@@ -63,7 +63,9 @@ a clean build (incl. the CI workflow) shipped without them:
 
 Also: the CI workflow's apt set was missing **`fonts-liberation`/`fonts-dejavu`**,
 which `fetch-x11-libs.sh` copies into `wine-fonts/` for wine's Arial/Times/Courier
-substitution → **fixed in `build-vst-full.yml`**.
+substitution → **fixed** in the shared `X11_APT` apt set used by the VST jobs
+in `ci.yml` / `build-deploy.yml` (the VST build/release workflows were folded
+into these; `build-vst-full.yml` / `release-vst.yml` are gone).
 
 Audit method (re-run when adding any new runtime asset): list every asset
 `WineSetup` opens, mark which are gitignored (must be built), and confirm each
