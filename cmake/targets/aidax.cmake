@@ -54,6 +54,7 @@ ExternalProject_Add(aidax_build
     BINARY_DIR      "${_aidax_build}"
     INSTALL_DIR     "${_aidax_assets}"
     CMAKE_ARGS
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
         -DANDROID_ABI=${ANDROID_ABI}
         -DANDROID_PLATFORM=${ANDROID_PLATFORM}

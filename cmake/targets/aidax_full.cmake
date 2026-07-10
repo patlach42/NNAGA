@@ -51,7 +51,7 @@ set(_ttl_dir "${_aidax_full_build}/ttl")
 
 ExternalProject_Add(aidax_full_native
     SOURCE_DIR "${_dsp_only_cmake}" BINARY_DIR "${_native_build}" INSTALL_DIR "${_ttl_dir}"
-    CMAKE_ARGS -DCMAKE_C_COMPILER=cc -DCMAKE_CXX_COMPILER=c++ -DCMAKE_BUILD_TYPE=Release -DAIDAX_SRC=${_aidax_full_src} -DRTNEURAL_XSIMD=ON ${NDK_CCACHE_CMAKE_ARGS} CMAKE_CACHE_ARGS -DCMAKE_TOOLCHAIN_FILE:FILEPATH=
+    CMAKE_ARGS -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_C_COMPILER=cc -DCMAKE_CXX_COMPILER=c++ -DCMAKE_BUILD_TYPE=Release -DAIDAX_SRC=${_aidax_full_src} -DRTNEURAL_XSIMD=ON ${NDK_CCACHE_CMAKE_ARGS} CMAKE_CACHE_ARGS -DCMAKE_TOOLCHAIN_FILE:FILEPATH=
     BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> -j${NJOBS}
     INSTALL_COMMAND bash -c "mkdir -p '${_ttl_dir}' && cp <BINARY_DIR>/bin/AIDA-X.lv2/*.ttl '${_ttl_dir}/'"
 )

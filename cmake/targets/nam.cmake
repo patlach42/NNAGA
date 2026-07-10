@@ -83,6 +83,7 @@ ExternalProject_Add(nam_build
     INSTALL_DIR     "${_nam_assets}"
     PATCH_COMMAND   bash "${_nam_patch_script}" <SOURCE_DIR>
     CMAKE_ARGS
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5
         -DCMAKE_TOOLCHAIN_FILE=${CMAKE_TOOLCHAIN_FILE}
         -DANDROID_ABI=${ANDROID_ABI}
         -DANDROID_PLATFORM=${ANDROID_PLATFORM}
