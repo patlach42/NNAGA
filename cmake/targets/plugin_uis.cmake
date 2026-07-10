@@ -158,7 +158,7 @@ foreach(_pdir IN LISTS _trunk_plugin_dirs)
         "${X11_SYSROOT}/lib/libpixman-1.a"
         "${X11_SYSROOT}/lib/libpng.a"
         -L"${X11_SYSROOT}/lib"
-        X11 xcb Xau
+        X11 xcb Xau Xrender
         xshm_stub
         m z log dl
     )
@@ -260,7 +260,7 @@ if(IS_DIRECTORY "${_gx_plugins_src}")
             "${X11_SYSROOT}/lib/libpixman-1.a"
             "${X11_SYSROOT}/lib/libpng.a"
             -L"${X11_SYSROOT}/lib"
-            X11 xcb Xau
+            X11 xcb Xau Xrender
             xshm_stub
             m z log dl
         )

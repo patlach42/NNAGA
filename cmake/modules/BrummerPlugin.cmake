@@ -119,7 +119,7 @@ function(brummer_add_ui_target TARGET_NAME OUTPUT_NAME SOURCE BUILD_DIR XPUTTY_T
         "${X11_SYSROOT}/lib/libpixman-1.a"
         "${X11_SYSROOT}/lib/libpng.a"
         -L"${X11_SYSROOT}/lib"
-        X11 xcb Xau
+        X11 xcb Xau Xrender
         xshm_stub
         m z log dl
     )

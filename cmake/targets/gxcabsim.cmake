@@ -94,7 +94,7 @@ target_link_libraries(gxcabsim_ui PRIVATE
     "${X11_SYSROOT}/lib/libpixman-1.a"
     "${X11_SYSROOT}/lib/libpng.a"
     -L"${X11_SYSROOT}/lib"
-    X11 xcb Xau
+    X11 xcb Xau Xrender
     xshm_stub
     m z log dl
 )
