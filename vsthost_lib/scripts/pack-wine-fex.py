@@ -385,8 +385,8 @@ def main() -> int:
     # seedFonts() to copy into each wineprefix's drive_c/windows/Fonts.
     src_fonts = repo / "toolchain/wine-fonts"
     out_fonts = repo / "src/main/assets/wine-fonts"
+    out_fonts.mkdir(parents=True, exist_ok=True)
     if src_fonts.exists():
-        out_fonts.mkdir(parents=True, exist_ok=True)
         # Wipe stale fonts so renames upstream don't leave orphans.
         for stale in out_fonts.glob("*.ttf"):
             stale.unlink()

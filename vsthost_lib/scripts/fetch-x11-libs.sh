@@ -48,16 +48,24 @@ mkdir -p toolchain/x11-libs
 # (Termux doesn't package them). Wine needs at least Tahoma /
 # LiberationSans / LiberationSerif / LiberationMono to render plugin
 # UIs that ask for those by name.
-fonts_src=()
-for d in /usr/share/fonts/truetype/liberation /usr/share/fonts/truetype/dejavu; do
-    if [ -d "$d" ]; then fonts_src+=("$d"); fi
-done
-if [ ${#fonts_src[@]} -gt 0 ]; then
-    mkdir -p toolchain/wine-fonts
-    for d in "${fonts_src[@]}"; do
-        cp -n "$d"/*.ttf toolchain/wine-fonts/ 2>/dev/null || true
+font_globs=(
+    /usr/share/fonts/truetype/liberation/*.ttf
+    /usr/share/fonts/truetype/dejavu/*.ttf
+    /usr/share/fonts/liberation/*.ttf
+    /usr/share/fonts/dejavu/*.ttf
+    /usr/share/fonts/TTF/Liberation*.ttf
+    /usr/share/fonts/TTF/DejaVu*.ttf
+)
+mkdir -p toolchain/wine-fonts
+for pat in "${font_globs[@]}"; do
+    for f in $pat; do
+        [ -f "$f" ] || continue
+        cp -n "$f" toolchain/wine-fonts/ 2>/dev/null || true
     done
-    echo "[+] staged $(ls toolchain/wine-fonts/*.ttf 2>/dev/null | wc -l) host fonts in toolchain/wine-fonts/"
+done
+font_count="$(ls toolchain/wine-fonts/*.ttf 2>/dev/null | wc -l)"
+if [ "$font_count" -gt 0 ]; then
+    echo "[+] staged $font_count host fonts in toolchain/wine-fonts/"
 else
     echo "[!] no Liberation/DejaVu host fonts found — wine will render text in fallback fonts only"
 fi

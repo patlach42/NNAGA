@@ -41,6 +41,7 @@ build_one() {
       -DMINGW_TRIPLE="${triple}" \
       -DENABLE_LTO=False \
       -DBUILD_TESTING=False \
+      -DCMAKE_DISABLE_FIND_PACKAGE_fmt=TRUE \
       -DENABLE_JEMALLOC=False \
       -DENABLE_JEMALLOC_GLIBC_ALLOC=False \
       -D${arch_flag}=ON \
