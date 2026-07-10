@@ -52,6 +52,14 @@ if [ "$FLAVOR" = "clean" ]; then
     # Reset all submodules (undoes patches, waf modifications, generated codelets, etc.)
     git -C "$PROJECT_ROOT" submodule foreach --recursive 'git checkout -- . 2>/dev/null; git clean -fdx 2>/dev/null' || true
 
+    echo "Cleaning vsthost_lib build outputs..."
+    # The submodule reset above wipes vsthost_lib/external/* build dirs. This
+    # clears the superproject-level VST outputs that build-all.sh stages into
+    # gitignored dirs (src/main/{jniLibs,assets}/, toolchain/, .cache/,
+    # scripts/__pycache__/). -X removes only ignored files, so tracked source
+    # and any local WIP under vsthost_lib/ are preserved.
+    git -C "$PROJECT_ROOT" clean -fdX vsthost_lib
+
     echo "Clean complete."
     exit 0
 fi
@@ -110,6 +118,27 @@ if [ ! -f "$FFTW_SRC/dft/scalar/codelets/n1_2.c" ]; then
 elif [ ! -f "$FFTW_SRC/configure" ]; then
     # Codelets exist but configure doesn't (e.g. submodule was partially reset)
     (cd "$FFTW_SRC" && touch ChangeLog && autoreconf -fi)
+fi
+
+# ─── Windows-VST host stack (full / all flavors) ─────────────────────────────
+# The `full` flavor bundles :vsthost_lib (wine + FEX + DXVK + Mesa-Zink + the
+# VST hosts). Build that stack from source via vsthost_lib's orchestrator and
+# stage it into vsthost_lib/src/main/{jniLibs,assets} so a local `full`/`all`
+# build produces a working VST APK. The `playstore` flavor never ships VST.
+#
+# In CI the heavy components (llvm/wine/fex/dxvk/mesa/...) build as separate
+# cached jobs and are staged before build.sh runs, so build-all.sh must NOT run
+# here — it would rebuild everything from scratch and defeat the cache. That's
+# detected via $CI, and the CI steps also pass BUILD_VST=0 explicitly. Override:
+#   BUILD_VST=0 ./build.sh full   # skip the VST stack (iterate on LV2/native)
+#   BUILD_VST=1 ./build.sh full   # force it
+_vst_default=1
+[ -n "${CI:-}" ] && _vst_default=0
+if [ "$FLAVOR" != "playstore" ] && [ "${BUILD_VST:-$_vst_default}" = "1" ]; then
+    echo ""
+    echo "=== Building Windows-VST host stack (vsthost_lib/scripts/build-all.sh) ==="
+    "$PROJECT_ROOT/vsthost_lib/scripts/build-all.sh"
+    echo "=== VST host stack staged into vsthost_lib/src/main/{jniLibs,assets} ==="
 fi
 
 # On exact cache hit, all build outputs (.so files, LV2 assets, jniLibs) are

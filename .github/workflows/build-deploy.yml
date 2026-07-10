@@ -593,7 +593,8 @@ jobs:
 
       # ── 8. Native build (Ninja handles incrementality) ──────────────────
       - name: Build native libraries
-        run: ./build.sh full
+        # BUILD_VST=0: VST stack already staged from the cached components above.
+        run: BUILD_VST=0 ./build.sh full
         env:
           ANDROID_NDK: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_NATIVE }}
           NATIVE_CACHE_EXACT: ${{ steps.native-cache.outputs.cache-hit }}
@@ -874,7 +875,8 @@ jobs:
 
       # ── 8. Native build (Ninja handles incrementality) ──────────────────
       - name: Build native libraries
-        run: ./build.sh all
+        # playstore flavor only — no VST, no full-flavor overlay.
+        run: ./build.sh playstore
         env:
           ANDROID_NDK: ${{ env.ANDROID_SDK_ROOT }}/ndk/27.2.12479018
           NATIVE_CACHE_EXACT: ${{ steps.native-cache.outputs.cache-hit }}

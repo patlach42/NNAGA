@@ -21,9 +21,13 @@
 #
 # Usage:
 #   ./run.sh              # debug (default)
-#   ./run.sh debug        # full flavor, debug build
-#   ./run.sh release      # full flavor, release build + AAB
-#   ./run.sh playstore    # playstore flavor, release AAB + bundletool install
+#   ./run.sh debug        # full (VST) flavor, debug build
+#   ./run.sh release      # full (VST) flavor, release build + AAB
+#   ./run.sh playstore    # playstore flavor (no VST), release AAB + bundletool install
+#
+# The `full` flavor builds the Windows-VST host stack (wine/FEX/DXVK/Mesa) from
+# source via build.sh — the first build is slow (~60-90 min), incremental after.
+# Set BUILD_VST=0 to skip it and build a VST-less `full` APK.
 
 set -e
 

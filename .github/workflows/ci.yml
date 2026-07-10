@@ -554,7 +554,9 @@ jobs:
       - name: Build native libraries (build.sh full)
         env:
           ANDROID_NDK: ${{ env.ANDROID_SDK_ROOT }}/ndk/${{ env.NDK_NATIVE }}
-        run: ./build.sh full
+        # BUILD_VST=0: the VST stack is staged above from the cached component
+        # jobs (+ build-all.sh turnip/adrenotools/hosts/pack); don't rebuild it.
+        run: BUILD_VST=0 ./build.sh full
 
       - name: Show ccache stats
         if: always()
