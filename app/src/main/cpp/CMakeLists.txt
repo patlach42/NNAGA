@@ -102,6 +102,49 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/x11
     ${OBOE_ROOT}/include
 )
+# Direct USB Audio Class backend. `libusb` is pinned as a project submodule;
+# use the Android usbfs implementation with the app-granted device FD.
+set(LIBUSB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/libusb")
+if(NOT EXISTS "${LIBUSB_ROOT}/libusb/core.c")
+    message(FATAL_ERROR "libusb not found. Run: git submodule update --init --recursive 3rd_party/libusb")
+endif()
+
+add_library(libusb_static STATIC
+    ${LIBUSB_ROOT}/libusb/core.c
+    ${LIBUSB_ROOT}/libusb/descriptor.c
+    ${LIBUSB_ROOT}/libusb/hotplug.c
+    ${LIBUSB_ROOT}/libusb/io.c
+    ${LIBUSB_ROOT}/libusb/sync.c
+    ${LIBUSB_ROOT}/libusb/strerror.c
+    ${LIBUSB_ROOT}/libusb/os/linux_usbfs.c
+    ${LIBUSB_ROOT}/libusb/os/events_posix.c
+    ${LIBUSB_ROOT}/libusb/os/threads_posix.c
+    ${LIBUSB_ROOT}/libusb/os/linux_netlink.c
+)
+target_include_directories(libusb_static PUBLIC
+    ${LIBUSB_ROOT}/libusb
+    ${LIBUSB_ROOT}/libusb/os
+    ${LIBUSB_ROOT}/android
+)
+target_compile_options(libusb_static PRIVATE
+    -fvisibility=hidden
+    -Wno-unused-parameter
+    -Wno-unused-but-set-variable
+)
+set_target_properties(libusb_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_library(direct_usb_output STATIC
+    usb/libusb_uac_driver.cpp
+)
+target_include_directories(direct_usb_output PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/usb
+    ${LIBUSB_ROOT}/libusb
+)
+target_link_libraries(direct_usb_output
+    libusb_static
+    android
+    log
+)
 
 # Plugin abstraction layer
 add_library(plugin_abstraction STATIC
@@ -152,7 +195,10 @@ add_library(audio_engine STATIC
     engine/AudioRecorder.cpp
     engine/OfflineProcessor.cpp
 )
-target_link_libraries(audio_engine utils)
+target_link_libraries(audio_engine
+    utils
+    direct_usb_output
+)
 
 # XShm stub - used when plugin UI .so references MIT-SHM (fallback to XPutImage)
 add_library(xshm_stub STATIC

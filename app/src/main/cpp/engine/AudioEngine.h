@@ -28,6 +28,7 @@
 #include <vector>
 #include "plugin/PluginChain.h"
 #include "AudioRecorder.h"
+#include "DirectUsbOutput.h"
 
 namespace guitarrackcraft {
 
@@ -142,6 +143,9 @@ public:
      */
     AudioRecorder& getRecorder() { return recorder_; }
 
+    // Attach the playback-only USB sink. Lifetime is owned by NativeContext.
+    void setDirectUsbOutput(DirectUsbOutput* output) { directUsbOutput_ = output; }
+
     // --- WAV real-time playback ---
 
     /**
@@ -236,6 +240,8 @@ private:
     AudioRecorder recorder_;
 
     bool createAudioStreams(float sampleRate);
+
+    DirectUsbOutput* directUsbOutput_ = nullptr; // non-owning, NativeContext-owned
     void closeStreams();
     void resampleToEngineRate(const std::vector<float>& src, uint32_t srcRate,
                               std::vector<float>& dst);

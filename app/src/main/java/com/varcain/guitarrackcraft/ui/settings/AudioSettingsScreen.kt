@@ -38,6 +38,10 @@ import androidx.compose.ui.text.font.FontWeight
 import com.varcain.guitarrackcraft.engine.AudioDeviceOption
 import com.varcain.guitarrackcraft.engine.AudioEngine
 import com.varcain.guitarrackcraft.engine.AudioSettingsManager
+import com.varcain.guitarrackcraft.engine.DirectUsbAudioManager
+import com.varcain.guitarrackcraft.engine.DirectUsbDeviceOption
+import kotlinx.coroutines.launch
+
 import com.varcain.guitarrackcraft.ui.rack.RackViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -115,6 +119,8 @@ fun AudioSettingsScreen(
                 }
             )
 
+            DirectUsbOutputSettings(viewModel)
+
             Text(
                 text = "Lower buffer sizes reduce latency but increase CPU usage. Use Auto unless you experience issues.",
                 style = MaterialTheme.typography.bodySmall,
@@ -165,6 +171,135 @@ fun AudioSettingsScreen(
         }
     }
 }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DirectUsbOutputSettings(viewModel: RackViewModel) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var devices by remember { mutableStateOf(DirectUsbAudioManager.getAudioDevices(context)) }
+    var selectedDevice by remember { mutableStateOf<DirectUsbDeviceOption?>(devices.firstOrNull()) }
+    var expanded by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf<String?>(null) }
+    var formats by remember { mutableStateOf<List<com.varcain.guitarrackcraft.engine.DirectUsbFormat>>(emptyList()) }
+    val streaming = DirectUsbAudioManager.isStreaming()
+
+    fun refreshDevices() {
+        devices = DirectUsbAudioManager.getAudioDevices(context)
+        if (selectedDevice?.id !in devices.map { it.id }) {
+            selectedDevice = devices.firstOrNull()
+        }
+    }
+
+    Divider()
+    Text(
+        text = "Direct USB Output (Experimental)",
+        style = MaterialTheme.typography.labelLarge,
+        modifier = Modifier.padding(bottom = 4.dp)
+    )
+    Text(
+        text = "Bypasses Android audio routing for 48 kHz USB playback. Guitar input still uses Android audio.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Spacer(modifier = Modifier.height(4.dp))
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it }
+    ) {
+        OutlinedTextField(
+            value = selectedDevice?.name ?: "No USB audio interface found",
+            onValueChange = {},
+            readOnly = true,
+            enabled = !streaming,
+            modifier = Modifier.fillMaxWidth().menuAnchor(),
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
+        )
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            devices.forEach { device ->
+                DropdownMenuItem(
+                    text = { Text(device.name) },
+                    onClick = {
+                        selectedDevice = device
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        OutlinedButton(
+            onClick = {
+                refreshDevices()
+                message = null
+            },
+            modifier = Modifier.weight(1f),
+            enabled = !streaming
+        ) {
+            Text("Refresh")
+        }
+        Button(
+            onClick = {
+                if (streaming) {
+                    DirectUsbAudioManager.disable(context)
+                    message = "Direct USB output stopped"
+                } else {
+                    val device = selectedDevice
+                    if (device == null) {
+                        message = "Connect a USB Audio Class interface first"
+                    } else if (!AudioEngine.isRunning()) {
+                        message = "Start the audio engine before enabling direct USB output"
+                    } else {
+                        scope.launch {
+                            val probed = DirectUsbAudioManager.probeFormats(context, device)
+                            val available = probed.getOrElse {
+                                message = it.message
+                                return@launch
+                            }
+                            formats = available
+                            val preferred = available.firstOrNull {
+                                it.sampleRate == AudioSettingsManager.getDirectUsbRate(context) &&
+                                    it.bits == AudioSettingsManager.getDirectUsbBits(context) &&
+                                    it.subslotBytes == AudioSettingsManager.getDirectUsbSubslot(context) &&
+                                    it.channels == AudioSettingsManager.getDirectUsbChannels(context)
+                            }
+                            val candidates = listOfNotNull(preferred) +
+                                available.filter { it != preferred }
+                            var active: com.varcain.guitarrackcraft.engine.DirectUsbFormat? = null
+                            for (candidate in candidates) {
+                                if (!viewModel.restartEngineAtSampleRate(context, candidate.sampleRate)) continue
+                                if (DirectUsbAudioManager.startSelected(context, candidate).isSuccess) {
+                                    active = candidate
+                                    break
+                                }
+                            }
+                            message = active?.let {
+                                "Direct USB output active: ${it.label}"
+                            } ?: "No supported direct USB playback format accepted by the interface"
+                        }
+                    }
+                }
+            },
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(if (streaming) "Disable" else "Enable")
+        }
+    }
+    message?.let { detail ->
+        Text(
+            text = detail,
+            style = MaterialTheme.typography.bodySmall,
+            color = if (streaming) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
 
 @Composable
 private fun InfoRow(label: String, value: String) {

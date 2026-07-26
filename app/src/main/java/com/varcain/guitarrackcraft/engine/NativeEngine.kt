@@ -127,6 +127,25 @@ class NativeEngine private constructor() {
      */
     external fun nativeStartEngine(sampleRate: Float = 48000f, inputDeviceId: Int = 0, outputDeviceId: Int = 0, bufferFrames: Int = 0): Boolean
 
+    /** Opens an app-permitted USB device FD for the direct UAC playback prototype. */
+    external fun nativeOpenDirectUsbOutput(fileDescriptor: Int): Boolean
+
+    /** Starts direct USB playback in the selected advertised PCM format. */
+    external fun nativeStartDirectUsbOutput(
+        sampleRate: Int,
+        bitsPerSample: Int,
+        bytesPerSample: Int,
+        channels: Int
+    ): Boolean
+
+    /** Packed quadruples: sample rate Hz, valid bits, PCM subslot bytes, and channels. */
+    external fun nativeGetDirectUsbOutputFormats(): IntArray
+
+    /** Stops direct USB playback without closing the Java UsbDeviceConnection. */
+    external fun nativeStopDirectUsbOutput()
+
+    external fun nativeIsDirectUsbOutputStreaming(): Boolean
+
     /**
      * Stop the audio engine.
      */

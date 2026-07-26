@@ -91,6 +91,10 @@ void AudioEngine::stop() {
         // AudioTrack callback thread is still in getStream() -> pthread_mutex_lock on destroyed mutex (SIGABRT).
         LOGI("stop() isRunning_=0; calling closeStreams() anyway so streams tear down safely");
         closeStreams();
+        if (directUsbOutput_) {
+            directUsbOutput_->stop();
+        }
+
         return;
     }
     // Stop recording before tearing down the audio path
@@ -101,6 +105,10 @@ void AudioEngine::stop() {
     // Signal callback to exit immediately so it does not touch chain_ or stream
     // during teardown (avoids use-after-free / destroyed mutex in plugin chain or Oboe).
     isRunning_ = false;
+    if (directUsbOutput_) {
+        directUsbOutput_->stop();
+    }
+
     LOGI("stop() isRunning_=false set, calling chain_.deactivate()");
 
     chain_.deactivate();
@@ -340,13 +348,13 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             std::memset(inputBuffer_.data() + toCopy, 0, (numFrames - toCopy) * sizeof(float));
             wavPlaying_.store(false);
         }
+    } else if (directUsbOutput_ && directUsbOutput_->isStreaming()) {
+        std::memset(inputBuffer_.data(), 0, numFrames * sizeof(float));
     } else {
         int32_t framesRead = 0;
         if (inputStream_) {
             auto result = inputStream_->read(inputBuffer_.data(), numFrames, 0);
-            if (result == oboe::Result::OK) {
-                framesRead = result.value();
-            }
+            if (result == oboe::Result::OK) framesRead = result.value();
         }
         if (framesRead < numFrames) {
             std::memset(inputBuffer_.data() + framesRead, 0, (numFrames - framesRead) * sizeof(float));
@@ -512,8 +520,18 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         }
     }
 
-    // Copy to output (stereo: deinterleave; mono: mix)
-    if (numChannels == 2) {
+    // Direct USB is a playback-only sink driven by the Oboe callback clock.
+    // It owns the processed PCM while the framework stream receives silence,
+    // preventing duplicate playback through the phone speaker.
+    const bool directUsbStreaming =
+        directUsbOutput_ && directUsbOutput_->isStreaming();
+    if (directUsbStreaming) {
+        directUsbOutput_->writeStereo(
+            outputBufferLeft_.data(), outputBufferRight_.data(), numFrames);
+        std::memset(
+            outputData, 0,
+            static_cast<size_t>(numFrames) * numChannels * sizeof(float));
+    } else if (numChannels == 2) {
         for (int32_t i = 0; i < numFrames; ++i) {
             outputData[i * 2] = outputBufferLeft_[i];
             outputData[i * 2 + 1] = outputBufferRight_[i];

@@ -218,6 +218,24 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    suspend fun restartEngineAtSampleRate(context: Context, sampleRate: Int): Boolean {
+        restartJob?.cancel()
+        stopEngine()
+        delay(100)
+        val inputId = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getInputDeviceId(context)
+        val outputId = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getOutputDeviceId(context)
+        val bufferSize = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getBufferSize(context)
+        val started = AudioEngine.start(
+            sampleRate = sampleRate.toFloat(),
+            inputDeviceId = inputId,
+            outputDeviceId = outputId,
+            bufferFrames = bufferSize
+        )
+        _isEngineRunning.value = started
+        if (!started) _errorMessage.value = "Failed to start engine at $sampleRate Hz"
+        return started
+    }
+
     fun resetClipping() {
         AudioEngine.resetClipping()
         _inputClipping.value = false

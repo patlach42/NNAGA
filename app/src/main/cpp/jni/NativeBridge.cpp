@@ -61,6 +61,9 @@
 using namespace guitarrackcraft;
 
 struct NativeContext {
+    // Destruction order matters: AudioEngine holds a non-owning pointer to
+    // directUsbOutput_, so it must be destroyed first.
+    std::unique_ptr<DirectUsbOutput> directUsbOutput;
     std::unique_ptr<AudioEngine> audioEngine;
     std::unique_ptr<PluginRegistry> pluginRegistry;
     std::unique_ptr<OfflineProcessor> offlineProcessor;
@@ -321,7 +324,9 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeInit(JNIEnv* env, job
     }
 
     // Create audio engine
+    g_ctx->directUsbOutput = std::make_unique<DirectUsbOutput>();
     g_ctx->audioEngine = std::make_unique<AudioEngine>();
+    g_ctx->audioEngine->setDirectUsbOutput(g_ctx->directUsbOutput.get());
 
     // Create plugin UI manager
     g_ctx->pluginUIManager = std::make_unique<guitarrackcraft::PluginUIManager>();
@@ -392,6 +397,64 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartEngine(JNIEnv* e
                                      static_cast<int32_t>(inputDeviceId),
                                      static_cast<int32_t>(outputDeviceId),
                                      static_cast<int32_t>(bufferFrames)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeOpenDirectUsbOutput(
+        JNIEnv* env, jobject thiz, jint fileDescriptor) {
+    if (!g_ctx || !g_ctx->directUsbOutput) return JNI_FALSE;
+    return g_ctx->directUsbOutput->open(static_cast<int>(fileDescriptor))
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartDirectUsbOutput(
+        JNIEnv* env, jobject thiz, jint sampleRate, jint bitsPerSample,
+        jint bytesPerSample, jint channels) {
+    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput ||
+        !g_ctx->audioEngine->isRunning() ||
+        static_cast<int>(g_ctx->audioEngine->getSampleRate()) != static_cast<int>(sampleRate)) {
+        return JNI_FALSE;
+    }
+    return g_ctx->directUsbOutput->start(static_cast<int>(sampleRate),
+                                         static_cast<int>(bitsPerSample),
+                                         static_cast<int>(bytesPerSample),
+                                         static_cast<int>(channels))
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jintArray JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbOutputFormats(
+        JNIEnv* env, jobject thiz) {
+    if (!g_ctx || !g_ctx->directUsbOutput) return nullptr;
+    const auto formats = g_ctx->directUsbOutput->enumerateFormats();
+    jintArray out = env->NewIntArray(static_cast<jsize>(formats.size() * 4));
+    if (!out) return nullptr;
+    std::vector<jint> packed;
+    packed.reserve(formats.size() * 4);
+    for (const auto& f : formats) {
+        packed.push_back(static_cast<jint>(f.sampleRateHz));
+        packed.push_back(static_cast<jint>(f.bitsPerSample));
+        packed.push_back(static_cast<jint>(f.bytesPerSample));
+        packed.push_back(static_cast<jint>(f.channels));
+    }
+    if (!packed.empty()) env->SetIntArrayRegion(out, 0, static_cast<jsize>(packed.size()), packed.data());
+    return out;
+}
+
+JNIEXPORT void JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStopDirectUsbOutput(
+        JNIEnv* env, jobject thiz) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->stop();
+    }
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
+        JNIEnv* env, jobject thiz) {
+    return g_ctx && g_ctx->directUsbOutput &&
+        g_ctx->directUsbOutput->isStreaming() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
