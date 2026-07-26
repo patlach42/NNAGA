@@ -25,8 +25,6 @@ package com.varcain.guitarrackcraft.engine
 object AudioEngine {
     private val native get() = NativeEngine.getInstance()
 
-    fun start(sampleRate: Float = 48000f, inputDeviceId: Int = 0, outputDeviceId: Int = 0, bufferFrames: Int = 0): Boolean =
-        native.startEngine(sampleRate, inputDeviceId, outputDeviceId, bufferFrames)
     fun stop() = native.stopEngine()
     fun isRunning(): Boolean = native.isEngineRunning()
     fun getSampleRate(): Float = native.getSampleRate()

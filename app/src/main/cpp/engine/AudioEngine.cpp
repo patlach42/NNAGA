@@ -82,8 +82,49 @@ bool AudioEngine::start(float sampleRate, int32_t inputDeviceId,
     return true;
 }
 
+bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
+                                        int32_t subslotBytes, int32_t channels,
+                                        int32_t bufferFrames) {
+    if (isRunning_.load() || !directUsbOutput_ || sampleRate <= 0.0f ||
+        (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
+        subslotBytes < (bitsPerSample + 7) / 8 || subslotBytes > 4 ||
+        channels < 2 || channels > DirectUsbOutput::kMaxDeviceChannels) {
+        return false;
+    }
+    const int32_t renderFrames = bufferFrames > 0 ? bufferFrames : 256;
+    if (!directUsbOutput_->start(static_cast<int>(sampleRate), bitsPerSample,
+                                 subslotBytes, channels)) {
+        LOGE("Direct USB transport start failed");
+        return false;
+    }
+    sampleRate_ = sampleRate;
+    callbackFrameCount_ = static_cast<uint32_t>(renderFrames);
+    requestedBufferFrames_ = bufferFrames;
+    directUsbBits_ = bitsPerSample;
+    directUsbSubslotBytes_ = subslotBytes;
+    directUsbChannels_ = channels;
+    directUsbInputBuffer_.assign(static_cast<size_t>(renderFrames), 0.0f);
+    directUsbOutputLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
+    directUsbOutputRight_.assign(static_cast<size_t>(renderFrames), 0.0f);
+    chain_.setSampleRate(sampleRate_, callbackFrameCount_);
+    chain_.activate();
+    directUsbSession_.store(true, std::memory_order_release);
+    isRunning_.store(true, std::memory_order_release);
+    directUsbRenderThread_ = std::thread(&AudioEngine::directUsbRenderLoop, this);
+    return true;
+}
+
 void AudioEngine::stop() {
     LOGI("stop() entered tid=%ld isRunning_=%d", getTid(), isRunning_ ? 1 : 0);
+    if (directUsbSession_.load(std::memory_order_acquire)) {
+        isRunning_.store(false, std::memory_order_release);
+        directUsbSession_.store(false, std::memory_order_release);
+        if (directUsbRenderThread_.joinable()) directUsbRenderThread_.join();
+        if (recorder_.isRecording()) recorder_.stopRecording();
+        chain_.deactivate();
+        if (directUsbOutput_) directUsbOutput_->stop();
+        return;
+    }
     if (!isRunning_) {
         // Stream may have been closed by onErrorAfterClose (e.g. system closed stream when opening X11 UI).
         // We must still call closeStreams() so streams are torn down with the 250ms wait before the
@@ -301,6 +342,82 @@ void AudioEngine::resampleToEngineRate(const std::vector<float>& src,
         } else {
             dst[i] = src[j] * (1.0f - frac) + src[j + 1] * frac;
         }
+    }
+}
+
+void AudioEngine::directUsbRenderLoop() {
+    const int32_t frames = static_cast<int32_t>(callbackFrameCount_);
+    const auto period = std::chrono::duration<double>(
+        static_cast<double>(frames) / static_cast<double>(sampleRate_));
+    auto deadline = std::chrono::steady_clock::now();
+
+    while (directUsbSession_.load(std::memory_order_acquire) &&
+           isRunning_.load(std::memory_order_acquire)) {
+        const bool useWav = wavPlaying_.load(std::memory_order_relaxed) &&
+                            !wavBuffer_.empty();
+        if (useWav) {
+            const size_t pos = wavPositionFrames_.load(std::memory_order_relaxed);
+            const size_t available = wavLengthFrames_ > pos ? wavLengthFrames_ - pos : 0;
+            const size_t copied = std::min(static_cast<size_t>(frames), available);
+            if (copied > 0) {
+                std::memcpy(directUsbInputBuffer_.data(), wavBuffer_.data() + pos,
+                            copied * sizeof(float));
+                wavPositionFrames_.store(pos + copied, std::memory_order_relaxed);
+            }
+            if (copied < static_cast<size_t>(frames)) {
+                std::memset(directUsbInputBuffer_.data() + copied, 0,
+                            (static_cast<size_t>(frames) - copied) * sizeof(float));
+                wavPlaying_.store(false, std::memory_order_relaxed);
+            }
+        } else {
+            // USB capture is deliberately not implemented yet. This is the
+            // requested dummy input: a stable silent mono source.
+            std::memset(directUsbInputBuffer_.data(), 0,
+                        static_cast<size_t>(frames) * sizeof(float));
+        }
+
+        inputPtrs_[0] = directUsbInputBuffer_.data();
+        inputPtrs_[1] = directUsbInputBuffer_.data();
+        outputPtrs_[0] = directUsbOutputLeft_.data();
+        outputPtrs_[1] = directUsbOutputRight_.data();
+        const auto began = std::chrono::steady_clock::now();
+        if (chainBypass_.load(std::memory_order_relaxed) ||
+            (useWav && wavBypassChain_.load(std::memory_order_relaxed))) {
+            std::memcpy(outputPtrs_[0], inputPtrs_[0], static_cast<size_t>(frames) * sizeof(float));
+            std::memcpy(outputPtrs_[1], inputPtrs_[1], static_cast<size_t>(frames) * sizeof(float));
+        } else {
+            chain_.process(inputPtrs_, outputPtrs_, frames);
+        }
+        const auto elapsed = std::chrono::steady_clock::now() - began;
+        cpuLoad_.store(std::min(
+            1.0f,
+            static_cast<float>(std::chrono::duration<double>(elapsed).count() / period.count())
+        ), std::memory_order_relaxed);
+
+        float inputPeak = 0.0f;
+        float outputPeak = 0.0f;
+        for (int32_t i = 0; i < frames; ++i) {
+            inputPeak = std::max(inputPeak, std::fabs(directUsbInputBuffer_[i]));
+            outputPeak = std::max(outputPeak, std::max(
+                std::fabs(directUsbOutputLeft_[i]), std::fabs(directUsbOutputRight_[i])));
+        }
+        inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * kPeakDecay);
+        outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * kPeakDecay);
+        inputPeakLevel_.store(inputPeakHold_, std::memory_order_relaxed);
+        outputPeakLevel_.store(outputPeakHold_, std::memory_order_relaxed);
+        if (inputPeak >= kClippingThreshold) inputClipping_.store(true, std::memory_order_relaxed);
+        if (outputPeak >= kClippingThreshold) outputClipping_.store(true, std::memory_order_relaxed);
+
+        if (recorder_.isRecording()) {
+            recorder_.feedAudio(directUsbInputBuffer_.data(), directUsbOutputLeft_.data(),
+                                directUsbOutputRight_.data(), frames);
+        }
+        directUsbOutput_->writeStereo(directUsbOutputLeft_.data(), directUsbOutputRight_.data(), frames);
+
+        deadline += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
+        const auto now = std::chrono::steady_clock::now();
+        if (deadline < now) deadline = now;
+        std::this_thread::sleep_until(deadline);
     }
 }
 

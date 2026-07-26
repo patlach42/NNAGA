@@ -35,11 +35,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import com.varcain.guitarrackcraft.engine.AudioDeviceOption
 import com.varcain.guitarrackcraft.engine.AudioEngine
 import com.varcain.guitarrackcraft.engine.AudioSettingsManager
 import com.varcain.guitarrackcraft.engine.DirectUsbAudioManager
 import com.varcain.guitarrackcraft.engine.DirectUsbDeviceOption
+import com.varcain.guitarrackcraft.engine.DirectUsbFormat
 import kotlinx.coroutines.launch
 
 import com.varcain.guitarrackcraft.ui.rack.RackViewModel
@@ -51,23 +51,15 @@ fun AudioSettingsScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-
-    val inputDevices = remember { AudioSettingsManager.getInputDevices(context) }
-    val outputDevices = remember { AudioSettingsManager.getOutputDevices(context) }
-
-    var selectedInputId by remember { mutableIntStateOf(AudioSettingsManager.getInputDeviceId(context)) }
-    var selectedOutputId by remember { mutableIntStateOf(AudioSettingsManager.getOutputDeviceId(context)) }
     var selectedBufferSize by remember { mutableIntStateOf(AudioSettingsManager.getBufferSize(context)) }
-    var refreshKey by remember { mutableIntStateOf(0) }
-
     BackHandler { onNavigateBack() }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Audio Settings") },
+                title = { Text("USB Audio Settings") },
                 navigationIcon = {
-                    IconButton(onClick = { onNavigateBack() }) {
+                    IconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 }
@@ -82,221 +74,171 @@ fun AudioSettingsScreen(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // Input device selector
-            DeviceDropdown(
-                label = "Input Device",
-                devices = inputDevices,
-                selectedId = selectedInputId,
-                onSelected = { id ->
-                    selectedInputId = id
-                    AudioSettingsManager.setInputDeviceId(context, id)
-                    viewModel.restartEngine(context)
-                    refreshKey++
-                }
-            )
-
-            // Output device selector
-            DeviceDropdown(
-                label = "Output Device",
-                devices = outputDevices,
-                selectedId = selectedOutputId,
-                onSelected = { id ->
-                    selectedOutputId = id
-                    AudioSettingsManager.setOutputDeviceId(context, id)
-                    viewModel.restartEngine(context)
-                    refreshKey++
-                }
-            )
-
-            // Buffer size selector
+            DirectUsbSessionSettings()
             BufferSizeDropdown(
                 selectedSize = selectedBufferSize,
                 onSelected = { size ->
                     selectedBufferSize = size
                     AudioSettingsManager.setBufferSize(context, size)
-                    viewModel.restartEngine(context)
-                    refreshKey++
                 }
             )
-
-            DirectUsbOutputSettings(viewModel)
-
             Text(
-                text = "Lower buffer sizes reduce latency but increase CPU usage. Use Auto unless you experience issues.",
+                text = "The rack uses only the configured USB audio interface. " +
+                    "Input is currently silent (dummy input). Configure the interface before starting a session.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-
-            // Current engine info + low-latency checklist
             val isRunning by viewModel.isEngineRunning.collectAsState()
             if (isRunning) {
-                val sampleRate = remember(refreshKey) { AudioEngine.getSampleRate() }
-                val bufferFrames = remember(refreshKey) { AudioEngine.getBufferFrameCount() }
-                val streamInfo = remember(refreshKey) { AudioEngine.getStreamInfo() }
-
                 Divider()
-                Text(
-                    text = "Current Session",
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                InfoRow("Sample Rate", "%.0f Hz".format(sampleRate))
-                InfoRow("Buffer Size", "$bufferFrames frames")
-                InfoRow("Burst Size", "${streamInfo.framesPerBurst} frames")
-                InfoRow("Audio Format", "32-bit Float")
-
-                Spacer(modifier = Modifier.height(4.dp))
-                Divider()
-                Text(
-                    text = "Low-Latency Checklist",
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(bottom = 4.dp)
-                )
-                Text(
-                    text = "Based on developer.android.com/games/sdk/oboe/low-latency-audio",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(bottom = 8.dp)
-                )
-
-                ChecklistItem("Oboe API", true)
-                ChecklistItem("AAudio backend", streamInfo.isAAudio, "OpenSL ES")
-                ChecklistItem("Performance: Low Latency", streamInfo.outputLowLatency)
-                ChecklistItem("Sharing: Exclusive (output)", streamInfo.outputExclusive, "Shared")
-                ChecklistItem("Sharing: Exclusive (input)", streamInfo.inputExclusive, "Shared")
-                ChecklistItem("Sample rate: 48000 Hz", sampleRate.toInt() == 48000, "%.0f Hz".format(sampleRate))
-                ChecklistItem("Data callback", streamInfo.outputCallback)
-                ChecklistItem("MMAP buffer", streamInfo.outputMMap)
+                Text("Current USB Session", style = MaterialTheme.typography.labelLarge)
+                InfoRow("Sample Rate", "%.0f Hz".format(AudioEngine.getSampleRate()))
+                InfoRow("Buffer Size", "${AudioEngine.getBufferFrameCount()} frames")
+                InfoRow("Input", "Dummy silence")
             }
         }
     }
 }
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DirectUsbOutputSettings(viewModel: RackViewModel) {
+private fun DirectUsbSessionSettings() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var devices by remember { mutableStateOf(DirectUsbAudioManager.getAudioDevices(context)) }
-    var selectedDevice by remember { mutableStateOf<DirectUsbDeviceOption?>(devices.firstOrNull()) }
-    var expanded by remember { mutableStateOf(false) }
+    var selectedDevice by remember {
+        mutableStateOf(devices.firstOrNull { it.id == AudioSettingsManager.getDirectUsbDeviceId(context) })
+    }
+    var formats by remember { mutableStateOf<List<DirectUsbFormat>>(emptyList()) }
+    var selectedRate by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRate(context)) }
+    var selectedBits by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbBits(context)) }
     var message by remember { mutableStateOf<String?>(null) }
-    var formats by remember { mutableStateOf<List<com.varcain.guitarrackcraft.engine.DirectUsbFormat>>(emptyList()) }
-    val streaming = DirectUsbAudioManager.isStreaming()
+    var devicesExpanded by remember { mutableStateOf(false) }
 
-    fun refreshDevices() {
-        devices = DirectUsbAudioManager.getAudioDevices(context)
-        if (selectedDevice?.id !in devices.map { it.id }) {
-            selectedDevice = devices.firstOrNull()
+    fun selectCompatibleFormat() {
+        val selected = formats.firstOrNull {
+            it.sampleRate == selectedRate && it.bits == selectedBits
+        } ?: formats.firstOrNull()
+        if (selected != null) {
+            selectedRate = selected.sampleRate
+            selectedBits = selected.bits
+            DirectUsbAudioManager.startSelected(context, selected)
         }
     }
 
-    Divider()
-    Text(
-        text = "Direct USB Output (Experimental)",
-        style = MaterialTheme.typography.labelLarge,
-        modifier = Modifier.padding(bottom = 4.dp)
-    )
-    Text(
-        text = "Bypasses Android audio routing for 48 kHz USB playback. Guitar input still uses Android audio.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant
-    )
-    Spacer(modifier = Modifier.height(4.dp))
+    Text("USB Interface", style = MaterialTheme.typography.labelLarge)
     ExposedDropdownMenuBox(
-        expanded = expanded,
-        onExpandedChange = { expanded = it }
+        expanded = devicesExpanded,
+        onExpandedChange = { devicesExpanded = it }
     ) {
         OutlinedTextField(
             value = selectedDevice?.name ?: "No USB audio interface found",
             onValueChange = {},
             readOnly = true,
-            enabled = !streaming,
             modifier = Modifier.fillMaxWidth().menuAnchor(),
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(devicesExpanded) }
         )
         ExposedDropdownMenu(
-            expanded = expanded,
-            onDismissRequest = { expanded = false }
+            expanded = devicesExpanded,
+            onDismissRequest = { devicesExpanded = false }
         ) {
             devices.forEach { device ->
                 DropdownMenuItem(
                     text = { Text(device.name) },
                     onClick = {
                         selectedDevice = device
-                        expanded = false
+                        formats = emptyList()
+                        devicesExpanded = false
                     }
                 )
             }
         }
     }
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(
             onClick = {
-                refreshDevices()
+                devices = DirectUsbAudioManager.getAudioDevices(context)
+                selectedDevice = devices.firstOrNull { it.id == selectedDevice?.id }
+                    ?: devices.firstOrNull()
                 message = null
             },
-            modifier = Modifier.weight(1f),
-            enabled = !streaming
-        ) {
-            Text("Refresh")
-        }
+            modifier = Modifier.weight(1f)
+        ) { Text("Refresh") }
         Button(
             onClick = {
-                if (streaming) {
-                    DirectUsbAudioManager.disable(context)
-                    message = "Direct USB output stopped"
+                val device = selectedDevice
+                if (device == null) {
+                    message = "Connect a USB Audio Class interface first"
                 } else {
-                    val device = selectedDevice
-                    if (device == null) {
-                        message = "Connect a USB Audio Class interface first"
-                    } else if (!AudioEngine.isRunning()) {
-                        message = "Start the audio engine before enabling direct USB output"
-                    } else {
-                        scope.launch {
-                            val probed = DirectUsbAudioManager.probeFormats(context, device)
-                            val available = probed.getOrElse {
-                                message = it.message
-                                return@launch
+                    scope.launch {
+                        val result = DirectUsbAudioManager.probeFormats(context, device)
+                        result.onSuccess { available ->
+                            formats = available.sortedWith(
+                                compareBy<DirectUsbFormat> { it.sampleRate }.thenBy { it.bits }
+                            )
+                            val saved = formats.firstOrNull {
+                                it.sampleRate == selectedRate && it.bits == selectedBits
+                            } ?: formats.firstOrNull()
+                            if (saved != null) {
+                                selectedRate = saved.sampleRate
+                                selectedBits = saved.bits
+                                DirectUsbAudioManager.startSelected(context, saved)
+                                message = "USB interface configured"
                             }
-                            formats = available
-                            val preferred = available.firstOrNull {
-                                it.sampleRate == AudioSettingsManager.getDirectUsbRate(context) &&
-                                    it.bits == AudioSettingsManager.getDirectUsbBits(context) &&
-                                    it.subslotBytes == AudioSettingsManager.getDirectUsbSubslot(context) &&
-                                    it.channels == AudioSettingsManager.getDirectUsbChannels(context)
-                            }
-                            val candidates = listOfNotNull(preferred) +
-                                available.filter { it != preferred }
-                            var active: com.varcain.guitarrackcraft.engine.DirectUsbFormat? = null
-                            for (candidate in candidates) {
-                                if (!viewModel.restartEngineAtSampleRate(context, candidate.sampleRate)) continue
-                                if (DirectUsbAudioManager.startSelected(context, candidate).isSuccess) {
-                                    active = candidate
-                                    break
-                                }
-                            }
-                            message = active?.let {
-                                "Direct USB output active: ${it.label}"
-                            } ?: "No supported direct USB playback format accepted by the interface"
-                        }
+                        }.onFailure { message = it.message }
                     }
                 }
             },
             modifier = Modifier.weight(1f)
-        ) {
-            Text(if (streaming) "Disable" else "Enable")
+        ) { Text("Probe formats") }
+    }
+
+    val rates = formats.map { it.sampleRate }.distinct()
+    val bits = formats.filter { it.sampleRate == selectedRate }.map { it.bits }.distinct()
+    if (formats.isNotEmpty()) {
+        IntSelector("Sample rate", selectedRate, rates) {
+            selectedRate = it
+            selectCompatibleFormat()
+        }
+        IntSelector("Bit depth", selectedBits, bits) {
+            selectedBits = it
+            selectCompatibleFormat()
         }
     }
-    message?.let { detail ->
-        Text(
-            text = detail,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (streaming) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant
-        )
+    message?.let {
+        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun IntSelector(label: String, selected: Int, options: List<Int>, onSelected: (Int) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Column {
+        Text(label, style = MaterialTheme.typography.labelLarge)
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            OutlinedTextField(
+                value = when (label) {
+                    "Sample rate" -> "$selected Hz"
+                    else -> "$selected-bit"
+                },
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier.fillMaxWidth().menuAnchor(),
+                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
+            )
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEach { value ->
+                    DropdownMenuItem(
+                        text = { Text(if (label == "Sample rate") "$value Hz" else "$value-bit") },
+                        onClick = {
+                            onSelected(value)
+                            expanded = false
+                        }
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -321,85 +263,6 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
-@Composable
-private fun ChecklistItem(label: String, enabled: Boolean, disabledDetail: String? = null) {
-    val green = Color(0xFF4CAF50)
-    val red = Color(0xFFF44336)
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 3.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = if (enabled) "\u2713" else "\u2717",
-            color = if (enabled) green else red,
-            fontWeight = FontWeight.Bold,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.width(24.dp)
-        )
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
-        )
-        if (!enabled && disabledDetail != null) {
-            Text(
-                text = disabledDetail,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun DeviceDropdown(
-    label: String,
-    devices: List<AudioDeviceOption>,
-    selectedId: Int,
-    onSelected: (Int) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    val selectedDevice = devices.find { it.id == selectedId } ?: devices.firstOrNull()
-
-    Column {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        ExposedDropdownMenuBox(
-            expanded = expanded,
-            onExpandedChange = { expanded = it }
-        ) {
-            OutlinedTextField(
-                value = selectedDevice?.name ?: "Default",
-                onValueChange = {},
-                readOnly = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(),
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
-            )
-            ExposedDropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false }
-            ) {
-                devices.forEach { device ->
-                    DropdownMenuItem(
-                        text = { Text(device.name) },
-                        onClick = {
-                            onSelected(device.id)
-                            expanded = false
-                        }
-                    )
-                }
-            }
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

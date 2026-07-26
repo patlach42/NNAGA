@@ -120,23 +120,18 @@ class NativeEngine private constructor() {
      *  editor or size unknown yet. */
     external fun nativeGetRackPluginEditorSize(position: Int): Long
 
-    /**
-     * Start the audio engine.
-     * @param sampleRate Desired sample rate (will use device default if not supported)
-     * @return true if started successfully
-     */
-    external fun nativeStartEngine(sampleRate: Float = 48000f, inputDeviceId: Int = 0, outputDeviceId: Int = 0, bufferFrames: Int = 0): Boolean
 
     /** Opens an app-permitted USB device FD for the direct UAC playback prototype. */
     external fun nativeOpenDirectUsbOutput(fileDescriptor: Int): Boolean
-
-    /** Starts direct USB playback in the selected advertised PCM format. */
-    external fun nativeStartDirectUsbOutput(
+    /** Starts the USB-only audio session with a silent native input and libusb output. */
+    external fun nativeStartDirectUsbSession(
         sampleRate: Int,
         bitsPerSample: Int,
         bytesPerSample: Int,
-        channels: Int
+        channels: Int,
+        bufferFrames: Int
     ): Boolean
+
 
     /** Packed quadruples: sample rate Hz, valid bits, PCM subslot bytes, and channels. */
     external fun nativeGetDirectUsbOutputFormats(): IntArray
@@ -447,9 +442,6 @@ class NativeEngine private constructor() {
     fun setChainBypass(bypass: Boolean) = nativeSetChainBypass(bypass)
     fun setWavBypassChain(bypass: Boolean) = nativeSetWavBypassChain(bypass)
 
-    fun startEngine(sampleRate: Float = 48000f, inputDeviceId: Int = 0, outputDeviceId: Int = 0, bufferFrames: Int = 0): Boolean {
-        return nativeStartEngine(sampleRate, inputDeviceId, outputDeviceId, bufferFrames)
-    }
 
     fun stopEngine() {
         nativeStopEngine()

@@ -24,6 +24,8 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.varcain.guitarrackcraft.engine.AudioEngine
+import com.varcain.guitarrackcraft.engine.AudioSettingsManager
+import com.varcain.guitarrackcraft.engine.DirectUsbAudioManager
 import com.varcain.guitarrackcraft.engine.NativeEngine
 import com.varcain.guitarrackcraft.engine.PresetManager
 import com.varcain.guitarrackcraft.engine.RackManager
@@ -132,11 +134,6 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     val recordingDurationSec: StateFlow<Double> = _recordingDurationSec.asStateFlow()
 
     init {
-        val ctx = getApplication<Application>()
-        val inputId = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getInputDeviceId(ctx)
-        val outputId = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getOutputDeviceId(ctx)
-        val bufSize = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getBufferSize(ctx)
-        startEngine(inputDeviceId = inputId, outputDeviceId = outputId, bufferFrames = bufSize)
         updateRackState()
 
         // Refresh rack state periodically to catch external changes
@@ -183,58 +180,27 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun startEngine(inputDeviceId: Int = 0, outputDeviceId: Int = 0, bufferFrames: Int = 0) {
-        android.util.Log.i("AudioLifecycle", "RackViewModel.startEngine(input=$inputDeviceId, output=$outputDeviceId, buf=$bufferFrames) (thread=${Thread.currentThread().name})")
+    fun startEngine() {
         viewModelScope.launch {
-            try {
-                val started = AudioEngine.start(
-                    inputDeviceId = inputDeviceId,
-                    outputDeviceId = outputDeviceId,
-                    bufferFrames = bufferFrames
-                )
-                android.util.Log.i("AudioLifecycle", "RackViewModel.startEngine() result=$started")
-                _isEngineRunning.value = started
-                if (started) {
-                    _errorMessage.value = null
-                }
-            } catch (e: Exception) {
-                _errorMessage.value = "Failed to start engine: ${e.message}"
-            }
+            val result = DirectUsbAudioManager.startConfigured(getApplication<Application>())
+            _isEngineRunning.value = result.isSuccess
+            _errorMessage.value = result.exceptionOrNull()?.message
+                ?.let { "USB audio session unavailable: $it" }
         }
     }
 
     private var restartJob: Job? = null
 
-    fun restartEngine(context: Context) {
+    fun restartEngine() {
+        if (!_isEngineRunning.value) return
         restartJob?.cancel()
         restartJob = viewModelScope.launch {
-            val inputId = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getInputDeviceId(context)
-            val outputId = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getOutputDeviceId(context)
-            val bufSize = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getBufferSize(context)
-            android.util.Log.i("AudioLifecycle", "RackViewModel.restartEngine(input=$inputId, output=$outputId, buf=$bufSize)")
             stopEngine()
             delay(100)
-            startEngine(inputDeviceId = inputId, outputDeviceId = outputId, bufferFrames = bufSize)
+            startEngine()
         }
     }
 
-    suspend fun restartEngineAtSampleRate(context: Context, sampleRate: Int): Boolean {
-        restartJob?.cancel()
-        stopEngine()
-        delay(100)
-        val inputId = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getInputDeviceId(context)
-        val outputId = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getOutputDeviceId(context)
-        val bufferSize = com.varcain.guitarrackcraft.engine.AudioSettingsManager.getBufferSize(context)
-        val started = AudioEngine.start(
-            sampleRate = sampleRate.toFloat(),
-            inputDeviceId = inputId,
-            outputDeviceId = outputId,
-            bufferFrames = bufferSize
-        )
-        _isEngineRunning.value = started
-        if (!started) _errorMessage.value = "Failed to start engine at $sampleRate Hz"
-        return started
-    }
 
     fun resetClipping() {
         AudioEngine.resetClipping()
@@ -243,9 +209,9 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun stopEngine() {
-        android.util.Log.i("AudioLifecycle", "RackViewModel.stopEngine() -> native (thread=${Thread.currentThread().name})")
+        android.util.Log.i("AudioLifecycle", "RackViewModel.stopEngine() -> USB native session")
         stopRecording()
-        AudioEngine.stop()
+        DirectUsbAudioManager.disable(getApplication<Application>())
         _isEngineRunning.value = false
     }
 

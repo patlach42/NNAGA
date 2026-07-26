@@ -22,7 +22,7 @@
 
 #include <oboe/Oboe.h>
 #include <atomic>
-#include <memory>
+#include <thread>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -52,6 +52,15 @@ public:
     /**
      * Stop audio processing.
      */
+    /**
+     * Start a playback-only USB session. No Android audio streams are opened;
+     * the native render thread supplies silent (or WAV) mono input to the
+     * plugin chain and writes processed stereo frames to DirectUsbOutput.
+     */
+    bool startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
+                               int32_t subslotBytes, int32_t channels,
+                               int32_t bufferFrames);
+
     void stop();
 
     /**
@@ -169,7 +178,18 @@ public:
     bool isWavPlaying() const;
     bool isWavLoaded() const;
 
-    // Oboe AudioStreamCallback implementation
+private:
+    void directUsbRenderLoop();
+    std::thread directUsbRenderThread_;
+    std::atomic<bool> directUsbSession_{false};
+    int32_t directUsbBits_ = 0;
+    int32_t directUsbSubslotBytes_ = 0;
+    int32_t directUsbChannels_ = 0;
+    std::vector<float> directUsbInputBuffer_;
+    std::vector<float> directUsbOutputLeft_;
+    std::vector<float> directUsbOutputRight_;
+
+    std::unique_ptr<oboe::AudioStream> inputStream_;
     oboe::DataCallbackResult onAudioReady(
         oboe::AudioStream* audioStream,
         void* audioData,
@@ -178,8 +198,6 @@ public:
     void onErrorBeforeClose(oboe::AudioStream* oboeStream, oboe::Result error) override;
     void onErrorAfterClose(oboe::AudioStream* oboeStream, oboe::Result error) override;
 
-private:
-    std::unique_ptr<oboe::AudioStream> inputStream_;
     std::unique_ptr<oboe::AudioStream> outputStream_;
     PluginChain chain_;
     float sampleRate_;

@@ -51,9 +51,9 @@ data class DirectUsbFormat(
 }
 
 /**
- * Owns the Android USB permission and connection required by the native UAC
- * playback prototype. The direct path is intentionally output-only: guitar
- * input remains on the existing Oboe input stream until UAC capture exists.
+ * Owns the app-permitted USB connection used by the USB-only audio session.
+ * The native session supplies intentional silent input and sends processed frames
+ * directly to libusb; Android AudioManager/Oboe routing is not involved.
  */
 object DirectUsbAudioManager {
     private const val TAG = "DirectUsbAudio"
@@ -102,6 +102,7 @@ object DirectUsbAudioManager {
         }
         connection = opened
         activeDeviceId = option.id
+        AudioSettingsManager.setDirectUsbDeviceId(context, option.id)
         registerDetachReceiver(context.applicationContext)
         val packedFormats = runCatching { engine.nativeGetDirectUsbOutputFormats() }.getOrDefault(intArrayOf())
         val nativeFormats = packedFormats
@@ -114,32 +115,42 @@ object DirectUsbAudioManager {
         return Result.success((nativeFormats + fallbackFormats).distinct())
     }
 
-    fun startSelected(context: Context, format: DirectUsbFormat): Result<Unit> {
-        if (AudioEngine.getSampleRate().toInt() != format.sampleRate) {
-            return Result.failure(IllegalStateException("Engine is not running at ${format.sampleRate} Hz"))
-        }
+    suspend fun startConfigured(context: Context): Result<Unit> {
+        val deviceId = AudioSettingsManager.getDirectUsbDeviceId(context)
+        val device = getAudioDevices(context).firstOrNull { it.id == deviceId }
+            ?: return Result.failure(IllegalStateException("No configured USB audio device"))
+        val selected = DirectUsbFormat(
+            AudioSettingsManager.getDirectUsbRate(context),
+            AudioSettingsManager.getDirectUsbBits(context),
+            AudioSettingsManager.getDirectUsbSubslot(context),
+            AudioSettingsManager.getDirectUsbChannels(context)
+        )
+        val available = probeFormats(context, device).getOrElse { return Result.failure(it) }
+        val exact = available.firstOrNull {
+            it.sampleRate == selected.sampleRate && it.bits == selected.bits &&
+                it.subslotBytes == selected.subslotBytes && it.channels == selected.channels
+        } ?: return Result.failure(IllegalStateException("Configured USB format is unavailable"))
+        val bufferFrames = AudioSettingsManager.getBufferSize(context)
         val engine = NativeEngine.getInstance()
-        if (!engine.nativeStartDirectUsbOutput(
-                format.sampleRate,
-                format.bits,
-                format.subslotBytes,
-                format.channels
+        if (!engine.nativeStartDirectUsbSession(
+                exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels, bufferFrames
             )
         ) {
-            return Result.failure(IllegalStateException("Could not start ${format.label} playback"))
+            return Result.failure(IllegalStateException("Could not start USB audio session (${exact.label})"))
         }
+        return Result.success(Unit)
+    }
+
+    fun startSelected(context: Context, format: DirectUsbFormat): Result<Unit> {
         AudioSettingsManager.setDirectUsbFormat(
-            context,
-            format.sampleRate,
-            format.bits,
-            format.subslotBytes,
-            format.channels
+            context, format.sampleRate, format.bits, format.subslotBytes, format.channels
         )
         return Result.success(Unit)
     }
 
 
     fun disable(context: Context) {
+        NativeEngine.getInstance().stopEngine()
         NativeEngine.getInstance().nativeStopDirectUsbOutput()
         connection?.close()
         connection = null

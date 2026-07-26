@@ -20,8 +20,6 @@
 package com.varcain.guitarrackcraft.engine
 
 import android.content.Context
-import android.media.AudioDeviceInfo
-import android.media.AudioManager
 
 data class AudioDeviceOption(
     val id: Int,
@@ -31,68 +29,40 @@ data class AudioDeviceOption(
 
 object AudioSettingsManager {
     private const val PREFS_NAME = "audio_settings"
-    private const val KEY_INPUT_DEVICE_ID = "inputDeviceId"
-    private const val KEY_OUTPUT_DEVICE_ID = "outputDeviceId"
     private const val KEY_BUFFER_SIZE = "bufferSize"
+    private const val KEY_USB_DEVICE_ID = "directUsbDeviceId"
     private const val KEY_DIRECT_USB_RATE = "directUsbRate"
     private const val KEY_DIRECT_USB_BITS = "directUsbBits"
     private const val KEY_DIRECT_USB_SUBSLOT = "directUsbSubslot"
     private const val KEY_DIRECT_USB_CHANNELS = "directUsbChannels"
 
     val BUFFER_SIZE_OPTIONS = listOf(
-        0 to "Auto",
-        16 to "16",
-        32 to "32",
-        64 to "64",
-        128 to "128",
-        256 to "256",
-        512 to "512",
-        1024 to "1024"
+        0 to "Auto", 16 to "16", 32 to "32", 64 to "64",
+        128 to "128", 256 to "256", 512 to "512", 1024 to "1024"
     )
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun getInputDeviceId(context: Context): Int =
-        prefs(context).getInt(KEY_INPUT_DEVICE_ID, 0)
-
-    fun setInputDeviceId(context: Context, id: Int) {
-        prefs(context).edit().putInt(KEY_INPUT_DEVICE_ID, id).apply()
-    }
-
-    fun getOutputDeviceId(context: Context): Int =
-        prefs(context).getInt(KEY_OUTPUT_DEVICE_ID, 0)
-
-    fun setOutputDeviceId(context: Context, id: Int) {
-        prefs(context).edit().putInt(KEY_OUTPUT_DEVICE_ID, id).apply()
-    }
-
-    fun getBufferSize(context: Context): Int =
-        prefs(context).getInt(KEY_BUFFER_SIZE, 0)
+    fun getBufferSize(context: Context): Int = prefs(context).getInt(KEY_BUFFER_SIZE, 0)
 
     fun setBufferSize(context: Context, size: Int) {
         prefs(context).edit().putInt(KEY_BUFFER_SIZE, size).apply()
     }
 
-    fun getDirectUsbRate(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_RATE, 48_000)
+    fun getDirectUsbDeviceId(context: Context): Int =
+        prefs(context).getInt(KEY_USB_DEVICE_ID, 0)
 
-    fun getDirectUsbBits(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_BITS, 32)
+    fun setDirectUsbDeviceId(context: Context, id: Int) {
+        prefs(context).edit().putInt(KEY_USB_DEVICE_ID, id).apply()
+    }
 
-    fun getDirectUsbSubslot(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_SUBSLOT, 4)
+    fun getDirectUsbRate(context: Context): Int = prefs(context).getInt(KEY_DIRECT_USB_RATE, 48_000)
+    fun getDirectUsbBits(context: Context): Int = prefs(context).getInt(KEY_DIRECT_USB_BITS, 32)
+    fun getDirectUsbSubslot(context: Context): Int = prefs(context).getInt(KEY_DIRECT_USB_SUBSLOT, 4)
+    fun getDirectUsbChannels(context: Context): Int = prefs(context).getInt(KEY_DIRECT_USB_CHANNELS, 2)
 
-    fun getDirectUsbChannels(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_CHANNELS, 2)
-
-    fun setDirectUsbFormat(
-        context: Context,
-        rate: Int,
-        bits: Int,
-        subslotBytes: Int,
-        channels: Int
-    ) {
+    fun setDirectUsbFormat(context: Context, rate: Int, bits: Int, subslotBytes: Int, channels: Int) {
         prefs(context).edit()
             .putInt(KEY_DIRECT_USB_RATE, rate)
             .putInt(KEY_DIRECT_USB_BITS, bits)
@@ -100,48 +70,5 @@ object AudioSettingsManager {
             .putInt(KEY_DIRECT_USB_CHANNELS, channels)
             .apply()
     }
-
-    fun getInputDevices(context: Context): List<AudioDeviceOption> {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val devices = am.getDevices(AudioManager.GET_DEVICES_INPUTS)
-        return buildList {
-            add(AudioDeviceOption(0, "Default", 0))
-            devices.forEach { dev ->
-                val name = dev.productName?.toString()?.ifEmpty { null }
-                    ?: deviceTypeName(dev.type)
-                add(AudioDeviceOption(dev.id, "$name (${deviceTypeName(dev.type)})", dev.type))
-            }
-        }
-    }
-
-    fun getOutputDevices(context: Context): List<AudioDeviceOption> {
-        val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val devices = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
-        return buildList {
-            add(AudioDeviceOption(0, "Default", 0))
-            devices.forEach { dev ->
-                val name = dev.productName?.toString()?.ifEmpty { null }
-                    ?: deviceTypeName(dev.type)
-                add(AudioDeviceOption(dev.id, "$name (${deviceTypeName(dev.type)})", dev.type))
-            }
-        }
-    }
-
-    private fun deviceTypeName(type: Int): String = when (type) {
-        AudioDeviceInfo.TYPE_BUILTIN_MIC -> "Built-in Mic"
-        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Built-in Speaker"
-        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Earpiece"
-        AudioDeviceInfo.TYPE_WIRED_HEADSET -> "Wired Headset"
-        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> "Wired Headphones"
-        AudioDeviceInfo.TYPE_USB_DEVICE -> "USB Device"
-        AudioDeviceInfo.TYPE_USB_ACCESSORY -> "USB Accessory"
-        AudioDeviceInfo.TYPE_USB_HEADSET -> "USB Headset"
-        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth SCO"
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "Bluetooth A2DP"
-        AudioDeviceInfo.TYPE_TELEPHONY -> "Telephony"
-        AudioDeviceInfo.TYPE_AUX_LINE -> "Aux Line"
-        AudioDeviceInfo.TYPE_HDMI -> "HDMI"
-        AudioDeviceInfo.TYPE_HDMI_ARC -> "HDMI ARC"
-        else -> "Audio Device"
-    }
 }
+

@@ -512,7 +512,7 @@ fun RackScreen(
                                             if (size != currentBufferSize) {
                                                 currentBufferSize = size
                                                 AudioSettingsManager.setBufferSize(context, size)
-                                                viewModel.restartEngine(context)
+                                                viewModel.restartEngine()
                                             }
                                         }
                                     )
@@ -645,7 +645,7 @@ fun RackScreen(
                 RackBottomBar(
                     isEngineRunning = isEngineRunning,
                     onToggleEngine = {
-                        if (isEngineRunning) viewModel.stopEngine() else viewModel.restartEngine(context)
+                        if (isEngineRunning) viewModel.stopEngine() else viewModel.startEngine()
                     },
                     onAddPlugin = onNavigateToBrowser,
                     onOpenPresets = {
@@ -837,7 +837,7 @@ fun RackScreen(
                     }
                 )
                 Card(
-                    onClick = { viewModel.restartEngine(context) },
+                    onClick = { viewModel.startEngine() },
                     modifier = Modifier.fillMaxWidth(),
                     colors = CardDefaults.cardColors(
                         containerColor = MaterialTheme.colorScheme.secondaryContainer

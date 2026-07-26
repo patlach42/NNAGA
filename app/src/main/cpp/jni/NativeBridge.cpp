@@ -386,18 +386,6 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRefreshPluginRegistry
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartEngine(JNIEnv* env, jobject thiz, jfloat sampleRate, jint inputDeviceId, jint outputDeviceId, jint bufferFrames) {
-    if (!g_ctx->audioEngine) {
-        LOGE("Audio engine not initialized");
-        return JNI_FALSE;
-    }
-
-    return g_ctx->audioEngine->start(static_cast<float>(sampleRate),
-                                     static_cast<int32_t>(inputDeviceId),
-                                     static_cast<int32_t>(outputDeviceId),
-                                     static_cast<int32_t>(bufferFrames)) ? JNI_TRUE : JNI_FALSE;
-}
 
 JNIEXPORT jboolean JNICALL
 Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeOpenDirectUsbOutput(
@@ -408,20 +396,19 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeOpenDirectUsbOutput(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartDirectUsbOutput(
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartDirectUsbSession(
         JNIEnv* env, jobject thiz, jint sampleRate, jint bitsPerSample,
-        jint bytesPerSample, jint channels) {
-    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput ||
-        !g_ctx->audioEngine->isRunning() ||
-        static_cast<int>(g_ctx->audioEngine->getSampleRate()) != static_cast<int>(sampleRate)) {
-        return JNI_FALSE;
-    }
-    return g_ctx->directUsbOutput->start(static_cast<int>(sampleRate),
-                                         static_cast<int>(bitsPerSample),
-                                         static_cast<int>(bytesPerSample),
-                                         static_cast<int>(channels))
-        ? JNI_TRUE : JNI_FALSE;
+        jint bytesPerSample, jint channels, jint bufferFrames) {
+    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
+    return g_ctx->audioEngine->startDirectUsbSession(
+        static_cast<float>(sampleRate),
+        static_cast<int32_t>(bitsPerSample),
+        static_cast<int32_t>(bytesPerSample),
+        static_cast<int32_t>(channels),
+        static_cast<int32_t>(bufferFrames)
+    ) ? JNI_TRUE : JNI_FALSE;
 }
+
 
 JNIEXPORT jintArray JNICALL
 Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbOutputFormats(
