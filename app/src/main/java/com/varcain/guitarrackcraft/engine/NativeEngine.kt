@@ -123,18 +123,22 @@ class NativeEngine private constructor() {
 
     /** Opens an app-permitted USB device FD for the direct UAC playback prototype. */
     external fun nativeOpenDirectUsbOutput(fileDescriptor: Int): Boolean
-    /** Starts the USB-only audio session with a silent native input and libusb output. */
+    /** Starts direct USB with one selected zero-based mono capture channel. */
     external fun nativeStartDirectUsbSession(
         sampleRate: Int,
         bitsPerSample: Int,
         bytesPerSample: Int,
         channels: Int,
+        inputChannel: Int,
         bufferFrames: Int
     ): Boolean
 
 
     /** Packed quadruples: sample rate Hz, valid bits, PCM subslot bytes, and channels. */
     external fun nativeGetDirectUsbOutputFormats(): IntArray
+
+    /** Number of selectable mono capture channels on the opened USB interface. */
+    external fun nativeGetDirectUsbInputChannelCount(): Int
 
     /** Stops direct USB playback without closing the Java UsbDeviceConnection. */
     external fun nativeStopDirectUsbOutput()

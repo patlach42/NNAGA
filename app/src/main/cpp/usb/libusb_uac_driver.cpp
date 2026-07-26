@@ -41,19 +41,20 @@ constexpr uint8_t FORMAT_TYPE_I         = 0x01;
 constexpr uint8_t REQ_SET_CUR              = 0x01;
 constexpr uint16_t CS_SAM_FREQ_CONTROL_SEL = 0x01;
 
-// Pump tuning. 4 transfers × 8 packets keeps the pipe primed without
-// hogging memory; 1MB ring covers ~700ms at 384k/32-bit/2ch which is
-// far more than the audio thread's typical wakeup jitter.
+// Keep several 1 ms batches queued so the kernel can reserve consecutive
+// service intervals while the event thread handles completed batches. This
+// prevents user-space scheduling gaps from starving the asynchronous DAC.
 constexpr int kNumTransfers = 4;
 constexpr int kPacketsPerTransfer = 8;
-constexpr size_t kRingBytes = 1u << 20;  // 1 MiB, must be power of two
+// 1 MiB ring covers ~700ms at 384k/32-bit/2ch which is far more than
+// the audio thread's typical wakeup jitter.
+constexpr size_t kRingBytes = 1u << 20;  // must be power of two
+// Capture backlog is a latency budget, not a smoothing cache. At 48 kHz,
+// 24-bit in 4-byte subslots this caps a four-channel input at ~5 ms.
+constexpr size_t kCaptureRingBytes = 1u << 12;
 
-// Heartbeat: one LOGI per N iso completion callbacks. At HS /
-// bInterval=1 the event thread fires 8000 callbacks/sec / kPacketsPerTransfer
-// per transfer, so kNumTransfers transfers in flight × 8000pps gives
-// ~1000 onIso calls/sec → log once per second. Calibrated to be
-// noticeable in logcat without flooding it; flip to a smaller value
-// when actively diagnosing a wedge.
+// Heartbeat: one LOGI per N iso completion callbacks. Four queued HS batches
+// of eight packets yield roughly 1000 callbacks per second.
 constexpr uint32_t kIsoLogEvery = 1000;
 
 // Produced/consumed bytes count, not frame count. We pack interleaved
@@ -89,8 +90,9 @@ void walkExtra(const uint8_t* extra, int extraLen, Cb&& cb) {
 LibusbUacDriver::LibusbUacDriver() {
     ring_.resize(kRingBytes);
     ringMask_ = kRingBytes - 1;
+    captureRing_.resize(kCaptureRingBytes);
+    captureRingMask_ = kCaptureRingBytes - 1;
 }
-
 LibusbUacDriver::~LibusbUacDriver() {
     stop();
     close();
@@ -331,6 +333,54 @@ std::vector<UsbFormatCandidate> LibusbUacDriver::enumerateFormats() {
     libusb_free_config_descriptor(config);
     return result;
 }
+int LibusbUacDriver::captureChannelCount() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!device_) return 0;
+    libusb_config_descriptor* config = nullptr;
+    libusb_device* dev = libusb_get_device(device_);
+    int rc = libusb_get_active_config_descriptor(dev, &config);
+    if (rc != LIBUSB_SUCCESS) rc = libusb_get_config_descriptor(dev, 0, &config);
+    if (rc != LIBUSB_SUCCESS || !config) return 0;
+    int maximum = 0;
+    for (uint8_t i = 0; i < config->bNumInterfaces; ++i) {
+        const auto& iface = config->interface[i];
+        for (int a = 0; a < iface.num_altsetting; ++a) {
+            const auto& alt = iface.altsetting[a];
+            if (alt.bInterfaceClass != USB_CLASS_AUDIO ||
+                alt.bInterfaceSubClass != SUBCLASS_AUDIOSTREAM ||
+                alt.bAlternateSetting == 0) continue;
+            int channels = 0;
+            bool pcm = false;
+            bool hasUac2General = false;
+            walkExtra(alt.extra, alt.extra_length, [&](const uint8_t* p, int len) {
+                if (isClassDescriptor(p, len, CS_INTERFACE, AS_GENERAL) &&
+                    len >= 11) {
+                    channels = p[10];
+                    hasUac2General = true;
+                }
+                if (isClassDescriptor(p, len, CS_INTERFACE, AS_FORMAT_TYPE) &&
+                    len >= 6 && p[3] == FORMAT_TYPE_I) {
+                    pcm = true;
+                    if (!hasUac2General && len >= 7 && p[4] > 0) channels = p[4];
+                }
+                return false;
+            });
+            bool input = false;
+            for (int e = 0; e < alt.bNumEndpoints; ++e) {
+                const auto& ep = alt.endpoint[e];
+                if ((ep.bmAttributes & 3) == LIBUSB_TRANSFER_TYPE_ISOCHRONOUS &&
+                    (ep.bEndpointAddress & 0x80)) {
+                    input = true;
+                    break;
+                }
+            }
+            if (input && pcm && channels > maximum) maximum = channels;
+        }
+    }
+    libusb_free_config_descriptor(config);
+    return maximum;
+}
+
 
 // --- UAC2 enumeration -------------------------------------------------
 
@@ -1071,6 +1121,11 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
     ringTail_.store(0, std::memory_order_relaxed);
     writtenFrames_.store(0, std::memory_order_relaxed);
     playedFrames_.store(0, std::memory_order_relaxed);
+    playbackOverruns_.store(0, std::memory_order_relaxed);
+    playbackUnderruns_.store(0, std::memory_order_relaxed);
+    playbackOverrunActive_.store(false, std::memory_order_relaxed);
+    playbackUnderrunActive_.store(false, std::memory_order_relaxed);
+    playbackStarted_.store(false, std::memory_order_relaxed);
     stopRequested_.store(false, std::memory_order_relaxed);
 
     if (!startIsoPump()) {
@@ -1088,6 +1143,227 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
          format_.endpointAddress);
     return true;
 }
+bool LibusbUacDriver::selectCaptureAltSetting(const StreamFormat& playback,
+                                              StreamFormat* out_fmt) {
+    libusb_config_descriptor* config = nullptr;
+    libusb_device* dev = libusb_get_device(device_);
+    int rc = libusb_get_active_config_descriptor(dev, &config);
+    if (rc != LIBUSB_SUCCESS) rc = libusb_get_config_descriptor(dev, 0, &config);
+    if (rc != LIBUSB_SUCCESS || !config) return false;
+    const libusb_interface_descriptor* chosen = nullptr;
+    const libusb_endpoint_descriptor* chosenEp = nullptr;
+    bool chosenImplicitFeedback = false;
+    int chosenChannels = 0;
+    for (uint8_t i = 0; i < config->bNumInterfaces; ++i) {
+        const auto& iface = config->interface[i];
+        for (int a = 0; a < iface.num_altsetting; ++a) {
+            const auto& alt = iface.altsetting[a];
+            if (alt.bInterfaceClass != USB_CLASS_AUDIO ||
+                alt.bInterfaceSubClass != SUBCLASS_AUDIOSTREAM ||
+                alt.bAlternateSetting == 0) continue;
+            int channels = 0, bits = 0, bytes = 0;
+            walkExtra(alt.extra, alt.extra_length, [&](const uint8_t* p, int len) {
+                if (isClassDescriptor(p, len, CS_INTERFACE, AS_GENERAL) &&
+                    playback.uacVersion >= 0x0200 && len >= 11) {
+                    channels = p[10];
+                }
+                if (isClassDescriptor(p, len, CS_INTERFACE, AS_FORMAT_TYPE) &&
+                    len >= 6 && p[3] == FORMAT_TYPE_I) {
+                    if (playback.uacVersion >= 0x0200) {
+                        bytes = p[4];
+                        bits = p[5];
+                    } else if (len >= 7) {
+                        channels = p[4];
+                        bytes = p[5];
+                        bits = p[6];
+                    }
+                }
+                return false;
+            });
+            // Capture channel count is independent of playback: common
+            // guitar interfaces expose one or two inputs and stereo output.
+            if (channels <= 0 || bits != playback.bitsPerSample ||
+                bytes != playback.bytesPerSample) continue;
+            for (int e = 0; e < alt.bNumEndpoints; ++e) {
+                const auto& ep = alt.endpoint[e];
+                if ((ep.bmAttributes & 3) != LIBUSB_TRANSFER_TYPE_ISOCHRONOUS ||
+                    !(ep.bEndpointAddress & 0x80)) continue;
+                const uint8_t usage = (ep.bmAttributes >> 4) & 3;
+                if (usage != 0 && usage != 2) continue;
+                if (!chosen || (usage == 2 && !chosenImplicitFeedback)) {
+                    chosen = &alt;
+                    chosenEp = &ep;
+                    chosenChannels = channels;
+                    chosenImplicitFeedback = usage == 2;
+                }
+            }
+        }
+    }
+    if (!chosen || !chosenEp) {
+        libusb_free_config_descriptor(config);
+        return false;
+    }
+    *out_fmt = playback;
+    out_fmt->channels = chosenChannels;
+    out_fmt->interfaceNumber = chosen->bInterfaceNumber;
+    out_fmt->altSetting = chosen->bAlternateSetting;
+    out_fmt->endpointAddress = chosenEp->bEndpointAddress;
+    out_fmt->maxPacketSize = chosenEp->wMaxPacketSize;
+    out_fmt->bInterval = chosenEp->bInterval;
+    out_fmt->feedbackEndpointAddress = 0;
+    out_fmt->implicitFeedback = chosenImplicitFeedback;
+    libusb_free_config_descriptor(config);
+    return true;
+}
+
+bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
+                                  int channels, int bytesPerSample) {
+    if (!start(sampleRateHz, bitsPerSample, channels, bytesPerSample)) return false;
+
+    bool captureStarted = false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        StreamFormat capture{};
+        if (!selectCaptureAltSetting(format_, &capture)) {
+            LOGW("no compatible PCM capture alt setting");
+        } else if (capture.interfaceNumber == format_.interfaceNumber) {
+            LOGW("capture and playback share interface; refusing unsafe duplex claim");
+        } else {
+            const int claim = libusb_claim_interface(device_, capture.interfaceNumber);
+            if (claim != LIBUSB_SUCCESS) {
+                LOGE("claim capture interface %u -> %d", capture.interfaceNumber, claim);
+            } else {
+                captureInterfaceClaimed_ = true;
+                claimedCaptureIface_ = capture.interfaceNumber;
+                captureFormat_ = capture;
+                const int alt = libusb_set_interface_alt_setting(
+                    device_, capture.interfaceNumber, capture.altSetting);
+                if (alt != LIBUSB_SUCCESS) {
+                    LOGE("set capture interface %u alt %u -> %d",
+                         capture.interfaceNumber, capture.altSetting, alt);
+                } else {
+                    captureHead_.store(0, std::memory_order_relaxed);
+                    captureTail_.store(0, std::memory_order_relaxed);
+                    captureOverruns_.store(0, std::memory_order_relaxed);
+                    captureUnderruns_.store(0, std::memory_order_relaxed);
+                    captureSequence_.store(0, std::memory_order_relaxed);
+                    captureStarted = startCapturePump();
+                }
+            }
+        }
+    }
+    if (captureStarted) return true;
+    // start() has already activated output. A partial duplex startup must
+    // fully unwind its claims and transfers; leaving output live would leak
+    // the Android-owned interface and make the next attempt permanently BUSY.
+    stop();
+    return false;
+}
+
+bool LibusbUacDriver::startCapturePump() {
+    const int packets = kPacketsPerTransfer;
+    const int mps = libusb_get_max_iso_packet_size(
+        libusb_get_device(device_), captureFormat_.endpointAddress);
+    if (mps <= 0) return false;
+    captureTransfers_.reserve(kNumTransfers);
+    captureTransferBuffers_.reserve(kNumTransfers);
+    for (int i = 0; i < kNumTransfers; ++i) {
+        libusb_transfer* xfr = libusb_alloc_transfer(packets);
+        if (!xfr) { stopCapturePump(); return false; }
+        std::vector<uint8_t> buf(static_cast<size_t>(mps) * packets);
+        libusb_fill_iso_transfer(xfr, device_, captureFormat_.endpointAddress,
+                                 buf.data(), buf.size(), packets,
+                                 &LibusbUacDriver::onCaptureTrampoline, this, 0);
+        libusb_set_iso_packet_lengths(xfr, mps);
+        captureTransferBuffers_.emplace_back(std::move(buf));
+        captureTransfers_.push_back(xfr);
+    }
+    for (auto* xfr : captureTransfers_) {
+        if (libusb_submit_transfer(xfr) != LIBUSB_SUCCESS) {
+            stopCapturePump(); return false;
+        }
+        captureInflight_.fetch_add(1, std::memory_order_relaxed);
+    }
+    return true;
+}
+
+void LibusbUacDriver::stopCapturePump() {
+    for (auto* xfr : captureTransfers_) if (xfr) libusb_cancel_transfer(xfr);
+    for (int spin = 0; spin < 200 && captureInflight_.load(std::memory_order_acquire) > 0; ++spin) {
+        timeval tv{0, 5000};
+        libusb_handle_events_timeout(ctx_, &tv);
+    }
+    for (auto* xfr : captureTransfers_) if (xfr) libusb_free_transfer(xfr);
+    captureTransfers_.clear();
+    captureTransferBuffers_.clear();
+    captureInflight_.store(0, std::memory_order_relaxed);
+}
+
+void LibusbUacDriver::onCaptureTrampoline(libusb_transfer* xfr) {
+    static_cast<LibusbUacDriver*>(xfr->user_data)->onCapture(xfr);
+}
+
+void LibusbUacDriver::onCapture(libusb_transfer* xfr) {
+    if (xfr->status == LIBUSB_TRANSFER_CANCELLED ||
+        xfr->status == LIBUSB_TRANSFER_NO_DEVICE ||
+        stopRequested_.load(std::memory_order_acquire)) {
+        captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
+        return;
+    }
+    size_t head = captureHead_.load(std::memory_order_relaxed);
+    size_t tail = captureTail_.load(std::memory_order_acquire);
+    const size_t capacity = captureRing_.size();
+    int totalFrames = 0;
+    const int stride = captureFormat_.channels * captureFormat_.bytesPerSample;
+    uint8_t* cursor = xfr->buffer;
+    for (int i = 0; i < xfr->num_iso_packets; ++i) {
+        const int n = xfr->iso_packet_desc[i].actual_length;
+        if (n > 0 && stride > 0) {
+            const size_t free = capacity - (head - tail);
+            const size_t keep = std::min<size_t>(n, free - (free % stride));
+            if (keep < static_cast<size_t>(n))
+                captureOverruns_.fetch_add(1, std::memory_order_relaxed);
+            size_t off = head & captureRingMask_;
+            size_t first = std::min(keep, capacity - off);
+            if (first) std::memcpy(captureRing_.data() + off, cursor, first);
+            if (first < keep) std::memcpy(captureRing_.data(), cursor + first, keep - first);
+            head += keep;
+            totalFrames += static_cast<int>(keep / stride);
+        }
+        cursor += xfr->iso_packet_desc[i].length;
+    }
+    captureHead_.store(head, std::memory_order_release);
+    if (totalFrames > 0) captureSequence_.fetch_add(static_cast<uint64_t>(totalFrames),
+                                                      std::memory_order_release);
+    if (libusb_submit_transfer(xfr) != LIBUSB_SUCCESS)
+        captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+int LibusbUacDriver::readCapturePcm(uint8_t* dst, int frames) {
+    if (!dst || frames <= 0 || captureFormat_.channels <= 0) return 0;
+    const int stride = captureFormat_.channels * captureFormat_.bytesPerSample;
+    const size_t want = static_cast<size_t>(frames) * stride;
+    size_t head = captureHead_.load(std::memory_order_acquire);
+    size_t tail = captureTail_.load(std::memory_order_relaxed);
+    size_t n = std::min(want, head - tail);
+    n -= n % stride;
+    const size_t off = tail & captureRingMask_;
+    const size_t first = std::min(n, captureRing_.size() - off);
+    if (first) std::memcpy(dst, captureRing_.data() + off, first);
+    if (first < n) std::memcpy(dst + first, captureRing_.data(), n - first);
+    captureTail_.store(tail + n, std::memory_order_release);
+    const int got = static_cast<int>(n / stride);
+    if (got < frames) captureUnderruns_.fetch_add(1, std::memory_order_relaxed);
+    return got;
+}
+
+int LibusbUacDriver::captureAvailableFrames() const {
+    const int stride = captureFormat_.channels * captureFormat_.bytesPerSample;
+    if (stride <= 0) return 0;
+    return static_cast<int>((captureHead_.load(std::memory_order_acquire) -
+                             captureTail_.load(std::memory_order_relaxed)) / stride);
+}
+
 
 void LibusbUacDriver::flushRing() {
     // Lockless reset of the SPSC ring. Producer + consumer both
@@ -1115,11 +1391,12 @@ bool LibusbUacDriver::isStreamingFormat(int sampleRate, int bitsPerSample, int c
 }
 void LibusbUacDriver::stop() {
     bool was = streaming_.exchange(false, std::memory_order_acq_rel);
-    if (!was && transfers_.empty() &&
-        !interfaceClaimed_ && !controlInterfaceClaimed_) return;
-
+    if (!was && transfers_.empty() && captureTransfers_.empty() &&
+        !interfaceClaimed_ && !controlInterfaceClaimed_ &&
+        !captureInterfaceClaimed_) return;
     std::lock_guard<std::mutex> lock(mutex_);
     stopIsoPump();
+    stopCapturePump();
     // Full teardown: alt 0 then release. Caller is the toggle going
     // off, the queue clearing, or app pause — NOT a track-to-track
     // reconfigure, which goes through start() with the claim kept.
@@ -1134,6 +1411,13 @@ void LibusbUacDriver::stop() {
     if (device_ && controlInterfaceClaimed_) {
         libusb_release_interface(device_, claimedControlIface_);
         controlInterfaceClaimed_ = false;
+    }
+    if (device_ && captureInterfaceClaimed_) {
+        if (captureFormat_.altSetting != 0)
+            libusb_set_interface_alt_setting(device_, captureFormat_.interfaceNumber, 0);
+        libusb_release_interface(device_, claimedCaptureIface_);
+        captureInterfaceClaimed_ = false;
+        claimedCaptureIface_ = 0xFF;
     }
     LOGI("stopped streaming (full teardown)");
 }
@@ -1470,6 +1754,12 @@ int LibusbUacDriver::drainRing(uint8_t* dst, int bytes) {
         // Underrun — pad with silence so the iso packet still ships.
         // The DAC hears a click rather than dropping the entire URB.
         std::memset(dst + n, 0, bytes - n);
+        if (playbackStarted_.load(std::memory_order_acquire) &&
+            !playbackUnderrunActive_.exchange(true, std::memory_order_acq_rel)) {
+            playbackUnderruns_.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        playbackUnderrunActive_.store(false, std::memory_order_release);
     }
     // Frames "played" = frames the pump has dispatched, including the
     // silence padding (since the device hears those samples too). Used
@@ -1492,6 +1782,13 @@ int LibusbUacDriver::writePcm(const uint8_t* data, int frames) {
     // calls — saves the consumer from having to track partial frames.
     int frameStride = format_.channels * format_.bytesPerSample;
     if (frameStride > 0) writable -= writable % frameStride;
+    if (writable < bytes) {
+        if (!playbackOverrunActive_.exchange(true, std::memory_order_acq_rel)) {
+            playbackOverruns_.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        playbackOverrunActive_.store(false, std::memory_order_release);
+    }
     if (writable <= 0) return 0;
 
     size_t off = head & ringMask_;
@@ -1503,6 +1800,7 @@ int LibusbUacDriver::writePcm(const uint8_t* data, int frames) {
     ringHead_.store(head + writable, std::memory_order_release);
     int framesPushed = writable / frameStride;
     writtenFrames_.fetch_add(framesPushed, std::memory_order_acq_rel);
+    playbackStarted_.store(true, std::memory_order_release);
     return framesPushed;
 }
 

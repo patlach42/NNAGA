@@ -22,8 +22,8 @@
 
 namespace guitarrackcraft {
 
-// Playback-only USB sink. All methods called by the Oboe callback are bounded
-// and lock-free; open/start/stop are control-thread operations.
+// Full-duplex custom USB UAC bridge. The render thread uses bounded,
+// lock-free playback and capture rings; lifecycle stays on control threads.
 class DirectUsbOutput {
 public:
     static constexpr int kSampleRate = 48000;
@@ -33,7 +33,8 @@ public:
     static constexpr int kMaxFramesPerWrite = 8192;
 
     DirectUsbOutput()
-        : pcm_(static_cast<size_t>(kMaxFramesPerWrite) * kMaxDeviceChannels * 4) {}
+        : pcm_(static_cast<size_t>(kMaxFramesPerWrite) * kMaxDeviceChannels * 4),
+          capturePcm_(static_cast<size_t>(kMaxFramesPerWrite) * kMaxDeviceChannels * 4) {}
     ~DirectUsbOutput() { stop(); close(); }
 
     bool open(int fd) {
@@ -50,24 +51,33 @@ public:
         driver_.close();
     }
 
-    bool start(int sampleRate, int bitsPerSample, int bytesPerSample, int channels) {
+    bool start(int sampleRate, int bitsPerSample, int bytesPerSample, int channels,
+               int inputChannel) {
         if (!driver_.isOpen() || sampleRate <= 0 ||
             (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
             bytesPerSample < (bitsPerSample + 7) / 8 || bytesPerSample > 4 ||
-            channels < kChannels || channels > kMaxDeviceChannels) return false;
+            channels < kChannels || channels > kMaxDeviceChannels ||
+            inputChannel < 0 || inputChannel >= captureChannelCount()) return false;
         stop();
-        if (!driver_.start(sampleRate, bitsPerSample, channels, bytesPerSample))
+        if (!driver_.startDuplex(sampleRate, bitsPerSample, channels, bytesPerSample))
             return false;
         formatBits_ = bitsPerSample;
         formatBytes_ = bytesPerSample;
         deviceChannels_ = driver_.currentFormat().channels;
-        if (deviceChannels_ < kChannels || deviceChannels_ > kMaxDeviceChannels) {
+        const auto& capture = driver_.currentCaptureFormat();
+        if (deviceChannels_ < kChannels || deviceChannels_ > kMaxDeviceChannels ||
+            inputChannel >= capture.channels) {
             driver_.stop();
             return false;
         }
+        inputChannel_ = inputChannel;
         accepting_.store(true, std::memory_order_release);
         streaming_.store(true, std::memory_order_release);
         return true;
+    }
+
+    int captureChannelCount() const noexcept {
+        return driver_.captureChannelCount();
     }
 
     std::vector<monotrypt::usb::UsbFormatCandidate> enumerateFormats() {
@@ -118,6 +128,48 @@ public:
         activeWriters_.fetch_sub(1, std::memory_order_release);
     }
 
+    // Reads the selected capture channel as normalized float. Non-blocking
+    // and allocation-free; missing frames are zero-filled.
+    int readMonoInput(float* dst, int frames) noexcept {
+        if (!dst || frames <= 0) return 0;
+        if (frames > kMaxFramesPerWrite) frames = kMaxFramesPerWrite;
+        const auto& f = driver_.currentCaptureFormat();
+        const int stride = f.channels * f.bytesPerSample;
+        const int got = (stride > 0) ? driver_.readCapturePcm(capturePcm_.data(), frames) : 0;
+        for (int i = 0; i < frames; ++i) {
+            if (i >= got) { dst[i] = 0.0f; continue; }
+            const uint8_t* p = capturePcm_.data() +
+                static_cast<size_t>(i) * stride +
+                static_cast<size_t>(inputChannel_) * f.bytesPerSample;
+            uint32_t raw = 0;
+            for (int b = 0; b < f.bytesPerSample; ++b)
+                raw |= static_cast<uint32_t>(p[b]) << (8 * b);
+            const int validBytes = (f.bitsPerSample + 7) / 8;
+            const int shift = 8 * (f.bytesPerSample - validBytes);
+            int32_t sample = static_cast<int32_t>(raw >> shift);
+            const int validBits = f.bitsPerSample;
+            if (validBits < 32) {
+                const uint32_t sign = 1u << (validBits - 1);
+                const uint32_t mask = (1u << validBits) - 1u;
+                uint32_t v = static_cast<uint32_t>(sample) & mask;
+                if (v & sign) v |= ~mask;
+                sample = static_cast<int32_t>(v);
+            }
+            const float scale = validBits == 16 ? 32768.0f :
+                                validBits == 24 ? 8388608.0f : 2147483648.0f;
+            dst[i] = static_cast<float>(sample) / scale;
+        }
+        return got;
+    }
+
+    int captureAvailableFrames() const noexcept {
+        return driver_.captureAvailableFrames();
+    }
+
+    uint64_t xrunCount() const noexcept {
+        return driver_.playbackXRunCount();
+    }
+
 private:
     void packPcm(float value, uint8_t* out) const noexcept {
         int32_t sample = 0;
@@ -143,8 +195,10 @@ private:
             out[i] = static_cast<uint8_t>(subslot >> (8 * i));
     }
     int deviceChannels_ = kChannels;
+    int inputChannel_ = 0;
     monotrypt::usb::LibusbUacDriver driver_;
     std::vector<uint8_t> pcm_;
+    std::vector<uint8_t> capturePcm_;
     int formatBits_ = kBitsPerSample;
     int formatBytes_ = 4;
     std::atomic<bool> accepting_{false};

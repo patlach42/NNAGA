@@ -31,6 +31,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <thread>
+#include <limits>
 
 #define LOG_TAG "AudioEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -84,16 +85,18 @@ bool AudioEngine::start(float sampleRate, int32_t inputDeviceId,
 
 bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                         int32_t subslotBytes, int32_t channels,
-                                        int32_t bufferFrames) {
+                                        int32_t inputChannel, int32_t bufferFrames) {
     if (isRunning_.load() || !directUsbOutput_ || sampleRate <= 0.0f ||
         (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
         subslotBytes < (bitsPerSample + 7) / 8 || subslotBytes > 4 ||
-        channels < 2 || channels > DirectUsbOutput::kMaxDeviceChannels) {
+        channels < 2 || channels > DirectUsbOutput::kMaxDeviceChannels ||
+        inputChannel < 0 ||
+        inputChannel >= directUsbOutput_->captureChannelCount()) {
         return false;
     }
-    const int32_t renderFrames = bufferFrames > 0 ? bufferFrames : 256;
+    const int32_t renderFrames = bufferFrames > 0 ? bufferFrames : 64;
     if (!directUsbOutput_->start(static_cast<int>(sampleRate), bitsPerSample,
-                                 subslotBytes, channels)) {
+                                 subslotBytes, channels, inputChannel)) {
         LOGE("Direct USB transport start failed");
         return false;
     }
@@ -217,11 +220,12 @@ int32_t AudioEngine::getXRunCount() const {
         auto result = outputStream_->getXRunCount();
         oboeXruns = result ? result.value() : 0;
     }
-    /* Oboe-side xruns only happen when the audio thread itself misses a
-     * deadline. VST plugins under wine zero-fill on their own (the audio
-     * thread sees full buffers, just silent) — so Oboe never knows. Add
-     * the per-plugin underrun counter so the UI's "xruns" reflects both. */
-    return oboeXruns + vstUnderruns_.load();
+    const uint64_t directUsbXruns = directUsbOutput_
+        ? directUsbOutput_->xrunCount() : 0;
+    const uint64_t total = static_cast<uint64_t>(std::max(0, oboeXruns)) +
+        static_cast<uint64_t>(std::max(0, vstUnderruns_.load())) + directUsbXruns;
+    return static_cast<int32_t>(std::min<uint64_t>(
+        total, static_cast<uint64_t>(std::numeric_limits<int32_t>::max())));
 }
 
 bool AudioEngine::isInputClipping() const {
@@ -370,10 +374,15 @@ void AudioEngine::directUsbRenderLoop() {
                 wavPlaying_.store(false, std::memory_order_relaxed);
             }
         } else {
-            // USB capture is deliberately not implemented yet. This is the
-            // requested dummy input: a stable silent mono source.
-            std::memset(directUsbInputBuffer_.data(), 0,
-                        static_cast<size_t>(frames) * sizeof(float));
+            // Capture callbacks populate the bounded USB PCM ring. Do not
+            // synthesize timing here: consuming whole ready blocks ties DSP
+            // to the device clock and bounds added scheduling latency.
+            if (!directUsbOutput_ ||
+                directUsbOutput_->captureAvailableFrames() < frames) {
+                std::this_thread::sleep_for(std::chrono::microseconds(100));
+                continue;
+            }
+            directUsbOutput_->readMonoInput(directUsbInputBuffer_.data(), frames);
         }
 
         inputPtrs_[0] = directUsbInputBuffer_.data();
@@ -414,10 +423,12 @@ void AudioEngine::directUsbRenderLoop() {
         }
         directUsbOutput_->writeStereo(directUsbOutputLeft_.data(), directUsbOutputRight_.data(), frames);
 
-        deadline += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
-        const auto now = std::chrono::steady_clock::now();
-        if (deadline < now) deadline = now;
-        std::this_thread::sleep_until(deadline);
+        if (useWav) {
+            deadline += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
+            const auto now = std::chrono::steady_clock::now();
+            if (deadline < now) deadline = now;
+            std::this_thread::sleep_until(deadline);
+        }
     }
 }
 

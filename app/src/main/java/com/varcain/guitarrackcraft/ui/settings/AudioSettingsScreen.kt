@@ -83,8 +83,8 @@ fun AudioSettingsScreen(
                 }
             )
             Text(
-                text = "The rack uses only the configured USB audio interface. " +
-                    "Input is currently silent (dummy input). Configure the interface before starting a session.",
+                text = "The rack uses the configured USB audio interface for both input and output. " +
+                    "Configure the interface before starting a session.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -94,7 +94,7 @@ fun AudioSettingsScreen(
                 Text("Current USB Session", style = MaterialTheme.typography.labelLarge)
                 InfoRow("Sample Rate", "%.0f Hz".format(AudioEngine.getSampleRate()))
                 InfoRow("Buffer Size", "${AudioEngine.getBufferFrameCount()} frames")
-                InfoRow("Input", "Dummy silence")
+                InfoRow("Input", "USB capture input ${AudioSettingsManager.getDirectUsbInputChannel(context) + 1}")
             }
         }
     }
@@ -112,6 +112,10 @@ private fun DirectUsbSessionSettings() {
     var formats by remember { mutableStateOf<List<DirectUsbFormat>>(emptyList()) }
     var selectedRate by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRate(context)) }
     var selectedBits by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbBits(context)) }
+    var selectedInputChannel by remember {
+        mutableIntStateOf(AudioSettingsManager.getDirectUsbInputChannel(context))
+    }
+    var inputChannelCount by remember { mutableIntStateOf(DirectUsbAudioManager.getInputChannelCount()) }
     var message by remember { mutableStateOf<String?>(null) }
     var devicesExpanded by remember { mutableStateOf(false) }
 
@@ -173,6 +177,11 @@ private fun DirectUsbSessionSettings() {
                     scope.launch {
                         val result = DirectUsbAudioManager.probeFormats(context, device)
                         result.onSuccess { available ->
+                            inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
+                            if (selectedInputChannel >= inputChannelCount) {
+                                selectedInputChannel = 0
+                                AudioSettingsManager.setDirectUsbInputChannel(context, 0)
+                            }
                             formats = available.sortedWith(
                                 compareBy<DirectUsbFormat> { it.sampleRate }.thenBy { it.bits }
                             )
@@ -204,6 +213,16 @@ private fun DirectUsbSessionSettings() {
             selectedBits = it
             selectCompatibleFormat()
         }
+        if (inputChannelCount > 0) {
+            IntSelector(
+                label = "Input",
+                selected = selectedInputChannel + 1,
+                options = (1..inputChannelCount).toList()
+            ) { channel ->
+                selectedInputChannel = channel - 1
+                AudioSettingsManager.setDirectUsbInputChannel(context, selectedInputChannel)
+            }
+        }
     }
     message?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -220,6 +239,7 @@ private fun IntSelector(label: String, selected: Int, options: List<Int>, onSele
             OutlinedTextField(
                 value = when (label) {
                     "Sample rate" -> "$selected Hz"
+                    "Input" -> "Input $selected"
                     else -> "$selected-bit"
                 },
                 onValueChange = {},
@@ -230,7 +250,15 @@ private fun IntSelector(label: String, selected: Int, options: List<Int>, onSele
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 options.forEach { value ->
                     DropdownMenuItem(
-                        text = { Text(if (label == "Sample rate") "$value Hz" else "$value-bit") },
+                        text = {
+                            Text(
+                                when (label) {
+                                    "Sample rate" -> "$value Hz"
+                                    "Input" -> "Input $value"
+                                    else -> "$value-bit"
+                                }
+                            )
+                        },
                         onClick = {
                             onSelected(value)
                             expanded = false

@@ -51,9 +51,9 @@ data class DirectUsbFormat(
 }
 
 /**
- * Owns the app-permitted USB connection used by the USB-only audio session.
- * The native session supplies intentional silent input and sends processed frames
- * directly to libusb; Android AudioManager/Oboe routing is not involved.
+ * Owns the app-permitted USB connection used by the direct USB audio session.
+ * Native code captures one selected mono channel and sends the processed stereo
+ * signal through libusb; Android AudioManager/Oboe routing is not involved.
  */
 object DirectUsbAudioManager {
     private const val TAG = "DirectUsbAudio"
@@ -72,6 +72,7 @@ object DirectUsbAudioManager {
     private var connection: UsbDeviceConnection? = null
     private var activeDeviceId: Int? = null
     private var detachReceiver: BroadcastReceiver? = null
+    private var availableInputChannels = 0
 
     fun getAudioDevices(context: Context): List<DirectUsbDeviceOption> {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
@@ -104,6 +105,11 @@ object DirectUsbAudioManager {
         activeDeviceId = option.id
         AudioSettingsManager.setDirectUsbDeviceId(context, option.id)
         registerDetachReceiver(context.applicationContext)
+        availableInputChannels = engine.nativeGetDirectUsbInputChannelCount()
+        if (availableInputChannels <= 0) {
+            disable(context)
+            return Result.failure(IllegalStateException("The USB interface exposes no PCM capture channels"))
+        }
         val packedFormats = runCatching { engine.nativeGetDirectUsbOutputFormats() }.getOrDefault(intArrayOf())
         val nativeFormats = packedFormats
             .asSequence()
@@ -126,6 +132,10 @@ object DirectUsbAudioManager {
             AudioSettingsManager.getDirectUsbChannels(context)
         )
         val available = probeFormats(context, device).getOrElse { return Result.failure(it) }
+        val inputChannel = AudioSettingsManager.getDirectUsbInputChannel(context)
+        if (inputChannel !in 0 until availableInputChannels) {
+            return Result.failure(IllegalStateException("Configured USB input channel is unavailable"))
+        }
         val exact = available.firstOrNull {
             it.sampleRate == selected.sampleRate && it.bits == selected.bits &&
                 it.subslotBytes == selected.subslotBytes && it.channels == selected.channels
@@ -133,7 +143,8 @@ object DirectUsbAudioManager {
         val bufferFrames = AudioSettingsManager.getBufferSize(context)
         val engine = NativeEngine.getInstance()
         if (!engine.nativeStartDirectUsbSession(
-                exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels, bufferFrames
+                exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels,
+                inputChannel, bufferFrames
             )
         ) {
             return Result.failure(IllegalStateException("Could not start USB audio session (${exact.label})"))
@@ -155,10 +166,13 @@ object DirectUsbAudioManager {
         connection?.close()
         connection = null
         activeDeviceId = null
+        availableInputChannels = 0
         unregisterDetachReceiver(context.applicationContext)
     }
 
     fun isStreaming(): Boolean = NativeEngine.getInstance().nativeIsDirectUsbOutputStreaming()
+
+    fun getInputChannelCount(): Int = availableInputChannels
 
     private fun isUsbAudioDevice(device: UsbDevice): Boolean =
         device.deviceClass == UsbConstants.USB_CLASS_AUDIO ||

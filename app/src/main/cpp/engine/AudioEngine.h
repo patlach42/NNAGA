@@ -59,7 +59,7 @@ public:
      */
     bool startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                int32_t subslotBytes, int32_t channels,
-                               int32_t bufferFrames);
+                               int32_t inputChannel, int32_t bufferFrames);
 
     void stop();
 
@@ -152,7 +152,7 @@ public:
      */
     AudioRecorder& getRecorder() { return recorder_; }
 
-    // Attach the playback-only USB sink. Lifetime is owned by NativeContext.
+    // Attach the duplex direct USB transport. Lifetime is owned by NativeContext.
     void setDirectUsbOutput(DirectUsbOutput* output) { directUsbOutput_ = output; }
 
     // --- WAV real-time playback ---

@@ -66,6 +66,7 @@ struct UsbFormatCandidate {
 };
 
 
+
 // Negotiated PCM stream parameters (output of UAC2 enumeration).
 struct StreamFormat {
     int sampleRateHz = 0;
@@ -103,12 +104,23 @@ struct StreamFormat {
     uint8_t feedbackEndpointAddress = 0;
     uint16_t feedbackMaxPacketSize = 0;
     uint8_t feedbackInterval = 0;
+    // An IN AS endpoint with usage type implicit-feedback clocks the
+    // paired asynchronous playback endpoint from its packet cadence.
+    bool implicitFeedback = false;
     // Every clock entity ID we found in the AudioControl topology,
     // in walk order. Used as a fall-through search list when SET_CUR
     // / GET_CUR on the topology-resolved clockSourceId fails — some
     // devices' Selector / Multiplier resolution is non-obvious and
     // it's cheaper to just try them all than misparse the graph.
     std::vector<uint8_t> candidateClockIds;
+};
+// Duplex capture format (PCM Type-I IN stream).
+using CaptureFormat = StreamFormat;
+
+struct CaptureStats {
+    uint64_t overruns = 0;
+    uint64_t underruns = 0;
+    uint64_t sequence = 0;
 };
 
 class LibusbUacDriver {
@@ -124,6 +136,9 @@ public:
     // channels. This is a control-thread operation and may issue
     // descriptor/control reads.
     std::vector<UsbFormatCandidate> enumerateFormats();
+    // Maximum selectable mono channels advertised by valid PCM Type-I IN
+    // streaming alternate settings. Control-thread enumeration.
+    int captureChannelCount() const;
 
     void close();
     bool isOpen() const { return device_ != nullptr; }
@@ -131,6 +146,20 @@ public:
     // Negotiates UAC2 alt setting matching the requested format,
     // claims the streaming interface, sets the clock source rate via
     // a class-specific control transfer, and starts the iso pump.
+    // Starts playback and a compatible PCM Type-I capture stream.
+    bool startDuplex(int sampleRateHz, int bitsPerSample, int channels,
+                     int bytesPerSample = 0);
+    int readCapturePcm(uint8_t* dst, int frames);
+    int captureAvailableFrames() const;
+    const CaptureFormat& currentCaptureFormat() const { return captureFormat_; }
+    CaptureStats captureStats() const {
+        return {captureOverruns_.load(std::memory_order_acquire),
+                captureUnderruns_.load(std::memory_order_acquire),
+                captureSequence_.load(std::memory_order_acquire)};
+    }
+    uint64_t captureSequence() const {
+        return captureSequence_.load(std::memory_order_acquire);
+    }
     // Returns false if any step fails (reasons logged with TAG
     // "LibusbUacDriver" — most often `LIBUSB_ERROR_BUSY` from
     // libusb_claim_interface, meaning the kernel UAC driver still
@@ -174,6 +203,12 @@ public:
 
     // How many frames can be written right now without blocking.
     int writableFrames() const;
+    // Cumulative producer/consumer discontinuities for the current stream.
+    // Adjacent short writes or silence packets form one xrun event.
+    uint64_t playbackXRunCount() const {
+        return playbackOverruns_.load(std::memory_order_acquire) +
+               playbackUnderruns_.load(std::memory_order_acquire);
+    }
 
     // Total PCM frames the iso pump has drained from the ring since
     // [start] — i.e. the frames the device has actually been told to
@@ -226,6 +261,12 @@ private:
     bool setSampleRate(uint32_t hz);
 
     // Issues GET_RANGE on the given clock entity and appends decoded
+    bool selectCaptureAltSetting(const StreamFormat& playback,
+                                 StreamFormat* out_fmt);
+    bool startCapturePump();
+    void stopCapturePump();
+    static void LIBUSB_CALL onCaptureTrampoline(libusb_transfer* xfr);
+    void onCapture(libusb_transfer* xfr);
     // (min, max, res) subranges into supportedRates_. No-op if the
     // device returns less than the 2-byte wNumSubRanges header. Used
     // on the success path of setSampleRate so the UI can list "44.1 /
@@ -276,6 +317,20 @@ private:
     // wIndex pointing at the AC interface.
     bool controlInterfaceClaimed_ = false;
     uint8_t claimedControlIface_ = 0xFF;
+    // Capture SPSC ring and persistent IN transfer storage.
+    std::vector<uint8_t> captureRing_;
+    size_t captureRingMask_ = 0;
+    std::atomic<size_t> captureHead_{0};
+    std::atomic<size_t> captureTail_{0};
+    CaptureFormat captureFormat_{};
+    std::vector<libusb_transfer*> captureTransfers_;
+    std::vector<std::vector<uint8_t>> captureTransferBuffers_;
+    bool captureInterfaceClaimed_ = false;
+    uint8_t claimedCaptureIface_ = 0xFF;
+    std::atomic<uint64_t> captureOverruns_{0};
+    std::atomic<uint64_t> captureUnderruns_{0};
+    std::atomic<uint64_t> captureSequence_{0};
+    std::atomic<int> captureInflight_{0};
 
     // Iso pump state — touched only from the event thread once
     // streaming_ is true.
@@ -288,6 +343,13 @@ private:
     // (see playedFrames() / writtenFrames()). Reset on start().
     std::atomic<long> writtenFrames_{0};
     std::atomic<long> playedFrames_{0};
+    // Count state transitions, rather than every silent packet or short
+    // write: a sustained starvation/overflow is one audible xrun.
+    std::atomic<uint64_t> playbackOverruns_{0};
+    std::atomic<uint64_t> playbackUnderruns_{0};
+    std::atomic<bool> playbackOverrunActive_{false};
+    std::atomic<bool> playbackUnderrunActive_{false};
+    std::atomic<bool> playbackStarted_{false};
     std::thread eventThread_;
 
     // Per-packet frame count is computed from a 16.16 fixed-point
