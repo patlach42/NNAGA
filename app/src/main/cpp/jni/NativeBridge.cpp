@@ -405,7 +405,8 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbInputChan
 JNIEXPORT jboolean JNICALL
 Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartDirectUsbSession(
         JNIEnv* env, jobject thiz, jint sampleRate, jint bitsPerSample,
-        jint bytesPerSample, jint channels, jint inputChannel, jint bufferFrames) {
+        jint bytesPerSample, jint channels, jint inputChannel, jint outputPair,
+        jint bufferFrames) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->audioEngine->startDirectUsbSession(
         static_cast<float>(sampleRate),
@@ -413,6 +414,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartDirectUsbSession
         static_cast<int32_t>(bytesPerSample),
         static_cast<int32_t>(channels),
         static_cast<int32_t>(inputChannel),
+        static_cast<int32_t>(outputPair),
         static_cast<int32_t>(bufferFrames)
     ) ? JNI_TRUE : JNI_FALSE;
 }

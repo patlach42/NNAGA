@@ -36,6 +36,7 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_SUBSLOT = "directUsbSubslot"
     private const val KEY_DIRECT_USB_CHANNELS = "directUsbChannels"
     private const val KEY_DIRECT_USB_INPUT_CHANNEL = "directUsbInputChannel"
+    private const val KEY_DIRECT_USB_OUTPUT_PAIR = "directUsbOutputPair"
 
     val BUFFER_SIZE_OPTIONS = listOf(
         0 to "Auto", 16 to "16", 32 to "32", 64 to "64",
@@ -67,6 +68,13 @@ object AudioSettingsManager {
 
     fun setDirectUsbInputChannel(context: Context, channel: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_INPUT_CHANNEL, channel).apply()
+    }
+
+    fun getDirectUsbOutputPair(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_OUTPUT_PAIR, 0)
+
+    fun setDirectUsbOutputPair(context: Context, pair: Int) {
+        prefs(context).edit().putInt(KEY_DIRECT_USB_OUTPUT_PAIR, pair).apply()
     }
 
     fun setDirectUsbFormat(context: Context, rate: Int, bits: Int, subslotBytes: Int, channels: Int) {

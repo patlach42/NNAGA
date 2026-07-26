@@ -52,12 +52,13 @@ public:
     }
 
     bool start(int sampleRate, int bitsPerSample, int bytesPerSample, int channels,
-               int inputChannel) {
+               int inputChannel, int outputPair) {
         if (!driver_.isOpen() || sampleRate <= 0 ||
             (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
             bytesPerSample < (bitsPerSample + 7) / 8 || bytesPerSample > 4 ||
             channels < kChannels || channels > kMaxDeviceChannels ||
-            inputChannel < 0 || inputChannel >= captureChannelCount()) return false;
+            inputChannel < 0 || inputChannel >= captureChannelCount() ||
+            outputPair < 0 || outputPair * 2 + 1 >= channels) return false;
         stop();
         if (!driver_.startDuplex(sampleRate, bitsPerSample, channels, bytesPerSample))
             return false;
@@ -66,11 +67,12 @@ public:
         deviceChannels_ = driver_.currentFormat().channels;
         const auto& capture = driver_.currentCaptureFormat();
         if (deviceChannels_ < kChannels || deviceChannels_ > kMaxDeviceChannels ||
-            inputChannel >= capture.channels) {
+            inputChannel >= capture.channels || outputPair * 2 + 1 >= deviceChannels_) {
             driver_.stop();
             return false;
         }
         inputChannel_ = inputChannel;
+        outputPair_ = outputPair;
         accepting_.store(true, std::memory_order_release);
         streaming_.store(true, std::memory_order_release);
         return true;
@@ -115,9 +117,11 @@ public:
             const int frameStride = deviceChannels_ * formatBytes_;
             for (int i = 0; i < count; ++i) {
                 uint8_t* frame = pcm_.data() + static_cast<size_t>(i) * frameStride;
+                const int selectedLeft = outputPair_ * 2;
                 for (int channel = 0; channel < deviceChannels_; ++channel) {
-                    packPcm((channel & 1) == 0 ? left[offset + i] : right[offset + i],
-                            frame + channel * formatBytes_);
+                    const float value = channel == selectedLeft ? left[offset + i] :
+                                        channel == selectedLeft + 1 ? right[offset + i] : 0.0f;
+                    packPcm(value, frame + channel * formatBytes_);
                 }
             }
             const int written = driver_.writePcm(pcm_.data(), count);
@@ -196,6 +200,7 @@ private:
     }
     int deviceChannels_ = kChannels;
     int inputChannel_ = 0;
+    int outputPair_ = 0;
     monotrypt::usb::LibusbUacDriver driver_;
     std::vector<uint8_t> pcm_;
     std::vector<uint8_t> capturePcm_;

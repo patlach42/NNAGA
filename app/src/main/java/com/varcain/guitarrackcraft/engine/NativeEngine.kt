@@ -130,6 +130,7 @@ class NativeEngine private constructor() {
         bytesPerSample: Int,
         channels: Int,
         inputChannel: Int,
+        outputPair: Int,
         bufferFrames: Int
     ): Boolean
 

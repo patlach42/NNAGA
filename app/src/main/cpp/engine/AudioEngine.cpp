@@ -85,18 +85,21 @@ bool AudioEngine::start(float sampleRate, int32_t inputDeviceId,
 
 bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                         int32_t subslotBytes, int32_t channels,
-                                        int32_t inputChannel, int32_t bufferFrames) {
+                                        int32_t inputChannel, int32_t outputPair,
+                                        int32_t bufferFrames) {
     if (isRunning_.load() || !directUsbOutput_ || sampleRate <= 0.0f ||
         (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
         subslotBytes < (bitsPerSample + 7) / 8 || subslotBytes > 4 ||
         channels < 2 || channels > DirectUsbOutput::kMaxDeviceChannels ||
         inputChannel < 0 ||
-        inputChannel >= directUsbOutput_->captureChannelCount()) {
+        inputChannel >= directUsbOutput_->captureChannelCount() ||
+        outputPair < 0 || outputPair * 2 + 1 >= channels) {
         return false;
     }
     const int32_t renderFrames = bufferFrames > 0 ? bufferFrames : 64;
     if (!directUsbOutput_->start(static_cast<int>(sampleRate), bitsPerSample,
-                                 subslotBytes, channels, inputChannel)) {
+                                 subslotBytes, channels, inputChannel,
+                                 outputPair)) {
         LOGE("Direct USB transport start failed");
         return false;
     }

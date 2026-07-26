@@ -95,6 +95,7 @@ fun AudioSettingsScreen(
                 InfoRow("Sample Rate", "%.0f Hz".format(AudioEngine.getSampleRate()))
                 InfoRow("Buffer Size", "${AudioEngine.getBufferFrameCount()} frames")
                 InfoRow("Input", "USB capture input ${AudioSettingsManager.getDirectUsbInputChannel(context) + 1}")
+                InfoRow("Output", "USB outputs ${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 1}–${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 2}")
             }
         }
     }
@@ -116,6 +117,9 @@ private fun DirectUsbSessionSettings() {
         mutableIntStateOf(AudioSettingsManager.getDirectUsbInputChannel(context))
     }
     var inputChannelCount by remember { mutableIntStateOf(DirectUsbAudioManager.getInputChannelCount()) }
+    var selectedOutputPair by remember {
+        mutableIntStateOf(AudioSettingsManager.getDirectUsbOutputPair(context))
+    }
     var message by remember { mutableStateOf<String?>(null) }
     var devicesExpanded by remember { mutableStateOf(false) }
 
@@ -125,10 +129,15 @@ private fun DirectUsbSessionSettings() {
         } ?: formats.firstOrNull()
         if (selected != null) {
             selectedRate = selected.sampleRate
+
             selectedBits = selected.bits
             DirectUsbAudioManager.startSelected(context, selected)
         }
     }
+
+    fun selectedOutputPairCount(): Int = formats.firstOrNull {
+        it.sampleRate == selectedRate && it.bits == selectedBits
+    }?.channels?.div(2) ?: 0
 
     Text("USB Interface", style = MaterialTheme.typography.labelLarge)
     ExposedDropdownMenuBox(
@@ -177,11 +186,6 @@ private fun DirectUsbSessionSettings() {
                     scope.launch {
                         val result = DirectUsbAudioManager.probeFormats(context, device)
                         result.onSuccess { available ->
-                            inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
-                            if (selectedInputChannel >= inputChannelCount) {
-                                selectedInputChannel = 0
-                                AudioSettingsManager.setDirectUsbInputChannel(context, 0)
-                            }
                             formats = available.sortedWith(
                                 compareBy<DirectUsbFormat> { it.sampleRate }.thenBy { it.bits }
                             )
@@ -192,8 +196,17 @@ private fun DirectUsbSessionSettings() {
                                 selectedRate = saved.sampleRate
                                 selectedBits = saved.bits
                                 DirectUsbAudioManager.startSelected(context, saved)
-                                message = "USB interface configured"
                             }
+                            inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
+                            if (selectedInputChannel >= inputChannelCount) {
+                                selectedInputChannel = 0
+                                AudioSettingsManager.setDirectUsbInputChannel(context, 0)
+                            }
+                            if (selectedOutputPair >= selectedOutputPairCount()) {
+                                selectedOutputPair = 0
+                                AudioSettingsManager.setDirectUsbOutputPair(context, 0)
+                            }
+                            message = "USB interface configured"
                         }.onFailure { message = it.message }
                     }
                 }
@@ -223,6 +236,17 @@ private fun DirectUsbSessionSettings() {
                 AudioSettingsManager.setDirectUsbInputChannel(context, selectedInputChannel)
             }
         }
+        val outputPairCount = selectedOutputPairCount()
+        if (outputPairCount > 0) {
+            IntSelector(
+                label = "Output",
+                selected = selectedOutputPair + 1,
+                options = (1..outputPairCount).toList()
+            ) { pair ->
+                selectedOutputPair = pair - 1
+                AudioSettingsManager.setDirectUsbOutputPair(context, selectedOutputPair)
+            }
+        }
     }
     message?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -240,6 +264,7 @@ private fun IntSelector(label: String, selected: Int, options: List<Int>, onSele
                 value = when (label) {
                     "Sample rate" -> "$selected Hz"
                     "Input" -> "Input $selected"
+                    "Output" -> "Outputs ${selected * 2 - 1}–${selected * 2}"
                     else -> "$selected-bit"
                 },
                 onValueChange = {},
@@ -255,6 +280,7 @@ private fun IntSelector(label: String, selected: Int, options: List<Int>, onSele
                                 when (label) {
                                     "Sample rate" -> "$value Hz"
                                     "Input" -> "Input $value"
+                                    "Output" -> "Outputs ${value * 2 - 1}–${value * 2}"
                                     else -> "$value-bit"
                                 }
                             )

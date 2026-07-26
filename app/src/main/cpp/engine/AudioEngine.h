@@ -59,7 +59,8 @@ public:
      */
     bool startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                int32_t subslotBytes, int32_t channels,
-                               int32_t inputChannel, int32_t bufferFrames);
+                               int32_t inputChannel, int32_t outputPair,
+                               int32_t bufferFrames);
 
     void stop();
 

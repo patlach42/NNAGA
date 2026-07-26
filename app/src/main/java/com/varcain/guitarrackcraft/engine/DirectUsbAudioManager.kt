@@ -140,11 +140,15 @@ object DirectUsbAudioManager {
             it.sampleRate == selected.sampleRate && it.bits == selected.bits &&
                 it.subslotBytes == selected.subslotBytes && it.channels == selected.channels
         } ?: return Result.failure(IllegalStateException("Configured USB format is unavailable"))
+        val outputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
+        if (outputPair !in 0 until exact.channels / 2) {
+            return Result.failure(IllegalStateException("Configured USB output pair is unavailable"))
+        }
         val bufferFrames = AudioSettingsManager.getBufferSize(context)
         val engine = NativeEngine.getInstance()
         if (!engine.nativeStartDirectUsbSession(
                 exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels,
-                inputChannel, bufferFrames
+                inputChannel, outputPair, bufferFrames
             )
         ) {
             return Result.failure(IllegalStateException("Could not start USB audio session (${exact.label})"))
