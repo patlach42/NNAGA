@@ -113,7 +113,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.varcain.guitarrackcraft.engine.AudioSettingsManager
 import com.varcain.guitarrackcraft.engine.RackManager
 import com.varcain.guitarrackcraft.engine.X11Bridge
 import com.varcain.guitarrackcraft.engine.PluginInfo
@@ -255,13 +254,11 @@ fun RackScreen(
     }
 
     val context = LocalContext.current
-    var currentBufferSize by remember { mutableIntStateOf(AudioSettingsManager.getBufferSize(context)) }
 
     // Refresh when navigating back to this screen (isVisible changes to true)
     LaunchedEffect(isVisible) {
         if (isVisible) {
             viewModel.refreshRack()
-            currentBufferSize = AudioSettingsManager.getBufferSize(context)
         }
     }
 
@@ -471,54 +468,6 @@ fun RackScreen(
                                     viewModel.resetClipping()
                                 }
                         )
-                        // Quick buffer size selector
-                        val bufferLabel = AudioSettingsManager.BUFFER_SIZE_OPTIONS
-                            .find { it.first == currentBufferSize }?.second ?: "Auto"
-                        Box {
-                            var showBufferMenu by remember { mutableStateOf(false) }
-                            Row(
-                                modifier = Modifier
-                                    .clickable { showBufferMenu = true }
-                                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                Text(
-                                    text = "Buffer:",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = bufferLabel,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = showBufferMenu,
-                                onDismissRequest = { showBufferMenu = false }
-                            ) {
-                                AudioSettingsManager.BUFFER_SIZE_OPTIONS.forEach { (size, label) ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                label,
-                                                fontWeight = if (size == currentBufferSize) FontWeight.Bold else FontWeight.Normal
-                                            )
-                                        },
-                                        onClick = {
-                                            showBufferMenu = false
-                                            if (size != currentBufferSize) {
-                                                currentBufferSize = size
-                                                AudioSettingsManager.setBufferSize(context, size)
-                                                viewModel.restartEngine()
-                                            }
-                                        }
-                                    )
-                                }
-                            }
-                        }
                         Box {
                             var showOverflowMenu by remember { mutableStateOf(false) }
                             var showAboutDialog by remember { mutableStateOf(false) }
