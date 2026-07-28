@@ -621,7 +621,7 @@ struct X11NativeDisplay::Impl {
                 auto colon = pkg.find(':');
                 if (colon != std::string::npos) pkg.resize(colon);
             }
-            if (pkg.empty()) pkg = "com.varcain.guitarrackcraft";
+            if (pkg.empty()) pkg = "com.vibes.dsp";
             fmPath = "/data/data/" + pkg + "/cache/x11_focus_mode.txt";
         }
         uint32_t v = 0;

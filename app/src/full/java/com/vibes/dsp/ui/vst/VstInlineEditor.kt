@@ -1,0 +1,291 @@
+/*
+ * Copyright (C) 2026 Kamil Lulko <kamil.lulko@gmail.com>
+ * Licensed under GPL v3 — see app/src/main/cpp/plugin/IPlugin.h for full notice.
+ */
+
+package com.vibes.dsp.ui.vst
+
+import android.content.Context
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Log
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.vibes.dsp.engine.NativeEngine
+import com.varcain.vsthost.NativeBridge
+import com.varcain.vsthost.ui.PluginSurface
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.IOException
+
+private data class VstFilePickerRequest(
+    val sequence: Int,
+    val title: String,
+    val filterPatterns: String,
+    val initialDir: String,
+    val copyDirLinux: String,
+    val copyDirWindows: String,
+)
+
+/**
+ * Embed a wine-rendered VST editor inline in the rack row. The displayNumber
+ * is owned by the WineVstPlugin (vsthost_lib) — NOT GuitarRackCraft's
+ * X11DisplayManager — so we go directly through vsthost_lib's NativeBridge
+ * for surface attach and touch routing.
+ *
+ * Sizing: poll the plugin's editor_width/height via shm (via the
+ * nativeGetRackPluginEditorSize JNI bridge). Until known, show "Loading
+ * editor…". Once known, render vstpoc's PluginSurface which uses
+ * Modifier.aspectRatio for letterboxing.
+ */
+@Composable
+fun VstInlineEditor(
+    pathId: Long,
+    pluginIndex: Int,
+    isFullscreen: Boolean = false,
+    onPluginSizeKnown: (width: Int, height: Int) -> Unit = { _, _ -> },
+    onFilePickerRequested: (
+        sequence: Int,
+        title: String,
+        filterPatterns: String,
+        initialDir: String,
+        copyDirLinux: String,
+        copyDirWindows: String,
+    ) -> Boolean = { _, _, _, _, _, _ -> false },
+) {
+    val displayNumber = remember(pathId, pluginIndex) {
+        runCatching {
+            NativeEngine.getInstance().nativeGetRackPluginX11Display(pathId, pluginIndex)
+        }.getOrDefault(-1)
+    }
+    if (displayNumber < 0) {
+        Box(modifier = Modifier.fillMaxWidth().height(60.dp).background(Color(0xFF222222)),
+            contentAlignment = Alignment.Center) {
+            Text("VST display unavailable", color = Color.White)
+        }
+        return
+    }
+
+    val context = LocalContext.current
+    val engine = remember { NativeEngine.getInstance() }
+    val currentOnFilePickerRequested by rememberUpdatedState(onFilePickerRequested)
+    val scope = rememberCoroutineScope()
+    var pendingPickerRequest by remember(pathId, pluginIndex) { mutableStateOf<VstFilePickerRequest?>(null) }
+    var pickerInFlight by remember(pathId, pluginIndex) { mutableStateOf(false) }
+
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        val request = pendingPickerRequest
+        if (request == null) {
+            pickerInFlight = false
+            return@rememberLauncherForActivityResult
+        }
+
+        scope.launch {
+            if (uri == null) {
+                engine.nativeRespondVstFilePicker(pathId, pluginIndex, request.sequence, true, "")
+            } else {
+                val windowsPath = runCatching {
+                    withContext(Dispatchers.IO) {
+                        copySafUriIntoWinePrefix(context, uri, request)
+                    }
+                }.getOrElse { error ->
+                    Log.e("VstInlineEditor", "plugin[$pluginIndex] VST picker copy failed", error)
+                    ""
+                }
+                engine.nativeRespondVstFilePicker(
+                    pathId,
+                    pluginIndex,
+                    request.sequence,
+                    windowsPath.isEmpty(),
+                    windowsPath
+                )
+            }
+            pendingPickerRequest = null
+            pickerInFlight = false
+        }
+    }
+
+    LaunchedEffect(pathId, pluginIndex) {
+        while (true) {
+            val raw = runCatching {
+                engine.nativePollVstFilePickerRequest(pathId, pluginIndex)
+            }.getOrNull()
+            if (pickerInFlight) {
+                if (raw == null) pickerInFlight = false
+            } else if (raw != null && raw.size >= 6) {
+                val request = VstFilePickerRequest(
+                    sequence = raw[0].toIntOrNull() ?: 0,
+                    title = raw[1],
+                    filterPatterns = raw[2],
+                    initialDir = raw[3],
+                    copyDirLinux = raw[4],
+                    copyDirWindows = raw[5],
+                )
+                val handledByRack = currentOnFilePickerRequested(
+                    request.sequence,
+                    request.title,
+                    request.filterPatterns,
+                    request.initialDir,
+                    request.copyDirLinux,
+                    request.copyDirWindows,
+                )
+                if (handledByRack) {
+                    pickerInFlight = true
+                } else {
+                    pendingPickerRequest = request
+                    pickerInFlight = true
+                    filePickerLauncher.launch(mimeTypesForPicker(request))
+                }
+            }
+            delay(150)
+        }
+    }
+
+    // Bring up the X11 server on this display if it's not already (idempotent).
+    // Wine started it at activate time, but this is harmless to repeat.
+    LaunchedEffect(displayNumber) {
+        NativeBridge.nativeStartX11Server(displayNumber, 4096, 2160)
+    }
+
+    var size by remember(pathId, pluginIndex) { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(pathId, pluginIndex) {
+        while (size == null) {
+            val encoded = runCatching {
+                engine.nativeGetRackPluginEditorSize(pathId, pluginIndex)
+            }.getOrDefault(0L)
+            val w = (encoded ushr 32).toInt()
+            val h = (encoded and 0xffffffffL).toInt()
+            if (w > 0 && h > 0) {
+                Log.i("VstInlineEditor", "plugin[$pluginIndex] editor size: ${w}x$h → display=$displayNumber")
+                NativeBridge.nativeSetX11PluginSize(displayNumber, w, h)
+                size = w to h
+                onPluginSizeKnown(w, h)
+            } else {
+                delay(250)
+            }
+        }
+    }
+
+    val s = size
+    if (s != null) {
+        PluginSurface(
+            displayNumber = displayNumber,
+            pluginWidth   = s.first,
+            pluginHeight  = s.second,
+            modifier      = if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+            // Keep the X11 display alive across activity transitions
+            // (file picker, app backgrounding, etc.). The display is
+            // owned by the wine subprocess that WineVstPlugin spawned
+            // — destroying it on Compose dispose orphans wine and the
+            // next attach attempt crashes (SIGABRT on the main thread,
+            // verified 2026-05-26 with WAV picker round-trip).
+            destroyOnDispose = false,
+        )
+    } else {
+        Box(modifier = Modifier.fillMaxWidth().height(60.dp).background(Color(0xFF111111)).padding(8.dp),
+            contentAlignment = Alignment.Center) {
+            Text("Loading editor…", color = Color.LightGray)
+        }
+    }
+}
+
+private fun mimeTypesForPicker(request: VstFilePickerRequest): Array<String> {
+    val patterns = request.filterPatterns.lowercase()
+    return when {
+        patterns.contains(".wav") || patterns.contains(".aif") -> arrayOf("audio/*", "*/*")
+        patterns.contains(".json") || patterns.contains(".nam") -> arrayOf("application/json", "application/octet-stream", "*/*")
+        else -> arrayOf("*/*")
+    }
+}
+
+private fun copySafUriIntoWinePrefix(
+    context: Context,
+    uri: Uri,
+    request: VstFilePickerRequest,
+): String {
+    val destDir = File(request.copyDirLinux)
+    if (!destDir.exists() && !destDir.mkdirs()) {
+        throw IOException("Could not create ${destDir.absolutePath}")
+    }
+
+    val pickedName = resolvePickedDisplayName(context, uri) ?: "picked_file"
+    val safeName = sanitizeWindowsFileName(pickedName)
+    val destFile = uniqueDestinationFile(destDir, safeName)
+
+    val input = context.contentResolver.openInputStream(uri)
+        ?: throw IOException("Could not open picked URI")
+    input.use { source ->
+        destFile.outputStream().use { target ->
+            source.copyTo(target)
+        }
+    }
+
+    val windowsDir = request.copyDirWindows.ifBlank { "C:\\vstpoc_picker" }.trimEnd('\\')
+    return "$windowsDir\\${destFile.name}"
+}
+
+private fun resolvePickedDisplayName(context: Context, uri: Uri): String? {
+    context.contentResolver.query(
+        uri,
+        arrayOf(OpenableColumns.DISPLAY_NAME),
+        null,
+        null,
+        null
+    )?.use { cursor ->
+        val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (index >= 0 && cursor.moveToFirst()) {
+            val name = cursor.getString(index)
+            if (!name.isNullOrBlank()) return name
+        }
+    }
+    return uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+}
+
+private fun sanitizeWindowsFileName(name: String): String {
+    val illegal = charArrayOf('\\', '/', ':', '*', '?', '"', '<', '>', '|')
+    val cleaned = buildString(name.length) {
+        name.forEach { ch ->
+            append(if (ch.code < 32 || ch in illegal) '_' else ch)
+        }
+    }.trim().trim('.')
+    return cleaned.ifBlank { "picked_file" }.take(180)
+}
+
+private fun uniqueDestinationFile(dir: File, fileName: String): File {
+    val first = File(dir, fileName)
+    if (!first.exists()) return first
+
+    val dot = fileName.lastIndexOf('.')
+    val base = if (dot > 0) fileName.substring(0, dot) else fileName
+    val ext = if (dot > 0) fileName.substring(dot) else ""
+    for (i in 1..999) {
+        val candidate = File(dir, "${base}_$i$ext")
+        if (!candidate.exists()) return candidate
+    }
+    return File(dir, "${base}_${System.currentTimeMillis()}$ext")
+}

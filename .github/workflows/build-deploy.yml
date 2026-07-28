@@ -1016,7 +1016,7 @@ jobs:
         uses: r0adkll/upload-google-play@v1
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_KEY }}
-          packageName: com.varcain.guitarrackcraft
+          packageName: com.vibes.dsp
           releaseFiles: ${{ steps.artifacts.outputs.aab }}
           track: internal
           status: draft

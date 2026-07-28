@@ -726,10 +726,13 @@ bool LibusbUacDriver::selectAltSetting(int sampleRateHz, int bitsPerSample,
                 ? microframesPerSecond / microframesPerInterval
                 : microframesPerSecond;
             int frameStride = (altSubslot ? altSubslot : bitsPerSample / 8) * channels;
-            // Required packet bytes = ceil(rate / packetsPerSec) * stride,
-            // plus one frame of headroom for fractional-rate jitter.
-            int reqBytesPerPacket = ((sampleRateHz + packetsPerSec - 1)
-                                     / packetsPerSec + 1) * frameStride;
+            // Admission requires the nominal ceiling packet to fit exactly.
+            // A valid endpoint can have no spare frame (for example FS
+            // 48 kHz, stereo S16: 48 * 4 = 192 bytes). Fractional-rate
+            // headroom is negotiated later only when the physical MPS has it.
+            const int nominalFramesPerPacket =
+                (sampleRateHz + packetsPerSec - 1) / packetsPerSec;
+            const int reqBytesPerPacket = nominalFramesPerPacket * frameStride;
             int actualMps = iso->wMaxPacketSize & 0x07FF;
             int extraTransactions = ((iso->wMaxPacketSize >> 11) & 0x3) + 1;
             int realMps = actualMps * extraTransactions;

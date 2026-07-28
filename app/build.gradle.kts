@@ -27,11 +27,11 @@ plugins {
 }
 
 android {
-    namespace = "com.varcain.guitarrackcraft"
+    namespace = "com.vibes.dsp"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.varcain.guitarrackcraft"
+        applicationId = "com.vibes.dsp"
         minSdk = 26
         targetSdk = 35
         versionCode = 100  // 0.1

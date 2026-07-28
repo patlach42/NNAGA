@@ -1372,7 +1372,7 @@ bool WineHostProcess::start() {
         // Product Manager — call LoadLibraryA("foo.dll") or fopen("config.ini")
         // expecting CWD to be the exe's directory. Without this the child
         // inherits the app process's working dir which is something like
-        // /data/user/0/com.varcain.guitarrackcraft (or /), no resources there.
+        // /data/user/0/com.vibes.dsp (or /), no resources there.
         if (!cfg_.primaryExe.empty()) {
             auto slash = cfg_.primaryExe.find_last_of('/');
             if (slash != std::string::npos) {

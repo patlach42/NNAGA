@@ -92,7 +92,7 @@ debug)
     echo ""
 
     echo "Starting app..."
-    adb shell am start -n com.varcain.guitarrackcraft/.MainActivity
+    adb shell am start -n com.vibes.dsp/.MainActivity
     echo ""
     echo "Debug build installed and started."
     ;;
@@ -139,7 +139,7 @@ release)
     echo ""
 
     echo "Starting app..."
-    adb shell am start -n com.varcain.guitarrackcraft/.MainActivity
+    adb shell am start -n com.vibes.dsp/.MainActivity
     echo ""
     echo "Release build installed and started."
     ;;
@@ -212,7 +212,7 @@ playstore)
     echo ""
 
     echo "Starting app..."
-    adb shell am start -n com.varcain.guitarrackcraft/.MainActivity
+    adb shell am start -n com.vibes.dsp/.MainActivity
     echo ""
     echo "Play Store build installed and started."
     echo "Install-time asset packs delivered via --local-testing mode."

@@ -1,12 +1,24 @@
 #include <gtest/gtest.h>
 
 #include "libusb_uac_driver.h"
+#include "engine/DirectUsbOutput.h"
 
 #include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
+
+static_assert(
+    std::is_same_v<
+        decltype(std::declval<guitarrackcraft::DirectUsbOutput&>().writeStereo(
+            static_cast<const float*>(nullptr),
+            static_cast<const float*>(nullptr),
+            0)),
+        int>,
+    "DirectUsbOutput::writeStereo must report submitted whole frames");
 
 namespace monotrypt::usb {
 
@@ -165,6 +177,50 @@ TEST(UsbDriverRing, WatermarkRejectsPartialFrameAndCoalescesOverrun) {
     EXPECT_EQ(driver.playbackXRunCount(), 1u);
     EXPECT_EQ(driver.writePcm(input.data(), 1), 0);
     EXPECT_EQ(driver.playbackXRunCount(), 1u);
+}
+
+TEST(UsbDriverRing, PartialAdmissionReportsWholeFramesAndCallerCanSubmitTail) {
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
+    driver.setGraphQuantum(16);  // watermark admits 48 of the 49-frame block
+
+    constexpr int frameStride = 4;
+    constexpr int requestedFrames = 49;
+    std::vector<uint8_t> input(requestedFrames * frameStride);
+    for (int frame = 0; frame < requestedFrames; ++frame) {
+        for (int byte = 0; byte < frameStride; ++byte) {
+            input[frame * frameStride + byte] =
+                static_cast<uint8_t>(0x10 + frame + byte);
+        }
+    }
+
+    const int submitted = driver.writePcm(input.data(), requestedFrames);
+    ASSERT_EQ(submitted, 48);
+    EXPECT_EQ(driver.bufferedFrames(), submitted);
+    EXPECT_EQ(driver.writableFrames(), 0);
+
+    std::vector<uint8_t> admitted(submitted * frameStride);
+    monotrypt::usb::UsbDriverTestAccess::playbackStarted(driver, true);
+    ASSERT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                  driver, admitted.data(), static_cast<int>(admitted.size())),
+              static_cast<int>(admitted.size()));
+    EXPECT_EQ(admitted,
+              std::vector<uint8_t>(input.begin(),
+                                    input.begin() + submitted * frameStride));
+
+    const int remainingFrames = requestedFrames - submitted;
+    ASSERT_EQ(remainingFrames, 1);
+    ASSERT_EQ(driver.writePcm(input.data() + submitted * frameStride,
+                              remainingFrames),
+              remainingFrames);
+
+    std::vector<uint8_t> tail(frameStride);
+    ASSERT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                  driver, tail.data(), static_cast<int>(tail.size())),
+              frameStride);
+    EXPECT_EQ(tail,
+              std::vector<uint8_t>(input.begin() + submitted * frameStride,
+                                    input.end()));
 }
 
 TEST(UsbDriverCapture, InactiveCaptureGatesReadsAndStaleCompletion) {
@@ -361,4 +417,36 @@ TEST(UsbDriverLifecycle, PendingImplicitSubmitFailureRetainsOwnershipAndStops) {
     EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::inflight(driver), 0);
     EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::pendingCount(driver), 1u);
     libusb_free_transfer(xfr);
+}
+
+TEST(UsbDriverTelemetry, IsoDeviceRemovalIncrementsDirectionSpecificCounters) {
+    resetMock();
+    monotrypt::usb::LibusbUacDriver captureDriver;
+    monotrypt::usb::UsbDriverTestAccess::captureActive(captureDriver, true);
+    monotrypt::usb::UsbDriverTestAccess::captureInflight(captureDriver, 1);
+    std::vector<uint8_t> capturePayload(2, 0xC1);
+    auto* captureTransfer = makeTransfer(capturePayload);
+    ASSERT_NE(captureTransfer, nullptr);
+    captureTransfer->status = LIBUSB_TRANSFER_NO_DEVICE;
+
+    monotrypt::usb::UsbDriverTestAccess::onCapture(captureDriver,
+                                                    captureTransfer);
+    const auto captureStats = captureDriver.implicitFeedbackStats();
+    EXPECT_EQ(captureStats.captureTransferErrors, 1u);
+    EXPECT_EQ(captureStats.playbackTransferErrors, 0u);
+    libusb_free_transfer(captureTransfer);
+
+    monotrypt::usb::LibusbUacDriver playbackDriver;
+    monotrypt::usb::UsbDriverTestAccess::playbackInflight(playbackDriver, 1);
+    std::vector<uint8_t> playbackPayload(2, 0xD2);
+    auto* playbackTransfer = makeTransfer(playbackPayload);
+    ASSERT_NE(playbackTransfer, nullptr);
+    playbackTransfer->status = LIBUSB_TRANSFER_NO_DEVICE;
+
+    monotrypt::usb::UsbDriverTestAccess::onIso(playbackDriver,
+                                               playbackTransfer);
+    const auto playbackStats = playbackDriver.implicitFeedbackStats();
+    EXPECT_EQ(playbackStats.captureTransferErrors, 0u);
+    EXPECT_EQ(playbackStats.playbackTransferErrors, 1u);
+    libusb_free_transfer(playbackTransfer);
 }

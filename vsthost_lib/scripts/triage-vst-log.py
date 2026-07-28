@@ -36,7 +36,7 @@ from typing import Iterable
 MEMORY_INDEX = Path(
     "/home/varcain/.claude/projects/-home-varcain-projects-private-vstpoc/memory/MEMORY.md"
 )
-APP_PACKAGE = "com.varcain.guitarrackcraft"
+APP_PACKAGE = "com.vibes.dsp"
 CACHE_LOG_PREFIX = "cache/vst_host_v"
 
 

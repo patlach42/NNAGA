@@ -109,14 +109,15 @@ public:
     }
 
     // Called only from the dedicated render thread. No allocation, locks,
-    // I/O, or blocking calls occur here.
-    void writeStereo(const float* left, const float* right, int frames) noexcept {
+    // I/O, or blocking calls occur here. Returns the number of whole frames
+    // admitted to the playback ring so the caller can retry an unqueued tail.
+    int writeStereo(const float* left, const float* right, int frames) noexcept {
         if (!left || !right || frames <= 0 ||
-            !accepting_.load(std::memory_order_acquire)) return;
+            !accepting_.load(std::memory_order_acquire)) return 0;
         activeWriters_.fetch_add(1, std::memory_order_acq_rel);
         if (!accepting_.load(std::memory_order_acquire)) {
             activeWriters_.fetch_sub(1, std::memory_order_release);
-            return;
+            return 0;
         }
         int offset = 0;
         while (offset < frames) {
@@ -138,6 +139,7 @@ public:
             if (written < count) break;
         }
         activeWriters_.fetch_sub(1, std::memory_order_release);
+        return offset;
     }
 
     // Reads the selected capture channel as normalized float. Non-blocking

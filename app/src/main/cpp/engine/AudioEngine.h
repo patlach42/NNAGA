@@ -120,7 +120,8 @@ public:
     float getCpuLoad() const;
 
     /**
-     * Get cumulative audio xrun (underrun/overrun) count from the output stream.
+     * Get cumulative render discontinuities: Oboe XRuns plus direct-USB
+     * ring, transfer, and render-pacing failures for this engine session.
      */
     int32_t getXRunCount() const;
 
@@ -152,6 +153,12 @@ public:
     bool isDirectUsbRenderUrgentAudio() const noexcept {
         return directUsbRenderUrgentAudio_.load(std::memory_order_acquire);
     }
+    uint64_t directUsbCaptureWaitTimeouts() const noexcept {
+        return directUsbCaptureWaitTimeouts_.load(std::memory_order_acquire);
+    }
+    uint64_t directUsbWriteWaitTimeouts() const noexcept {
+        return directUsbWriteWaitTimeouts_.load(std::memory_order_acquire);
+    }
 
     bool loadTrackWav(RackPathId trackId, const std::string& path,
                       const std::string& displayName);
@@ -169,6 +176,10 @@ private:
     int32_t directUsbChannels_ = 0;
     std::vector<float> directUsbInputBuffer_;
     std::vector<float> directUsbOutputLeft_;
+    std::atomic<uint64_t> directUsbCaptureWaitTimeouts_{0};
+    std::vector<float> directUsbStartupLeft_;
+    std::vector<float> directUsbStartupRight_;
+    std::atomic<uint64_t> directUsbWriteWaitTimeouts_{0};
     std::vector<float> directUsbOutputRight_;
 
     std::unique_ptr<oboe::AudioStream> inputStream_;

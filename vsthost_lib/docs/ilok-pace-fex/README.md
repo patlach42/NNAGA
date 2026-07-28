@@ -66,10 +66,10 @@ still open). We did (the PARKED prototype here) — first of its kind.
 `BuildConfig.DEBUG`) forks `wine <exe>` against a prefix from the app process (SELinux
 needs the app-domain fork, not `adb run-as`). No UI needed:
 ```
-adb shell am broadcast -n com.varcain.guitarrackcraft/com.varcain.guitarrackcraft.debug.DebugRunReceiver \
-  -a com.varcain.guitarrackcraft.DEBUG_RUN \
-  --es exe "/data/user/0/com.varcain.guitarrackcraft/files/wineprefix_<X>/drive_c/.../LDSvc.exe" \
-  --es prefix "/data/user/0/com.varcain.guitarrackcraft/files/wineprefix_<X>"
+adb shell am broadcast -n com.vibes.dsp/com.vibes.dsp.debug.DebugRunReceiver \
+  -a com.vibes.dsp.DEBUG_RUN \
+  --es exe "/data/user/0/com.vibes.dsp/files/wineprefix_<X>/drive_c/.../LDSvc.exe" \
+  --es prefix "/data/user/0/com.vibes.dsp/files/wineprefix_<X>"
 ```
 - Args via `cache/exe_args.txt`; WINEDEBUG/env via `cache/wine_env.txt`; log →
   `cache/vst_host_installer.log`.

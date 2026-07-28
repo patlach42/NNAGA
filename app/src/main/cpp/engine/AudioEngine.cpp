@@ -103,12 +103,13 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
         outputPair < 0 || outputPair * 2 + 1 >= channels) {
         return false;
     }
-    // The USB driver clamps its graph quantum to 1024 frames and exposes at
-    // most two quanta of writable playback space. Keep one render block within
-    // that limit so WAV pacing can always make progress for any positive
-    // requested session buffer size.
+    // A direct-USB graph runs on its own capture-clocked render thread. Keep
+    // its quantum small even when the Android stream preference is large:
+    // large 512/1024-frame quanta leave no scheduler headroom between USB
+    // capture arrivals and cause playback-ring underruns.
+    constexpr int32_t kDirectUsbMaxRenderFrames = 256;
     const int32_t renderFrames = bufferFrames > 0
-        ? std::min<int32_t>(bufferFrames, DirectUsbOutput::kMaxGraphQuantum) : 64;
+        ? std::min<int32_t>(bufferFrames, kDirectUsbMaxRenderFrames) : 64;
     if (!directUsbOutput_->start(static_cast<int>(sampleRate), bitsPerSample,
                                  subslotBytes, channels, inputChannel,
                                  outputPair)) {
@@ -124,6 +125,10 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbInputBuffer_.assign(static_cast<size_t>(renderFrames), 0.0f);
     directUsbOutputLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
     directUsbOutputRight_.assign(static_cast<size_t>(renderFrames), 0.0f);
+    directUsbStartupLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
+    directUsbStartupRight_.assign(static_cast<size_t>(renderFrames), 0.0f);
+    directUsbCaptureWaitTimeouts_.store(0, std::memory_order_relaxed);
+    directUsbWriteWaitTimeouts_.store(0, std::memory_order_relaxed);
     directUsbOutput_->setGraphQuantum(renderFrames);
     rackGraph_.setSampleRate(sampleRate_, callbackFrameCount_);
     rackGraph_.activate();
@@ -223,10 +228,19 @@ int32_t AudioEngine::getXRunCount() const {
         auto result = outputStream_->getXRunCount();
         oboeXruns = result ? result.value() : 0;
     }
-    const uint64_t directUsbXruns = directUsbOutput_
-        ? directUsbOutput_->xrunCount() + directUsbOutput_->captureXRunCount() : 0;
+    uint64_t directUsbDiscontinuities = 0;
+    if (directUsbOutput_) {
+        const auto transport = directUsbOutput_->transportStats();
+        directUsbDiscontinuities =
+            directUsbOutput_->xrunCount() +
+            directUsbOutput_->captureXRunCount() +
+            transport.captureTransferErrors +
+            transport.playbackTransferErrors +
+            directUsbCaptureWaitTimeouts_.load(std::memory_order_acquire) +
+            directUsbWriteWaitTimeouts_.load(std::memory_order_acquire);
+    }
     const uint64_t total =
-        static_cast<uint64_t>(std::max(0, oboeXruns)) + directUsbXruns;
+        static_cast<uint64_t>(std::max(0, oboeXruns)) + directUsbDiscontinuities;
     return static_cast<int32_t>(std::min<uint64_t>(
         total, static_cast<uint64_t>(std::numeric_limits<int32_t>::max())));
 }
@@ -299,24 +313,33 @@ void AudioEngine::directUsbRenderLoop() {
         setCurrentThreadUrgentAudio("UsbAudioRender"),
         std::memory_order_release);
     const int32_t frames = static_cast<int32_t>(callbackFrameCount_);
+    // A capture completion can overshoot its wait threshold by one ISO
+    // transfer. Leave that margin below the driver's two-quantum capture
+    // latency ceiling; the second block is then collected immediately.
+    constexpr int32_t kCapturePreRollMarginFrames = 64;
+    const int32_t startupFrames = std::max(
+        frames, frames * 2 - kCapturePreRollMarginFrames);
     const auto period = std::chrono::duration<double>(
         static_cast<double>(frames) / static_cast<double>(sampleRate_));
     const int writeTimeoutMs = std::max(
         2, static_cast<int>(std::ceil(period.count() * 2000.0)));
 
-    while (directUsbSession_.load(std::memory_order_acquire) &&
-           isRunning_.load(std::memory_order_acquire)) {
-        // USB capture clock always paces DSP, even when every track uses WAV.
-        if (!directUsbOutput_ ||
-            !directUsbOutput_->waitForCaptureFrames(frames, 1000)) {
-            if (!directUsbSession_.load(std::memory_order_acquire) ||
-                !directUsbOutput_ || !directUsbOutput_->isStreaming()) {
-                break;
-            }
-            continue;
+    const auto canContinue = [this]() noexcept {
+        return directUsbSession_.load(std::memory_order_acquire) &&
+            directUsbOutput_ && directUsbOutput_->isStreaming();
+    };
+    const auto waitForCapture = [this, &canContinue](int32_t required) noexcept {
+        if (directUsbOutput_ &&
+            directUsbOutput_->waitForCaptureFrames(required, 1000)) {
+            return true;
         }
+        if (canContinue()) {
+            directUsbCaptureWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
+        }
+        return false;
+    };
+    const auto renderBlock = [this, frames, period]() noexcept {
         directUsbOutput_->readMonoInput(directUsbInputBuffer_.data(), frames);
-
         inputPtrs_[0] = directUsbInputBuffer_.data();
         inputPtrs_[1] = directUsbInputBuffer_.data();
         outputPtrs_[0] = directUsbOutputLeft_.data();
@@ -342,19 +365,72 @@ void AudioEngine::directUsbRenderLoop() {
         outputPeakLevel_.store(outputPeakHold_, std::memory_order_relaxed);
         if (inputPeak >= kClippingThreshold) inputClipping_.store(true, std::memory_order_relaxed);
         if (outputPeak >= kClippingThreshold) outputClipping_.store(true, std::memory_order_relaxed);
-
         if (recorder_.isRecording()) {
             recorder_.feedAudio(directUsbInputBuffer_.data(), directUsbOutputLeft_.data(),
                                 directUsbOutputRight_.data(), frames);
         }
-        if (!directUsbOutput_ ||
-            !directUsbOutput_->waitForWritableFrames(frames, writeTimeoutMs)) {
-            if (!directUsbSession_.load(std::memory_order_acquire) ||
-                !directUsbOutput_ || !directUsbOutput_->isStreaming()) {
-                break;
+    };
+    const auto submitBlock = [this, frames, writeTimeoutMs, &canContinue](
+                                 const float* left, const float* right) noexcept {
+        int32_t submittedFrames = 0;
+        while (submittedFrames < frames) {
+            const int32_t remainingFrames = frames - submittedFrames;
+            if (!directUsbOutput_ ||
+                !directUsbOutput_->waitForWritableFrames(
+                    remainingFrames, writeTimeoutMs)) {
+                if (canContinue()) {
+                    directUsbWriteWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
+                }
+                return false;
             }
+            const int written = directUsbOutput_->writeStereo(
+                left + submittedFrames, right + submittedFrames, remainingFrames);
+            if (written <= 0) {
+                directUsbWriteWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+            submittedFrames += written;
         }
-        directUsbOutput_->writeStereo(directUsbOutputLeft_.data(), directUsbOutputRight_.data(), frames);
+        return true;
+    };
+
+    bool outputPrimed = false;
+    while (directUsbSession_.load(std::memory_order_acquire) &&
+           isRunning_.load(std::memory_order_acquire)) {
+        if (!outputPrimed) {
+            if (!waitForCapture(startupFrames)) {
+                if (!canContinue()) break;
+                continue;
+            }
+            renderBlock();
+            std::memcpy(directUsbStartupLeft_.data(), directUsbOutputLeft_.data(),
+                        static_cast<size_t>(frames) * sizeof(float));
+            std::memcpy(directUsbStartupRight_.data(), directUsbOutputRight_.data(),
+                        static_cast<size_t>(frames) * sizeof(float));
+
+            if (!waitForCapture(frames)) {
+                if (!canContinue()) break;
+                continue;
+            }
+            renderBlock();
+            if (!submitBlock(directUsbStartupLeft_.data(), directUsbStartupRight_.data()) ||
+                !submitBlock(directUsbOutputLeft_.data(), directUsbOutputRight_.data())) {
+                if (!canContinue()) break;
+                continue;
+            }
+            outputPrimed = true;
+            continue;
+        }
+
+        if (!waitForCapture(frames)) {
+            if (!canContinue()) break;
+            continue;
+        }
+        renderBlock();
+        if (!submitBlock(directUsbOutputLeft_.data(), directUsbOutputRight_.data()) &&
+            !canContinue()) {
+            break;
+        }
     }
     // Runtime transfer failure: retire all transport, recording, and plugin
     // state instead of spinning on empty rings or leaving an active graph.
@@ -373,6 +449,15 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         return oboe::DataCallbackResult::Continue;
     // Only process when the output stream needs data (we do not set callback on input).
     if (audioStream != outputStream_.get()) {
+        return oboe::DataCallbackResult::Continue;
+    }
+    // Direct USB owns the graph and the USB sink on its capture-clocked
+    // render thread. Never process or write it from an Oboe callback: that
+    // would race the graph and violate the driver's SPSC playback ring.
+    if (directUsbSession_.load(std::memory_order_acquire)) {
+        const int32_t channels = std::max<int32_t>(1, audioStream->getChannelCount());
+        std::memset(audioData, 0,
+                    static_cast<size_t>(numFrames) * channels * sizeof(float));
         return oboe::DataCallbackResult::Continue;
     }
     float* outputData = static_cast<float*>(audioData);
@@ -446,7 +531,6 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     outputPeakLevel_.store(outputPeakHold_);
     if (outputClip) outputClipping_.store(true);
 
-    // Feed recorder (lock-free ring buffer write)
     if (recorder_.isRecording()) {
         recorder_.feedAudio(inputBuffer_.data(),
                             outputBufferLeft_.data(),
@@ -454,19 +538,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                             numFrames);
     }
 
-
-    // Direct USB is a playback-only sink driven by the Oboe callback clock.
-    // It owns the processed PCM while the framework stream receives silence,
-    // preventing duplicate playback through the phone speaker.
-    const bool directUsbStreaming =
-        directUsbOutput_ && directUsbOutput_->isStreaming();
-    if (directUsbStreaming) {
-        directUsbOutput_->writeStereo(
-            outputBufferLeft_.data(), outputBufferRight_.data(), numFrames);
-        std::memset(
-            outputData, 0,
-            static_cast<size_t>(numFrames) * numChannels * sizeof(float));
-    } else if (numChannels == 2) {
+    if (numChannels == 2) {
         for (int32_t i = 0; i < numFrames; ++i) {
             outputData[i * 2] = outputBufferLeft_[i];
             outputData[i * 2 + 1] = outputBufferRight_[i];

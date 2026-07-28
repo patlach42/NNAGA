@@ -24,7 +24,7 @@
 
 set -uo pipefail
 
-APP=com.varcain.guitarrackcraft
+APP=com.vibes.dsp
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 triage="$script_dir/triage-vst-log.py"
 

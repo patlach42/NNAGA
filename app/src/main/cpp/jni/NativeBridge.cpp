@@ -119,16 +119,16 @@ static bool ensureJniCache(JNIEnv* env) {
     g_jni.arrayListCtor = env->GetMethodID(g_jni.arrayListClass, "<init>", "(I)V");
     g_jni.arrayListAdd = env->GetMethodID(g_jni.arrayListClass, "add", "(Ljava/lang/Object;)Z");
 
-    g_jni.scalePointClass = cache("com/varcain/guitarrackcraft/engine/ScalePoint");
+    g_jni.scalePointClass = cache("com/vibes/dsp/engine/ScalePoint");
     if (g_jni.scalePointClass)
         g_jni.scalePointCtor = env->GetMethodID(g_jni.scalePointClass, "<init>", "(Ljava/lang/String;F)V");
 
-    g_jni.portInfoClass = cache("com/varcain/guitarrackcraft/engine/PortInfo");
+    g_jni.portInfoClass = cache("com/vibes/dsp/engine/PortInfo");
     if (!g_jni.portInfoClass) return false;
     g_jni.portInfoCtor = env->GetMethodID(g_jni.portInfoClass, "<init>",
         "(ILjava/lang/String;Ljava/lang/String;ZZZZFFFLjava/util/List;)V");
 
-    g_jni.pluginInfoClass = cache("com/varcain/guitarrackcraft/engine/PluginInfo");
+    g_jni.pluginInfoClass = cache("com/vibes/dsp/engine/PluginInfo");
     if (!g_jni.pluginInfoClass) return false;
     g_jni.pluginInfoCtor = env->GetMethodID(g_jni.pluginInfoClass, "<init>", "()V");
     g_jni.piId = env->GetFieldID(g_jni.pluginInfoClass, "id", "Ljava/lang/String;");
@@ -187,7 +187,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetLv2Path(JNIEnv* env, jobject thiz, jstring path) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetLv2Path(JNIEnv* env, jobject thiz, jstring path) {
     if (!path) {
         ensureCtx()->lv2Path.clear();
         return;
@@ -201,7 +201,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetLv2Path(JNIEnv* en
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetNativeLibDir(JNIEnv* env, jobject thiz, jstring path) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetNativeLibDir(JNIEnv* env, jobject thiz, jstring path) {
     if (!path) {
         ensureCtx()->nativeLibDir.clear();
         return;
@@ -215,7 +215,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetNativeLibDir(JNIEn
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetFilesDir(JNIEnv* env, jobject thiz, jstring path) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetFilesDir(JNIEnv* env, jobject thiz, jstring path) {
     if (!path) {
         ensureCtx()->filesDir.clear();
         return;
@@ -229,7 +229,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetFilesDir(JNIEnv* e
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetX11LibsDir(JNIEnv* env, jobject thiz, jstring path) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetX11LibsDir(JNIEnv* env, jobject thiz, jstring path) {
     if (!path) {
         ensureCtx()->x11LibsDir.clear();
         return;
@@ -264,7 +264,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetX11LibsDir(JNIEnv*
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetPluginLibDir(JNIEnv* env, jobject thiz, jstring path) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetPluginLibDir(JNIEnv* env, jobject thiz, jstring path) {
     if (!path) {
         ensureCtx()->pluginLibDir.clear();
         return;
@@ -278,7 +278,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetPluginLibDir(JNIEn
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
     LOGI("Initializing native engine");
 
     // Promote libc++_shared.so to RTLD_GLOBAL so that LV2 plugin .so files
@@ -343,7 +343,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeInit(JNIEnv* env, job
 }
 
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginX11Display(
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginX11Display(
     JNIEnv*, jobject, jlong pathId, jint position) {
     if (!g_ctx || !g_ctx->audioEngine) return -1;
     std::lock_guard lock(g_ctx->rackControlMutex);
@@ -353,7 +353,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginX11Displ
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginEditorSize(
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginEditorSize(
     JNIEnv*, jobject, jlong pathId, jint position) {
     if (!g_ctx || !g_ctx->audioEngine) return 0;
     std::lock_guard lock(g_ctx->rackControlMutex);
@@ -366,7 +366,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginEditorSi
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRefreshPluginRegistry(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeRefreshPluginRegistry(JNIEnv* env, jobject thiz) {
     if (!g_ctx || !g_ctx->pluginRegistry) {
         LOGE("nativeRefreshPluginRegistry: registry not initialized");
         return JNI_FALSE;
@@ -383,14 +383,14 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRefreshPluginRegistry
 
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeOpenDirectUsbOutput(
+Java_com_vibes_dsp_engine_NativeEngine_nativeOpenDirectUsbOutput(
         JNIEnv* env, jobject thiz, jint fileDescriptor) {
     if (!g_ctx || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->directUsbOutput->open(static_cast<int>(fileDescriptor))
         ? JNI_TRUE : JNI_FALSE;
 }
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbInputChannelCount(
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbInputChannelCount(
         JNIEnv* env, jobject thiz) {
     if (!g_ctx || !g_ctx->directUsbOutput) return 0;
     return static_cast<jint>(g_ctx->directUsbOutput->captureChannelCount());
@@ -398,7 +398,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbInputChan
 
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartDirectUsbSession(
+Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         JNIEnv* env, jobject thiz, jint sampleRate, jint bitsPerSample,
         jint bytesPerSample, jint channels, jint inputChannel, jint outputPair,
         jint bufferFrames) {
@@ -416,7 +416,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartDirectUsbSession
 
 
 JNIEXPORT jintArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbOutputFormats(
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbOutputFormats(
         JNIEnv* env, jobject thiz) {
     if (!g_ctx || !g_ctx->directUsbOutput) return nullptr;
     const auto formats = g_ctx->directUsbOutput->enumerateFormats();
@@ -435,7 +435,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbOutputFor
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStopDirectUsbOutput(
+Java_com_vibes_dsp_engine_NativeEngine_nativeStopDirectUsbOutput(
         JNIEnv* env, jobject thiz) {
     if (g_ctx && g_ctx->directUsbOutput) {
         g_ctx->directUsbOutput->stop();
@@ -443,16 +443,16 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStopDirectUsbOutput(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
+Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
         JNIEnv* env, jobject thiz) {
     return g_ctx && g_ctx->directUsbOutput &&
         g_ctx->directUsbOutput->isStreaming() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jlongArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbStats(
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 15;
+    constexpr jsize kStatCount = 18;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -475,6 +475,11 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbStats(
             static_cast<jlong>(g_ctx->directUsbOutput->writtenFrames());
         values[14] =
             static_cast<jlong>(g_ctx->directUsbOutput->playedFrames());
+        values[15] = static_cast<jlong>(g_ctx->directUsbOutput->xrunCount());
+        values[16] = g_ctx->audioEngine
+            ? static_cast<jlong>(g_ctx->audioEngine->directUsbCaptureWaitTimeouts()) : 0;
+        values[17] = g_ctx->audioEngine
+            ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
     }
     jlongArray out = env->NewLongArray(kStatCount);
     if (out) env->SetLongArrayRegion(out, 0, kStatCount, values);
@@ -482,7 +487,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbStats(
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStopEngine(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeStopEngine(JNIEnv* env, jobject thiz) {
     LOGI("nativeStopEngine CALLED tid=%ld (Java requested stop; will call closeStreams from this thread)", getTid());
     if (g_ctx->audioEngine) {
         g_ctx->audioEngine->stop();
@@ -491,12 +496,12 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStopEngine(JNIEnv* en
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsEngineRunning(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeIsEngineRunning(JNIEnv* env, jobject thiz) {
     return g_ctx->audioEngine && g_ctx->audioEngine->isRunning() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetSampleRate(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetSampleRate(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return 0.0f;
     }
@@ -504,7 +509,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetSampleRate(JNIEnv*
 }
 
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetBufferFrameCount(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetBufferFrameCount(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return 0;
     }
@@ -512,7 +517,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetBufferFrameCount(J
 }
 
 JNIEXPORT jintArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetStreamInfo(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetStreamInfo(JNIEnv* env, jobject thiz) {
     // Returns [isAAudio, inputExclusive, outputExclusive, inputLowLatency, outputLowLatency, outputMMap, outputCallback, framesPerBurst]
     jint arr[8] = {};
     if (g_ctx->audioEngine && g_ctx->audioEngine->isRunning()) {
@@ -534,7 +539,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetStreamInfo(JNIEnv*
 }
 
 JNIEXPORT jdouble JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetLatencyMs(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetLatencyMs(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return 0.0;
     }
@@ -542,7 +547,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetLatencyMs(JNIEnv* 
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetInputLevel(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetInputLevel(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return 0.0f;
     }
@@ -550,7 +555,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetInputLevel(JNIEnv*
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetOutputLevel(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetOutputLevel(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return 0.0f;
     }
@@ -558,7 +563,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetOutputLevel(JNIEnv
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetCpuLoad(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetCpuLoad(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return 0.0f;
     }
@@ -566,7 +571,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetCpuLoad(JNIEnv* en
 }
 
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetXRunCount(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetXRunCount(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return 0;
     }
@@ -574,7 +579,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetXRunCount(JNIEnv* 
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsInputClipping(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeIsInputClipping(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return JNI_FALSE;
     }
@@ -582,7 +587,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsInputClipping(JNIEn
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsOutputClipping(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeIsOutputClipping(JNIEnv* env, jobject thiz) {
     if (!g_ctx->audioEngine) {
         return JNI_FALSE;
     }
@@ -590,7 +595,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsOutputClipping(JNIE
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeResetClipping(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeResetClipping(JNIEnv* env, jobject thiz) {
     if (g_ctx->audioEngine) {
         g_ctx->audioEngine->resetClipping();
     }
@@ -684,7 +689,7 @@ jobject createPluginInfoObject(JNIEnv* env, const PluginInfo& info) {
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetAvailablePlugins(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetAvailablePlugins(JNIEnv* env, jobject thiz) {
     if (!ensureJniCache(env)) return nullptr;
 
     std::vector<PluginInfo> plugins;
@@ -709,7 +714,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetAvailablePlugins(J
 }
 
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeAddPluginToRack(
+Java_com_vibes_dsp_engine_NativeEngine_nativeAddPluginToRack(
     JNIEnv* env, jobject, jlong pathId, jstring pluginId, jint position) {
     if (!g_ctx || !g_ctx->pluginRegistry || !g_ctx->audioEngine || !pluginId) return -1;
     const char* id = env->GetStringUTFChars(pluginId, nullptr);
@@ -724,7 +729,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeAddPluginToRack(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRemovePluginFromRack(
+Java_com_vibes_dsp_engine_NativeEngine_nativeRemovePluginFromRack(
     JNIEnv*, jobject, jlong pathId, jint position) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     std::lock_guard lock(g_ctx->rackControlMutex);
@@ -733,7 +738,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRemovePluginFromRack(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeReorderRack(
+Java_com_vibes_dsp_engine_NativeEngine_nativeReorderRack(
     JNIEnv*, jobject, jlong pathId, jint fromPos, jint toPos) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     std::lock_guard lock(g_ctx->rackControlMutex);
@@ -742,7 +747,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeReorderRack(
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetPluginFilePath(
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetPluginFilePath(
     JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jstring propertyUri, jstring filePath) {
     if (!g_ctx || !g_ctx->audioEngine || !propertyUri || !filePath) return;
     const char* property = env->GetStringUTFChars(propertyUri, nullptr);
@@ -758,7 +763,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetPluginFilePath(
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetParameter(
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetParameter(
     JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex, jfloat value) {
     if (!g_ctx || !g_ctx->audioEngine) return;
     std::lock_guard lock(g_ctx->rackControlMutex);
@@ -768,7 +773,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetParameter(
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetParameter(
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameter(
     JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex) {
     if (!g_ctx || !g_ctx->audioEngine) return 0.0f;
     std::lock_guard lock(g_ctx->rackControlMutex);
@@ -777,35 +782,35 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetParameter(
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeAddTrack(JNIEnv*, jobject) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeAddTrack(JNIEnv*, jobject) {
     if (!g_ctx || !g_ctx->audioEngine) return 0;
     std::lock_guard lock(g_ctx->rackControlMutex);
     return static_cast<jlong>(g_ctx->audioEngine->getRackGraph().addTrack());
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRemoveTrack(JNIEnv*, jobject, jlong trackId) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeRemoveTrack(JNIEnv*, jobject, jlong trackId) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     std::lock_guard lock(g_ctx->rackControlMutex);
     return g_ctx->audioEngine->getRackGraph().removeTrack(trackId) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetTrackVolume(
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackVolume(
     JNIEnv*, jobject, jlong trackId, jfloat volume) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     return g_ctx->audioEngine->getRackGraph().setTrackVolume(trackId, volume) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetTrackInputArmed(
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputArmed(
     JNIEnv*, jobject, jlong trackId, jboolean armed) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     return g_ctx->audioEngine->getRackGraph().setTrackInputArmed(trackId, armed == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeLoadTrackWav(
+Java_com_vibes_dsp_engine_NativeEngine_nativeLoadTrackWav(
     JNIEnv* env, jobject, jlong trackId, jstring path, jstring displayName) {
     if (!g_ctx || !g_ctx->audioEngine || !path || !displayName) return JNI_FALSE;
     const char* filePath = env->GetStringUTFChars(path, nullptr);
@@ -817,34 +822,34 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeLoadTrackWav(
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeUnloadTrackWav(JNIEnv*, jobject, jlong trackId) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeUnloadTrackWav(JNIEnv*, jobject, jlong trackId) {
     return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->unloadTrackWav(trackId) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeClearTrackWavs(JNIEnv*, jobject) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeClearTrackWavs(JNIEnv*, jobject) {
     return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->getRackGraph().clearTrackWavs() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetWavTransportPlaying(JNIEnv*, jobject, jboolean playing) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetWavTransportPlaying(JNIEnv*, jobject, jboolean playing) {
     return g_ctx && g_ctx->audioEngine &&
         g_ctx->audioEngine->getRackGraph().setTransportPlaying(playing == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRestartWavTransport(JNIEnv*, jobject) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeRestartWavTransport(JNIEnv*, jobject) {
     return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->isRunning() &&
         g_ctx->audioEngine->getRackGraph().restartTransport() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetWavTransportLooping(JNIEnv*, jobject, jboolean looping) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetWavTransportLooping(JNIEnv*, jobject, jboolean looping) {
     if (g_ctx && g_ctx->audioEngine) g_ctx->audioEngine->getRackGraph().setTransportLooping(looping == JNI_TRUE);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackSize(JNIEnv*, jobject, jlong pathId) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackSize(JNIEnv*, jobject, jlong pathId) {
     if (!g_ctx || !g_ctx->audioEngine) return 0;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
@@ -852,7 +857,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackSize(JNIEnv*, 
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginInfo(JNIEnv* env, jobject, jlong pathId, jint index) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginInfo(JNIEnv* env, jobject, jlong pathId, jint index) {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
@@ -861,7 +866,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginInfo(JNI
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginInstanceId(JNIEnv*, jobject, jlong pathId, jint index) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginInstanceId(JNIEnv*, jobject, jlong pathId, jint index) {
     if (!g_ctx || !g_ctx->audioEngine) return 0;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
@@ -869,16 +874,16 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginInstance
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPlugins(
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPlugins(
     JNIEnv* env, jobject, jlong pathId) {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
     if (!chain) return nullptr;
-    jclass entryClass = env->FindClass("com/varcain/guitarrackcraft/engine/RackPluginEntry");
+    jclass entryClass = env->FindClass("com/vibes/dsp/engine/RackPluginEntry");
     if (!entryClass) return nullptr;
     jmethodID ctor = env->GetMethodID(
-        entryClass, "<init>", "(IJLcom/varcain/guitarrackcraft/engine/PluginInfo;)V");
+        entryClass, "<init>", "(IJLcom/vibes/dsp/engine/PluginInfo;)V");
     if (!ctor) return nullptr;
     const size_t size = chain->getSize();
     jobjectArray result = env->NewObjectArray(static_cast<jsize>(size), entryClass, nullptr);
@@ -896,10 +901,10 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPlugins(
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     const auto tracks = g_ctx->audioEngine->getRackGraph().getTracks();
-    jclass clazz = env->FindClass("com/varcain/guitarrackcraft/engine/RackTrackInfo");
+    jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
     if (!clazz) return nullptr;
     jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;D)V");
     if (!ctor) return nullptr;
@@ -919,10 +924,10 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetTracks(JNIEnv* env
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetWavTransportInfo(JNIEnv* env, jobject) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetWavTransportInfo(JNIEnv* env, jobject) {
     const TransportSnapshot state = g_ctx && g_ctx->audioEngine
         ? g_ctx->audioEngine->getRackGraph().getTransportSnapshot() : TransportSnapshot{};
-    jclass clazz = env->FindClass("com/varcain/guitarrackcraft/engine/WavTransportInfo");
+    jclass clazz = env->FindClass("com/vibes/dsp/engine/WavTransportInfo");
     if (!clazz) return nullptr;
     jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZZDDI)V");
     return ctor ? env->NewObject(clazz, ctor, state.playing ? JNI_TRUE : JNI_FALSE,
@@ -931,7 +936,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetWavTransportInfo(J
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeBeginCreatePluginUI(JNIEnv* env, jobject thiz, jint displayNumber, jint pluginIndex) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeBeginCreatePluginUI(JNIEnv* env, jobject thiz, jint displayNumber, jint pluginIndex) {
     /* Set display state to Creating BEFORE the plugin UI creation starts.
      * This ensures signalDetachSurfaceFromDisplay will defer if called during creation. */
     {
@@ -946,7 +951,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeBeginCreatePluginUI(J
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeCreatePluginUI(JNIEnv* env, jobject thiz, jint pluginIndex, jint displayNumber, jlong parentWindowId) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeCreatePluginUI(JNIEnv* env, jobject thiz, jint pluginIndex, jint displayNumber, jlong parentWindowId) {
     LOGI("nativeCreatePluginUI ENTER tid=%ld pluginIndex=%d displayNumber=%d parentWindowId=0x%lx", getTid(), pluginIndex, displayNumber, (unsigned long)parentWindowId);
     
     if (!g_ctx->audioEngine) {
@@ -994,7 +999,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeCreatePluginUI(JNIEnv
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDestroyPluginUI(JNIEnv* env, jobject thiz, jint pluginIndex) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeDestroyPluginUI(JNIEnv* env, jobject thiz, jint pluginIndex) {
     LOGI("nativeDestroyPluginUI CALLED tid=%ld pluginIndex=%d", getTid(), pluginIndex);
     if (g_ctx->audioEngine) {
         g_ctx->pluginUIManager->destroyPluginUI(pluginIndex);
@@ -1003,7 +1008,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDestroyPluginUI(JNIEn
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIdlePluginUIs(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeIdlePluginUIs(JNIEnv* env, jobject thiz) {
     if (g_ctx->audioEngine) {
         return g_ctx->pluginUIManager->idleAllUIs() ? JNI_TRUE : JNI_FALSE;
     }
@@ -1013,7 +1018,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIdlePluginUIs(JNIEnv*
 // --- X11 native display (EGL + ANativeWindow) ---
 
 JNIEXPORT jlong JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeAttachSurfaceToDisplay(JNIEnv* env, jobject thiz, jint displayNumber, jobject surface, jint width, jint height) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeAttachSurfaceToDisplay(JNIEnv* env, jobject thiz, jint displayNumber, jobject surface, jint width, jint height) {
     if (!surface || width <= 0 || height <= 0) {
         LOGE("nativeAttachSurfaceToDisplay: invalid surface or size");
         return 0;
@@ -1042,7 +1047,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeAttachSurfaceToDispla
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSignalDetachSurfaceFromDisplay(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSignalDetachSurfaceFromDisplay(JNIEnv* env, jobject thiz, jint displayNumber) {
     LOGI("nativeSignalDetachSurfaceFromDisplay ENTER display=%d tid=%ld", displayNumber, getTid());
     
     /* Always defer when creating - never close X connection during plugin creation.
@@ -1075,25 +1080,25 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSignalDetachSurfaceFr
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStopX11RenderThreadOnly(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeStopX11RenderThreadOnly(JNIEnv* env, jobject thiz, jint displayNumber) {
     X11NativeDisplay* disp = getX11Display(displayNumber);
     if (disp) disp->stopRenderThreadOnly();
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDetachSurfaceFromDisplay(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeDetachSurfaceFromDisplay(JNIEnv* env, jobject thiz, jint displayNumber) {
     LOGI("nativeDetachSurfaceFromDisplay ENTER display=%d tid=%ld", displayNumber, getTid());
     X11NativeDisplay* disp = getX11Display(displayNumber);
     if (disp) disp->detachSurface();
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDestroyX11Display(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeDestroyX11Display(JNIEnv* env, jobject thiz, jint displayNumber) {
     destroyX11Display(displayNumber);
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDetachAndDestroyX11DisplayIfExists(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeDetachAndDestroyX11DisplayIfExists(JNIEnv* env, jobject thiz, jint displayNumber) {
     LOGI("nativeDetachAndDestroyX11DisplayIfExists ENTER display=%d tid=%ld", displayNumber, getTid());
     
     auto phase = getDisplayPhase(displayNumber);
@@ -1124,7 +1129,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDetachAndDestroyX11Di
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeHideX11Display(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeHideX11Display(JNIEnv* env, jobject thiz, jint displayNumber) {
     LOGI("nativeHideX11Display ENTER display=%d tid=%ld", displayNumber, getTid());
     
     X11NativeDisplay* disp = getX11Display(displayNumber);
@@ -1141,7 +1146,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeHideX11Display(JNIEnv
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeResumeX11Display(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeResumeX11Display(JNIEnv* env, jobject thiz, jint displayNumber) {
     LOGI("nativeResumeX11Display ENTER display=%d tid=%ld", displayNumber, getTid());
     
     X11NativeDisplay* disp = getX11Display(displayNumber);
@@ -1158,27 +1163,27 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeResumeX11Display(JNIE
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetSurfaceSize(JNIEnv* env, jobject thiz, jint displayNumber, jint width, jint height) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetSurfaceSize(JNIEnv* env, jobject thiz, jint displayNumber, jint width, jint height) {
     withDisplaySetSurfaceSize(displayNumber, width, height);
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeInjectTouch(JNIEnv* env, jobject thiz, jint displayNumber, jint action, jint x, jint y) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeInjectTouch(JNIEnv* env, jobject thiz, jint displayNumber, jint action, jint x, jint y) {
     withDisplayInjectTouch(displayNumber, action, x, y);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsWidgetAtPoint(JNIEnv* env, jobject thiz, jint displayNumber, jint x, jint y) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeIsWidgetAtPoint(JNIEnv* env, jobject thiz, jint displayNumber, jint x, jint y) {
     return withDisplayIsWidgetAtPoint(displayNumber, x, y) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRequestX11Frame(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeRequestX11Frame(JNIEnv* env, jobject thiz, jint displayNumber) {
     withDisplayRequestFrame(displayNumber);
 }
 
 JNIEXPORT jintArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetX11PluginSize(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetX11PluginSize(JNIEnv* env, jobject thiz, jint displayNumber) {
     int w = 0, h = 0;
     withDisplayGetPluginSize(displayNumber, w, h);
     jintArray result = env->NewIntArray(2);
@@ -1190,12 +1195,12 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetX11PluginSize(JNIE
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetX11UIScale(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetX11UIScale(JNIEnv* env, jobject thiz, jint displayNumber) {
     return withDisplayGetUIScale(displayNumber);
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativePollFileRequest(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativePollFileRequest(JNIEnv* env, jobject thiz) {
     if (!g_ctx || !g_ctx->pluginUIManager) return nullptr;
 
     guitarrackcraft::PluginUIManager::FileRequest req;
@@ -1217,7 +1222,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativePollFileRequest(JNIEn
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDeliverFileToPluginUI(
+Java_com_vibes_dsp_engine_NativeEngine_nativeDeliverFileToPluginUI(
     JNIEnv* env, jobject thiz, jint pluginIndex, jstring propertyUri, jstring filePath)
 {
     if (!g_ctx || !g_ctx->pluginUIManager) return;
@@ -1233,7 +1238,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDeliverFileToPluginUI
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativePollVstFilePickerRequest(
+Java_com_vibes_dsp_engine_NativeEngine_nativePollVstFilePickerRequest(
     JNIEnv* env, jobject, jlong pathId, jint pluginIndex)
 {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
@@ -1266,7 +1271,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativePollVstFilePickerRequ
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRespondVstFilePicker(
+Java_com_vibes_dsp_engine_NativeEngine_nativeRespondVstFilePicker(
     JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jint sequence, jboolean cancelled, jstring windowsPath)
 {
     if (!g_ctx || !g_ctx->audioEngine) return;
@@ -1292,7 +1297,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRespondVstFilePicker(
 // --- Real-time recording ---
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartRecording(JNIEnv* env, jobject thiz, jstring rawPath, jstring processedPath) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeStartRecording(JNIEnv* env, jobject thiz, jstring rawPath, jstring processedPath) {
     if (!g_ctx || !g_ctx->audioEngine) {
         return JNI_FALSE;
     }
@@ -1314,14 +1319,14 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStartRecording(JNIEnv
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeStopRecording(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeStopRecording(JNIEnv* env, jobject thiz) {
     if (g_ctx && g_ctx->audioEngine) {
         g_ctx->audioEngine->getRecorder().stopRecording();
     }
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsRecording(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeIsRecording(JNIEnv* env, jobject thiz) {
     if (!g_ctx || !g_ctx->audioEngine) {
         return JNI_FALSE;
     }
@@ -1329,7 +1334,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsRecording(JNIEnv* e
 }
 
 JNIEXPORT jdouble JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRecordingDurationSec(JNIEnv* env, jobject thiz) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRecordingDurationSec(JNIEnv* env, jobject thiz) {
     if (!g_ctx || !g_ctx->audioEngine) {
         return 0.0;
     }
@@ -1339,7 +1344,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRecordingDurationS
 // --- State save/restore (presets) ---
 
 JNIEXPORT jstring JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSaveRackState(JNIEnv* env, jobject) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSaveRackState(JNIEnv* env, jobject) {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     std::lock_guard lock(g_ctx->rackControlMutex);
     const std::string json = serializeRackStateToJson(g_ctx->audioEngine->getRackGraph().saveState());
@@ -1347,7 +1352,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSaveRackState(JNIEnv*
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRestorePluginState(
+Java_com_vibes_dsp_engine_NativeEngine_nativeRestorePluginState(
     JNIEnv* env, jobject, jlong pathId, jint pluginIndex,
     jfloatArray portValues, jintArray portIndices,
     jobjectArray propKeys, jobjectArray propTypes,
@@ -1415,7 +1420,7 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRestorePluginState(
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetRackBypass(
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetRackBypass(
     JNIEnv*, jobject, jboolean bypass) {
     if (g_ctx && g_ctx->audioEngine) {
         g_ctx->audioEngine->setRackBypass(bypass == JNI_TRUE);

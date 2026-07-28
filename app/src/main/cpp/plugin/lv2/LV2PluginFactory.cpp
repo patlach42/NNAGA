@@ -81,8 +81,8 @@ bool LV2PluginFactory::initialize() {
         scanPlugins(lv2Path_);
     }
     const char* fallbackPaths[] = {
-        "/data/data/com.varcain.guitarrackcraft/files/lv2",
-        "/sdcard/Android/data/com.varcain.guitarrackcraft/files/lv2",
+        "/data/data/com.vibes.dsp/files/lv2",
+        "/sdcard/Android/data/com.vibes.dsp/files/lv2",
         nullptr
     };
     for (int i = 0; fallbackPaths[i]; ++i) {

@@ -3,7 +3,7 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <application
-        android:name="com.varcain.guitarrackcraft.VstHostApplication"
+        android:name="com.vibes.dsp.VstHostApplication"
         tools:replace="android:name">
 
         <!-- VST plugin editor. Lives in a SEPARATE process to isolate
@@ -18,7 +18,7 @@
              wine was launched by the main process — separating the editor
              causes SIGSEGV on X11 server init.) -->
         <activity
-            android:name="com.varcain.guitarrackcraft.ui.vst.VstEditorActivity"
+            android:name="com.vibes.dsp.ui.vst.VstEditorActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout"
             android:theme="@style/Theme.GuitarRackCraft" />
@@ -26,10 +26,10 @@
         <!-- Debug-only: fork `wine <exe>` against a prefix from adb (no UI).
              Gated on BuildConfig.DEBUG inside the receiver. See DebugRunReceiver. -->
         <receiver
-            android:name="com.varcain.guitarrackcraft.debug.DebugRunReceiver"
+            android:name="com.vibes.dsp.debug.DebugRunReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.varcain.guitarrackcraft.DEBUG_RUN" />
+                <action android:name="com.vibes.dsp.DEBUG_RUN" />
             </intent-filter>
         </receiver>
 

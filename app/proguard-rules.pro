@@ -8,11 +8,11 @@
 }
 
 # Keep JNI bridge classes (PluginInfo, PortInfo, ScalePoint constructed via JNI reflection)
--keep class com.varcain.guitarrackcraft.engine.** { *; }
+-keep class com.vibes.dsp.engine.** { *; }
 
 # Keep activities referenced in AndroidManifest
--keep class com.varcain.guitarrackcraft.MainActivity { *; }
--keep class com.varcain.guitarrackcraft.X11PluginUIActivity { *; }
+-keep class com.vibes.dsp.MainActivity { *; }
+-keep class com.vibes.dsp.X11PluginUIActivity { *; }
 
 # Keep Kotlin enums (used in when-expressions, serialization)
 -keepclassmembers enum * {
