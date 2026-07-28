@@ -32,29 +32,37 @@ bool readWavFile(const std::string& path,
                  std::vector<float>& samples,
                  uint32_t& sampleRate,
                  uint32_t& numChannels) {
+    samples.clear();
+    sampleRate = 0;
+    numChannels = 0;
     std::ifstream file(path, std::ios::binary);
     if (!file.is_open()) {
         LOGE("Cannot open file: %s", path.c_str());
         return false;
     }
 
-    WavHeader header;
-    file.read(reinterpret_cast<char*>(&header), sizeof(WavHeader));
+    file.seekg(0, std::ios::end);
+    const std::streamoff fileSize = file.tellg();
+    file.seekg(0, std::ios::beg);
+    if (fileSize < static_cast<std::streamoff>(sizeof(WavHeader))) return false;
 
-    if (std::memcmp(header.riff, "RIFF", 4) != 0 ||
+    WavHeader header{};
+    file.read(reinterpret_cast<char*>(&header), sizeof(header));
+    if (!file || std::memcmp(header.riff, "RIFF", 4) != 0 ||
         std::memcmp(header.wave, "WAVE", 4) != 0 ||
-        std::memcmp(header.fmt, "fmt ", 4) != 0 ||
-        header.audioFormat != 1) {
+        std::memcmp(header.fmt, "fmt ", 4) != 0 || header.audioFormat != 1 ||
+        (header.bitsPerSample != 16 && header.bitsPerSample != 32) ||
+        header.sampleRate == 0 || (header.numChannels != 1 && header.numChannels != 2)) {
         LOGE("Invalid WAV file format");
         return false;
     }
-
-    sampleRate = header.sampleRate;
-    numChannels = header.numChannels;
-    uint16_t bitsPerSample = header.bitsPerSample;
-
+    const uint32_t bytesPerSample = header.bitsPerSample / 8;
+    if (header.blockAlign != header.numChannels * bytesPerSample) return false;
+    if (header.fmtSize < 16) return false;
     if (header.fmtSize > 16) {
-        file.seekg(header.fmtSize - 16, std::ios::cur);
+        const auto extra = static_cast<std::streamoff>(header.fmtSize - 16);
+        if (extra > fileSize - file.tellg()) return false;
+        file.seekg(extra, std::ios::cur);
     }
 
     uint32_t dataSize = 0;
@@ -63,45 +71,41 @@ bool readWavFile(const std::string& path,
     } else {
         char chunkId[4];
         uint32_t chunkSize = 0;
-        while (file.read(chunkId, 4)) {
-            file.read(reinterpret_cast<char*>(&chunkSize), 4);
+        while (file.read(chunkId, sizeof(chunkId)) &&
+               file.read(reinterpret_cast<char*>(&chunkSize), sizeof(chunkSize))) {
+            const auto remaining = fileSize - file.tellg();
+            if (chunkSize > remaining) return false;
             if (std::memcmp(chunkId, "data", 4) == 0) {
                 dataSize = chunkSize;
                 break;
             }
-            file.seekg(chunkSize, std::ios::cur);
+            file.seekg(static_cast<std::streamoff>(chunkSize) + (chunkSize & 1U), std::ios::cur);
         }
     }
+    if (dataSize == 0 || dataSize % header.blockAlign != 0 ||
+        dataSize > static_cast<uint64_t>(fileSize - file.tellg())) return false;
+    const size_t count = dataSize / bytesPerSample;
+    if (count == 0 || count > kMaxWavSamples) return false;
 
-    size_t numSamples = dataSize / (bitsPerSample / 8);
-    if (numSamples == 0) {
-        LOGE("WAV file has no data");
-        return false;
-    }
-    if (numSamples > kMaxWavSamples) {
-        LOGE("WAV file too large: %zu samples", numSamples);
-        return false;
-    }
-
-    samples.resize(numSamples);
-
-    if (bitsPerSample == 16) {
-        std::vector<int16_t> intSamples(numSamples);
-        file.read(reinterpret_cast<char*>(intSamples.data()), dataSize);
-        for (size_t i = 0; i < numSamples; ++i) {
-            samples[i] = intSamples[i] / kInt16MaxF;
+    try {
+        samples.resize(count);
+        if (header.bitsPerSample == 16) {
+            std::vector<int16_t> source(count);
+            file.read(reinterpret_cast<char*>(source.data()), dataSize);
+            if (file.gcount() != static_cast<std::streamsize>(dataSize)) { samples.clear(); return false; }
+            for (size_t index = 0; index < count; ++index) samples[index] = source[index] / kInt16MaxF;
+        } else {
+            std::vector<int32_t> source(count);
+            file.read(reinterpret_cast<char*>(source.data()), dataSize);
+            if (file.gcount() != static_cast<std::streamsize>(dataSize)) { samples.clear(); return false; }
+            for (size_t index = 0; index < count; ++index) samples[index] = source[index] / kInt32MaxF;
         }
-    } else if (bitsPerSample == 32) {
-        std::vector<int32_t> intSamples(numSamples);
-        file.read(reinterpret_cast<char*>(intSamples.data()), dataSize);
-        for (size_t i = 0; i < numSamples; ++i) {
-            samples[i] = intSamples[i] / kInt32MaxF;
-        }
-    } else {
-        LOGE("Unsupported bit depth: %u", bitsPerSample);
+    } catch (const std::exception&) {
+        samples.clear();
         return false;
     }
-
+    sampleRate = header.sampleRate;
+    numChannels = header.numChannels;
     return true;
 }
 

@@ -21,6 +21,8 @@
 
 #include <unistd.h>
 #include <sys/syscall.h>
+#include <pthread.h>
+#include <sys/resource.h>
 
 namespace guitarrackcraft {
 
@@ -29,6 +31,26 @@ inline long getTid() {
     return static_cast<long>(syscall(SYS_gettid));
 #else
     return static_cast<long>(pthread_self());
+#endif
+}
+
+// Best-effort Android/Linux realtime scheduling for app-owned audio threads.
+// Prefer SCHED_FIFO when permitted, then Android's urgent-audio nice level.
+// Call only once at thread startup; failure is exposed through diagnostics.
+inline bool setCurrentThreadUrgentAudio(const char* name) noexcept {
+    if (name != nullptr) {
+        (void)pthread_setname_np(pthread_self(), name);
+    }
+#if defined(__ANDROID__) && defined(__linux__)
+    sched_param realtime{};
+    realtime.sched_priority = 1;
+    if (pthread_setschedparam(pthread_self(), SCHED_FIFO, &realtime) == 0)
+        return true;
+    constexpr int kUrgentAudioNice = -19;
+    return setpriority(PRIO_PROCESS, static_cast<id_t>(getTid()),
+                       kUrgentAudioNice) == 0;
+#else
+    return false;
 #endif
 }
 

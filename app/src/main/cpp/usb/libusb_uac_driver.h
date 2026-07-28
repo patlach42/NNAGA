@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // USB Audio Class 2.0 direct-output driver — libusb-backed PCM sink.
 #include <array>
+#include <algorithm>
 //
 // Owns:
 //   - the libusb context (one per process, lazily created)
@@ -18,12 +19,13 @@
 
 #include <atomic>
 #include <cstdint>
-#include <mutex>
 #include <string>
 #include <thread>
+#include <mutex>
 #include <vector>
 
 #include <libusb.h>
+#include "UsbScheduling.h"
 
 namespace monotrypt::usb {
 
@@ -76,6 +78,8 @@ struct StreamFormat {
     uint8_t interfaceNumber = 0;
     uint8_t altSetting = 0;
     uint8_t endpointAddress = 0;
+    uint8_t syncEndpointAddress = 0;
+    uint8_t terminalLink = 0;
     uint16_t maxPacketSize = 0;
     uint8_t clockSourceId = 0;
     uint8_t controlInterfaceNum = 0;
@@ -122,8 +126,21 @@ struct CaptureStats {
     uint64_t underruns = 0;
     uint64_t sequence = 0;
 };
+struct ImplicitFeedbackStats {
+    uint64_t fifoDepth = 0;
+    uint64_t fallbackPackets = 0;
+    uint64_t captureTransferErrors = 0;
+    uint64_t playbackTransferErrors = 0;
+    uint64_t ringFrames = 0;
+    uint64_t captureRingFrames = 0;
+    uint64_t lifecycleFailures = 0;
+    bool transportFailed = false;
+    bool eventThreadUrgentAudio = false;
+};
+
 
 class LibusbUacDriver {
+    friend struct UsbDriverTestAccess;
 public:
     LibusbUacDriver();
     ~LibusbUacDriver();
@@ -142,6 +159,7 @@ public:
 
     void close();
     bool isOpen() const { return device_ != nullptr; }
+    bool waitForCaptureFrames(int frames, int timeoutMs) const;
 
     // Negotiates UAC2 alt setting matching the requested format,
     // claims the streaming interface, sets the clock source rate via
@@ -157,6 +175,23 @@ public:
                 captureUnderruns_.load(std::memory_order_acquire),
                 captureSequence_.load(std::memory_order_acquire)};
     }
+    int discardCaptureFrames(int maxFrames) noexcept;
+    ImplicitFeedbackStats implicitFeedbackStats() const {
+        const size_t depth = implicitWrite_.load(std::memory_order_acquire) -
+                             implicitRead_.load(std::memory_order_acquire);
+        const int stride = std::max(1, format_.channels * format_.bytesPerSample);
+        return {depth,
+                implicitFallbackPackets_.load(std::memory_order_acquire),
+                captureTransferErrors_.load(std::memory_order_acquire),
+                playbackTransferErrors_.load(std::memory_order_acquire),
+                (ringHead_.load(std::memory_order_acquire) -
+                 ringTail_.load(std::memory_order_acquire)) /
+                    static_cast<size_t>(stride),
+                static_cast<uint64_t>(captureAvailableFrames()),
+                lifecycleFailures_.load(std::memory_order_acquire),
+                transportFailed_.load(std::memory_order_acquire),
+                eventThreadUrgentAudio_.load(std::memory_order_acquire)};
+    }
     uint64_t captureSequence() const {
         return captureSequence_.load(std::memory_order_acquire);
     }
@@ -168,9 +203,9 @@ public:
     bool start(int sampleRateHz, int bitsPerSample, int channels,
                int bytesPerSample = 0);
 
-    // Cancels in-flight transfers, waits for the event thread to
-    // drain, releases the streaming interface, and resets to alt 0.
-    // Safe to call from any thread, idempotent.
+    // Requests cancellation, performs a bounded callback drain, and releases
+    // interfaces only after every transfer retires. Safe to call repeatedly
+    // from control threads.
     void stop();
 
     bool isStreaming() const {
@@ -178,14 +213,14 @@ public:
     }
 
     // Discards any PCM still in the ring without tearing down the iso
-    // pump. Use between tracks (Media3 calls flush() on track end) so
-    // we don't release the streaming interface — releasing causes the
-    // Android kernel to briefly re-grab the audio interface, after
-    // which libusb_claim_interface returns BUSY on the next track and
-    // playback dies until the user re-plugs the DAC. The pump keeps
-    // running, sending silence iso packets, until the next handleBuffer
-    // resumes feeding the ring.
+    // pump. Use between tracks so the Android kernel cannot reclaim the
+    // streaming interface between same-device format changes.
     void flushRing();
+
+    // Current queued playback frames, used to enforce bounded latency.
+    int bufferedFrames() const;
+    // Set the application graph quantum; controls the playback watermark.
+    void setGraphQuantum(int frames);
 
     // Returns true when the iso pump is already streaming a stream
     // matching [sampleRate]/[bitsPerSample]/[channels]. Used by
@@ -203,6 +238,9 @@ public:
 
     // How many frames can be written right now without blocking.
     int writableFrames() const;
+    // Waits until [frames] fit inside the bounded playback watermark.
+    // Uses the shared transport eventfd; no polling or spin sleeps.
+    bool waitForWritableFrames(int frames, int timeoutMs) const;
     // Cumulative producer/consumer discontinuities for the current stream.
     // Adjacent short writes or silence packets form one xrun event.
     uint64_t playbackXRunCount() const {
@@ -264,7 +302,7 @@ private:
     bool selectCaptureAltSetting(const StreamFormat& playback,
                                  StreamFormat* out_fmt);
     bool startCapturePump();
-    void stopCapturePump();
+    bool stopCapturePump();
     static void LIBUSB_CALL onCaptureTrampoline(libusb_transfer* xfr);
     void onCapture(libusb_transfer* xfr);
     // (min, max, res) subranges into supportedRates_. No-op if the
@@ -274,11 +312,15 @@ private:
     void captureRangeForClock(uint8_t clockId);
 
     bool startIsoPump();
-    void stopIsoPump();
+    bool stopIsoPump();
 
     // libusb iso completion callback — static trampoline into onIso().
     static void LIBUSB_CALL onIsoTrampoline(libusb_transfer* xfr);
     void onIso(libusb_transfer* xfr);
+    bool prepareImplicitTransfer(libusb_transfer* xfr);
+    void submitPendingImplicitTransfers();
+    void markTransportFailed() noexcept;
+    int captureFrameLimit() const noexcept;
 
     // Drains [bytes] bytes from the ring into [dst]. Returns bytes
     // actually drained; pads remainder with silence so iso packets
@@ -292,8 +334,12 @@ private:
     size_t ringMask_ = 0;
     std::atomic<size_t> ringHead_{0};  // producer cursor (writePcm)
     std::atomic<size_t> ringTail_{0};  // consumer cursor (onIso)
+    // Frame-based latency budget, configured by the graph quantum.
+    std::atomic<int> graphQuantum_{64};
+    std::atomic<int> targetWatermark_{128};
 
     mutable std::mutex mutex_;          // guards open/start/stop only
+    mutable std::recursive_mutex sessionMutex_; // serializes start/duplex/stop
     libusb_context* ctx_ = nullptr;
     libusb_device_handle* device_ = nullptr;
     int fd_ = -1;
@@ -323,6 +369,8 @@ private:
     std::atomic<size_t> captureHead_{0};
     std::atomic<size_t> captureTail_{0};
     CaptureFormat captureFormat_{};
+    std::atomic<bool> captureActive_{false};
+    int captureWakeFd_ = -1;
     std::vector<libusb_transfer*> captureTransfers_;
     std::vector<std::vector<uint8_t>> captureTransferBuffers_;
     bool captureInterfaceClaimed_ = false;
@@ -331,6 +379,17 @@ private:
     std::atomic<uint64_t> captureUnderruns_{0};
     std::atomic<uint64_t> captureSequence_{0};
     std::atomic<int> captureInflight_{0};
+    static constexpr size_t kImplicitFifoCapacity = 256;
+    std::array<std::atomic<uint32_t>, kImplicitFifoCapacity> implicitFrames_{};
+    std::atomic<size_t> implicitRead_{0};
+    std::atomic<size_t> implicitWrite_{0};
+    std::atomic<uint64_t> implicitFallbackPackets_{0};
+    std::atomic<uint64_t> captureTransferErrors_{0};
+    std::atomic<uint64_t> playbackTransferErrors_{0};
+    std::atomic<uint64_t> lifecycleFailures_{0};
+    std::atomic<bool> transportFailed_{false};
+    int captureMaxFramesPerPacket_ = 0;
+    std::atomic<bool> eventThreadUrgentAudio_{false};
 
     // Iso pump state — touched only from the event thread once
     // streaming_ is true.
@@ -338,6 +397,8 @@ private:
     std::vector<std::vector<uint8_t>> transferBuffers_;
     std::vector<libusb_transfer*> feedbackTransfers_;
     std::vector<std::vector<uint8_t>> feedbackBuffers_;
+    std::array<libusb_transfer*, 4> pendingImplicitTransfers_{};
+    size_t pendingImplicitCount_ = 0;
     std::atomic<int> inflight_{0};     // active transfers (data + fb)
     // Cumulative frame counters used for honest position reporting
     // (see playedFrames() / writtenFrames()). Reset on start().
@@ -351,29 +412,20 @@ private:
     std::atomic<bool> playbackUnderrunActive_{false};
     std::atomic<bool> playbackStarted_{false};
     std::thread eventThread_;
+    std::atomic<bool> deferOutputStart_{false};
 
-    // Per-packet frame count is computed from a 16.16 fixed-point
-    // "frames per microframe" value. Two sources:
-    //  - When no feedback EP exists, we seed it from the requested
-    //    rate as (sampleRate / microframesPerSec) << 16, integer
-    //    plus fractional (`rateRemainder_ << 16 / microframesPerSec_`).
-    //    A fractional accumulator on the iso completion thread then
-    //    walks one packet at a time — same effect as the old
-    //    Bresenham, just in a single uint32 instead of two ints.
-    //  - When a feedback IN EP exists, every feedback URB completion
-    //    overwrites this atomic with the device-requested rate.
-    //    Packets sized off the next read get the new rate, so the
-    //    host paces to whatever the DAC's clock recovery wants.
+    // Q16 frames per USB packet. Without explicit feedback it is seeded
+    // from the selected sample rate and packet cadence. Explicit feedback
+    // reports frames per microframe/frame, so onFeedback multiplies by the
+    // endpoint interval before publishing the per-packet value consumed by
+    // onIso. The fractional accumulator retains sub-frame remainder.
+    monotrypt::usb::RationalPacketScheduler nominalScheduler_;
     std::atomic<uint32_t> framesPerUframe_q16_{0};
     int microframesPerSec_ = 8000;
     int maxFramesPerPacket_ = 0;
+    int packetIntervalUframes_ = 1;
     uint32_t fracAccumulator_q16_ = 0;  // event-thread-only state
 
-    // Heartbeat counter for the iso completion log. Without this, a
-    // wedged or slow iso pump is invisible (onIso only logs failures).
-    // Touched only from the event thread; one LOGI per ~kIsoLogEvery
-    // callbacks (≈ once per second at HS / 8000 packets per sec).
-    uint32_t isoCallbacks_ = 0;
 
     static void LIBUSB_CALL onFeedbackTrampoline(libusb_transfer* xfr);
     void onFeedback(libusb_transfer* xfr);

@@ -2,13 +2,20 @@
 // See libusb_uac_driver.h.
 
 #include "libusb_uac_driver.h"
+#include "UsbScheduling.h"
+#include "utils/ThreadUtils.h"
 
 #include <android/log.h>
 #include <libusb.h>
 
 #include <algorithm>
 #include <cstring>
+#include <chrono>
 #include <utility>
+#include <cerrno>
+#include <poll.h>
+#include <sys/eventfd.h>
+#include <unistd.h>
 
 #define TAG "LibusbUacDriver"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -46,16 +53,11 @@ constexpr uint16_t CS_SAM_FREQ_CONTROL_SEL = 0x01;
 // prevents user-space scheduling gaps from starving the asynchronous DAC.
 constexpr int kNumTransfers = 4;
 constexpr int kPacketsPerTransfer = 8;
-// 1 MiB ring covers ~700ms at 384k/32-bit/2ch which is far more than
-// the audio thread's typical wakeup jitter.
-constexpr size_t kRingBytes = 1u << 20;  // must be power of two
-// Capture backlog is a latency budget, not a smoothing cache. At 48 kHz,
-// 24-bit in 4-byte subslots this caps a four-channel input at ~5 ms.
-constexpr size_t kCaptureRingBytes = 1u << 12;
+// Playback backlog is deliberately bounded: target watermark plus one max graph block.
+// 64 KiB covers 2048 frames at the largest supported 8ch/32-bit format.
+constexpr size_t kRingBytes = kPlaybackRingBytes;
+constexpr size_t kCaptureRingBytes = kPlaybackRingBytes;
 
-// Heartbeat: one LOGI per N iso completion callbacks. Four queued HS batches
-// of eight packets yield roughly 1000 callbacks per second.
-constexpr uint32_t kIsoLogEvery = 1000;
 
 // Produced/consumed bytes count, not frame count. We pack interleaved
 // PCM contiguously so byte-level accounting is the natural unit.
@@ -86,16 +88,57 @@ void walkExtra(const uint8_t* extra, int extraLen, Cb&& cb) {
 }
 
 } // namespace
+void signalWakeFd(int fd) noexcept {
+    if (fd < 0) return;
+    eventfd_t one = 1;
+    (void)eventfd_write(fd, one);
+}
+void drainWakeFd(int fd) noexcept {
+    if (fd < 0) return;
+    eventfd_t value = 0;
+    while (eventfd_read(fd, &value) == 0) {}
+}
+bool pollWakeFd(int fd, int timeoutMs) noexcept {
+    if (fd < 0) return false;
+    pollfd pfd{fd, POLLIN, 0};
+    int result;
+    do { result = poll(&pfd, 1, timeoutMs); } while (result < 0 && errno == EINTR);
+    return result > 0;
+}
 
 LibusbUacDriver::LibusbUacDriver() {
     ring_.resize(kRingBytes);
     ringMask_ = kRingBytes - 1;
     captureRing_.resize(kCaptureRingBytes);
     captureRingMask_ = kCaptureRingBytes - 1;
+    captureWakeFd_ = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
 }
 LibusbUacDriver::~LibusbUacDriver() {
     stop();
     close();
+    if (ctx_ && (inflight_.load(std::memory_order_acquire) != 0 ||
+                 captureInflight_.load(std::memory_order_acquire) != 0)) {
+        // Normal control-path teardown is bounded. Destruction is the final
+        // ownership barrier: callbacks still reference this object and its
+        // buffers, so keep servicing their cancellation instead of freeing
+        // callback-visible storage.
+        LOGW("waiting for deferred USB cancellations before destruction");
+        stopRequested_.store(true, std::memory_order_release);
+        for (auto* xfr : transfers_) if (xfr) libusb_cancel_transfer(xfr);
+        for (auto* xfr : feedbackTransfers_) if (xfr) libusb_cancel_transfer(xfr);
+        for (auto* xfr : captureTransfers_) if (xfr) libusb_cancel_transfer(xfr);
+        while (inflight_.load(std::memory_order_acquire) != 0 ||
+               captureInflight_.load(std::memory_order_acquire) != 0) {
+            timeval tv{0, 5000};
+            libusb_handle_events_timeout(ctx_, &tv);
+        }
+        stop();
+        close();
+    }
+    if (captureWakeFd_ >= 0) {
+        ::close(captureWakeFd_);
+        captureWakeFd_ = -1;
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     if (ctx_) {
         libusb_exit(ctx_);
@@ -160,10 +203,20 @@ bool LibusbUacDriver::ensureContext() {
 }
 
 bool LibusbUacDriver::open(int fileDescriptor) {
+    std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
     if (!ensureContext()) return false;
+    stop();
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!transfers_.empty() || !feedbackTransfers_.empty() ||
+        !captureTransfers_.empty() ||
+        inflight_.load(std::memory_order_acquire) != 0 ||
+        captureInflight_.load(std::memory_order_acquire) != 0) {
+        lifecycleFailures_.fetch_add(1, std::memory_order_relaxed);
+        LOGW("open refused: previous USB transfers are still live");
+        return false;
+    }
+    if (device_ != nullptr && fd_ == fileDescriptor) return true;
     if (device_ != nullptr) {
-        if (fd_ == fileDescriptor) return true;
         libusb_close(device_);
         device_ = nullptr;
         fd_ = -1;
@@ -178,10 +231,6 @@ bool LibusbUacDriver::open(int fileDescriptor) {
     }
     device_ = handle;
     fd_ = fileDescriptor;
-    // Best-effort kernel-driver detach. On Android the snd-usb-audio
-    // driver isn't present in user space (the framework owns USB
-    // audio via tinyalsa), so this is normally a no-op — but if a
-    // future Android version exposes it, this pre-emptively releases.
     libusb_set_auto_detach_kernel_driver(device_, 1);
     LOGI("opened device via fd=%d", fileDescriptor);
     return true;
@@ -189,7 +238,15 @@ bool LibusbUacDriver::open(int fileDescriptor) {
 
 void LibusbUacDriver::close() {
     stop();
+    std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!transfers_.empty() || !feedbackTransfers_.empty() ||
+        !captureTransfers_.empty() ||
+        inflight_.load(std::memory_order_acquire) != 0 ||
+        captureInflight_.load(std::memory_order_acquire) != 0) {
+        LOGW("close deferred: USB transfers are still live");
+        return;
+    }
     if (device_ != nullptr) {
         libusb_close(device_);
         device_ = nullptr;
@@ -691,7 +748,9 @@ bool LibusbUacDriver::selectAltSetting(int sampleRateHz, int bitsPerSample,
             out_fmt->channels = channels;
             out_fmt->interfaceNumber = alt.bInterfaceNumber;
             out_fmt->altSetting = alt.bAlternateSetting;
+            out_fmt->terminalLink = altTerminalLink;
             out_fmt->endpointAddress = iso->bEndpointAddress;
+            out_fmt->syncEndpointAddress = iso->bSynchAddress;
             out_fmt->maxPacketSize = iso->wMaxPacketSize;
             // Resolve the rate-bearing CLOCK_SOURCE entity for this
             // streaming alt by walking the topology graph:
@@ -996,6 +1055,7 @@ bool LibusbUacDriver::setSampleRate(uint32_t hz) {
 
 bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
                             int bytesPerSample) {
+    std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
     std::lock_guard<std::mutex> lock(mutex_);
     ErrorSink err{&lastError_, &errorMutex_, &lastErrorDetail_};
     // Optimistic clear; failure sites overwrite. Successful return
@@ -1008,17 +1068,45 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
         // on this start (or leave empty if the device returns nothing).
         supportedRates_.clear();
     }
+    if (captureWakeFd_ < 0) {
+        err(StartError::IsoPumpAllocFailed,
+            "eventfd creation failed: " + std::string(std::strerror(errno)));
+        return false;
+    }
     if (!device_) {
         err(StartError::NoDevice, "start() called before open() — "
             "no UsbDeviceConnection wrapped yet");
         return false;
     }
-    if (streaming_.load(std::memory_order_acquire)) {
-        // Already streaming — caller wants a different format. Stop
-        // the iso pump but KEEP the interface claim so the kernel
-        // can't grab it in the gap. Common path on a mixed-format
-        // album (16-bit FLAC followed by 24-bit FLAC).
-        stopIsoPump();
+    if (streaming_.load(std::memory_order_acquire) ||
+        !transfers_.empty() || !feedbackTransfers_.empty() ||
+        !captureTransfers_.empty() || eventThread_.joinable() ||
+        inflight_.load(std::memory_order_acquire) != 0 ||
+        captureInflight_.load(std::memory_order_acquire) != 0 ||
+        captureInterfaceClaimed_) {
+        // Reconfigure both halves before mutating shared format/ring state.
+        // Keep the playback/control claims, but release capture so the next
+        // duplex start can select and claim its matching alternate setting.
+        captureActive_.store(false, std::memory_order_release);
+        const bool playbackStopped = stopIsoPump();
+        const bool captureStopped = stopCapturePump();
+        if (!playbackStopped || !captureStopped) {
+            err(StartError::IsoPumpSubmitFailed,
+                "previous USB transfers did not stop within 500 ms");
+            return false;
+        }
+        if (captureInterfaceClaimed_) {
+            if (captureFormat_.altSetting != 0)
+                libusb_set_interface_alt_setting(device_, captureFormat_.interfaceNumber, 0);
+            libusb_release_interface(device_, claimedCaptureIface_);
+            captureInterfaceClaimed_ = false;
+            claimedCaptureIface_ = 0xFF;
+        }
+        captureHead_.store(0, std::memory_order_relaxed);
+        captureTail_.store(0, std::memory_order_relaxed);
+        captureSequence_.store(0, std::memory_order_relaxed);
+        captureOverruns_.store(0, std::memory_order_relaxed);
+        captureUnderruns_.store(0, std::memory_order_relaxed);
         streaming_.store(false, std::memory_order_release);
     }
 
@@ -1127,17 +1215,17 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
     playbackUnderrunActive_.store(false, std::memory_order_relaxed);
     playbackStarted_.store(false, std::memory_order_relaxed);
     stopRequested_.store(false, std::memory_order_relaxed);
+    transportFailed_.store(false, std::memory_order_relaxed);
+    eventThreadUrgentAudio_.store(false, std::memory_order_relaxed);
 
-    if (!startIsoPump()) {
-        // startIsoPump() sets the specific subcategory itself based
-        // on whether alloc or submit failed. Don't overwrite here.
+    if (!deferOutputStart_ && !startIsoPump()) {
         if (lastError_.load(std::memory_order_relaxed) == StartError::Ok) {
             err(StartError::IsoPumpAllocFailed,
                 "iso pump failed to start (see logcat for details)");
         }
         return false;
     }
-    streaming_.store(true, std::memory_order_release);
+    streaming_.store(!deferOutputStart_, std::memory_order_release);
     LOGI("streaming: %d Hz / %d-bit / %d ch via ep 0x%02x",
          format_.sampleRateHz, format_.bitsPerSample, format_.channels,
          format_.endpointAddress);
@@ -1150,10 +1238,59 @@ bool LibusbUacDriver::selectCaptureAltSetting(const StreamFormat& playback,
     int rc = libusb_get_active_config_descriptor(dev, &config);
     if (rc != LIBUSB_SUCCESS) rc = libusb_get_config_descriptor(dev, 0, &config);
     if (rc != LIBUSB_SUCCESS || !config) return false;
+    struct TermClock { uint8_t termId; uint8_t clockId; };
+    struct ClockEntity { uint8_t id; uint8_t subtype; uint8_t baseId; };
+    std::vector<TermClock> terminals;
+    std::vector<ClockEntity> clocks;
+    if (playback.uacVersion >= 0x0200) {
+        for (uint8_t i = 0; i < config->bNumInterfaces; ++i) {
+            const auto& iface = config->interface[i];
+            for (int a = 0; a < iface.num_altsetting; ++a) {
+                const auto& alt = iface.altsetting[a];
+                if (alt.bInterfaceClass != USB_CLASS_AUDIO ||
+                    alt.bInterfaceSubClass != SUBCLASS_AUDIOCONTROL) continue;
+                walkExtra(alt.extra, alt.extra_length, [&](const uint8_t* p, int len) {
+                    if (isClassDescriptor(p, len, CS_INTERFACE, AC_CLOCK_SOURCE) && len >= 4)
+                        clocks.push_back({p[3], AC_CLOCK_SOURCE, 0});
+                    else if (isClassDescriptor(p, len, CS_INTERFACE, AC_CLOCK_SELECTOR) && len >= 6)
+                        clocks.push_back({p[3], AC_CLOCK_SELECTOR, p[5]});
+                    else if (isClassDescriptor(p, len, CS_INTERFACE, AC_CLOCK_MULTIPLIER) && len >= 5)
+                        clocks.push_back({p[3], AC_CLOCK_MULTIPLIER, p[4]});
+                    else if (isClassDescriptor(p, len, CS_INTERFACE, AC_INPUT_TERMINAL) && len >= 8)
+                        terminals.push_back({p[3], p[7]});
+                    else if (isClassDescriptor(p, len, CS_INTERFACE, AC_OUTPUT_TERMINAL) && len >= 9)
+                        terminals.push_back({p[3], p[8]});
+                    return false;
+                });
+            }
+        }
+    }
+    const auto resolveClock = [&](uint8_t terminalId) {
+        uint8_t clockId = 0;
+        for (const auto& terminal : terminals) {
+            if (terminal.termId == terminalId) {
+                clockId = terminal.clockId;
+                break;
+            }
+        }
+        for (int hop = 0; hop < 4 && clockId != 0; ++hop) {
+            const ClockEntity* entity = nullptr;
+            for (const auto& clock : clocks) {
+                if (clock.id == clockId) {
+                    entity = &clock;
+                    break;
+                }
+            }
+            if (!entity || entity->subtype == AC_CLOCK_SOURCE || entity->baseId == 0) break;
+            clockId = entity->baseId;
+        }
+        return clockId;
+    };
     const libusb_interface_descriptor* chosen = nullptr;
     const libusb_endpoint_descriptor* chosenEp = nullptr;
     bool chosenImplicitFeedback = false;
     int chosenChannels = 0;
+    uint8_t chosenClock = 0;
     for (uint8_t i = 0; i < config->bNumInterfaces; ++i) {
         const auto& iface = config->interface[i];
         for (int a = 0; a < iface.num_altsetting; ++a) {
@@ -1162,24 +1299,29 @@ bool LibusbUacDriver::selectCaptureAltSetting(const StreamFormat& playback,
                 alt.bInterfaceSubClass != SUBCLASS_AUDIOSTREAM ||
                 alt.bAlternateSetting == 0) continue;
             int channels = 0, bits = 0, bytes = 0;
+            uint8_t terminalLink = 0;
             walkExtra(alt.extra, alt.extra_length, [&](const uint8_t* p, int len) {
                 if (isClassDescriptor(p, len, CS_INTERFACE, AS_GENERAL) &&
                     playback.uacVersion >= 0x0200 && len >= 11) {
+                    terminalLink = len >= 16 ? p[3] : 0;
                     channels = p[10];
                 }
                 if (isClassDescriptor(p, len, CS_INTERFACE, AS_FORMAT_TYPE) &&
                     len >= 6 && p[3] == FORMAT_TYPE_I) {
                     if (playback.uacVersion >= 0x0200) {
-                        bytes = p[4];
-                        bits = p[5];
+                        bytes = p[4]; bits = p[5];
                     } else if (len >= 7) {
-                        channels = p[4];
-                        bytes = p[5];
-                        bits = p[6];
+                        channels = p[4]; bytes = p[5]; bits = p[6];
                     }
                 }
                 return false;
             });
+            // Prefer a distinct capture terminal; sharing playback's terminal
+            // is not duplex topology and risks claiming the wrong direction.
+            if (playback.terminalLink != 0 && terminalLink == playback.terminalLink) continue;
+            const uint8_t candidateClock = resolveClock(terminalLink);
+            if (playback.clockSourceId != 0 && candidateClock != 0 &&
+                candidateClock != playback.clockSourceId) continue;
             // Capture channel count is independent of playback: common
             // guitar interfaces expose one or two inputs and stereo output.
             if (channels <= 0 || bits != playback.bitsPerSample ||
@@ -1189,12 +1331,16 @@ bool LibusbUacDriver::selectCaptureAltSetting(const StreamFormat& playback,
                 if ((ep.bmAttributes & 3) != LIBUSB_TRANSFER_TYPE_ISOCHRONOUS ||
                     !(ep.bEndpointAddress & 0x80)) continue;
                 const uint8_t usage = (ep.bmAttributes >> 4) & 3;
+                if (playback.feedbackEndpointAddress == 0 &&
+                    playback.syncEndpointAddress != 0 &&
+                    ep.bEndpointAddress != playback.syncEndpointAddress) continue;
                 if (usage != 0 && usage != 2) continue;
                 if (!chosen || (usage == 2 && !chosenImplicitFeedback)) {
                     chosen = &alt;
                     chosenEp = &ep;
                     chosenChannels = channels;
                     chosenImplicitFeedback = usage == 2;
+                    chosenClock = candidateClock;
                 }
             }
         }
@@ -1209,6 +1355,7 @@ bool LibusbUacDriver::selectCaptureAltSetting(const StreamFormat& playback,
     out_fmt->altSetting = chosen->bAlternateSetting;
     out_fmt->endpointAddress = chosenEp->bEndpointAddress;
     out_fmt->maxPacketSize = chosenEp->wMaxPacketSize;
+    out_fmt->clockSourceId = chosenClock;
     out_fmt->bInterval = chosenEp->bInterval;
     out_fmt->feedbackEndpointAddress = 0;
     out_fmt->implicitFeedback = chosenImplicitFeedback;
@@ -1218,7 +1365,12 @@ bool LibusbUacDriver::selectCaptureAltSetting(const StreamFormat& playback,
 
 bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                                   int channels, int bytesPerSample) {
-    if (!start(sampleRateHz, bitsPerSample, channels, bytesPerSample)) return false;
+    std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
+    ErrorSink err{&lastError_, &errorMutex_, &lastErrorDetail_};
+    deferOutputStart_.store(true, std::memory_order_release);
+    const bool prepared = start(sampleRateHz, bitsPerSample, channels, bytesPerSample);
+    deferOutputStart_.store(false, std::memory_order_release);
+    if (!prepared) return false;
 
     bool captureStarted = false;
     {
@@ -1226,12 +1378,20 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
         StreamFormat capture{};
         if (!selectCaptureAltSetting(format_, &capture)) {
             LOGW("no compatible PCM capture alt setting");
+            err(StartError::NoMatchingAlt,
+                "no capture alternate setting matches the selected playback format and clock");
         } else if (capture.interfaceNumber == format_.interfaceNumber) {
             LOGW("capture and playback share interface; refusing unsafe duplex claim");
+            err(StartError::ClaimInterfaceFailed,
+                "capture and playback resolve to the same streaming interface");
         } else {
             const int claim = libusb_claim_interface(device_, capture.interfaceNumber);
             if (claim != LIBUSB_SUCCESS) {
                 LOGE("claim capture interface %u -> %d", capture.interfaceNumber, claim);
+                err(StartError::ClaimInterfaceFailed,
+                    std::string("libusb_claim_interface(capture=") +
+                    std::to_string(capture.interfaceNumber) + ") -> " +
+                    libusb_strerror(claim));
             } else {
                 captureInterfaceClaimed_ = true;
                 claimedCaptureIface_ = capture.interfaceNumber;
@@ -1241,18 +1401,68 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                 if (alt != LIBUSB_SUCCESS) {
                     LOGE("set capture interface %u alt %u -> %d",
                          capture.interfaceNumber, capture.altSetting, alt);
+                    err(StartError::SetAltFailed,
+                        std::string("set capture alternate setting failed: ") +
+                        libusb_strerror(alt));
                 } else {
                     captureHead_.store(0, std::memory_order_relaxed);
                     captureTail_.store(0, std::memory_order_relaxed);
                     captureOverruns_.store(0, std::memory_order_relaxed);
                     captureUnderruns_.store(0, std::memory_order_relaxed);
                     captureSequence_.store(0, std::memory_order_relaxed);
+                    implicitRead_.store(0, std::memory_order_relaxed);
+                    implicitWrite_.store(0, std::memory_order_relaxed);
+                    implicitFallbackPackets_.store(0, std::memory_order_relaxed);
+                    captureTransferErrors_.store(0, std::memory_order_relaxed);
+                    playbackTransferErrors_.store(0, std::memory_order_relaxed);
+                    lifecycleFailures_.store(0, std::memory_order_relaxed);
                     captureStarted = startCapturePump();
                 }
             }
         }
     }
-    if (captureStarted) return true;
+    if (captureStarted) {
+        if (captureActive_.load(std::memory_order_acquire) &&
+            captureFormat_.implicitFeedback &&
+            format_.feedbackEndpointAddress == 0) {
+            // Capture completions provide the packet clock. Drive them before
+            // submitting OUT transfers, then require enough metadata to size
+            // every initially queued packet without a nominal fallback.
+            eventThread_ = std::thread([this]() {
+                eventThreadUrgentAudio_.store(
+                    guitarrackcraft::setCurrentThreadUrgentAudio("UsbIsoEvents"),
+                    std::memory_order_release);
+                while (!stopRequested_.load(std::memory_order_acquire)) {
+                    timeval tv{0, 100000};
+                    libusb_handle_events_timeout(ctx_, &tv);
+                }
+            });
+            constexpr size_t required = kNumTransfers * kPacketsPerTransfer;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+            while (implicitWrite_.load(std::memory_order_acquire) -
+                       implicitRead_.load(std::memory_order_acquire) < required &&
+                   !stopRequested_.load(std::memory_order_acquire)) {
+                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()).count();
+                if (remaining <= 0 || !pollWakeFd(captureWakeFd_, static_cast<int>(remaining))) break;
+                drainWakeFd(captureWakeFd_);
+            }
+            if (implicitWrite_.load(std::memory_order_acquire) -
+                    implicitRead_.load(std::memory_order_acquire) < required) {
+                LOGE("implicit-feedback capture did not prime output packet metadata");
+                err(StartError::IsoPumpSubmitFailed,
+                    "implicit-feedback capture did not prime output within 50 ms");
+                stop();
+                return false;
+            }
+        }
+        if (!startIsoPump()) {
+            stop();
+            return false;
+        }
+        streaming_.store(true, std::memory_order_release);
+        return true;
+    }
     // start() has already activated output. A partial duplex startup must
     // fully unwind its claims and transfers; leaving output live would leak
     // the Android-owned interface and make the next attempt permanently BUSY.
@@ -1261,15 +1471,52 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
 }
 
 bool LibusbUacDriver::startCapturePump() {
+    ErrorSink err{&lastError_, &errorMutex_, &lastErrorDetail_};
     const int packets = kPacketsPerTransfer;
     const int mps = libusb_get_max_iso_packet_size(
         libusb_get_device(device_), captureFormat_.endpointAddress);
-    if (mps <= 0) return false;
+    if (mps <= 0) {
+        err(StartError::IsoPumpAllocFailed,
+            "capture endpoint has no usable isochronous packet size");
+        return false;
+    }
+    const int captureStride =
+        captureFormat_.channels * captureFormat_.bytesPerSample;
+    if (captureStride <= 0) {
+        err(StartError::IsoPumpAllocFailed,
+            "capture format has no usable PCM frame stride");
+        return false;
+    }
+    const int captureHostPeriods =
+        captureFormat_.isHighSpeed ? 8000 : 1000;
+    const int captureInterval = captureFormat_.isHighSpeed
+        ? (1 << std::min<int>(
+              15, captureFormat_.bInterval > 0
+                      ? captureFormat_.bInterval - 1 : 0))
+        : std::max<int>(1, captureFormat_.bInterval);
+    const int capturePacketsPerSecond =
+        std::max(1, captureHostPeriods / captureInterval);
+    const int captureNominalMax =
+        (captureFormat_.sampleRateHz + capturePacketsPerSecond - 1) /
+        capturePacketsPerSecond;
+    const int capturePhysicalMax = mps / captureStride;
+    if (capturePhysicalMax < captureNominalMax) {
+        err(StartError::IsoPumpAllocFailed,
+            "capture endpoint max packet cannot carry nominal frame cadence");
+        return false;
+    }
+    captureMaxFramesPerPacket_ =
+        std::min(capturePhysicalMax, captureNominalMax + 1);
     captureTransfers_.reserve(kNumTransfers);
     captureTransferBuffers_.reserve(kNumTransfers);
     for (int i = 0; i < kNumTransfers; ++i) {
         libusb_transfer* xfr = libusb_alloc_transfer(packets);
-        if (!xfr) { stopCapturePump(); return false; }
+        if (!xfr) {
+            err(StartError::IsoPumpAllocFailed,
+                "libusb_alloc_transfer returned null for capture");
+            stopCapturePump();
+            return false;
+        }
         std::vector<uint8_t> buf(static_cast<size_t>(mps) * packets);
         libusb_fill_iso_transfer(xfr, device_, captureFormat_.endpointAddress,
                                  buf.data(), buf.size(), packets,
@@ -1278,73 +1525,180 @@ bool LibusbUacDriver::startCapturePump() {
         captureTransferBuffers_.emplace_back(std::move(buf));
         captureTransfers_.push_back(xfr);
     }
+    captureActive_.store(true, std::memory_order_release);
     for (auto* xfr : captureTransfers_) {
-        if (libusb_submit_transfer(xfr) != LIBUSB_SUCCESS) {
-            stopCapturePump(); return false;
+        captureInflight_.fetch_add(1, std::memory_order_acq_rel);
+        const int rc = libusb_submit_transfer(xfr);
+        if (rc != LIBUSB_SUCCESS) {
+            captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
+            captureTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+            err(StartError::IsoPumpSubmitFailed,
+                std::string("capture transfer submit failed: ") +
+                libusb_strerror(rc));
+            captureActive_.store(false, std::memory_order_release);
+            stopRequested_.store(true, std::memory_order_release);
+            stopCapturePump();
+            return false;
         }
-        captureInflight_.fetch_add(1, std::memory_order_relaxed);
     }
     return true;
 }
-
-void LibusbUacDriver::stopCapturePump() {
+bool LibusbUacDriver::stopCapturePump() {
     for (auto* xfr : captureTransfers_) if (xfr) libusb_cancel_transfer(xfr);
-    for (int spin = 0; spin < 200 && captureInflight_.load(std::memory_order_acquire) > 0; ++spin) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (captureInflight_.load(std::memory_order_acquire) != 0 &&
+           std::chrono::steady_clock::now() < deadline) {
         timeval tv{0, 5000};
         libusb_handle_events_timeout(ctx_, &tv);
+    }
+    if (captureInflight_.load(std::memory_order_acquire) != 0) {
+        lifecycleFailures_.fetch_add(1, std::memory_order_relaxed);
+        LOGW("capture teardown deferred: %d transfers still live",
+             captureInflight_.load(std::memory_order_acquire));
+        return false;
     }
     for (auto* xfr : captureTransfers_) if (xfr) libusb_free_transfer(xfr);
     captureTransfers_.clear();
     captureTransferBuffers_.clear();
-    captureInflight_.store(0, std::memory_order_relaxed);
+    captureMaxFramesPerPacket_ = 0;
+    return true;
 }
 
 void LibusbUacDriver::onCaptureTrampoline(libusb_transfer* xfr) {
     static_cast<LibusbUacDriver*>(xfr->user_data)->onCapture(xfr);
 }
 
+void LibusbUacDriver::markTransportFailed() noexcept {
+    transportFailed_.store(true, std::memory_order_release);
+    captureActive_.store(false, std::memory_order_release);
+    streaming_.store(false, std::memory_order_release);
+    stopRequested_.store(true, std::memory_order_release);
+    signalWakeFd(captureWakeFd_);
+}
+
 void LibusbUacDriver::onCapture(libusb_transfer* xfr) {
+    if (!captureActive_.load(std::memory_order_acquire)) {
+        captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
+        return;
+    }
     if (xfr->status == LIBUSB_TRANSFER_CANCELLED ||
-        xfr->status == LIBUSB_TRANSFER_NO_DEVICE ||
         stopRequested_.load(std::memory_order_acquire)) {
         captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
         return;
     }
+    if (xfr->status == LIBUSB_TRANSFER_NO_DEVICE) {
+        captureTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+        captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
+        markTransportFailed();
+        return;
+    }
+    if (xfr->status != LIBUSB_TRANSFER_COMPLETED)
+        captureTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+
     size_t head = captureHead_.load(std::memory_order_relaxed);
-    size_t tail = captureTail_.load(std::memory_order_acquire);
+    const size_t tail = captureTail_.load(std::memory_order_acquire);
     const size_t capacity = captureRing_.size();
     int totalFrames = 0;
     const int stride = captureFormat_.channels * captureFormat_.bytesPerSample;
     uint8_t* cursor = xfr->buffer;
     for (int i = 0; i < xfr->num_iso_packets; ++i) {
-        const int n = xfr->iso_packet_desc[i].actual_length;
-        if (n > 0 && stride > 0) {
+        auto& pkt = xfr->iso_packet_desc[i];
+        const int n = pkt.actual_length;
+        const bool packetOk = xfr->status == LIBUSB_TRANSFER_COMPLETED &&
+                              pkt.status == LIBUSB_TRANSFER_COMPLETED &&
+                              n > 0 && stride > 0;
+        if (!packetOk)
+            captureTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+        const bool implicit = captureFormat_.implicitFeedback &&
+                              format_.feedbackEndpointAddress == 0;
+        if (implicit) {
+            const uint16_t packetFrames =
+                packetOk ? static_cast<uint16_t>(n / stride) : 0;
+            const size_t write =
+                implicitWrite_.load(std::memory_order_relaxed);
+            size_t read = implicitRead_.load(std::memory_order_acquire);
+            while (write - read >= kImplicitFifoCapacity) {
+                // Startup priming briefly consumes this FIFO from the
+                // control thread. Advance its cursor only if it has not
+                // already moved, so an overflow can never rewind the reader.
+                if (implicitRead_.compare_exchange_weak(
+                        read, write, std::memory_order_acq_rel,
+                        std::memory_order_acquire)) {
+                    captureOverruns_.fetch_add(1, std::memory_order_relaxed);
+                    break;
+                }
+            }
+            implicitFrames_[write & (kImplicitFifoCapacity - 1)].store(
+                packetFrames, std::memory_order_relaxed);
+            implicitWrite_.store(write + 1, std::memory_order_release);
+        }
+        if (packetOk) {
             const size_t free = capacity - (head - tail);
             const size_t keep = std::min<size_t>(n, free - (free % stride));
             if (keep < static_cast<size_t>(n))
                 captureOverruns_.fetch_add(1, std::memory_order_relaxed);
-            size_t off = head & captureRingMask_;
-            size_t first = std::min(keep, capacity - off);
+            const size_t off = head & captureRingMask_;
+            const size_t first = std::min(keep, capacity - off);
             if (first) std::memcpy(captureRing_.data() + off, cursor, first);
-            if (first < keep) std::memcpy(captureRing_.data(), cursor + first, keep - first);
+            if (first < keep)
+                std::memcpy(captureRing_.data(), cursor + first, keep - first);
             head += keep;
             totalFrames += static_cast<int>(keep / stride);
         }
         cursor += xfr->iso_packet_desc[i].length;
     }
     captureHead_.store(head, std::memory_order_release);
-    if (totalFrames > 0) captureSequence_.fetch_add(static_cast<uint64_t>(totalFrames),
-                                                      std::memory_order_release);
-    if (libusb_submit_transfer(xfr) != LIBUSB_SUCCESS)
+    if (totalFrames > 0)
+        captureSequence_.fetch_add(static_cast<uint64_t>(totalFrames),
+                                   std::memory_order_release);
+
+    submitPendingImplicitTransfers();
+    signalWakeFd(captureWakeFd_);
+    if (transportFailed_.load(std::memory_order_acquire)) {
         captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
+        return;
+    }
+    const int rc = libusb_submit_transfer(xfr);
+    if (rc != LIBUSB_SUCCESS) {
+        captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
+        captureTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+        markTransportFailed();
+    }
+}
+
+int LibusbUacDriver::captureFrameLimit() const noexcept {
+    const int stride =
+        captureFormat_.channels * captureFormat_.bytesPerSample;
+    if (stride <= 0 || captureRing_.empty()) return 0;
+    const int graph = graphQuantum_.load(std::memory_order_acquire);
+    const int transferBurstFrames =
+        std::max(maxFramesPerPacket_, captureMaxFramesPerPacket_) *
+        kPacketsPerTransfer;
+    const int latencyLimit =
+        std::max(graph * 2, transferBurstFrames * 2);
+    const int physicalLimit =
+        static_cast<int>(captureRing_.size() / static_cast<size_t>(stride));
+    return std::min(physicalLimit, latencyLimit);
 }
 
 int LibusbUacDriver::readCapturePcm(uint8_t* dst, int frames) {
+    if (!captureActive_.load(std::memory_order_acquire)) return 0;
     if (!dst || frames <= 0 || captureFormat_.channels <= 0) return 0;
     const int stride = captureFormat_.channels * captureFormat_.bytesPerSample;
     const size_t want = static_cast<size_t>(frames) * stride;
-    size_t head = captureHead_.load(std::memory_order_acquire);
+    const size_t head = captureHead_.load(std::memory_order_acquire);
     size_t tail = captureTail_.load(std::memory_order_relaxed);
+
+    const size_t limitBytes =
+        static_cast<size_t>(captureFrameLimit()) * stride;
+    if (head - tail > limitBytes) {
+        // The consumer owns tail, so it can discard stale capture without
+        // violating the SPSC producer's ownership of head. Preserve the
+        // newest bounded window after a render stall.
+        tail = head - limitBytes;
+        captureOverruns_.fetch_add(1, std::memory_order_relaxed);
+    }
+
     size_t n = std::min(want, head - tail);
     n -= n % stride;
     const size_t off = tail & captureRingMask_;
@@ -1353,15 +1707,57 @@ int LibusbUacDriver::readCapturePcm(uint8_t* dst, int frames) {
     if (first < n) std::memcpy(dst + first, captureRing_.data(), n - first);
     captureTail_.store(tail + n, std::memory_order_release);
     const int got = static_cast<int>(n / stride);
-    if (got < frames) captureUnderruns_.fetch_add(1, std::memory_order_relaxed);
+    if (got < frames)
+        captureUnderruns_.fetch_add(1, std::memory_order_relaxed);
     return got;
 }
 
-int LibusbUacDriver::captureAvailableFrames() const {
+int LibusbUacDriver::discardCaptureFrames(int maxFrames) noexcept {
+    if (!captureActive_.load(std::memory_order_acquire) || maxFrames <= 0)
+        return 0;
     const int stride = captureFormat_.channels * captureFormat_.bytesPerSample;
     if (stride <= 0) return 0;
-    return static_cast<int>((captureHead_.load(std::memory_order_acquire) -
-                             captureTail_.load(std::memory_order_relaxed)) / stride);
+    const size_t head = captureHead_.load(std::memory_order_acquire);
+    const size_t tail = captureTail_.load(std::memory_order_relaxed);
+    const size_t availableFrames =
+        (head - tail) / static_cast<size_t>(stride);
+    const size_t discarded = std::min(
+        availableFrames, static_cast<size_t>(maxFrames));
+    captureTail_.store(
+        tail + discarded * static_cast<size_t>(stride),
+        std::memory_order_release);
+    return static_cast<int>(discarded);
+}
+
+int LibusbUacDriver::captureAvailableFrames() const {
+    if (!captureActive_.load(std::memory_order_acquire)) return 0;
+    const int stride = captureFormat_.channels * captureFormat_.bytesPerSample;
+    if (stride <= 0) return 0;
+    const size_t available =
+        (captureHead_.load(std::memory_order_acquire) -
+         captureTail_.load(std::memory_order_relaxed)) /
+        static_cast<size_t>(stride);
+    return static_cast<int>(
+        std::min(available, static_cast<size_t>(captureFrameLimit())));
+}
+bool LibusbUacDriver::waitForCaptureFrames(int frames, int timeoutMs) const {
+    if (frames <= 0) return true;
+    const auto deadline = timeoutMs > 0
+        ? std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs)
+        : std::chrono::steady_clock::time_point::max();
+    while (captureAvailableFrames() < frames &&
+           streaming_.load(std::memory_order_acquire)) {
+        int waitMs = -1;
+        if (timeoutMs > 0) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now()).count();
+            if (remaining <= 0) break;
+            waitMs = static_cast<int>(remaining);
+        }
+        if (!pollWakeFd(captureWakeFd_, waitMs)) break;
+        drainWakeFd(captureWakeFd_);
+    }
+    return captureAvailableFrames() >= frames;
 }
 
 
@@ -1390,21 +1786,23 @@ bool LibusbUacDriver::isStreamingFormat(int sampleRate, int bitsPerSample, int c
         && format_.channels == channels;
 }
 void LibusbUacDriver::stop() {
-    bool was = streaming_.exchange(false, std::memory_order_acq_rel);
+    std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
+    captureActive_.store(false, std::memory_order_release);
+    const bool was = streaming_.exchange(false, std::memory_order_acq_rel);
+    signalWakeFd(captureWakeFd_);
     if (!was && transfers_.empty() && captureTransfers_.empty() &&
         !interfaceClaimed_ && !controlInterfaceClaimed_ &&
         !captureInterfaceClaimed_) return;
     std::lock_guard<std::mutex> lock(mutex_);
-    stopIsoPump();
-    stopCapturePump();
-    // Full teardown: alt 0 then release. Caller is the toggle going
-    // off, the queue clearing, or app pause — NOT a track-to-track
-    // reconfigure, which goes through start() with the claim kept.
+    const bool playbackStopped = stopIsoPump();
+    const bool captureStopped = stopCapturePump();
+    if (!playbackStopped || !captureStopped) {
+        LOGW("USB teardown deferred until live transfers complete");
+        return;
+    }
     if (device_ && interfaceClaimed_) {
-        if (format_.altSetting != 0) {
-            libusb_set_interface_alt_setting(
-                device_, format_.interfaceNumber, 0);
-        }
+        if (format_.altSetting != 0)
+            libusb_set_interface_alt_setting(device_, format_.interfaceNumber, 0);
         libusb_release_interface(device_, format_.interfaceNumber);
         interfaceClaimed_ = false;
     }
@@ -1419,12 +1817,22 @@ void LibusbUacDriver::stop() {
         captureInterfaceClaimed_ = false;
         claimedCaptureIface_ = 0xFF;
     }
+    captureHead_.store(0, std::memory_order_relaxed);
+    captureTail_.store(0, std::memory_order_relaxed);
+    captureSequence_.store(0, std::memory_order_relaxed);
+    captureOverruns_.store(0, std::memory_order_relaxed);
+    captureUnderruns_.store(0, std::memory_order_relaxed);
     LOGI("stopped streaming (full teardown)");
 }
 
 // --- Iso pump ---------------------------------------------------------
 
 bool LibusbUacDriver::startIsoPump() {
+    auto setErr = [this](StartError c, const std::string& d) {
+        lastError_.store(c, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(errorMutex_);
+        lastErrorDetail_ = d;
+    };
     // Compute the actual *packet* rate from bInterval. Naively
     // assuming 1 packet per microframe was the source of distortion
     // when a device's alt uses bInterval > 1 (Bathys' alt 1 is
@@ -1432,12 +1840,14 @@ bool LibusbUacDriver::startIsoPump() {
     // microframes/sec we'd been pumping at).
     //   HS: packet interval = 2^(bInterval-1) microframes
     //   FS: packet interval = bInterval frames (1ms each)
-    int hostPeriodHz = format_.isHighSpeed ? 8000 : 1000;
-    int packetIntervalUframes = format_.isHighSpeed
-        ? (1 << (format_.bInterval > 0 ? format_.bInterval - 1 : 0))
-        : format_.bInterval;
-    if (packetIntervalUframes < 1) packetIntervalUframes = 1;
-    microframesPerSec_ = hostPeriodHz / packetIntervalUframes;
+    const int hostPeriodHz = format_.isHighSpeed ? 8000 : 1000;
+    const int intervalExponent = std::min<int>(
+        15, format_.bInterval > 0 ? format_.bInterval - 1 : 0);
+    packetIntervalUframes_ = format_.isHighSpeed
+        ? (1 << intervalExponent)
+        : std::max<int>(1, format_.bInterval);
+    microframesPerSec_ =
+        std::max(1, hostPeriodHz / packetIntervalUframes_);
     int baseFrames = format_.sampleRateHz / microframesPerSec_;
     int rateRemainder = format_.sampleRateHz % microframesPerSec_;
     LOGI("iso pump: %d packets/sec (HS=%d, bInterval=%u), "
@@ -1449,33 +1859,36 @@ bool LibusbUacDriver::startIsoPump() {
         static_cast<uint32_t>(
             (static_cast<uint64_t>(rateRemainder) << 16) /
             static_cast<uint32_t>(microframesPerSec_));
+    nominalScheduler_.reset(static_cast<uint32_t>(format_.sampleRateHz),
+                            static_cast<uint32_t>(microframesPerSec_));
     framesPerUframe_q16_.store(seed_q16, std::memory_order_relaxed);
     fracAccumulator_q16_ = 0;
-    isoCallbacks_ = 0;
-    maxFramesPerPacket_ = baseFrames + (rateRemainder > 0 ? 1 : 0)
-                          // +1 headroom for feedback over-asks.
-                          + 1;
-
-    int frameStride = format_.channels * format_.bytesPerSample;
-    int maxBytesPerPacket = maxFramesPerPacket_ * frameStride;
-
-    // Hard-cap at the endpoint's max packet size to stay spec-legal.
-    int maxPacket = libusb_get_max_iso_packet_size(
+    pendingImplicitCount_ = 0;
+    const int nominalMaxFrames = baseFrames + (rateRemainder > 0 ? 1 : 0);
+    const int frameStride = format_.channels * format_.bytesPerSample;
+    const int maxPacket = libusb_get_max_iso_packet_size(
         libusb_get_device(device_), format_.endpointAddress);
-    if (maxPacket > 0 && maxBytesPerPacket > maxPacket) {
-        LOGE("computed packet %d > endpoint max %d",
-             maxBytesPerPacket, maxPacket);
+    if (frameStride <= 0 || maxPacket <= 0) {
+        setErr(StartError::IsoPumpAllocFailed,
+               "playback endpoint has no usable isochronous packet size");
         return false;
     }
+    const int physicalMaxFrames = maxPacket / frameStride;
+    if (physicalMaxFrames < nominalMaxFrames) {
+        setErr(StartError::IsoPumpAllocFailed,
+               "playback endpoint max packet cannot carry nominal frame cadence");
+        return false;
+    }
+    // Permit at most one feedback-driven frame above nominal while honoring
+    // exact-capacity synchronous endpoints. This rejects glitchy feedback and
+    // keeps transfer-burst latency independent of an overprovisioned wMaxPacket.
+    maxFramesPerPacket_ =
+        std::min(physicalMaxFrames, nominalMaxFrames + 1);
+    const int maxBytesPerPacket = maxFramesPerPacket_ * frameStride;
 
     transfers_.reserve(kNumTransfers);
     transferBuffers_.reserve(kNumTransfers);
 
-    auto setErr = [this](StartError c, const std::string& d) {
-        lastError_.store(c, std::memory_order_release);
-        std::lock_guard<std::mutex> lock(errorMutex_);
-        lastErrorDetail_ = d;
-    };
 
     for (int t = 0; t < kNumTransfers; ++t) {
         libusb_transfer* xfr = libusb_alloc_transfer(kPacketsPerTransfer);
@@ -1494,121 +1907,137 @@ bool LibusbUacDriver::startIsoPump() {
             xfr, device_, format_.endpointAddress,
             buf.data(), buf.size(), kPacketsPerTransfer,
             &LibusbUacDriver::onIsoTrampoline, this, /*timeout=*/0);
-        // Initial packet lengths use the integer base frames so the
-        // first transmission is silence at roughly the average rate.
-        // onIso refines per-packet from the fractional accumulator
-        // and (when present) the latest feedback value.
-        libusb_set_iso_packet_lengths(xfr, baseFrames * frameStride);
+        // Prime every packet with the same exact rational cadence used after
+        // the first completion. At 44.1 kHz, filling all initial packets with
+        // the five-frame floor would undersend 16 frames in the first 4 ms.
+        for (int packet = 0; packet < kPacketsPerTransfer; ++packet) {
+            xfr->iso_packet_desc[packet].length =
+                static_cast<unsigned int>(nominalScheduler_.next()) * frameStride;
+        }
 
         transferBuffers_.emplace_back(std::move(buf));
         transfers_.push_back(xfr);
     }
 
-    // Optional feedback EP. UAC2 §5.2.2.4.1: feedback IN, 4 bytes
-    // (16.16 fixed) on high-speed, 3 bytes (10.10 fixed shifted left
-    // by 4) on full-speed. We allocate one 1-packet transfer per
-    // feedback URB and keep two in flight so completions overlap
-    // with each other; the event thread already drives all iso
-    // completions on a single thread so no locking needed for the
-    // atomic store.
+    // The capture endpoint is the clock for an implicit-feedback sink.
+    // Initial OUT transfers must use capture-derived packet sizes too.
+    if (captureActive_.load(std::memory_order_acquire) &&
+        captureFormat_.implicitFeedback &&
+        format_.feedbackEndpointAddress == 0) {
+        for (libusb_transfer* xfr : transfers_) {
+            for (int packet = 0; packet < xfr->num_iso_packets; ++packet) {
+                size_t read = implicitRead_.load(std::memory_order_acquire);
+                for (;;) {
+                    const size_t write =
+                        implicitWrite_.load(std::memory_order_acquire);
+                    if (read == write) {
+                        setErr(StartError::IsoPumpSubmitFailed,
+                               "implicit-feedback metadata exhausted while priming output");
+                        stopIsoPump();
+                        return false;
+                    }
+                    const int frames = std::min<int>(
+                        implicitFrames_[read & (kImplicitFifoCapacity - 1)]
+                            .load(std::memory_order_relaxed),
+                        maxFramesPerPacket_);
+                    if (implicitRead_.compare_exchange_weak(
+                            read, read + 1, std::memory_order_acq_rel,
+                            std::memory_order_acquire)) {
+                        xfr->iso_packet_desc[packet].length =
+                            frames * frameStride;
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
+    // Optional feedback EP. UAC2 §5.2.2.4.1: feedback IN, 4 bytes
+    // (16.16 fixed) on high-speed, 3 bytes (10.14 fixed) on full-speed.
     constexpr int kFeedbackTransfers = 2;
     if (format_.feedbackEndpointAddress != 0) {
         for (int t = 0; t < kFeedbackTransfers; ++t) {
-            libusb_transfer* fxfr = libusb_alloc_transfer(/*iso pkts=*/1);
+            libusb_transfer* fxfr = libusb_alloc_transfer(1);
             if (!fxfr) {
-                LOGE("alloc feedback transfer %d failed", t);
                 setErr(StartError::IsoPumpAllocFailed,
-                       "libusb_alloc_transfer (feedback) returned null at #" +
-                       std::to_string(t));
+                       "libusb_alloc_transfer (feedback) returned null");
                 stopIsoPump();
                 return false;
             }
-            int fbBufSize = format_.feedbackMaxPacketSize > 0
+            const int fbBufSize = format_.feedbackMaxPacketSize > 0
                 ? format_.feedbackMaxPacketSize : 4;
             std::vector<uint8_t> fbBuf(fbBufSize, 0);
-            libusb_fill_iso_transfer(
-                fxfr, device_, format_.feedbackEndpointAddress,
-                fbBuf.data(), fbBuf.size(), /*num_iso_packets=*/1,
-                &LibusbUacDriver::onFeedbackTrampoline, this, /*timeout=*/0);
+            libusb_fill_iso_transfer(fxfr, device_, format_.feedbackEndpointAddress,
+                                     fbBuf.data(), fbBuf.size(), 1,
+                                     &LibusbUacDriver::onFeedbackTrampoline, this, 0);
             libusb_set_iso_packet_lengths(fxfr, fbBufSize);
             feedbackBuffers_.emplace_back(std::move(fbBuf));
             feedbackTransfers_.push_back(fxfr);
         }
     }
-
-    // Spin up the event thread before we submit so any immediate
-    // completion has somewhere to go.
-    eventThread_ = std::thread([this]() {
-        while (!stopRequested_.load(std::memory_order_acquire)) {
-            timeval tv{};
-            tv.tv_sec = 0;
-            tv.tv_usec = 100000;  // 100ms
-            libusb_handle_events_timeout(ctx_, &tv);
-        }
-    });
-
-    // Initial submit. Buffers are zero-padded so the first ms of
-    // output is silence — gives the audio thread a head-start to
-    // fill the ring before the iso pipeline drains it. Feedback
-    // transfers are submitted before the data EP starts demanding samples.
+    if (!eventThread_.joinable()) {
+        eventThread_ = std::thread([this]() {
+            eventThreadUrgentAudio_.store(
+                guitarrackcraft::setCurrentThreadUrgentAudio("UsbIsoEvents"),
+                std::memory_order_release);
+            while (!stopRequested_.load(std::memory_order_acquire)) {
+                timeval tv{0, 100000};
+                libusb_handle_events_timeout(ctx_, &tv);
+            }
+        });
+    }
     for (libusb_transfer* fxfr : feedbackTransfers_) {
-        int rc = libusb_submit_transfer(fxfr);
+        inflight_.fetch_add(1, std::memory_order_acq_rel);
+        const int rc = libusb_submit_transfer(fxfr);
         if (rc != LIBUSB_SUCCESS) {
-            LOGE("initial submit feedback -> %d", rc);
+            inflight_.fetch_sub(1, std::memory_order_acq_rel);
             setErr(StartError::IsoPumpSubmitFailed,
-                   std::string("libusb_submit_transfer (feedback) -> ") +
+                   std::string("feedback transfer submit failed: ") +
                    libusb_strerror(rc));
-            stopRequested_.store(true, std::memory_order_release);
             stopIsoPump();
             return false;
         }
-        inflight_.fetch_add(1, std::memory_order_relaxed);
     }
     for (libusb_transfer* xfr : transfers_) {
-        int rc = libusb_submit_transfer(xfr);
+        inflight_.fetch_add(1, std::memory_order_acq_rel);
+        const int rc = libusb_submit_transfer(xfr);
         if (rc != LIBUSB_SUCCESS) {
-            LOGE("initial submit_transfer -> %d", rc);
+            inflight_.fetch_sub(1, std::memory_order_acq_rel);
             setErr(StartError::IsoPumpSubmitFailed,
-                   std::string("libusb_submit_transfer -> ") +
+                   std::string("playback transfer submit failed: ") +
                    libusb_strerror(rc));
-            stopRequested_.store(true, std::memory_order_release);
             stopIsoPump();
             return false;
         }
-        inflight_.fetch_add(1, std::memory_order_relaxed);
     }
     return true;
 }
-
-void LibusbUacDriver::stopIsoPump() {
+bool LibusbUacDriver::stopIsoPump() {
     stopRequested_.store(true, std::memory_order_release);
-    for (libusb_transfer* xfr : transfers_) {
-        if (xfr) libusb_cancel_transfer(xfr);
-    }
-    for (libusb_transfer* fxfr : feedbackTransfers_) {
-        if (fxfr) libusb_cancel_transfer(fxfr);
-    }
-    // Drain the event loop until every transfer has reported completion
-    // (cancellation counts). Bounded wait — if libusb wedges we'd
-    // rather log and move on than hang the audio thread.
-    for (int spin = 0; spin < 200; ++spin) {
-        if (inflight_.load(std::memory_order_acquire) == 0) break;
+    for (libusb_transfer* xfr : transfers_) if (xfr) libusb_cancel_transfer(xfr);
+    for (libusb_transfer* fxfr : feedbackTransfers_) if (fxfr) libusb_cancel_transfer(fxfr);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    while (inflight_.load(std::memory_order_acquire) != 0 &&
+           std::chrono::steady_clock::now() < deadline) {
         timeval tv{0, 5000};
         libusb_handle_events_timeout(ctx_, &tv);
     }
+    if (inflight_.load(std::memory_order_acquire) != 0) {
+        lifecycleFailures_.fetch_add(1, std::memory_order_relaxed);
+        LOGW("playback teardown deferred: %d transfers still live",
+             inflight_.load(std::memory_order_acquire));
+        return false;
+    }
     if (eventThread_.joinable()) eventThread_.join();
-    for (libusb_transfer* xfr : transfers_) {
-        if (xfr) libusb_free_transfer(xfr);
-    }
-    for (libusb_transfer* fxfr : feedbackTransfers_) {
-        if (fxfr) libusb_free_transfer(fxfr);
-    }
+    pendingImplicitCount_ = 0;
+    pendingImplicitTransfers_.fill(nullptr);
+    for (libusb_transfer* xfr : transfers_) if (xfr) libusb_free_transfer(xfr);
+    for (libusb_transfer* fxfr : feedbackTransfers_) if (fxfr) libusb_free_transfer(fxfr);
     transfers_.clear();
     transferBuffers_.clear();
     feedbackTransfers_.clear();
     feedbackBuffers_.clear();
-    inflight_.store(0, std::memory_order_relaxed);
+    return true;
 }
 
 void LibusbUacDriver::onIsoTrampoline(libusb_transfer* xfr) {
@@ -1621,116 +2050,181 @@ void LibusbUacDriver::onFeedbackTrampoline(libusb_transfer* xfr) {
 // Decodes a UAC feedback packet and updates the atomic rate the
 // data-EP completion callback reads on its next pass.
 //
-// High-speed (USB 2.0): 4 bytes, little-endian, 16.16 fixed-point.
-//   Value = number of samples per microframe the device wants.
-//   Direct fit for our framesPerUframe_q16_ atomic.
+// High-speed (USB 2.0): 4 bytes, little-endian, 16.16 fixed-point;
+// the value is samples per microframe.
 //
-// Full-speed (USB 1.1): 3 bytes, little-endian, 10.10 fixed-point
-// shifted left by 4 — i.e. the 24-bit value is "samples per frame
-// in 10.14 format". To normalize to the same q16 representation
-// the data EP uses, we left-shift by 2 (10.14 → 10.16).
+// Full-speed (USB 1.1): 3 bytes, little-endian, 10.14 fixed-point;
+// normalize it to Q16 by shifting left two bits.
 //
-// Out-of-range values (zero, or > maxFramesPerPacket_+1) are
-// ignored — better to keep the previous rate than chase a glitchy
-// reading that would overrun the iso buffer or starve the DAC.
+// onFeedback then scales either normalized value by the data endpoint's
+// service interval. Values outside its physical packet capacity are ignored.
 void LibusbUacDriver::onFeedback(libusb_transfer* xfr) {
     if (xfr->status == LIBUSB_TRANSFER_CANCELLED ||
-        xfr->status == LIBUSB_TRANSFER_NO_DEVICE) {
+        stopRequested_.load(std::memory_order_acquire)) {
         inflight_.fetch_sub(1, std::memory_order_acq_rel);
         return;
     }
-    if (stopRequested_.load(std::memory_order_acquire)) {
+    if (xfr->status == LIBUSB_TRANSFER_NO_DEVICE) {
+        playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
         inflight_.fetch_sub(1, std::memory_order_acq_rel);
+        markTransportFailed();
         return;
     }
-    if (xfr->status == LIBUSB_TRANSFER_COMPLETED &&
-        xfr->num_iso_packets > 0 &&
-        xfr->iso_packet_desc[0].status == LIBUSB_TRANSFER_COMPLETED) {
-        int actual = xfr->iso_packet_desc[0].actual_length;
+    if (xfr->status != LIBUSB_TRANSFER_COMPLETED ||
+        xfr->num_iso_packets <= 0 ||
+        xfr->iso_packet_desc[0].status != LIBUSB_TRANSFER_COMPLETED) {
+        playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        const int actual = xfr->iso_packet_desc[0].actual_length;
         const uint8_t* p = xfr->buffer;
         uint32_t v_q16 = 0;
         if (actual >= 4) {
-            v_q16 =  static_cast<uint32_t>(p[0])
-                  | (static_cast<uint32_t>(p[1]) << 8)
-                  | (static_cast<uint32_t>(p[2]) << 16)
-                  | (static_cast<uint32_t>(p[3]) << 24);
+            v_q16 = static_cast<uint32_t>(p[0]) |
+                    (static_cast<uint32_t>(p[1]) << 8) |
+                    (static_cast<uint32_t>(p[2]) << 16) |
+                    (static_cast<uint32_t>(p[3]) << 24);
         } else if (actual >= 3) {
-            uint32_t v_q14 =
-                  static_cast<uint32_t>(p[0])
-                | (static_cast<uint32_t>(p[1]) << 8)
-                | (static_cast<uint32_t>(p[2]) << 16);
-            v_q16 = v_q14 << 2;
+            v_q16 = (static_cast<uint32_t>(p[0]) |
+                     (static_cast<uint32_t>(p[1]) << 8) |
+                     (static_cast<uint32_t>(p[2]) << 16)) << 2;
         }
-        if (v_q16 > 0) {
-            uint32_t maxAllowed_q16 =
-                static_cast<uint32_t>(maxFramesPerPacket_) << 16;
-            if (v_q16 <= maxAllowed_q16) {
-                framesPerUframe_q16_.store(v_q16, std::memory_order_release);
-            }
+        const uint64_t packetRateQ16 =
+            static_cast<uint64_t>(v_q16) *
+            static_cast<uint64_t>(packetIntervalUframes_);
+        if (packetRateQ16 > 0 &&
+            packetRateQ16 <=
+                (static_cast<uint64_t>(maxFramesPerPacket_) << 16)) {
+            framesPerUframe_q16_.store(
+                static_cast<uint32_t>(packetRateQ16),
+                std::memory_order_release);
         }
     }
-    int rc = libusb_submit_transfer(xfr);
+    const int rc = libusb_submit_transfer(xfr);
     if (rc != LIBUSB_SUCCESS) {
-        LOGE("resubmit feedback -> %d", rc);
+        playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
         inflight_.fetch_sub(1, std::memory_order_acq_rel);
+        markTransportFailed();
+    }
+}
+
+bool LibusbUacDriver::prepareImplicitTransfer(libusb_transfer* xfr) {
+    const size_t count = static_cast<size_t>(xfr->num_iso_packets);
+    if (count == 0 || count > kPacketsPerTransfer) return false;
+    std::array<int, kPacketsPerTransfer> frameCounts{};
+    size_t read = implicitRead_.load(std::memory_order_acquire);
+    for (;;) {
+        const size_t write = implicitWrite_.load(std::memory_order_acquire);
+        if (write - read < count) return false;
+        for (size_t packet = 0; packet < count; ++packet) {
+            frameCounts[packet] = std::min<int>(
+                implicitFrames_[(read + packet) &
+                                (kImplicitFifoCapacity - 1)]
+                    .load(std::memory_order_relaxed),
+                maxFramesPerPacket_);
+        }
+        if (implicitRead_.compare_exchange_weak(
+                read, read + count, std::memory_order_acq_rel,
+                std::memory_order_acquire)) {
+            break;
+        }
+    }
+
+    const int stride = format_.channels * format_.bytesPerSample;
+    uint8_t* cursor = xfr->buffer;
+    for (size_t packet = 0; packet < count; ++packet) {
+        const int bytes = frameCounts[packet] * stride;
+        xfr->iso_packet_desc[packet].length = bytes;
+        if (bytes > 0) drainRing(cursor, bytes);
+        cursor += bytes;
+    }
+    return true;
+}
+
+void LibusbUacDriver::submitPendingImplicitTransfers() {
+    size_t submitted = 0;
+    while (submitted < pendingImplicitCount_) {
+        libusb_transfer* xfr = pendingImplicitTransfers_[submitted];
+        if (!prepareImplicitTransfer(xfr)) break;
+        inflight_.fetch_add(1, std::memory_order_acq_rel);
+        const int rc = libusb_submit_transfer(xfr);
+        if (rc != LIBUSB_SUCCESS) {
+            playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+            inflight_.fetch_sub(1, std::memory_order_acq_rel);
+            markTransportFailed();
+            break;
+        }
+        ++submitted;
+    }
+    if (submitted > 0) {
+        for (size_t i = submitted; i < pendingImplicitCount_; ++i)
+            pendingImplicitTransfers_[i - submitted] =
+                pendingImplicitTransfers_[i];
+        pendingImplicitCount_ -= submitted;
     }
 }
 
 void LibusbUacDriver::onIso(libusb_transfer* xfr) {
     if (xfr->status == LIBUSB_TRANSFER_CANCELLED ||
-        xfr->status == LIBUSB_TRANSFER_NO_DEVICE) {
+        stopRequested_.load(std::memory_order_acquire)) {
         inflight_.fetch_sub(1, std::memory_order_acq_rel);
+        return;
+    }
+    if (xfr->status == LIBUSB_TRANSFER_NO_DEVICE) {
+        playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+        inflight_.fetch_sub(1, std::memory_order_acq_rel);
+        markTransportFailed();
         return;
     }
     if (xfr->status != LIBUSB_TRANSFER_COMPLETED)
-        LOGW("iso transfer status=%d (will resubmit)", xfr->status);
-    if (stopRequested_.load(std::memory_order_acquire)) {
-        inflight_.fetch_sub(1, std::memory_order_acq_rel);
-        return;
-    }
+        playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
 
-    // Per-packet sizing from the 16.16 fixed-point rate the device
-    // most recently asked for (or the seeded open-loop value if no
-    // feedback EP). libusb iso buffers are TIGHTLY PACKED by
-    // per-packet length (packet i starts at offset = sum of
-    // lengths[0..i-1]), so we drain into a running cursor — no
-    // worst-case padding.
-    int frameStride = format_.channels * format_.bytesPerSample;
-    uint32_t rate_q16 = framesPerUframe_q16_.load(std::memory_order_acquire);
-    uint8_t* cursor = xfr->buffer;
-    for (int p = 0; p < xfr->num_iso_packets; ++p) {
-        int frames = 0;
-        fracAccumulator_q16_ += rate_q16;
-        frames = static_cast<int>(fracAccumulator_q16_ >> 16);
-        fracAccumulator_q16_ &= 0xFFFF;
-        if (frames <= 0) frames = static_cast<int>(rate_q16 >> 16);
-        if (frames > maxFramesPerPacket_) frames = maxFramesPerPacket_;
-        int bytes = frames * frameStride;
-        xfr->iso_packet_desc[p].length = bytes;
-        if (bytes > 0) drainRing(cursor, bytes);
-        cursor += bytes;
+    const bool implicit = captureActive_.load(std::memory_order_acquire) &&
+                          captureFormat_.implicitFeedback &&
+                          format_.feedbackEndpointAddress == 0;
+    for (int packet = 0; packet < xfr->num_iso_packets; ++packet) {
+        const bool packetOk = xfr->status == LIBUSB_TRANSFER_COMPLETED &&
+                              xfr->iso_packet_desc[packet].status ==
+                                  LIBUSB_TRANSFER_COMPLETED;
+        if (!packetOk)
+            playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
     }
-
-    // Periodic heartbeat so a wedged or slow pump is visible in
-    // logcat. Without this, the only iso-side log lines are LOGW on
-    // failure, so a pump that "completes" but never advances
-    // playedFrames (because every drainRing pads with silence) looks
-    // identical to a pump that's perfectly healthy.
-    if ((++isoCallbacks_ % kIsoLogEvery) == 0) {
-        size_t head = ringHead_.load(std::memory_order_acquire);
-        size_t tail = ringTail_.load(std::memory_order_acquire);
-        LOGI("iso heartbeat: cb=%u played=%ld written=%ld ring=%zu inflight=%d",
-             isoCallbacks_,
-             playedFrames_.load(std::memory_order_relaxed),
-             writtenFrames_.load(std::memory_order_relaxed),
-             head - tail,
-             inflight_.load(std::memory_order_relaxed));
+    if (implicit) {
+        if (!prepareImplicitTransfer(xfr)) {
+            if (pendingImplicitCount_ < pendingImplicitTransfers_.size()) {
+                inflight_.fetch_sub(1, std::memory_order_acq_rel);
+                pendingImplicitTransfers_[pendingImplicitCount_++] = xfr;
+                return;
+            }
+            playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+            inflight_.fetch_sub(1, std::memory_order_acq_rel);
+            markTransportFailed();
+            return;
+        }
+    } else {
+        const int stride = format_.channels * format_.bytesPerSample;
+        const uint32_t rate =
+            framesPerUframe_q16_.load(std::memory_order_acquire);
+        uint8_t* cursor = xfr->buffer;
+        for (int packet = 0; packet < xfr->num_iso_packets; ++packet) {
+            int frames = format_.feedbackEndpointAddress == 0
+                ? static_cast<int>(nominalScheduler_.next())
+                : static_cast<int>((fracAccumulator_q16_ += rate) >> 16);
+            if (format_.feedbackEndpointAddress != 0)
+                fracAccumulator_q16_ &= 0xFFFF;
+            if (frames <= 0) frames = static_cast<int>(rate >> 16);
+            frames = std::min(frames, maxFramesPerPacket_);
+            const int bytes = frames * stride;
+            xfr->iso_packet_desc[packet].length = bytes;
+            if (bytes > 0) drainRing(cursor, bytes);
+            cursor += bytes;
+        }
     }
-
-    int rc = libusb_submit_transfer(xfr);
+    signalWakeFd(captureWakeFd_);
+    const int rc = libusb_submit_transfer(xfr);
     if (rc != LIBUSB_SUCCESS) {
-        LOGE("resubmit_transfer -> %d", rc);
+        playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
         inflight_.fetch_sub(1, std::memory_order_acq_rel);
+        markTransportFailed();
     }
 }
 
@@ -1777,10 +2271,14 @@ int LibusbUacDriver::writePcm(const uint8_t* data, int frames) {
     size_t head = ringHead_.load(std::memory_order_relaxed);
     size_t tail = ringTail_.load(std::memory_order_acquire);
     size_t free = kRingBytes - (head - tail);
-    int writable = static_cast<int>(std::min<size_t>(free, static_cast<size_t>(bytes)));
-    // Round down to whole frames to avoid splitting a frame across
-    // calls — saves the consumer from having to track partial frames.
     int frameStride = format_.channels * format_.bytesPerSample;
+    const size_t queuedFrames = frameStride > 0 ? (head - tail) / static_cast<size_t>(frameStride) : 0;
+    const size_t frameLimit = static_cast<size_t>(targetWatermark_.load(std::memory_order_acquire) +
+                                                   graphQuantum_.load(std::memory_order_acquire));
+    if (queuedFrames >= frameLimit) free = 0;
+    else free = std::min(free, (frameLimit - queuedFrames) * static_cast<size_t>(frameStride));
+    int writable = static_cast<int>(std::min<size_t>(free, static_cast<size_t>(bytes)));
+    // Round down to whole frames to avoid splitting a frame across calls.
     if (frameStride > 0) writable -= writable % frameStride;
     if (writable < bytes) {
         if (!playbackOverrunActive_.exchange(true, std::memory_order_acq_rel)) {
@@ -1804,13 +2302,65 @@ int LibusbUacDriver::writePcm(const uint8_t* data, int frames) {
     return framesPushed;
 }
 
+int LibusbUacDriver::bufferedFrames() const {
+    const int stride = format_.channels * format_.bytesPerSample;
+    if (stride <= 0) return 0;
+    return static_cast<int>((ringHead_.load(std::memory_order_acquire) -
+                             ringTail_.load(std::memory_order_relaxed)) /
+                            static_cast<size_t>(stride));
+}
+
+void LibusbUacDriver::setGraphQuantum(int frames) {
+    const auto config = playbackWatermarkConfig(frames);
+    const int stride = format_.channels * format_.bytesPerSample;
+    const int physicalFrames = stride > 0
+        ? static_cast<int>(kRingBytes / static_cast<size_t>(stride))
+        : config.frameLimit;
+    const int transferBurstFrames =
+        maxFramesPerPacket_ * kPacketsPerTransfer;
+    const int maxTarget = std::max(0, physicalFrames - config.graphQuantum);
+    const int target = std::min(
+        maxTarget, std::max(config.targetFrames, transferBurstFrames));
+    graphQuantum_.store(config.graphQuantum, std::memory_order_release);
+    targetWatermark_.store(target, std::memory_order_release);
+}
+
 int LibusbUacDriver::writableFrames() const {
-    if (format_.channels == 0) return 0;
-    size_t head = ringHead_.load(std::memory_order_relaxed);
-    size_t tail = ringTail_.load(std::memory_order_acquire);
-    size_t free = kRingBytes - (head - tail);
-    int frameStride = format_.channels * format_.bytesPerSample;
-    return static_cast<int>(free / frameStride);
+    const int frameStride = format_.channels * format_.bytesPerSample;
+    if (frameStride <= 0) return 0;
+    const size_t head = ringHead_.load(std::memory_order_relaxed);
+    const size_t tail = ringTail_.load(std::memory_order_acquire);
+    const size_t queuedFrames = (head - tail) / static_cast<size_t>(frameStride);
+    const size_t frameLimit = static_cast<size_t>(
+        targetWatermark_.load(std::memory_order_acquire) +
+        graphQuantum_.load(std::memory_order_acquire));
+    const size_t physicalFree = (kRingBytes - (head - tail)) /
+                                static_cast<size_t>(frameStride);
+    const size_t logicalFree = queuedFrames < frameLimit ? frameLimit - queuedFrames : 0;
+    return static_cast<int>(std::min(physicalFree, logicalFree));
+}
+
+bool LibusbUacDriver::waitForWritableFrames(int frames, int timeoutMs) const {
+    if (frames <= 0) return true;
+    const auto deadline = timeoutMs > 0
+        ? std::chrono::steady_clock::now() +
+              std::chrono::milliseconds(timeoutMs)
+        : std::chrono::steady_clock::time_point::max();
+    while (writableFrames() < frames &&
+           streaming_.load(std::memory_order_acquire) &&
+           !transportFailed_.load(std::memory_order_acquire)) {
+        int waitMs = -1;
+        if (timeoutMs > 0) {
+            const auto remaining =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()).count();
+            if (remaining <= 0) break;
+            waitMs = static_cast<int>(remaining);
+        }
+        if (!pollWakeFd(captureWakeFd_, waitMs)) break;
+        drainWakeFd(captureWakeFd_);
+    }
+    return writableFrames() >= frames;
 }
 
 } // namespace monotrypt::usb

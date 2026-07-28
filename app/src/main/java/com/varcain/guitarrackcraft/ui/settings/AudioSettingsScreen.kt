@@ -19,6 +19,12 @@
 
 package com.varcain.guitarrackcraft.ui.settings
 
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.hardware.usb.UsbManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -123,6 +129,41 @@ private fun DirectUsbSessionSettings() {
     var message by remember { mutableStateOf<String?>(null) }
     var devicesExpanded by remember { mutableStateOf(false) }
 
+    fun refreshDevices() {
+        val previousDeviceId = selectedDevice?.id
+        devices = DirectUsbAudioManager.getAudioDevices(context)
+        selectedDevice = devices.firstOrNull { it.id == previousDeviceId }
+            ?: devices.firstOrNull()
+        if (selectedDevice?.id != previousDeviceId) {
+            formats = emptyList()
+            inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
+        }
+        message = null
+    }
+
+    DisposableEffect(context) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context, intent: Intent) {
+                if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED ||
+                    intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED
+                ) {
+                    refreshDevices()
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED)
+            addAction(UsbManager.ACTION_USB_DEVICE_DETACHED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            context.registerReceiver(receiver, filter)
+        }
+        onDispose { runCatching { context.unregisterReceiver(receiver) } }
+    }
+
     fun selectCompatibleFormat() {
         val selected = formats.firstOrNull {
             it.sampleRate == selectedRate && it.bits == selectedBits
@@ -169,12 +210,7 @@ private fun DirectUsbSessionSettings() {
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(
-            onClick = {
-                devices = DirectUsbAudioManager.getAudioDevices(context)
-                selectedDevice = devices.firstOrNull { it.id == selectedDevice?.id }
-                    ?: devices.firstOrNull()
-                message = null
-            },
+            onClick = { refreshDevices() },
             modifier = Modifier.weight(1f)
         ) { Text("Refresh") }
         Button(

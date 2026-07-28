@@ -29,8 +29,11 @@ public:
     static constexpr int kSampleRate = 48000;
     static constexpr int kBitsPerSample = 32;
     static constexpr int kChannels = 2;
-    static constexpr int kMaxDeviceChannels = 8;
-    static constexpr int kMaxFramesPerWrite = 8192;
+    static constexpr int kMaxDeviceChannels = monotrypt::usb::kMaxTransportChannels;
+    static constexpr int kMaxSubslotBytes = monotrypt::usb::kMaxSubslotBytes;
+    // Keep engine blocks within the driver's bounded playback watermark.
+    static constexpr int kMaxGraphQuantum = monotrypt::usb::kMaxGraphQuantum;
+    static constexpr int kMaxFramesPerWrite = kMaxGraphQuantum;
 
     DirectUsbOutput()
         : pcm_(static_cast<size_t>(kMaxFramesPerWrite) * kMaxDeviceChannels * 4),
@@ -55,7 +58,8 @@ public:
                int inputChannel, int outputPair) {
         if (!driver_.isOpen() || sampleRate <= 0 ||
             (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
-            bytesPerSample < (bitsPerSample + 7) / 8 || bytesPerSample > 4 ||
+            bytesPerSample < (bitsPerSample + 7) / 8 ||
+            bytesPerSample > kMaxSubslotBytes ||
             channels < kChannels || channels > kMaxDeviceChannels ||
             inputChannel < 0 || inputChannel >= captureChannelCount() ||
             outputPair < 0 || outputPair * 2 + 1 >= channels) return false;
@@ -67,7 +71,11 @@ public:
         deviceChannels_ = driver_.currentFormat().channels;
         const auto& capture = driver_.currentCaptureFormat();
         if (deviceChannels_ < kChannels || deviceChannels_ > kMaxDeviceChannels ||
-            inputChannel >= capture.channels || outputPair * 2 + 1 >= deviceChannels_) {
+            capture.channels <= 0 || capture.channels > kMaxDeviceChannels ||
+            capture.bytesPerSample <= 0 ||
+            capture.bytesPerSample > kMaxSubslotBytes ||
+            inputChannel >= capture.channels ||
+            outputPair * 2 + 1 >= deviceChannels_) {
             driver_.stop();
             return false;
         }
@@ -89,7 +97,7 @@ public:
     void stop() {
         accepting_.store(false, std::memory_order_release);
         while (activeWriters_.load(std::memory_order_acquire) != 0) {
-            // Control thread only: callback never enters this path.
+            // Control thread only: the render thread never enters this path.
             std::this_thread::yield();
         }
         streaming_.store(false, std::memory_order_release);
@@ -100,8 +108,8 @@ public:
         return streaming_.load(std::memory_order_acquire) && driver_.isStreaming();
     }
 
-    // Called only from AudioEngine::onAudioReady. No allocation, locks, I/O,
-    // or blocking calls occur here.
+    // Called only from the dedicated render thread. No allocation, locks,
+    // I/O, or blocking calls occur here.
     void writeStereo(const float* left, const float* right, int frames) noexcept {
         if (!left || !right || frames <= 0 ||
             !accepting_.load(std::memory_order_acquire)) return;
@@ -169,10 +177,34 @@ public:
     int captureAvailableFrames() const noexcept {
         return driver_.captureAvailableFrames();
     }
+    bool waitForCaptureFrames(int frames, int timeoutMs) const noexcept {
+        return driver_.waitForCaptureFrames(frames, timeoutMs);
+    }
+    bool waitForWritableFrames(int frames, int timeoutMs) const noexcept {
+        return driver_.waitForWritableFrames(frames, timeoutMs);
+    }
+    int discardCaptureFrames(int frames) noexcept {
+        return driver_.discardCaptureFrames(frames);
+    }
 
     uint64_t xrunCount() const noexcept {
         return driver_.playbackXRunCount();
     }
+    void setGraphQuantum(int frames) noexcept { driver_.setGraphQuantum(frames); }
+    int bufferedFrames() const noexcept { return driver_.bufferedFrames(); }
+    int writableFrames() const noexcept { return driver_.writableFrames(); }
+    uint64_t captureXRunCount() const noexcept {
+        const auto stats = driver_.captureStats();
+        return stats.overruns + stats.underruns;
+    }
+    monotrypt::usb::CaptureStats captureStats() const noexcept {
+        return driver_.captureStats();
+    }
+    monotrypt::usb::ImplicitFeedbackStats transportStats() const noexcept {
+        return driver_.implicitFeedbackStats();
+    }
+    long writtenFrames() const noexcept { return driver_.writtenFrames(); }
+    long playedFrames() const noexcept { return driver_.playedFrames(); }
 
 private:
     void packPcm(float value, uint8_t* out) const noexcept {
