@@ -68,6 +68,7 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PluginBrowserScreen(
+    pathId: Long,
     replaceIndex: Int = -1,
     onNavigateBack: () -> Unit,
     viewModel: PluginBrowserViewModel = viewModel()
@@ -223,9 +224,9 @@ fun PluginBrowserScreen(
                                                             // coroutine scope; the view model dispatches to IO.
                                                             addPluginScope.launch {
                                                                 val success = if (replaceIndex >= 0) {
-                                                                    viewModel.replacePluginInRack(replaceIndex, plugin)
+                                                                    viewModel.replacePluginInRack(pathId, replaceIndex, plugin)
                                                                 } else {
-                                                                    viewModel.addPluginToRack(plugin)
+                                                                    viewModel.addPluginToRack(pathId, plugin)
                                                                 }
                                                                 if (success) onNavigateBack()
                                                             }

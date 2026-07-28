@@ -24,12 +24,12 @@
 #include <atomic>
 #include <thread>
 #include <string>
-#include <unordered_map>
 #include <vector>
 #include "plugin/PluginChain.h"
 #include "AudioRecorder.h"
 #include "DirectUsbOutput.h"
 
+#include "../plugin/RackGraph.h"
 namespace guitarrackcraft {
 
 /**
@@ -69,11 +69,9 @@ public:
      */
     bool isRunning() const;
 
-    /**
-     * Get the plugin chain (for adding/removing plugins).
-     */
-    PluginChain& getChain() { return chain_; }
-    const PluginChain& getChain() const { return chain_; }
+    /** Get the parallel rack graph for track and master operations. */
+    RackGraph& getRackGraph() { return rackGraph_; }
+    const RackGraph& getRackGraph() const { return rackGraph_; }
 
     /**
      * Get current sample rate.
@@ -141,12 +139,8 @@ public:
      */
     void resetClipping();
 
-    /**
-     * Bypass chain processing (audio passthrough). Use during preset loading
-     * to prevent the audio thread from processing a partially-built chain.
-     */
-    void setChainBypass(bool bypass) { chainBypass_.store(bypass); }
-    void setWavBypassChain(bool bypass) { wavBypassChain_.store(bypass); }
+    /** Silence graph output during destructive preset replacement. */
+    void setRackBypass(bool bypass) { rackBypass_.store(bypass); }
 
     /**
      * Get the audio recorder for real-time recording of raw input and processed output.
@@ -155,34 +149,21 @@ public:
 
     // Attach the duplex direct USB transport. Lifetime is owned by NativeContext.
     void setDirectUsbOutput(DirectUsbOutput* output) { directUsbOutput_ = output; }
+    bool isDirectUsbRenderUrgentAudio() const noexcept {
+        return directUsbRenderUrgentAudio_.load(std::memory_order_acquire);
+    }
 
-    // --- WAV real-time playback ---
+    bool loadTrackWav(RackPathId trackId, const std::string& path,
+                      const std::string& displayName);
+    bool unloadTrackWav(RackPathId trackId);
 
-    /**
-     * Load a WAV file for playback. Engine must be running (sample rate known).
-     * Converts to mono and resamples to engine rate.
-     * @return true on success
-     */
-    bool loadWav(const std::string& path);
-
-    /**
-     * Unload the current WAV and stop playback.
-     */
-    void unloadWav();
-
-    void wavPlay();
-    void wavPause();
-    void wavSeekToFrame(size_t frame);
-
-    double getWavDurationSec() const;
-    double getWavPositionSec() const;
-    bool isWavPlaying() const;
-    bool isWavLoaded() const;
 
 private:
     void directUsbRenderLoop();
     std::thread directUsbRenderThread_;
     std::atomic<bool> directUsbSession_{false};
+    std::atomic<bool> directUsbRenderUrgentAudio_{false};
+    std::atomic<bool> cleanupStarted_{true};
     int32_t directUsbBits_ = 0;
     int32_t directUsbSubslotBytes_ = 0;
     int32_t directUsbChannels_ = 0;
@@ -200,14 +181,14 @@ private:
     void onErrorAfterClose(oboe::AudioStream* oboeStream, oboe::Result error) override;
 
     std::unique_ptr<oboe::AudioStream> outputStream_;
-    PluginChain chain_;
+    RackGraph rackGraph_;
     float sampleRate_;
     int32_t inputDeviceId_ = 0;
     int32_t outputDeviceId_ = 0;
     int32_t requestedBufferFrames_ = 0;
     uint32_t callbackFrameCount_ = 0;  // Power-of-2 frames per audio callback
     std::atomic<bool> isRunning_;
-    std::atomic<bool> chainBypass_{false};  // skip chain processing (passthrough)
+    std::atomic<bool> rackBypass_{false};
 
     // Audio buffers for processing
     std::vector<float> inputBuffer_;
@@ -227,34 +208,10 @@ private:
     float inputPeakHold_{0.0f};
     float outputPeakHold_{0.0f};
 
-    // Aggregated subprocess (wine VST) load + xruns. Sampled periodically
-    // from the audio callback (every ~1s) so the UI's getCpuLoad / xrun
-    // metrics include VSTs that run out-of-process. Without this, a Helix
-    // Native that's saturating the wine subprocess shows 1% CPU and 0
-    // xruns because the audio thread itself is idle — the wine subprocess
-    // is the bottleneck and it isn't measured here.
-    std::atomic<float>   vstCpuLoad_{0.0f};
-    std::atomic<int32_t> vstUnderruns_{0};
-    /** Per-plugin last-sampled jiffies counter, keyed by subprocess pid.
-     *  Lives in audio-callback context — only touched at periodic-sample
-     *  cadence (not every callback). */
-    std::unordered_map<int, uint64_t> vstLastJiffies_;
-    /** Wall-time when vstLastJiffies_ was last updated (clock_gettime ns). */
-    uint64_t vstLastSampleNs_{0};
-    /** Audio-callback counter so we sample subprocesses every N callbacks
-     *  (~1Hz) rather than every block — reading /proc is cheap but not
-     *  free, and the value is for human-facing UI. */
-    uint32_t vstSampleCounter_{0};
 
     static constexpr float kClippingThreshold = 0.99f;
     static constexpr float kPeakDecay = 0.95f;
 
-    // WAV playback state (read in callback; written from load/seek/play/pause)
-    std::vector<float> wavBuffer_;
-    std::atomic<size_t> wavPositionFrames_{0};
-    std::atomic<bool> wavPlaying_{false};
-    std::atomic<bool> wavBypassChain_{true};  // true = WAV plays raw (backing track), false = through effects
-    size_t wavLengthFrames_{0};
 
     AudioRecorder recorder_;
 
@@ -262,8 +219,9 @@ private:
 
     DirectUsbOutput* directUsbOutput_ = nullptr; // non-owning, NativeContext-owned
     void closeStreams();
-    void resampleToEngineRate(const std::vector<float>& src, uint32_t srcRate,
-                              std::vector<float>& dst);
+    void processRackBlock(const float* const* liveInputs, float* const* outputs,
+                          uint32_t numFrames) noexcept;
+    void cleanupEngineState();
 };
 
 } // namespace guitarrackcraft

@@ -33,6 +33,32 @@ data class AudioStreamInfo(
     val framesPerBurst: Int = 0
 )
 
+typealias RackPathId = Long
+const val MASTER_PATH_ID: RackPathId = 0L
+
+data class RackTrackInfo(
+    val id: RackPathId,
+    val volume: Float,
+    val inputArmed: Boolean,
+    val wavLoaded: Boolean,
+    val wavDisplayName: String,
+    val wavDurationSec: Double
+)
+
+data class WavTransportInfo(
+    val playing: Boolean,
+    val looping: Boolean,
+    val positionSec: Double,
+    val durationSec: Double,
+    val loadedTrackCount: Int
+)
+
+data class RackPluginEntry(
+    val index: Int,
+    val instanceId: Long,
+    val info: PluginInfo
+)
+
 /**
  * JNI bridge to the native audio engine.
  * Provides a Kotlin interface to the C++ audio processing engine.
@@ -109,16 +135,10 @@ class NativeEngine private constructor() {
      *  VST appears in the browser without restarting the audio engine. */
     external fun nativeRefreshPluginRegistry(): Boolean
 
-    /** X11 display slot the plugin at the given rack position renders to,
-     *  or -1 if the position is invalid or the plugin doesn't use X11.
-     *  VST plugins (full flavor only) return their wine display number; LV2
-     *  plugins return -1. */
-    external fun nativeGetRackPluginX11Display(position: Int): Int
-
-    /** Editor size of the plugin at the given rack position, encoded as
-     *  one Long: high 32 bits = width, low 32 bits = height. 0 if no
-     *  editor or size unknown yet. */
-    external fun nativeGetRackPluginEditorSize(position: Int): Long
+    external fun nativeGetRackPluginX11Display(pathId: Long, pluginIndex: Int): Int
+    external fun nativeGetRackPluginEditorSize(pathId: Long, pluginIndex: Int): Long
+    external fun nativeGetRackPluginInstanceId(pathId: Long, pluginIndex: Int): Long
+    external fun nativeGetRackPlugins(pathId: Long): Array<RackPluginEntry>
 
 
     /** Opens an app-permitted USB device FD for the direct UAC playback prototype. */
@@ -145,6 +165,12 @@ class NativeEngine private constructor() {
     external fun nativeStopDirectUsbOutput()
 
     external fun nativeIsDirectUsbOutputStreaming(): Boolean
+
+    /**
+     * Direct USB transport diagnostics. Indices are documented by the
+     * instrumentation stress test and remain stable for field telemetry.
+     */
+    external fun nativeGetDirectUsbStats(): LongArray
 
     /**
      * Stop the audio engine.
@@ -217,72 +243,14 @@ class NativeEngine private constructor() {
      */
     external fun nativeGetAvailablePlugins(): Array<PluginInfo>
 
-    /**
-     * Add a plugin to the rack.
-     * @param pluginId Full plugin ID (format:plugin_id)
-     * @param position Position in chain (-1 for end)
-     * @return Index of inserted plugin, or -1 on failure
-     */
-    external fun nativeAddPluginToRack(pluginId: String, position: Int = -1): Int
-
-    /**
-     * Remove a plugin from the rack.
-     * @param position Index of plugin to remove
-     * @return true if removed successfully
-     */
-    external fun nativeRemovePluginFromRack(position: Int): Boolean
-
-    /**
-     * Reorder plugins in the rack.
-     * @param fromPos Source position
-     * @param toPos Destination position
-     * @return true if reordered successfully
-     */
-    external fun nativeReorderRack(fromPos: Int, toPos: Int): Boolean
-
-    /**
-     * Send a file path to a plugin via LV2 patch:Set.
-     * @param pluginIndex Index of plugin in chain
-     * @param propertyUri LV2 property URI (e.g. model file parameter)
-     * @param filePath Absolute file path on device
-     */
-    external fun nativeSetPluginFilePath(pluginIndex: Int, propertyUri: String, filePath: String)
-
-    /**
-     * Set a parameter value for a plugin in the rack.
-     * @param pluginIndex Index of plugin in chain
-     * @param portIndex Index of control port
-     * @param value Parameter value
-     */
-    external fun nativeSetParameter(pluginIndex: Int, portIndex: Int, value: Float)
-
-    /**
-     * Get a parameter value for a plugin in the rack.
-     * @param pluginIndex Index of plugin in chain
-     * @param portIndex Index of control port
-     * @return Current parameter value
-     */
-    external fun nativeGetParameter(pluginIndex: Int, portIndex: Int): Float
-
-    /**
-     * Process an audio file offline through the plugin chain.
-     * @param inputPath Path to input WAV file
-     * @param outputPath Path to output WAV file
-     * @return true if processing succeeded
-     */
-    external fun nativeProcessFile(inputPath: String, outputPath: String): Boolean
-
-    /**
-     * Get the number of plugins in the rack.
-     */
-    external fun nativeGetRackSize(): Int
-
-    /**
-     * Get plugin info for a plugin in the rack.
-     * @param index Index of plugin in rack
-     * @return PluginInfo or null if index is invalid
-     */
-    external fun nativeGetRackPluginInfo(index: Int): PluginInfo?
+    external fun nativeAddPluginToRack(pathId: Long, pluginId: String, position: Int = -1): Int
+    external fun nativeRemovePluginFromRack(pathId: Long, position: Int): Boolean
+    external fun nativeReorderRack(pathId: Long, fromPos: Int, toPos: Int): Boolean
+    external fun nativeSetPluginFilePath(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String)
+    external fun nativeSetParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float)
+    external fun nativeGetParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float
+    external fun nativeGetRackSize(pathId: Long): Int
+    external fun nativeGetRackPluginInfo(pathId: Long, index: Int): PluginInfo?
 
     // --- X11 UI management (EGL + ANativeWindow, native X server) ---
 
@@ -337,53 +305,17 @@ class NativeEngine private constructor() {
     /** Get the UI scale factor for the given display (1.0 = no scaling). */
     external fun nativeGetX11UIScale(displayNumber: Int): Float
 
-    /**
-     * Mark that we are about to create a plugin UI for this display.
-     * Call from the UI thread before posting createPluginUI to the executor, so that if surfaceDestroyed
-     * runs before the executor runs, signalDetach will defer (avoid closing X11 connection and killing the process).
-     */
-    external fun nativeBeginCreatePluginUI(displayNumber: Int, pluginIndex: Int)
-
-    /**
-     * Create an X11 UI for the plugin at the given rack index.
-     * The UI binary is loaded via dlopen and connects to the native X server; parentWindowId is the root window ID from nativeAttachSurfaceToDisplay.
-     */
-    external fun nativeCreatePluginUI(pluginIndex: Int, displayNumber: Int, parentWindowId: Long): Boolean
-
-    /** Tear down the X11 UI for the given rack index. */
-    external fun nativeDestroyPluginUI(pluginIndex: Int)
-
-    /** Pump idle on every active X11 UI (event processing).  Returns true if any UI reported work (dirty). */
+    external fun nativeBeginCreatePluginUI(pathId: Long, pluginIndex: Int, pluginInstanceId: Long, uiInstanceId: Long)
+    external fun nativeCreatePluginUI(pathId: Long, pluginIndex: Int, pluginInstanceId: Long, uiInstanceId: Long, displayNumber: Int, parentWindowId: Long): Boolean
+    external fun nativeDestroyPluginUI(pathId: Long, pluginInstanceId: Long, uiInstanceId: Long)
     external fun nativeIdlePluginUIs(): Boolean
-
-    /** Poll for a pending file request from any X11 plugin UI (ui:requestValue).
-     *  Returns [pluginIndex, propertyUri] or null if no request pending. */
     external fun nativePollFileRequest(): Array<String>?
+    external fun nativeDeliverFileToPluginUI(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String)
+    external fun nativePollVstFilePickerRequest(pathId: Long, pluginIndex: Int): Array<String>?
+    external fun nativeRespondVstFilePicker(pathId: Long, pluginIndex: Int, sequence: Int, cancelled: Boolean, windowsPath: String)
+    external fun nativeSaveRackState(): String?
+    external fun nativeRestorePluginState(pathId: Long, pluginIndex: Int, portValues: FloatArray, portIndices: IntArray, propertyKeys: Array<String>, propertyTypes: Array<String>, propertyValues: Array<ByteArray>, propertyFlags: IntArray): Boolean
 
-    /** Deliver a file path to a plugin's X11 UI via patch:Set atom. */
-    external fun nativeDeliverFileToPluginUI(pluginIndex: Int, propertyUri: String, filePath: String)
-
-    /** Poll for a pending Wine common-dialog file request from a hosted VST. */
-    external fun nativePollVstFilePickerRequest(pluginIndex: Int): Array<String>?
-
-    /** Deliver a Windows path, or cancellation, to a hosted VST file dialog. */
-    external fun nativeRespondVstFilePicker(
-        pluginIndex: Int,
-        sequence: Int,
-        cancelled: Boolean,
-        windowsPath: String
-    )
-
-    /** Save the complete chain state (all plugins) as a JSON string. */
-    external fun nativeSaveChainState(): String?
-
-    /** Restore a single plugin's state from decomposed arrays. */
-    external fun nativeRestorePluginState(
-        pluginIndex: Int,
-        portValues: FloatArray, portIndices: IntArray,
-        propertyKeys: Array<String>, propertyTypes: Array<String>,
-        propertyValues: Array<ByteArray>, propertyFlags: IntArray
-    ): Boolean
 
     // Kotlin wrappers
     fun attachSurfaceToDisplay(displayNumber: Int, surface: android.view.Surface, width: Int, height: Int): Long =
@@ -415,10 +347,10 @@ class NativeEngine private constructor() {
         return dir
     }
 
-    fun createPluginUI(pluginIndex: Int, displayNumber: Int, parentWindowId: Long): Boolean =
-        nativeCreatePluginUI(pluginIndex, displayNumber, parentWindowId)
-
-    fun destroyPluginUI(pluginIndex: Int) = nativeDestroyPluginUI(pluginIndex)
+    fun createPluginUI(pathId: Long, pluginIndex: Int, pluginInstanceId: Long, uiInstanceId: Long, displayNumber: Int, parentWindowId: Long): Boolean =
+        nativeCreatePluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId, displayNumber, parentWindowId)
+    fun destroyPluginUI(pathId: Long, pluginInstanceId: Long, uiInstanceId: Long) =
+        nativeDestroyPluginUI(pathId, pluginInstanceId, uiInstanceId)
 
     fun idlePluginUIs(): Boolean = nativeIdlePluginUIs()
 
@@ -429,23 +361,20 @@ class NativeEngine private constructor() {
     external fun nativeIsRecording(): Boolean
     external fun nativeGetRecordingDurationSec(): Double
 
-    // --- WAV real-time playback ---
-
-    external fun nativeLoadWav(path: String): Boolean
-    external fun nativeUnloadWav()
-    external fun nativeWavPlay()
-    external fun nativeWavPause()
-    external fun nativeWavSeek(positionSec: Double)
-    external fun nativeGetWavDurationSec(): Double
-    external fun nativeGetWavPositionSec(): Double
-    external fun nativeIsWavPlaying(): Boolean
-    external fun nativeIsWavLoaded(): Boolean
-    external fun nativeSetChainBypass(bypass: Boolean)
-    external fun nativeSetWavBypassChain(bypass: Boolean)
-
-    // Kotlin-friendly wrapper methods
-    fun setChainBypass(bypass: Boolean) = nativeSetChainBypass(bypass)
-    fun setWavBypassChain(bypass: Boolean) = nativeSetWavBypassChain(bypass)
+    external fun nativeAddTrack(): Long
+    external fun nativeRemoveTrack(trackId: Long): Boolean
+    external fun nativeGetTracks(): Array<RackTrackInfo>
+    external fun nativeSetTrackVolume(trackId: Long, volume: Float): Boolean
+    external fun nativeSetTrackInputArmed(trackId: Long, armed: Boolean): Boolean
+    external fun nativeLoadTrackWav(trackId: Long, path: String, displayName: String): Boolean
+    external fun nativeUnloadTrackWav(trackId: Long): Boolean
+    external fun nativeClearTrackWavs(): Boolean
+    external fun nativeSetWavTransportPlaying(playing: Boolean): Boolean
+    external fun nativeRestartWavTransport(): Boolean
+    external fun nativeSetWavTransportLooping(looping: Boolean)
+    external fun nativeGetWavTransportInfo(): WavTransportInfo
+    external fun nativeSetRackBypass(bypass: Boolean)
+    fun setRackBypass(bypass: Boolean) = nativeSetRackBypass(bypass)
 
 
     fun stopEngine() {
@@ -488,79 +417,42 @@ class NativeEngine private constructor() {
         return nativeGetAvailablePlugins().toList()
     }
 
-    fun addPluginToRack(pluginId: String, position: Int = -1): Int {
-        return nativeAddPluginToRack(pluginId, position)
-    }
+    fun addPluginToRack(pathId: Long, pluginId: String, position: Int = -1): Int =
+        nativeAddPluginToRack(pathId, pluginId, position)
+    fun removePluginFromRack(pathId: Long, position: Int): Boolean = nativeRemovePluginFromRack(pathId, position)
+    fun reorderRack(pathId: Long, fromPos: Int, toPos: Int): Boolean = nativeReorderRack(pathId, fromPos, toPos)
+    fun setPluginFilePath(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String) =
+        nativeSetPluginFilePath(pathId, pluginIndex, propertyUri, filePath)
+    fun setParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float) =
+        nativeSetParameter(pathId, pluginIndex, portIndex, value)
+    fun getParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float =
+        nativeGetParameter(pathId, pluginIndex, portIndex)
+    fun getRackSize(pathId: Long): Int = nativeGetRackSize(pathId)
+    fun getRackPluginInfo(pathId: Long, index: Int): PluginInfo? = nativeGetRackPluginInfo(pathId, index)
+    fun getRackPluginInstanceId(pathId: Long, index: Int): Long = nativeGetRackPluginInstanceId(pathId, index)
+    fun getRackPlugins(pathId: Long): Array<RackPluginEntry> = nativeGetRackPlugins(pathId)
 
-    fun removePluginFromRack(position: Int): Boolean {
-        return nativeRemovePluginFromRack(position)
-    }
+    fun addTrack(): Long = nativeAddTrack()
+    fun removeTrack(trackId: Long): Boolean = nativeRemoveTrack(trackId)
+    fun getTracks(): Array<RackTrackInfo> = nativeGetTracks()
+    fun setTrackVolume(trackId: Long, volume: Float): Boolean = nativeSetTrackVolume(trackId, volume.coerceIn(0f, 1f))
+    fun setTrackInputArmed(trackId: Long, armed: Boolean): Boolean = nativeSetTrackInputArmed(trackId, armed)
+    fun loadTrackWav(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackWav(trackId, path, displayName)
+    fun unloadTrackWav(trackId: Long): Boolean = nativeUnloadTrackWav(trackId)
+    fun clearTrackWavs(): Boolean = nativeClearTrackWavs()
+    fun setWavTransportPlaying(playing: Boolean): Boolean = nativeSetWavTransportPlaying(playing)
+    fun restartWavTransport(): Boolean = nativeRestartWavTransport()
+    fun setWavTransportLooping(looping: Boolean) = nativeSetWavTransportLooping(looping)
+    fun getWavTransportInfo(): WavTransportInfo = nativeGetWavTransportInfo()
 
-    fun reorderRack(fromPos: Int, toPos: Int): Boolean {
-        return nativeReorderRack(fromPos, toPos)
-    }
-
-    fun setPluginFilePath(pluginIndex: Int, propertyUri: String, filePath: String) {
-        nativeSetPluginFilePath(pluginIndex, propertyUri, filePath)
-    }
-
-    fun setParameter(pluginIndex: Int, portIndex: Int, value: Float) {
-        nativeSetParameter(pluginIndex, portIndex, value)
-    }
-
-    fun getParameter(pluginIndex: Int, portIndex: Int): Float {
-        return nativeGetParameter(pluginIndex, portIndex)
-    }
-
-    fun processFile(inputFile: File, outputFile: File): Boolean {
-        return nativeProcessFile(inputFile.absolutePath, outputFile.absolutePath)
-    }
-
-    fun getRackSize(): Int {
-        return nativeGetRackSize()
-    }
-
-    fun getRackPluginInfo(index: Int): PluginInfo? {
-        return nativeGetRackPluginInfo(index)
-    }
-
-    fun getRackPlugins(): List<PluginInfo> {
-        val size = getRackSize()
-        return (0 until size).mapNotNull { index ->
-            getRackPluginInfo(index)?.apply {
-                // Store the index for reference
-            }
-        }
-    }
-
-    // Recording wrappers
     fun startRecording(rawPath: String, processedPath: String): Boolean = nativeStartRecording(rawPath, processedPath)
     fun stopRecording() = nativeStopRecording()
     fun isRecording(): Boolean = nativeIsRecording()
     fun getRecordingDurationSec(): Double = nativeGetRecordingDurationSec()
-
-    // WAV playback wrappers
-    fun loadWav(file: File): Boolean = nativeLoadWav(file.absolutePath)
-    fun loadWav(path: String): Boolean = nativeLoadWav(path)
-    fun unloadWav() = nativeUnloadWav()
-    fun wavPlay() = nativeWavPlay()
-    fun wavPause() = nativeWavPause()
-    fun wavSeek(positionSec: Double) = nativeWavSeek(positionSec)
-    fun getWavDurationSec(): Double = nativeGetWavDurationSec()
-    fun getWavPositionSec(): Double = nativeGetWavPositionSec()
-    fun isWavPlaying(): Boolean = nativeIsWavPlaying()
-    fun isWavLoaded(): Boolean = nativeIsWavLoaded()
-
-    // State save/restore wrappers
-    fun saveChainState(): String? = nativeSaveChainState()
-
+    fun saveRackState(): String? = nativeSaveRackState()
     fun restorePluginState(
-        pluginIndex: Int,
-        portValues: FloatArray, portIndices: IntArray,
+        pathId: Long, pluginIndex: Int, portValues: FloatArray, portIndices: IntArray,
         propertyKeys: Array<String>, propertyTypes: Array<String>,
         propertyValues: Array<ByteArray>, propertyFlags: IntArray
-    ): Boolean = nativeRestorePluginState(
-        pluginIndex, portValues, portIndices,
-        propertyKeys, propertyTypes, propertyValues, propertyFlags
-    )
+    ): Boolean = nativeRestorePluginState(pathId, pluginIndex, portValues, portIndices, propertyKeys, propertyTypes, propertyValues, propertyFlags)
 }

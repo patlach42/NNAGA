@@ -54,7 +54,10 @@ public:
 private:
     std::atomic<bool> recording_{false};
     std::atomic<bool> writerRunning_{false};
+    std::atomic<uint32_t> activeFeeds_{0};
     std::atomic<size_t> totalRawFrames_{0};
+    size_t rawWrittenSamples_{0};
+    size_t processedWrittenSamples_{0};
     float sampleRate_{48000.0f};
 
     RingBuffer rawRing_;
@@ -64,8 +67,6 @@ private:
     std::ofstream processedFile_;
     std::thread writerThread_;
 
-    // Temp buffer for interleaving stereo in feedAudio (avoid allocation)
-    std::vector<float> interleaveBuffer_;
 
     void writerLoop();
     void writeWavHeader(std::ofstream& file, uint16_t numChannels, uint32_t sampleRate);

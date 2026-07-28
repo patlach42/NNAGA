@@ -49,16 +49,28 @@ object X11Bridge {
 
     fun ensureX11LibsDir(context: Context): File = native.ensureX11LibsDir(context)
 
-    fun beginCreatePluginUI(displayNumber: Int, pluginIndex: Int) =
-        native.nativeBeginCreatePluginUI(displayNumber, pluginIndex)
+    fun beginCreatePluginUI(
+        pathId: Long,
+        pluginIndex: Int,
+        pluginInstanceId: Long,
+        uiInstanceId: Long,
+        displayNumber: Int
+    ) = native.nativeBeginCreatePluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId)
 
-    fun createPluginUI(pluginIndex: Int, displayNumber: Int, parentWindowId: Long): Boolean =
-        native.createPluginUI(pluginIndex, displayNumber, parentWindowId)
+    fun createPluginUI(
+        pathId: Long,
+        pluginIndex: Int,
+        pluginInstanceId: Long,
+        uiInstanceId: Long,
+        displayNumber: Int,
+        parentWindowId: Long
+    ): Boolean = native.createPluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId, displayNumber, parentWindowId)
 
-    fun destroyPluginUI(pluginIndex: Int) = native.destroyPluginUI(pluginIndex)
+    fun destroyPluginUI(pathId: Long, pluginInstanceId: Long, uiInstanceId: Long) =
+        native.destroyPluginUI(pathId, pluginInstanceId, uiInstanceId)
     fun idlePluginUIs(): Boolean = native.idlePluginUIs()
 
     fun pollFileRequest(): Array<String>? = native.nativePollFileRequest()
-    fun deliverFileToPluginUI(pluginIndex: Int, propertyUri: String, filePath: String) =
-        native.nativeDeliverFileToPluginUI(pluginIndex, propertyUri, filePath)
+    fun deliverFileToPluginUI(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String) =
+        native.nativeDeliverFileToPluginUI(pathId, pluginIndex, propertyUri, filePath)
 }

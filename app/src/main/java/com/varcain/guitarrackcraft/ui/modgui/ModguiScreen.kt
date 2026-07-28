@@ -64,6 +64,7 @@ import java.io.File
  * JavaScript bridge for modgui: the host exposes setParameter(symbol, value) and getParameter(symbol).
  */
 class ModguiHostBridge(
+    val pathId: Long,
     @Volatile var pluginIndex: Int,
     pluginInfo: PluginInfo
 ) {
@@ -74,14 +75,14 @@ class ModguiHostBridge(
     @JavascriptInterface
     fun setParameter(symbol: String, value: Float) {
         symbolToIndex[symbol]?.let { portIndex ->
-            RackManager.setParameter(pluginIndex, portIndex, value)
+            RackManager.setParameter(pathId, pluginIndex, portIndex, value)
         }
     }
 
     @JavascriptInterface
     fun getParameter(symbol: String): Float {
         return symbolToIndex[symbol]?.let { portIndex ->
-            RackManager.getParameter(pluginIndex, portIndex)
+            RackManager.getParameter(pathId, pluginIndex, portIndex)
         } ?: 0f
     }
 
@@ -129,13 +130,14 @@ class ModguiHostBridge(
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun ModguiScreen(
+    pathId: Long,
     pluginIndex: Int,
     contentWidth: Int = 0,
     contentHeight: Int = 0,
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val pluginInfo = remember(pluginIndex) { RackManager.getRackPluginInfo(pluginIndex) }
+    val pluginInfo = remember(pathId, pluginIndex) { RackManager.getRackPluginInfo(pathId, pluginIndex) }
 
     // Landscape orientation for wide plugins
     val activity = context as? Activity
@@ -168,9 +170,8 @@ fun ModguiScreen(
         buildAssetLoader(context, baseDir, iconTemplate, templateData, pluginInfo, inline = false)
     }
     val loadUrl = "https://modgui.app/$iconTemplate"
-
-    val bridge = remember {
-        ModguiHostBridge(pluginIndex, pluginInfo)
+    val bridge = remember(pathId, pluginIndex, pluginInfo) {
+        ModguiHostBridge(pathId, pluginIndex, pluginInfo)
     }
     bridge.pluginIndex = pluginIndex  // keep current after reorders
 
@@ -210,6 +211,7 @@ fun ModguiScreen(
 @SuppressLint("SetJavaScriptEnabled", "ClickableViewAccessibility")
 @Composable
 fun InlineModguiView(
+    pathId: Long,
     pluginIndex: Int,
     pluginInfo: PluginInfo,
     isVisible: Boolean = true,
@@ -231,12 +233,10 @@ fun InlineModguiView(
         buildAssetLoader(context, baseDir, iconTemplate, templateData, pluginInfo, inline = true)
     }
     val loadUrl = "https://modgui.app/$iconTemplate"
-    val bridge = remember {
-        ModguiHostBridge(pluginIndex, pluginInfo)
+    val bridge = remember(pathId, pluginIndex, pluginInfo) {
+        ModguiHostBridge(pathId, pluginIndex, pluginInfo)
     }
     bridge.pluginIndex = pluginIndex  // keep current after reorders
-
-    // Content natural size in CSS pixels, reported by JS after load
     var contentWidth by remember { mutableStateOf(0) }
     var contentHeight by remember { mutableStateOf(0) }
 

@@ -63,6 +63,7 @@ private data class VstFilePickerRequest(
  */
 @Composable
 fun VstInlineEditor(
+    pathId: Long,
     pluginIndex: Int,
     isFullscreen: Boolean = false,
     onPluginSizeKnown: (width: Int, height: Int) -> Unit = { _, _ -> },
@@ -75,9 +76,9 @@ fun VstInlineEditor(
         copyDirWindows: String,
     ) -> Boolean = { _, _, _, _, _, _ -> false },
 ) {
-    val displayNumber = remember(pluginIndex) {
+    val displayNumber = remember(pathId, pluginIndex) {
         runCatching {
-            NativeEngine.getInstance().nativeGetRackPluginX11Display(pluginIndex)
+            NativeEngine.getInstance().nativeGetRackPluginX11Display(pathId, pluginIndex)
         }.getOrDefault(-1)
     }
     if (displayNumber < 0) {
@@ -92,8 +93,8 @@ fun VstInlineEditor(
     val engine = remember { NativeEngine.getInstance() }
     val currentOnFilePickerRequested by rememberUpdatedState(onFilePickerRequested)
     val scope = rememberCoroutineScope()
-    var pendingPickerRequest by remember(pluginIndex) { mutableStateOf<VstFilePickerRequest?>(null) }
-    var pickerInFlight by remember(pluginIndex) { mutableStateOf(false) }
+    var pendingPickerRequest by remember(pathId, pluginIndex) { mutableStateOf<VstFilePickerRequest?>(null) }
+    var pickerInFlight by remember(pathId, pluginIndex) { mutableStateOf(false) }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
@@ -106,7 +107,7 @@ fun VstInlineEditor(
 
         scope.launch {
             if (uri == null) {
-                engine.nativeRespondVstFilePicker(pluginIndex, request.sequence, true, "")
+                engine.nativeRespondVstFilePicker(pathId, pluginIndex, request.sequence, true, "")
             } else {
                 val windowsPath = runCatching {
                     withContext(Dispatchers.IO) {
@@ -117,6 +118,7 @@ fun VstInlineEditor(
                     ""
                 }
                 engine.nativeRespondVstFilePicker(
+                    pathId,
                     pluginIndex,
                     request.sequence,
                     windowsPath.isEmpty(),
@@ -128,10 +130,10 @@ fun VstInlineEditor(
         }
     }
 
-    LaunchedEffect(pluginIndex) {
+    LaunchedEffect(pathId, pluginIndex) {
         while (true) {
             val raw = runCatching {
-                engine.nativePollVstFilePickerRequest(pluginIndex)
+                engine.nativePollVstFilePickerRequest(pathId, pluginIndex)
             }.getOrNull()
             if (pickerInFlight) {
                 if (raw == null) pickerInFlight = false
@@ -170,11 +172,11 @@ fun VstInlineEditor(
         NativeBridge.nativeStartX11Server(displayNumber, 4096, 2160)
     }
 
-    var size by remember(pluginIndex) { mutableStateOf<Pair<Int, Int>?>(null) }
-    LaunchedEffect(pluginIndex) {
+    var size by remember(pathId, pluginIndex) { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(pathId, pluginIndex) {
         while (size == null) {
             val encoded = runCatching {
-                NativeEngine.getInstance().nativeGetRackPluginEditorSize(pluginIndex)
+                engine.nativeGetRackPluginEditorSize(pathId, pluginIndex)
             }.getOrDefault(0L)
             val w = (encoded ushr 32).toInt()
             val h = (encoded and 0xffffffffL).toInt()

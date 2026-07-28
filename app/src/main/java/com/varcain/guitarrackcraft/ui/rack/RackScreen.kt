@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
@@ -99,6 +100,9 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -120,8 +124,9 @@ import com.varcain.guitarrackcraft.engine.UiType
 import com.varcain.guitarrackcraft.ui.modgui.InlineModguiView
 import com.varcain.guitarrackcraft.ui.x11.PluginX11UiView
 import com.varcain.guitarrackcraft.ui.x11.X11DisplayManager
-import android.net.Uri
 import com.varcain.guitarrackcraft.BuildConfig
+import android.net.Uri
+import com.varcain.guitarrackcraft.engine.MASTER_PATH_ID
 import com.varcain.guitarrackcraft.engine.RecordingEntry
 import com.varcain.guitarrackcraft.engine.RecordingManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -147,6 +152,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import kotlin.math.roundToInt
 
 /** Item positions for drag-drop: (top in viewport px, height px) per plugin index. */
 private class ScrollableDragDropState(
@@ -233,15 +239,14 @@ private fun rememberScrollableDragDropState(
 @Composable
 fun RackScreen(
     isVisible: Boolean = true,
-    onNavigateToBrowser: () -> Unit,
+    onNavigateToBrowser: (Long) -> Unit,
     onNavigateToSettings: () -> Unit = {},
-    onNavigateToRecordings: () -> Unit = {},
+    onNavigateToRecordings: (Long) -> Unit = {},
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit = { _, _, _, _, _ -> },
     onNavigateToVstManager: () -> Unit = {},
-    onReplacePlugin: (Int) -> Unit = {},
+    onReplacePlugin: (Long, Int) -> Unit = { _, _ -> },
     viewModel: RackViewModel = viewModel()
 ) {
-    // Refresh rack state when screen becomes visible (e.g. returning from browser)
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -270,23 +275,19 @@ fun RackScreen(
     val xRunCount by viewModel.xRunCount.collectAsState()
     val inputClipping by viewModel.inputClipping.collectAsState()
     val outputClipping by viewModel.outputClipping.collectAsState()
-    val rackPlugins by viewModel.rackPlugins.collectAsState()
+    val tracks by viewModel.tracks.collectAsState()
+    val selectedPathId by viewModel.selectedPathId.collectAsState()
+    val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
+    val wavTransport by viewModel.wavTransport.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val presetMessage by viewModel.presetMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
-
-    val wavLoaded by viewModel.wavLoaded.collectAsState()
-    val wavDurationSec by viewModel.wavDurationSec.collectAsState()
-    val wavPositionSec by viewModel.wavPositionSec.collectAsState()
-    val isWavPlaying by viewModel.isWavPlaying.collectAsState()
-    val loadedFileName by viewModel.loadedFileName.collectAsState()
-    val wavRepeat by viewModel.wavRepeat.collectAsState()
-    val wavProcessEffects by viewModel.wavProcessEffects.collectAsState()
-
+    val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
     val isRecording by viewModel.isRecording.collectAsState()
     val recordingDurationSec by viewModel.recordingDurationSec.collectAsState()
 
-    var showWavDialog by rememberSaveable { mutableStateOf(false) }
+
+
 
     // Fullscreen state
     var fullscreenPluginIndex by rememberSaveable { mutableStateOf<Int?>(null) }
@@ -314,39 +315,29 @@ fun RackScreen(
     BackHandler(enabled = blockingOperation != null) { }
 
     val scope = rememberCoroutineScope()
+    var pendingWavTargetId by remember { mutableStateOf<Long?>(null) }
     val wavFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
-        uri?.let { selectedUri ->
+        val target = pendingWavTargetId
+        pendingWavTargetId = null
+        if (uri != null && target != null) {
             scope.launch {
-                val cacheFile = File(context.cacheDir, "wav_playback_${System.currentTimeMillis()}.wav")
+                val cacheFile = File(context.cacheDir, "track_wav_${System.currentTimeMillis()}.wav")
                 try {
                     withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(selectedUri)?.use { input ->
-                            cacheFile.outputStream().use { output ->
-                                input.copyTo(output)
-                            }
-                        }
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            cacheFile.outputStream().use { output -> input.copyTo(output) }
+                        } ?: error("Unable to open selected WAV")
                     }
-                    val fileName = selectedUri.lastPathSegment ?: cacheFile.name
-                    viewModel.loadWav(cacheFile.absolutePath, fileName)
+                    val name = queryDisplayName(context, uri) ?: uri.lastPathSegment ?: cacheFile.name
+                    viewModel.loadTrackWav(target, cacheFile.absolutePath, name)
                 } catch (e: Exception) {
-                    viewModel.loadWav("")
+                    viewModel.clearError()
+                } finally {
+                    withContext(Dispatchers.IO) { cacheFile.delete() }
                 }
             }
-        }
-    }
-
-    // Poll WAV position and handle repeat
-    LaunchedEffect(wavLoaded) {
-        while (wavLoaded) {
-            viewModel.updateWavPosition()
-            delay(200)
-        }
-    }
-    LaunchedEffect(isWavPlaying, wavRepeat, wavPositionSec, wavDurationSec) {
-        if (!isWavPlaying && wavRepeat && wavLoaded && wavDurationSec > 0 && wavPositionSec >= wavDurationSec - 0.3) {
-            viewModel.wavRestart()
         }
     }
 
@@ -503,7 +494,7 @@ fun RackScreen(
                                     text = { Text("Recordings") },
                                     onClick = {
                                         showOverflowMenu = false
-                                        onNavigateToRecordings()
+                                        onNavigateToRecordings(if (selectedPathId == MASTER_PATH_ID) -1L else selectedPathId)
                                     },
                                     leadingIcon = {
                                         Icon(
@@ -569,88 +560,61 @@ fun RackScreen(
             }
         },
             bottomBar = {
-            if (isFullscreenActive) return@Scaffold
-            Column {
-                if (wavLoaded) {
-                    WavPlaybackBar(
-                        fileName = loadedFileName,
-                        positionSec = wavPositionSec,
-                        durationSec = wavDurationSec,
-                        isPlaying = isWavPlaying,
-                        repeat = wavRepeat,
-                        onPlayPause = {
-                            if (isWavPlaying) viewModel.wavPause() else viewModel.wavPlay()
-                        },
-                        onRestart = { viewModel.wavRestart() },
-                        onStop = {
-                            viewModel.wavPause()
-                            viewModel.wavSeek(0.0)
-                        },
-                        onToggleRepeat = { viewModel.wavToggleRepeat() },
-                        onSeek = { viewModel.wavSeek(it) },
-                        onClose = { viewModel.unloadWav() }
-                    )
-                }
+                if (isFullscreenActive) return@Scaffold
                 RackBottomBar(
                     isEngineRunning = isEngineRunning,
-                    onToggleEngine = {
-                        if (isEngineRunning) viewModel.stopEngine() else viewModel.startEngine()
-                    },
-                    onAddPlugin = onNavigateToBrowser,
-                    onOpenPresets = {
-                        viewModel.refreshPresets(context)
-                        showPresetSheet = true
-                    },
+                    onToggleEngine = { if (isEngineRunning) viewModel.stopEngine() else viewModel.startEngine() },
+                    onAddPlugin = { onNavigateToBrowser(selectedPathId) },
+                    onOpenPresets = { viewModel.refreshPresets(context); showPresetSheet = true },
                     isRecording = isRecording,
                     recordingDurationSec = recordingDurationSec,
-                    onToggleRecording = { viewModel.toggleRecording(context) },
-                    onOpenWav = { showWavDialog = true }
+                    onToggleRecording = { viewModel.toggleRecording(context) }
                 )
-            }
             }
         ) { padding ->
 
-    // Preset bottom sheet
-    if (showPresetSheet) {
-        PresetBottomSheet(
-            viewModel = viewModel,
-            onDismiss = { showPresetSheet = false }
-        )
+    if (selectedPathId != MASTER_PATH_ID) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            tracks.forEachIndexed { index, track ->
+                FilterChip(selected = track.id == selectedPathId, onClick = { viewModel.selectPath(track.id) }, label = { Text("Track ${index + 1}") })
+            }
+            FilterChip(selected = false, onClick = { viewModel.selectPath(MASTER_PATH_ID) }, label = { Text("Master") })
+            IconButton(onClick = { viewModel.addTrack() }) { Icon(Icons.Default.Add, "Add track") }
+        }
+        selectedTrack?.let { track ->
+            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("REC")
+                Switch(checked = track.inputArmed, onCheckedChange = { viewModel.setTrackInputArmed(track.id, it) })
+                Text("Vol ${(track.volume * 100).roundToInt()}%")
+                Slider(value = track.volume, onValueChange = { viewModel.setTrackVolume(track.id, it) }, modifier = Modifier.weight(1f))
+                IconButton(onClick = { viewModel.removeTrack(track.id) }) { Icon(Icons.Default.Delete, "Delete track") }
+            }
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (!track.wavLoaded) {
+                    Button(onClick = { pendingWavTargetId = track.id; wavFilePickerLauncher.launch("audio/*") }) { Text("Load WAV") }
+                } else {
+                    Text(track.wavDisplayName, Modifier.weight(1f), maxLines = 1)
+                    Text("WAV → FX")
+                    TextButton(onClick = { viewModel.unloadTrackWav(track.id) }) { Text("Unload") }
+                }
+            }
+        }
+    } else {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
+            tracks.forEachIndexed { index, track -> FilterChip(selected = false, onClick = { viewModel.selectPath(track.id) }, label = { Text("Track ${index + 1}") }) }
+            FilterChip(selected = true, onClick = {}, label = { Text("Master") })
+            IconButton(onClick = { viewModel.addTrack() }) { Icon(Icons.Default.Add, "Add track") }
+        }
     }
-
-    // WAV load dialog
-    var showRecordingPicker by remember { mutableStateOf(false) }
-    if (showWavDialog) {
-        WavLoadDialog(
-            isEngineRunning = isEngineRunning,
-            wavLoaded = wavLoaded,
-            fileName = loadedFileName,
-            positionSec = wavPositionSec,
-            durationSec = wavDurationSec,
-            isPlaying = isWavPlaying,
-            repeat = wavRepeat,
-            onLoadWav = { wavFilePickerLauncher.launch("audio/*") },
-            onLoadRecordings = { showRecordingPicker = true },
-            onPlayPause = { if (isWavPlaying) viewModel.wavPause() else viewModel.wavPlay() },
-            onRestart = { viewModel.wavRestart() },
-            onStop = { viewModel.wavPause(); viewModel.wavSeek(0.0) },
-            onToggleRepeat = { viewModel.wavToggleRepeat() },
-            onSeek = { viewModel.wavSeek(it) },
-            onClose = { viewModel.unloadWav() },
-            processEffects = wavProcessEffects,
-            onToggleProcessEffects = { viewModel.wavToggleProcessEffects() },
-            onDismiss = { showWavDialog = false }
-        )
-    }
-    if (showRecordingPicker) {
-        RecordingPickerDialog(
-            onPickRecording = { path, isRaw ->
-                viewModel.setWavProcessEffects(isRaw)
-                viewModel.loadWav(path, java.io.File(path).name)
-                showRecordingPicker = false
-            },
-            onDismiss = { showRecordingPicker = false }
-        )
+    if (wavTransport.loadedTrackCount > 0) {
+        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = { if (wavTransport.playing) viewModel.wavTransportPause() else viewModel.wavTransportPlay() }) {
+                Icon(if (wavTransport.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/Pause")
+            }
+            IconButton(onClick = { viewModel.wavTransportRestart() }) { Icon(Icons.Default.SkipPrevious, "Restart") }
+            FilterChip(selected = wavTransport.looping, onClick = { viewModel.wavTransportToggleLoop() }, label = { Text("Loop") })
+            Text("${formatWavTime(wavTransport.positionSec)} / ${formatWavTime(wavTransport.durationSec)}")
+        }
     }
         // Drag-reorder state — use scrollable Column so all plugin cards stay in composition (no re-render when scrolling)
         val localPlugins = remember { mutableStateOf(rackPlugins.toMutableStateList()) }
@@ -737,7 +701,7 @@ fun RackScreen(
                         },
                         onDragEnd = {
                             dragDropState.onDragEnd()?.let { (from, to) ->
-                                viewModel.reorderPlugins(from, to)
+                                viewModel.reorderPlugins(selectedPathId, from, to)
                             }
                         },
                         onDragCancel = {
@@ -888,9 +852,10 @@ fun RackScreen(
                             PluginCard(
                                 plugin = plugin,
                                 pluginIndex = nativeIndex,
+                                pathId = selectedPathId,
                                 viewModel = viewModel,
-                                onRemove = { viewModel.removePlugin(nativeIndex) },
-                                onReplace = { onReplacePlugin(nativeIndex) },
+                                onRemove = { viewModel.removePlugin(selectedPathId, nativeIndex) },
+                                onReplace = { onReplacePlugin(selectedPathId, nativeIndex) },
                                 isFullscreen = isThisPluginFullscreen,
                                 isAnyPluginFullscreen = isFullscreenActive,
                                 isRackVisible = isVisible,
@@ -1107,6 +1072,7 @@ private fun VuMeter(
 fun PluginCard(
     plugin: RackPlugin,
     pluginIndex: Int,
+    pathId: Long,
     viewModel: RackViewModel,
     onRemove: () -> Unit,
     onReplace: () -> Unit = {},
@@ -1119,8 +1085,10 @@ fun PluginCard(
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit = { _, _, _, _, _ -> },
     modifier: Modifier = Modifier.fillMaxWidth()
 ) {
+    val selectedPathId = pathId
     var expanded by rememberSaveable { mutableStateOf(true) }
-    val pluginInfo = remember(pluginIndex) { RackManager.getRackPluginInfo(pluginIndex) }
+    val uiInstanceId = remember { System.nanoTime() }
+    val pluginInfo = remember(pluginIndex) { RackManager.getRackPluginInfo(pathId, pluginIndex) }
 
     Card(
         modifier = modifier,
@@ -1286,7 +1254,7 @@ fun PluginCard(
                                         // w > h*1.3 so 0/0 just skips the rotate, harmless).
                                         val encoded = runCatching {
                                             com.varcain.guitarrackcraft.engine.NativeEngine.getInstance()
-                                                .nativeGetRackPluginEditorSize(pluginIndex)
+                                                .nativeGetRackPluginEditorSize(pathId, pluginIndex)
                                         }.getOrDefault(0L)
                                         Pair((encoded ushr 32).toInt(), (encoded and 0xffffffffL).toInt())
                                     }
@@ -1310,7 +1278,7 @@ fun PluginCard(
                         currentUiMode == UiType.X11) {
                         IconButton(
                             onClick = {
-                                com.varcain.guitarrackcraft.ui.vst.VstKeyboardAction.showKeyboard(pluginIndex)
+                                com.varcain.guitarrackcraft.ui.vst.VstKeyboardAction.showKeyboard(pathId, pluginIndex)
                             },
                             modifier = Modifier.size(32.dp)
                         ) {
@@ -1371,12 +1339,10 @@ fun PluginCard(
                         if (x11DisplayNumber >= 0) {
                             Log.i("GuitarRackCraft.UI", "Plugin[$pluginIndex]: Releasing X11 display $x11DisplayNumber (removed from rack)")
                             val dispNum = x11DisplayNumber
-                            val pIdx = pluginIndex
                             x11DisplayNumber = -1
-                            X11DisplayManager.teardownExecutor.execute {
-                                X11Bridge.destroyPluginUI(pIdx)
-                                X11Bridge.detachAndDestroyX11DisplayIfExists(dispNum)
-                                X11DisplayManager.releaseDisplay(dispNum)
+                            X11Bridge.destroyPluginUI(pathId, plugin.instanceId, uiInstanceId)
+                            X11Bridge.detachAndDestroyX11DisplayIfExists(dispNum)
+                            X11DisplayManager.releaseDisplay(dispNum)
                             }
                         }
                     }
@@ -1409,8 +1375,8 @@ fun PluginCard(
                                 destFile.outputStream().use { output -> input.copyTo(output) }
                             }
                             withContext(Dispatchers.Main) {
-                                viewModel.setPluginFilePath(req.first, req.second, destFile.absolutePath)
-                                X11Bridge.deliverFileToPluginUI(req.first, req.second, destFile.absolutePath)
+                                viewModel.setPluginFilePath(pathId, req.first, req.second, destFile.absolutePath)
+                                X11Bridge.deliverFileToPluginUI(pathId, req.first, req.second, destFile.absolutePath)
                             }
                         }
                     }
@@ -1419,6 +1385,7 @@ fun PluginCard(
 
                 // Poll for X11 UI file requests when X11 UI is visible
                 val x11UiActive = currentUiMode == UiType.X11
+                val x11DisplayNumber = -1
                 LaunchedEffect(x11UiActive, x11DisplayNumber) {
                     if (x11UiActive && x11DisplayNumber >= 0) {
                         while (isActive) {
@@ -1442,8 +1409,8 @@ fun PluginCard(
                         sourcePropertyUri = req.second,
                         onFileSelected = { path ->
                             showX11FilePicker = false
-                            viewModel.setPluginFilePath(req.first, req.second, path)
-                            X11Bridge.deliverFileToPluginUI(req.first, req.second, path)
+                            viewModel.setPluginFilePath(pathId, req.first, req.second, path)
+                            X11Bridge.deliverFileToPluginUI(pathId, req.first, req.second, path)
                             x11FileRequestPending = null
                         },
                         onBrowseFiles = {
@@ -1470,6 +1437,7 @@ fun PluginCard(
                 ) {
                     com.varcain.guitarrackcraft.engine.NativeEngine.getInstance()
                         .nativeRespondVstFilePicker(
+                            pathId,
                             request.pluginIndex,
                             request.sequence,
                             cancelled,
@@ -1479,7 +1447,7 @@ fun PluginCard(
 
                 LaunchedEffect(pluginIndex) {
                     RackManager.vstTone3000FileSelectedEvents.collect { event ->
-                        if (event.pluginIndex != pluginIndex) return@collect
+                        if (event.pathId != pathId || event.pluginIndex != pluginIndex) return@collect
                         val request = vstWineFileRequestPending ?: return@collect
                         if (request.pluginIndex != event.pluginIndex) return@collect
 
@@ -1500,6 +1468,7 @@ fun PluginCard(
                         )
                         if (windowsPath.isNotEmpty()) {
                             RackManager.notifyModelLoaded(
+                                pathId,
                                 request.pluginIndex,
                                 java.io.File(event.filePath).nameWithoutExtension
                             )
@@ -1647,6 +1616,9 @@ fun PluginCard(
                         ) {
                             if (x11DisplayNumber >= 0) {
                                 PluginX11UiView(
+                                    pathId = pathId,
+                                    pluginInstanceId = plugin.instanceId,
+                                    uiInstanceId = uiInstanceId,
                                     pluginIndex = pluginIndex,
                                     displayNumber = x11DisplayNumber,
                                     isVisible = expanded && currentUiMode == UiType.X11 && (!isAnyPluginFullscreen || isFullscreen),
@@ -1697,6 +1669,7 @@ fun PluginCard(
                 // destroyOnDispose=false so the wine subprocess + X11 server
                 // stay alive on mode switch; only the SurfaceView is recreated.
                 // attachSurface drains any prior render thread on re-attach.
+                val isVstPlugin = pluginInfo.format == "VST2" || pluginInfo.format == "VST3"
                 if (isVstPlugin && com.varcain.guitarrackcraft.BuildConfig.HAS_VST_HOST &&
                     currentUiMode == UiType.X11) {
                     var vstUiReady by remember { mutableStateOf(false) }
@@ -1711,6 +1684,7 @@ fun PluginCard(
                         val effectiveScale = if (isFullscreen) 1f else userScale.coerceIn(0.3f, 1f)
                         Box(modifier = if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth(fraction = effectiveScale)) {
                             com.varcain.guitarrackcraft.ui.vst.VstInlineEditor(
+                                pathId,
                                 pluginIndex,
                                 isFullscreen = isFullscreen,
                                 onPluginSizeKnown = { w, h ->
@@ -1770,7 +1744,7 @@ fun PluginCard(
                                 // control; raises the IME against the wine editor surface for
                                 // plugins with text fields (license keys, in-editor search).
                                 IconButton(
-                                    onClick = { com.varcain.guitarrackcraft.ui.vst.VstKeyboardAction.showKeyboard(pluginIndex) },
+                                    onClick = { com.varcain.guitarrackcraft.ui.vst.VstKeyboardAction.showKeyboard(pathId, pluginIndex) },
                                     modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
                                 ) {
                                     Icon(
@@ -1841,6 +1815,7 @@ fun PluginCard(
                                 if (modguiFullscreen) screenHeight else 200.dp
                             }
                             InlineModguiView(
+                                pathId = pathId,
                                 pluginIndex = pluginIndex,
                                 pluginInfo = pluginInfo,
                                 isVisible = expanded && modguiOnScreen && (!isAnyPluginFullscreen || isFullscreen),
@@ -1861,11 +1836,7 @@ fun PluginCard(
                                 onModelSelected = { path ->
                                     modelActiveModelName = java.io.File(path).nameWithoutExtension
                                     modelConfig?.let { cfg ->
-                                        viewModel.setPluginFilePath(
-                                            pluginIndex,
-                                            cfg.propertyUri,
-                                            path
-                                        )
+                                        viewModel.setPluginFilePath(selectedPathId, pluginIndex, cfg.propertyUri, path)
                                     }
                                 }
                             )
@@ -1907,6 +1878,7 @@ fun PluginCard(
                     val initialTag = if (initialPlatform == "aida-x") "aida-x" else null
                     ModelPicker(
                         pluginIndex = pluginIndex,
+                        pathId = pathId,
                         viewModel = viewModel,
                         config = modelConfig,
                         externalPickerTrigger = modelFilePickerTrigger,
@@ -1969,11 +1941,7 @@ fun PluginCard(
                                             onClick = {
                                                 modelDropdownExpanded = false
                                                 modelActiveModelName = modelFile.nameWithoutExtension
-                                                viewModel.setPluginFilePath(
-                                                    pluginIndex,
-                                                    modelConfig.propertyUri,
-                                                    modelFile.absolutePath
-                                                )
+                                                viewModel.setPluginFilePath(selectedPathId, pluginIndex, modelConfig.propertyUri, modelFile.absolutePath)
                                             }
                                         )
                                     }
@@ -1993,6 +1961,7 @@ fun PluginCard(
                                     ParameterControl(
                                         port = port,
                                         pluginIndex = pluginIndex,
+                                        pathId = pathId,
                                         viewModel = viewModel
                                     )
                                 }
@@ -2011,16 +1980,17 @@ fun PluginCard(
             }
         }
     }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ParameterControl(
     port: com.varcain.guitarrackcraft.engine.PortInfo,
     pluginIndex: Int,
+    pathId: Long,
     viewModel: RackViewModel
 ) {
-    val currentValue = remember { mutableStateOf(viewModel.getParameter(pluginIndex, port.index)) }
+    val selectedPathId = pathId
+    val currentValue = remember { mutableStateOf(viewModel.getParameter(selectedPathId, pluginIndex, port.index)) }
     var isUserInteracting by remember { mutableStateOf(false) }
 
     // Poll native parameter value periodically so that changes made via the X11 UI
@@ -2029,7 +1999,7 @@ fun ParameterControl(
         while (true) {
             delay(200)
             if (!isUserInteracting) {
-                val nativeValue = viewModel.getParameter(pluginIndex, port.index)
+                val nativeValue = viewModel.getParameter(selectedPathId, pluginIndex, port.index)
                 if (kotlin.math.abs(nativeValue - currentValue.value) > 1e-5f) {
                     currentValue.value = nativeValue
                 }
@@ -2066,7 +2036,7 @@ fun ParameterControl(
                 onCheckedChange = { checked ->
                     val newValue = if (checked) port.maxValue else port.minValue
                     currentValue.value = newValue
-                    viewModel.setParameter(pluginIndex, port.index, newValue)
+                    viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
                 }
             )
         } else if (port.scalePoints.isNotEmpty()) {
@@ -2095,7 +2065,7 @@ fun ParameterControl(
                             text = { Text(sp.label) },
                             onClick = {
                                 currentValue.value = sp.value
-                                viewModel.setParameter(pluginIndex, port.index, sp.value)
+                                viewModel.setParameter(selectedPathId, pluginIndex, port.index, sp.value)
                                 expanded = false
                             }
                         )
@@ -2109,7 +2079,7 @@ fun ParameterControl(
                 onValueChange = { newValue ->
                     isUserInteracting = true
                     currentValue.value = newValue
-                    viewModel.setParameter(pluginIndex, port.index, newValue)
+                    viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
                 },
                 onValueChangeFinished = {
                     isUserInteracting = false
@@ -2738,6 +2708,7 @@ private fun uniqueVstWineDestinationFile(dir: java.io.File, fileName: String): j
 @Composable
 private fun ModelPicker(
     pluginIndex: Int,
+    pathId: Long,
     viewModel: RackViewModel,
     config: ModelPluginConfig,
     externalPickerTrigger: Int = 0,
@@ -2745,6 +2716,7 @@ private fun ModelPicker(
     onModelFilesChanged: ((List<java.io.File>) -> Unit)? = null,
     onNavigateToTone3000: () -> Unit = {}
 ) {
+    val selectedPathId = pathId
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var modelFiles by remember { mutableStateOf<List<java.io.File>>(emptyList()) }
@@ -2786,11 +2758,7 @@ private fun ModelPicker(
                             modelFiles = models
                             selectedModelIndex = 0
                             activeModelName = models[0].nameWithoutExtension
-                            viewModel.setPluginFilePath(
-                                pluginIndex,
-                                config.propertyUri,
-                                models[0].absolutePath
-                            )
+                            viewModel.setPluginFilePath(selectedPathId, pluginIndex, config.propertyUri, models[0].absolutePath)
                         } else {
                             Log.e("ModelPicker", "No models found in $fileName")
                         }
@@ -2814,11 +2782,7 @@ private fun ModelPicker(
                 modelFiles = listOf(destFile)
                 selectedModelIndex = 0
                 activeModelName = destFile.nameWithoutExtension
-                viewModel.setPluginFilePath(
-                    pluginIndex,
-                    config.propertyUri,
-                    destFile.absolutePath
-                )
+                viewModel.setPluginFilePath(selectedPathId, pluginIndex, config.propertyUri, destFile.absolutePath)
             } catch (e: Exception) {
                 Log.e("ModelPicker", "Failed to load model: ${e.message}", e)
             }
@@ -2846,7 +2810,7 @@ private fun ModelPicker(
                     java.io.File(path).nameWithoutExtension
                 }
                 activeModelName = name
-                viewModel.setPluginFilePath(pluginIndex, config.propertyUri, path)
+                viewModel.setPluginFilePath(selectedPathId, pluginIndex, config.propertyUri, path)
             },
             onBrowseFiles = {
                 showDialog = false
@@ -2869,7 +2833,6 @@ private fun RackBottomBar(
     isRecording: Boolean,
     recordingDurationSec: Double,
     onToggleRecording: () -> Unit,
-    onOpenWav: () -> Unit
 ) {
     Surface(tonalElevation = 3.dp) {
         Row(
@@ -2896,11 +2859,6 @@ private fun RackBottomBar(
                 label = if (isRecording) formatRecordingDuration(recordingDurationSec) else "Record",
                 onClick = onToggleRecording,
                 tint = if (isRecording) MaterialTheme.colorScheme.error else Color(0xFFE53935)
-            )
-            BottomBarButton(
-                icon = Icons.Default.MusicNote,
-                label = "Playback",
-                onClick = onOpenWav
             )
             BottomBarButton(
                 icon = if (isEngineRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
@@ -2944,296 +2902,17 @@ private fun BottomBarButton(
     }
 }
 
-@Composable
-private fun WavLoadDialog(
-    isEngineRunning: Boolean,
-    wavLoaded: Boolean,
-    fileName: String?,
-    positionSec: Double,
-    durationSec: Double,
-    isPlaying: Boolean,
-    repeat: Boolean,
-    onLoadWav: () -> Unit,
-    onLoadRecordings: () -> Unit,
-    onPlayPause: () -> Unit,
-    onRestart: () -> Unit,
-    onStop: () -> Unit,
-    onToggleRepeat: () -> Unit,
-    onSeek: (Double) -> Unit,
-    onClose: () -> Unit,
-    processEffects: Boolean,
-    onToggleProcessEffects: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Playback") },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = onLoadWav,
-                        enabled = isEngineRunning,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Default.MusicNote, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Load WAV", style = MaterialTheme.typography.labelMedium)
-                    }
-                    OutlinedButton(
-                        onClick = onLoadRecordings,
-                        enabled = isEngineRunning,
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
-                    ) {
-                        Icon(Icons.Default.Album, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Recordings", style = MaterialTheme.typography.labelMedium)
-                    }
-                }
 
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.clickable(onClick = onToggleProcessEffects)
-                        .padding(vertical = 4.dp)
-                ) {
-                    Checkbox(
-                        checked = processEffects,
-                        onCheckedChange = { onToggleProcessEffects() }
-                    )
-                    Text(
-                        text = "Process through effects",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-
-                if (wavLoaded) {
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // File name
-                    fileName?.let { name ->
-                        Text(
-                            text = name,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-
-                    // Seek slider
-                    if (durationSec > 0) {
-                        Slider(
-                            value = positionSec.toFloat().coerceIn(0f, durationSec.toFloat()),
-                            onValueChange = { onSeek(it.toDouble()) },
-                            valueRange = 0f..durationSec.toFloat(),
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                text = formatWavTime(positionSec),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = formatWavTime(durationSec),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    // Playback controls
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        IconButton(onClick = onToggleRepeat, modifier = Modifier.size(36.dp)) {
-                            Icon(
-                                Icons.Default.Repeat,
-                                contentDescription = if (repeat) "Repeat on" else "Repeat off",
-                                tint = if (repeat) MaterialTheme.colorScheme.primary
-                                       else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(16.dp))
-                        IconButton(onClick = onRestart, modifier = Modifier.size(36.dp)) {
-                            Icon(
-                                Icons.Default.SkipPrevious,
-                                contentDescription = "Restart",
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(onClick = onPlayPause, modifier = Modifier.size(44.dp)) {
-                            Icon(
-                                if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Pause" else "Play",
-                                modifier = Modifier.size(32.dp)
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        IconButton(onClick = onStop, modifier = Modifier.size(36.dp)) {
-                            Icon(
-                                Icons.Default.StopCircle,
-                                contentDescription = "Stop",
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-
-                    // Unload button
-                    Spacer(modifier = Modifier.height(8.dp))
-                    TextButton(onClick = onClose) {
-                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("Unload")
-                    }
-                } else if (!isEngineRunning) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Start the engine to load a WAV file",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
-        }
-    )
-}
-
-@Composable
-private fun WavPlaybackBar(
-    fileName: String?,
-    positionSec: Double,
-    durationSec: Double,
-    isPlaying: Boolean,
-    repeat: Boolean,
-    onPlayPause: () -> Unit,
-    onRestart: () -> Unit,
-    onStop: () -> Unit,
-    onToggleRepeat: () -> Unit,
-    onSeek: (Double) -> Unit,
-    onClose: () -> Unit
-) {
-    Surface(tonalElevation = 1.dp) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 4.dp)
-        ) {
-            // File name + close
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.MusicNote,
-                    contentDescription = null,
-                    modifier = Modifier.size(16.dp),
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = fileName ?: "WAV",
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = onClose, modifier = Modifier.size(24.dp)) {
-                    Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(16.dp))
-                }
-            }
-
-            // Progress slider
-            if (durationSec > 0) {
-                Slider(
-                    value = positionSec.toFloat().coerceIn(0f, durationSec.toFloat()),
-                    onValueChange = { onSeek(it.toDouble()) },
-                    valueRange = 0f..durationSec.toFloat(),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(24.dp)
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = formatWavTime(positionSec),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        text = formatWavTime(durationSec),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            // Playback controls
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = onToggleRepeat, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Default.Repeat,
-                        contentDescription = if (repeat) "Repeat on" else "Repeat off",
-                        tint = if (repeat) MaterialTheme.colorScheme.primary
-                               else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(16.dp))
-                IconButton(onClick = onRestart, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Default.SkipPrevious,
-                        contentDescription = "Restart",
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(onClick = onPlayPause, modifier = Modifier.size(44.dp)) {
-                    Icon(
-                        if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (isPlaying) "Pause" else "Play",
-                        modifier = Modifier.size(32.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(8.dp))
-                IconButton(onClick = onStop, modifier = Modifier.size(36.dp)) {
-                    Icon(
-                        Icons.Default.StopCircle,
-                        contentDescription = "Stop",
-                        modifier = Modifier.size(24.dp)
-                    )
-                }
-            }
-        }
-    }
-}
 
 private fun formatWavTime(sec: Double): String {
     val totalSec = sec.coerceAtLeast(0.0).toInt()
     val m = totalSec / 60
     val s = totalSec % 60
     return "%d:%02d".format(m, s)
+}
+private fun queryDisplayName(context: android.content.Context, uri: Uri): String? {
+    return context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

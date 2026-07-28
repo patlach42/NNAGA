@@ -20,6 +20,7 @@
 #ifndef GUITARRACKCRAFT_PLUGIN_CHAIN_H
 #define GUITARRACKCRAFT_PLUGIN_CHAIN_H
 
+#include <cstdint>
 #include <condition_variable>
 #include <deque>
 #include <vector>
@@ -30,6 +31,11 @@
 #include "IPlugin.h"
 
 namespace guitarrackcraft {
+
+struct PluginSlot {
+    uint64_t instanceId;
+    std::unique_ptr<IPlugin> plugin;
+};
 
 class PluginChain {
 public:
@@ -48,7 +54,7 @@ public:
 
     size_t getSize() const;
     IPlugin* getPlugin(int index);
-
+    uint64_t getPluginInstanceId(int index) const;
     void setParameter(int pluginIndex, uint32_t portIndex, float value);
     float getParameter(int pluginIndex, uint32_t portIndex) const;
 
@@ -68,7 +74,7 @@ public:
     std::shared_mutex* getChainMutex() { return &chainMutex_; }
 
 private:
-    std::vector<std::unique_ptr<IPlugin>> plugins_;
+    std::vector<PluginSlot> plugins_;
     mutable std::shared_mutex chainMutex_;
 
     float sampleRate_ = 0.0f;

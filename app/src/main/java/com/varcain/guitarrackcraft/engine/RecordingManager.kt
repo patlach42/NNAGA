@@ -64,15 +64,14 @@ object RecordingManager {
         val dir = recordingsDir(context)
         val ts = fileTimestampFormat.format(Date())
 
-        // Save sidecar preset if rack has plugins
+        // Always persist a version-2 rack sidecar, including an empty graph.
         try {
-            val stateJson = engine.saveChainState()
+            val stateJson = engine.saveRackState()
             if (stateJson != null) {
                 val root = JSONObject(stateJson)
-                val plugins = root.optJSONArray("plugins")
-                if (plugins != null && plugins.length() > 0) {
+                if (root.optInt("version", -1) == 2) {
                     File(dir, "Preset_$ts.json").writeText(root.toString(2))
-                    Log.i(TAG, "startRecording: saved sidecar preset for $ts")
+                    Log.i(TAG, "startRecording: saved v2 rack sidecar for $ts")
                 }
             }
         } catch (e: Exception) {

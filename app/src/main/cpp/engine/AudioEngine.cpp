@@ -72,12 +72,13 @@ bool AudioEngine::start(float sampleRate, int32_t inputDeviceId,
         return false;
     }
 
-    // Activate plugin chain with the power-of-2 callback frame count
-    // so convolver plugins configure their partition size correctly
+    // Configure every track and the master chain for this callback quantum.
     LOGI("Using callback frame count: %u (power-of-2)", callbackFrameCount_);
-    chain_.setSampleRate(sampleRate_, callbackFrameCount_);
-    chain_.activate();
+    rackGraph_.setSampleRate(sampleRate_, callbackFrameCount_);
+    rackGraph_.activate();
+    rackGraph_.pauseAndResetTransport();
 
+    cleanupStarted_.store(false, std::memory_order_release);
     isRunning_ = true;
     LOGI("start() EXIT tid=%ld Audio engine started at %.0f Hz", getTid(), sampleRate_);
     return true;
@@ -87,16 +88,27 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                         int32_t subslotBytes, int32_t channels,
                                         int32_t inputChannel, int32_t outputPair,
                                         int32_t bufferFrames) {
+    if (!isRunning_.load(std::memory_order_acquire) &&
+        !directUsbSession_.load(std::memory_order_acquire) &&
+        directUsbRenderThread_.joinable()) {
+        directUsbRenderThread_.join();
+    }
     if (isRunning_.load() || !directUsbOutput_ || sampleRate <= 0.0f ||
         (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
-        subslotBytes < (bitsPerSample + 7) / 8 || subslotBytes > 4 ||
+        subslotBytes < (bitsPerSample + 7) / 8 ||
+        subslotBytes > DirectUsbOutput::kMaxSubslotBytes ||
         channels < 2 || channels > DirectUsbOutput::kMaxDeviceChannels ||
         inputChannel < 0 ||
         inputChannel >= directUsbOutput_->captureChannelCount() ||
         outputPair < 0 || outputPair * 2 + 1 >= channels) {
         return false;
     }
-    const int32_t renderFrames = bufferFrames > 0 ? bufferFrames : 64;
+    // The USB driver clamps its graph quantum to 1024 frames and exposes at
+    // most two quanta of writable playback space. Keep one render block within
+    // that limit so WAV pacing can always make progress for any positive
+    // requested session buffer size.
+    const int32_t renderFrames = bufferFrames > 0
+        ? std::min<int32_t>(bufferFrames, DirectUsbOutput::kMaxGraphQuantum) : 64;
     if (!directUsbOutput_->start(static_cast<int>(sampleRate), bitsPerSample,
                                  subslotBytes, channels, inputChannel,
                                  outputPair)) {
@@ -112,57 +124,51 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbInputBuffer_.assign(static_cast<size_t>(renderFrames), 0.0f);
     directUsbOutputLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
     directUsbOutputRight_.assign(static_cast<size_t>(renderFrames), 0.0f);
-    chain_.setSampleRate(sampleRate_, callbackFrameCount_);
-    chain_.activate();
+    directUsbOutput_->setGraphQuantum(renderFrames);
+    rackGraph_.setSampleRate(sampleRate_, callbackFrameCount_);
+    rackGraph_.activate();
+    rackGraph_.pauseAndResetTransport();
+    cleanupStarted_.store(false, std::memory_order_release);
+    directUsbRenderUrgentAudio_.store(false, std::memory_order_relaxed);
     directUsbSession_.store(true, std::memory_order_release);
     isRunning_.store(true, std::memory_order_release);
     directUsbRenderThread_ = std::thread(&AudioEngine::directUsbRenderLoop, this);
     return true;
 }
 
+void AudioEngine::cleanupEngineState() {
+    if (cleanupStarted_.exchange(true, std::memory_order_acq_rel)) return;
+    if (recorder_.isRecording()) recorder_.stopRecording();
+    rackGraph_.pauseAndResetTransport();
+    rackGraph_.deactivate();
+}
+
 void AudioEngine::stop() {
-    LOGI("stop() entered tid=%ld isRunning_=%d", getTid(), isRunning_ ? 1 : 0);
-    if (directUsbSession_.load(std::memory_order_acquire)) {
+    LOGI("stop() entered tid=%ld isRunning_=%d", getTid(),
+         isRunning_ ? 1 : 0);
+    if (directUsbSession_.exchange(false, std::memory_order_acq_rel)) {
         isRunning_.store(false, std::memory_order_release);
-        directUsbSession_.store(false, std::memory_order_release);
-        if (directUsbRenderThread_.joinable()) directUsbRenderThread_.join();
-        if (recorder_.isRecording()) recorder_.stopRecording();
-        chain_.deactivate();
         if (directUsbOutput_) directUsbOutput_->stop();
+        if (directUsbRenderThread_.joinable()) directUsbRenderThread_.join();
+        cleanupEngineState();
         return;
     }
-    if (!isRunning_) {
-        // Stream may have been closed by onErrorAfterClose (e.g. system closed stream when opening X11 UI).
-        // We must still call closeStreams() so streams are torn down with the 250ms wait before the
-        // destructor runs. Otherwise ~AudioEngine destroys outputStream_/inputStream_ while the
-        // AudioTrack callback thread is still in getStream() -> pthread_mutex_lock on destroyed mutex (SIGABRT).
-        LOGI("stop() isRunning_=0; calling closeStreams() anyway so streams tear down safely");
+
+    if (!isRunning_.exchange(false, std::memory_order_acq_rel)) {
+        // Error callbacks can clear isRunning_ before the control thread
+        // arrives. Reap every resource anyway; cleanupEngineState is
+        // idempotent across concurrent USB/Oboe failure paths.
         closeStreams();
-        if (directUsbOutput_) {
-            directUsbOutput_->stop();
-        }
-
+        if (directUsbRenderThread_.joinable())
+            directUsbRenderThread_.join();
+        if (directUsbOutput_) directUsbOutput_->stop();
+        cleanupEngineState();
         return;
     }
-    // Stop recording before tearing down the audio path
-    if (recorder_.isRecording()) {
-        recorder_.stopRecording();
-    }
 
-    // Signal callback to exit immediately so it does not touch chain_ or stream
-    // during teardown (avoids use-after-free / destroyed mutex in plugin chain or Oboe).
-    isRunning_ = false;
-    if (directUsbOutput_) {
-        directUsbOutput_->stop();
-    }
-
-    LOGI("stop() isRunning_=false set, calling chain_.deactivate()");
-
-    chain_.deactivate();
-    LOGI("stop() chain_.deactivate() done, calling closeStreams()");
-
+    if (directUsbOutput_) directUsbOutput_->stop();
     closeStreams();
-    LOGI("stop() done");
+    cleanupEngineState();
 }
 
 bool AudioEngine::isRunning() const {
@@ -208,13 +214,7 @@ float AudioEngine::getOutputLevel() const {
 }
 
 float AudioEngine::getCpuLoad() const {
-    /* Audio-thread load (cpuLoad_) measures chain.process() wall time vs
-     * buffer duration. For LV2 plugins (in-process), that's the real
-     * processing cost. For VST plugins (out-of-process via wine), it
-     * measures only the shm push/pull — the wine subprocess does the
-     * actual work on different threads in another address space. Reporting
-     * the max of the two captures the bottleneck either way. */
-    return std::max(cpuLoad_.load(), vstCpuLoad_.load());
+    return cpuLoad_.load();
 }
 
 int32_t AudioEngine::getXRunCount() const {
@@ -224,9 +224,9 @@ int32_t AudioEngine::getXRunCount() const {
         oboeXruns = result ? result.value() : 0;
     }
     const uint64_t directUsbXruns = directUsbOutput_
-        ? directUsbOutput_->xrunCount() : 0;
-    const uint64_t total = static_cast<uint64_t>(std::max(0, oboeXruns)) +
-        static_cast<uint64_t>(std::max(0, vstUnderruns_.load())) + directUsbXruns;
+        ? directUsbOutput_->xrunCount() + directUsbOutput_->captureXRunCount() : 0;
+    const uint64_t total =
+        static_cast<uint64_t>(std::max(0, oboeXruns)) + directUsbXruns;
     return static_cast<int32_t>(std::min<uint64_t>(
         total, static_cast<uint64_t>(std::numeric_limits<int32_t>::max())));
 }
@@ -244,162 +244,85 @@ void AudioEngine::resetClipping() {
     outputClipping_.store(false);
 }
 
-// --- WAV playback ---
-
-bool AudioEngine::loadWav(const std::string& path) {
-    if (!isRunning_) {
-        LOGE("loadWav: engine not running");
-        return false;
-    }
-    wavPause();
-    std::vector<float> samples;
-    uint32_t fileRate = 44100;
-    uint32_t numChannels = 1;
-    if (!guitarrackcraft::readWavFile(path, samples, fileRate, numChannels)) {
-        return false;
-    }
-    // Convert to mono if stereo (samples are interleaved L,R,L,R,...)
-    std::vector<float> mono;
-    if (numChannels == 2) {
-        size_t numFrames = samples.size() / 2;
-        mono.resize(numFrames);
-        for (size_t i = 0; i < numFrames; ++i) {
-            mono[i] = (samples[i * 2] + samples[i * 2 + 1]) * 0.5f;
+bool AudioEngine::loadTrackWav(RackPathId trackId, const std::string& path,
+                               const std::string& displayName) {
+    try {
+        std::vector<float> samples;
+        uint32_t fileRate = 0;
+        uint32_t channels = 0;
+        if (!readWavFile(path, samples, fileRate, channels) || samples.empty() ||
+            fileRate == 0 || (channels != 1 && channels != 2) ||
+            samples.size() % channels != 0) {
+            LOGE("loadTrackWav: invalid WAV %s", path.c_str());
+            return false;
         }
-    } else {
-        mono = std::move(samples);
-    }
-    wavBuffer_.clear();
-    resampleToEngineRate(mono, fileRate, wavBuffer_);
-    wavLengthFrames_ = wavBuffer_.size();
-    wavPositionFrames_.store(0);
-    wavPlaying_.store(false);
-    LOGI("WAV loaded: %zu frames at %.0f Hz (from %u Hz)", wavLengthFrames_, sampleRate_, fileRate);
-    return true;
-}
-
-void AudioEngine::unloadWav() {
-    wavPlaying_.store(false);
-    wavBuffer_.clear();
-    wavLengthFrames_ = 0;
-    wavPositionFrames_.store(0);
-}
-
-void AudioEngine::wavPlay() {
-    if (!wavBuffer_.empty()) {
-        wavPlaying_.store(true);
-    }
-}
-
-void AudioEngine::wavPause() {
-    wavPlaying_.store(false);
-}
-
-void AudioEngine::wavSeekToFrame(size_t frame) {
-    size_t end = wavLengthFrames_;
-    if (end > 0 && frame > end) {
-        frame = end;
-    }
-    wavPositionFrames_.store(frame);
-}
-
-double AudioEngine::getWavDurationSec() const {
-    if (sampleRate_ <= 0.0f || wavLengthFrames_ == 0) return 0.0;
-    return static_cast<double>(wavLengthFrames_) / sampleRate_;
-}
-
-double AudioEngine::getWavPositionSec() const {
-    if (sampleRate_ <= 0.0f) return 0.0;
-    return static_cast<double>(wavPositionFrames_.load()) / sampleRate_;
-}
-
-bool AudioEngine::isWavPlaying() const {
-    return wavPlaying_.load();
-}
-
-bool AudioEngine::isWavLoaded() const {
-    return !wavBuffer_.empty();
-}
-
-
-void AudioEngine::resampleToEngineRate(const std::vector<float>& src,
-                                       uint32_t srcRate,
-                                       std::vector<float>& dst) {
-    if (src.empty() || sampleRate_ <= 0.0f) {
-        dst.clear();
-        return;
-    }
-    if (static_cast<float>(srcRate) == sampleRate_) {
-        dst = src;
-        return;
-    }
-    double ratio = sampleRate_ / static_cast<double>(srcRate);
-    size_t outFrames = static_cast<size_t>(std::round(src.size() * ratio));
-    if (outFrames == 0) {
-        dst.clear();
-        return;
-    }
-    dst.resize(outFrames);
-    for (size_t i = 0; i < outFrames; ++i) {
-        double srcIdx = i / ratio;
-        size_t j = static_cast<size_t>(srcIdx);
-        float frac = static_cast<float>(srcIdx - j);
-        if (j + 1 >= src.size()) {
-            dst[i] = src[src.size() - 1];
+        auto clip = std::make_shared<WavClip>();
+        clip->sampleRate = fileRate;
+        clip->displayName = displayName;
+        const size_t frames = samples.size() / channels;
+        clip->left.resize(frames);
+        if (channels == 1) {
+            clip->left = std::move(samples);
         } else {
-            dst[i] = src[j] * (1.0f - frac) + src[j + 1] * frac;
+            clip->right.resize(frames);
+            for (size_t frame = 0; frame < frames; ++frame) {
+                clip->left[frame] = samples[frame * 2];
+                clip->right[frame] = samples[frame * 2 + 1];
+            }
         }
+        return rackGraph_.attachTrackWav(trackId, std::move(clip));
+    } catch (const std::exception& error) {
+        LOGE("loadTrackWav failed: %s", error.what());
+        return false;
     }
+}
+
+bool AudioEngine::unloadTrackWav(RackPathId trackId) {
+    return rackGraph_.unloadTrackWav(trackId);
+}
+
+void AudioEngine::processRackBlock(const float* const* liveInputs, float* const* outputs,
+                                   uint32_t numFrames) noexcept {
+    if (rackBypass_.load(std::memory_order_relaxed)) {
+        for (uint32_t channel = 0; channel < 2; ++channel) {
+            if (outputs && outputs[channel]) {
+                std::memset(outputs[channel], 0, sizeof(float) * numFrames);
+            }
+        }
+        return;
+    }
+    rackGraph_.process(liveInputs, outputs, numFrames);
 }
 
 void AudioEngine::directUsbRenderLoop() {
+    directUsbRenderUrgentAudio_.store(
+        setCurrentThreadUrgentAudio("UsbAudioRender"),
+        std::memory_order_release);
     const int32_t frames = static_cast<int32_t>(callbackFrameCount_);
     const auto period = std::chrono::duration<double>(
         static_cast<double>(frames) / static_cast<double>(sampleRate_));
-    auto deadline = std::chrono::steady_clock::now();
+    const int writeTimeoutMs = std::max(
+        2, static_cast<int>(std::ceil(period.count() * 2000.0)));
 
     while (directUsbSession_.load(std::memory_order_acquire) &&
            isRunning_.load(std::memory_order_acquire)) {
-        const bool useWav = wavPlaying_.load(std::memory_order_relaxed) &&
-                            !wavBuffer_.empty();
-        if (useWav) {
-            const size_t pos = wavPositionFrames_.load(std::memory_order_relaxed);
-            const size_t available = wavLengthFrames_ > pos ? wavLengthFrames_ - pos : 0;
-            const size_t copied = std::min(static_cast<size_t>(frames), available);
-            if (copied > 0) {
-                std::memcpy(directUsbInputBuffer_.data(), wavBuffer_.data() + pos,
-                            copied * sizeof(float));
-                wavPositionFrames_.store(pos + copied, std::memory_order_relaxed);
+        // USB capture clock always paces DSP, even when every track uses WAV.
+        if (!directUsbOutput_ ||
+            !directUsbOutput_->waitForCaptureFrames(frames, 1000)) {
+            if (!directUsbSession_.load(std::memory_order_acquire) ||
+                !directUsbOutput_ || !directUsbOutput_->isStreaming()) {
+                break;
             }
-            if (copied < static_cast<size_t>(frames)) {
-                std::memset(directUsbInputBuffer_.data() + copied, 0,
-                            (static_cast<size_t>(frames) - copied) * sizeof(float));
-                wavPlaying_.store(false, std::memory_order_relaxed);
-            }
-        } else {
-            // Capture callbacks populate the bounded USB PCM ring. Do not
-            // synthesize timing here: consuming whole ready blocks ties DSP
-            // to the device clock and bounds added scheduling latency.
-            if (!directUsbOutput_ ||
-                directUsbOutput_->captureAvailableFrames() < frames) {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
-                continue;
-            }
-            directUsbOutput_->readMonoInput(directUsbInputBuffer_.data(), frames);
+            continue;
         }
+        directUsbOutput_->readMonoInput(directUsbInputBuffer_.data(), frames);
 
         inputPtrs_[0] = directUsbInputBuffer_.data();
         inputPtrs_[1] = directUsbInputBuffer_.data();
         outputPtrs_[0] = directUsbOutputLeft_.data();
         outputPtrs_[1] = directUsbOutputRight_.data();
         const auto began = std::chrono::steady_clock::now();
-        if (chainBypass_.load(std::memory_order_relaxed) ||
-            (useWav && wavBypassChain_.load(std::memory_order_relaxed))) {
-            std::memcpy(outputPtrs_[0], inputPtrs_[0], static_cast<size_t>(frames) * sizeof(float));
-            std::memcpy(outputPtrs_[1], inputPtrs_[1], static_cast<size_t>(frames) * sizeof(float));
-        } else {
-            chain_.process(inputPtrs_, outputPtrs_, frames);
-        }
+        processRackBlock(inputPtrs_, outputPtrs_, frames);
         const auto elapsed = std::chrono::steady_clock::now() - began;
         cpuLoad_.store(std::min(
             1.0f,
@@ -424,14 +347,21 @@ void AudioEngine::directUsbRenderLoop() {
             recorder_.feedAudio(directUsbInputBuffer_.data(), directUsbOutputLeft_.data(),
                                 directUsbOutputRight_.data(), frames);
         }
-        directUsbOutput_->writeStereo(directUsbOutputLeft_.data(), directUsbOutputRight_.data(), frames);
-
-        if (useWav) {
-            deadline += std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
-            const auto now = std::chrono::steady_clock::now();
-            if (deadline < now) deadline = now;
-            std::this_thread::sleep_until(deadline);
+        if (!directUsbOutput_ ||
+            !directUsbOutput_->waitForWritableFrames(frames, writeTimeoutMs)) {
+            if (!directUsbSession_.load(std::memory_order_acquire) ||
+                !directUsbOutput_ || !directUsbOutput_->isStreaming()) {
+                break;
+            }
         }
+        directUsbOutput_->writeStereo(directUsbOutputLeft_.data(), directUsbOutputRight_.data(), frames);
+    }
+    // Runtime transfer failure: retire all transport, recording, and plugin
+    // state instead of spinning on empty rings or leaving an active graph.
+    if (directUsbSession_.exchange(false, std::memory_order_acq_rel)) {
+        isRunning_.store(false, std::memory_order_release);
+        if (directUsbOutput_) directUsbOutput_->stop();
+        cleanupEngineState();
     }
 }
 
@@ -439,47 +369,26 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     oboe::AudioStream* audioStream,
     void* audioData,
     int32_t numFrames) {
-    // Debug: log callback thread still active (rate-limited) to correlate with closeStreams() tid
-    {
-        static std::atomic<int> enterCount{0};
-        static auto lastEnterLog = std::chrono::steady_clock::now();
-        int c = enterCount++;
-        auto now = std::chrono::steady_clock::now();
-        if (c < 3 || std::chrono::duration<double>(now - lastEnterLog).count() >= 5.0) {
-            if (c >= 3) lastEnterLog = now;
-            LOGI("onAudioReady ENTER tid=%ld (callback thread, count=%d)", getTid(), c);
-        }
-    }
-    // Debug: log when callback bails due to shutdown (rate-limited)
-    if (!isRunning_ || numFrames <= 0) {
-        static std::atomic<int> bailCount{0};
-        int c = bailCount++;
-        if (c < 5 || (c % 50 == 0)) {
-            LOGI("onAudioReady: bail tid=%ld !isRunning_=%d numFrames=%d (bail #%d)",
-                 getTid(), isRunning_ ? 0 : 1, numFrames, c);
-        }
+    if (!isRunning_.load(std::memory_order_acquire) || numFrames <= 0)
         return oboe::DataCallbackResult::Continue;
-    }
     // Only process when the output stream needs data (we do not set callback on input).
     if (audioStream != outputStream_.get()) {
         return oboe::DataCallbackResult::Continue;
     }
+    float* outputData = static_cast<float*>(audioData);
+    const int32_t numChannels =
+        std::max<int32_t>(1, audioStream->getChannelCount());
+    if (inputBuffer_.size() < static_cast<size_t>(numFrames) ||
+        outputBufferLeft_.size() < static_cast<size_t>(numFrames) ||
+        outputBufferRight_.size() < static_cast<size_t>(numFrames)) {
+        std::memset(outputData, 0,
+                    static_cast<size_t>(numFrames) * numChannels *
+                        sizeof(float));
+        return oboe::DataCallbackResult::Continue;
+    }
 
-    // Input source: WAV playback or microphone
-    const bool useWav = wavPlaying_.load() && !wavBuffer_.empty();
-    if (useWav) {
-        size_t pos = wavPositionFrames_.load();
-        size_t len = wavLengthFrames_;
-        size_t toCopy = std::min(static_cast<size_t>(numFrames), len > pos ? len - pos : 0);
-        if (toCopy > 0) {
-            std::memcpy(inputBuffer_.data(), wavBuffer_.data() + pos, toCopy * sizeof(float));
-            wavPositionFrames_.store(pos + toCopy);
-        }
-        if (toCopy < static_cast<size_t>(numFrames)) {
-            std::memset(inputBuffer_.data() + toCopy, 0, (numFrames - toCopy) * sizeof(float));
-            wavPlaying_.store(false);
-        }
-    } else if (directUsbOutput_ && directUsbOutput_->isStreaming()) {
+    // Always acquire physical live input; per-track WAV substitution is in RackGraph.
+    if (directUsbOutput_ && directUsbOutput_->isStreaming()) {
         std::memset(inputBuffer_.data(), 0, numFrames * sizeof(float));
     } else {
         int32_t framesRead = 0;
@@ -488,7 +397,8 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
             if (result == oboe::Result::OK) framesRead = result.value();
         }
         if (framesRead < numFrames) {
-            std::memset(inputBuffer_.data() + framesRead, 0, (numFrames - framesRead) * sizeof(float));
+            std::memset(inputBuffer_.data() + framesRead, 0,
+                        (numFrames - framesRead) * sizeof(float));
         }
     }
 
@@ -504,122 +414,25 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     inputPeakLevel_.store(inputPeakHold_);
     if (inputClip) inputClipping_.store(true);
 
-    // Rate-limited debug: input source and level (once per second)
-    {
-        static auto lastLog = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - lastLog).count() >= 1.0) {
-            lastLog = now;
-            LOGI("onAudioReady: source=%s numFrames=%d inputPeak=%.4f",
-                 useWav ? "WAV" : "mic", numFrames, inputPeak);
-        }
-    }
-
-    // Ensure buffers are large enough
-    if (inputBuffer_.size() < static_cast<size_t>(numFrames)) {
-        inputBuffer_.resize(numFrames);
-    }
-    if (outputBufferLeft_.size() < static_cast<size_t>(numFrames)) {
-        outputBufferLeft_.resize(numFrames);
-        outputBufferRight_.resize(numFrames);
-    }
 
     // Set up input pointers (mono guitar input -> stereo)
     inputPtrs_[0] = inputBuffer_.data();
     inputPtrs_[1] = inputBuffer_.data();  // Duplicate mono to stereo
 
     // Set up output pointers (always process into our buffers for metering)
-    float* outputData = static_cast<float*>(audioData);
-    int32_t numChannels = audioStream->getChannelCount();
     outputPtrs_[0] = outputBufferLeft_.data();
     outputPtrs_[1] = outputBufferRight_.data();
 
-    // Skip chain processing when bypassed (during preset load) or WAV bypass active
-    if (chainBypass_.load() || (useWav && wavBypassChain_.load())) {
-        for (int32_t ch = 0; ch < 2; ++ch) {
-            std::memcpy(outputPtrs_[ch], inputPtrs_[ch],
-                        numFrames * sizeof(float));
-        }
-    } else {
-        // Process through plugin chain (measure CPU time)
-        double bufferDurationMs = (numFrames / static_cast<double>(sampleRate_)) * 1000.0;
-        auto t0 = std::chrono::high_resolution_clock::now();
-        chain_.process(inputPtrs_, outputPtrs_, numFrames);
-        auto t1 = std::chrono::high_resolution_clock::now();
-        double processMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
-        float load = static_cast<float>(processMs / bufferDurationMs);
-        if (load > 1.0f) load = 1.0f;
-
-        /* Sample subprocess (wine VST) CPU + xruns every ~1s of audio
-         * callbacks. The plain cpuLoad_ measurement above misses VST work
-         * entirely because the wine subprocess runs in a different
-         * address space — getCpuLoad() returns ~1% with a CPU-pinned
-         * Helix Native loaded. Sampling rate is human-display rate, not
-         * audio rate, so once per second is plenty. */
-        constexpr uint32_t kSampleEveryNCallbacks = 100;
-        if (++vstSampleCounter_ >= kSampleEveryNCallbacks) {
-            vstSampleCounter_ = 0;
-            struct timespec ts{};
-            clock_gettime(CLOCK_MONOTONIC, &ts);
-            uint64_t nowNs = (uint64_t)ts.tv_sec * 1'000'000'000ULL + ts.tv_nsec;
-            uint64_t totalDeltaJiffies = 0;
-            int32_t totalUnderruns = 0;
-            const size_t n = chain_.getSize();
-            for (size_t i = 0; i < n; ++i) {
-                guitarrackcraft::IPlugin* p = chain_.getPlugin((int)i);
-                if (!p) continue;
-                totalUnderruns += p->getUnderrunCount();
-                int pid = p->getSubprocessPid();
-                if (pid <= 0) continue;
-                /* /proc/<pid>/stat fields utime (14) + stime (15) are
-                 * cumulative jiffies (typically 100Hz on Android) since
-                 * subprocess start. Read both, sum, diff against last
-                 * sample to derive jiffies-per-wall-second. */
-                char path[64];
-                std::snprintf(path, sizeof(path), "/proc/%d/stat", pid);
-                FILE* f = std::fopen(path, "r");
-                if (!f) continue;
-                char buf[512];
-                size_t got = std::fread(buf, 1, sizeof(buf) - 1, f);
-                std::fclose(f);
-                if (got == 0) continue;
-                buf[got] = 0;
-                /* Skip past "comm" (in parens — name can contain spaces),
-                 * then we're at field 3 (state). utime is field 14,
-                 * stime is field 15. */
-                char* p2 = std::strrchr(buf, ')');
-                if (!p2) continue;
-                unsigned long long fields[16] = {0};
-                int read = std::sscanf(p2 + 1,
-                    " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu",
-                    &fields[13], &fields[14]);
-                if (read != 2) continue;
-                uint64_t cur = fields[13] + fields[14];
-                auto it = vstLastJiffies_.find(pid);
-                if (it != vstLastJiffies_.end()) {
-                    totalDeltaJiffies += cur - it->second;
-                    it->second = cur;
-                } else {
-                    vstLastJiffies_[pid] = cur;
-                }
-            }
-            if (vstLastSampleNs_ > 0 && nowNs > vstLastSampleNs_) {
-                uint64_t elapsedNs = nowNs - vstLastSampleNs_;
-                /* sysconf(_SC_CLK_TCK) is the jiffies-per-second on this
-                 * system; on Android it's 100. Compute fraction of one
-                 * CPU's wall time the subprocesses used in aggregate. */
-                long clk = sysconf(_SC_CLK_TCK);
-                if (clk <= 0) clk = 100;
-                double secs = (double)elapsedNs / 1.0e9;
-                double frac = ((double)totalDeltaJiffies / (double)clk) / secs;
-                if (frac > 1.0) frac = 1.0;
-                vstCpuLoad_.store((float)frac);
-            }
-            vstLastSampleNs_ = nowNs;
-            vstUnderruns_.store(totalUnderruns);
-        }
-        cpuLoad_.store(load);
-    }
+    // Process the complete parallel rack and master chain.
+    const double bufferDurationMs =
+        (numFrames / static_cast<double>(sampleRate_)) * 1000.0;
+    const auto t0 = std::chrono::high_resolution_clock::now();
+    processRackBlock(inputPtrs_, outputPtrs_, numFrames);
+    const auto t1 = std::chrono::high_resolution_clock::now();
+    const double processMs =
+        std::chrono::duration<double, std::milli>(t1 - t0).count();
+    cpuLoad_.store(std::min(1.0f, static_cast<float>(processMs / bufferDurationMs)),
+                   std::memory_order_relaxed);
 
     // Output peak metering (from buffers we wrote to)
     float outputPeak = 0.0f;
@@ -641,15 +454,6 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
                             numFrames);
     }
 
-    // Rate-limited debug: output level (once per second)
-    {
-        static auto lastLogOut = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - lastLogOut).count() >= 1.0) {
-            lastLogOut = now;
-            LOGI("onAudioReady: outputPeak=%.4f", outputPeak);
-        }
-    }
 
     // Direct USB is a playback-only sink driven by the Oboe callback clock.
     // It owns the processed PCM while the framework stream receives silence,
@@ -834,6 +638,14 @@ bool AudioEngine::createAudioStreams(float sampleRate) {
     outputStream_.reset(outputStreamPtr);
 
     // Start streams
+    // Allocate every callback buffer before the output stream can invoke us.
+    const int32_t bufferSize = std::max<int32_t>(
+        outputStream_->getBufferSizeInFrames(),
+        static_cast<int32_t>(callbackFrameCount_));
+    inputBuffer_.resize(bufferSize);
+    outputBufferLeft_.resize(bufferSize);
+    outputBufferRight_.resize(bufferSize);
+
     result = inputStream_->requestStart();
     if (result != oboe::Result::OK) {
         LOGE("Failed to start input stream: %s", oboe::convertToText(result));
@@ -848,11 +660,6 @@ bool AudioEngine::createAudioStreams(float sampleRate) {
         return false;
     }
 
-    // Allocate buffers
-    int32_t bufferSize = outputStream_->getBufferSizeInFrames();
-    inputBuffer_.resize(bufferSize);
-    outputBufferLeft_.resize(bufferSize);
-    outputBufferRight_.resize(bufferSize);
 
     LOGI("Audio streams created: %d Hz, buffer size: %d frames", 
          static_cast<int>(sampleRate_), bufferSize);

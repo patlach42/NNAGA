@@ -90,11 +90,11 @@ class X11PluginUIActivity : ComponentActivity() {
                     finish()
                     return
                 }
-                X11Bridge.beginCreatePluginUI(displayNumber, 0)
+                X11Bridge.beginCreatePluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId, displayNumber)
                 X11DisplayManager.pluginUiExecutor.execute {
                     X11Bridge.ensureX11LibsDir(this@X11PluginUIActivity)
                     Thread.sleep(X11_INIT_DELAY_MS)
-                    val ok = X11Bridge.createPluginUI(0, displayNumber, rootId)
+                    val ok = X11Bridge.createPluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId, displayNumber, rootId)
                     Handler(Looper.getMainLooper()).post {
                         if (!ok) {
                             Log.e(TAG, "createPluginUI failed")
@@ -125,19 +125,26 @@ class X11PluginUIActivity : ComponentActivity() {
             finish()
             return
         }
-        val idx = RackManager.addPlugin(pluginId!!, 0)
-        if (idx < 0) {
+        pathId = RackManager.getTracks().firstOrNull()?.id ?: run {
+            Log.e(TAG, "No track available")
+            finish()
+            return
+        }
+        pluginIndex = RackManager.addPlugin(pathId, pluginId!!, 0)
+        if (pluginIndex < 0) {
             Log.e(TAG, "addPluginToRack failed for $pluginId")
             finish()
             return
         }
+        pluginInstanceId = RackManager.getRackPluginInstanceId(pathId, pluginIndex)
+        uiInstanceId = System.nanoTime().coerceAtLeast(1L)
         displayNumber = X11DisplayManager.allocateDisplay()
         if (displayNumber < 0) {
             Log.e(TAG, "No X11 display available")
             finish()
             return
         }
-        Log.i(TAG, "Subprocess inited: plugin at index $idx, display $displayNumber")
+        Log.i(TAG, "Subprocess inited: plugin at path=$pathId index=$pluginIndex instance=$pluginInstanceId, display $displayNumber")
     }
 
     override fun onDestroy() {
@@ -183,7 +190,6 @@ class X11PluginUIActivity : ComponentActivity() {
             }, 8)
         }
     }
-
     companion object {
         const val EXTRA_PLUGIN_ID = "com.varcain.guitarrackcraft.extra.PLUGIN_ID"
         private const val TAG = "X11PluginUIActivity"
@@ -191,9 +197,14 @@ class X11PluginUIActivity : ComponentActivity() {
     }
 
     private var pluginId: String? = null
+    private var pathId: Long = -1L
+    private var pluginIndex: Int = -1
+    private var pluginInstanceId: Long = 0L
+    private var uiInstanceId: Long = 0L
     private var displayNumber: Int = -1
     private var attached: Boolean = false
     private var pendingDetach: Boolean = false
     private var frameCallback: Choreographer.FrameCallback? = null
     private var idleScheduled: Boolean = false
+
 }

@@ -65,6 +65,7 @@ fun Tone3000Screen(
     initialTag: String? = null,
     initialGear: String? = null,
     initialPlatform: String? = null,
+    sourcePathId: Long = -1L,
     sourcePluginIndex: Int = -1,
     sourceSlot: String? = null,
     viewModel: Tone3000ViewModel = viewModel()
@@ -92,8 +93,8 @@ fun Tone3000Screen(
     var showFilterSheet by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
 
-    LaunchedEffect(sourcePluginIndex, sourceSlot) {
-        viewModel.setSourcePlugin(sourcePluginIndex, sourceSlot)
+    LaunchedEffect(sourcePathId, sourcePluginIndex, sourceSlot) {
+        viewModel.setSourcePlugin(sourcePathId, sourcePluginIndex, sourceSlot)
     }
 
     LaunchedEffect(initialTag, initialGear, initialPlatform) {

@@ -2,28 +2,14 @@
  * Copyright (C) 2026 Kamil Lulko <kamil.lulko@gmail.com>
  *
  * This file is part of Guitar RackCraft.
- *
- * Guitar RackCraft is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * Guitar RackCraft is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with Guitar RackCraft. If not, see <https://www.gnu.org/licenses/>.
+ * Guitar RackCraft is free software under the GNU General Public License v3.
  */
-
 #include "StateSerializer.h"
 #include <sstream>
-#include <cstring>
+#include <cstdio>
 
 namespace guitarrackcraft {
 
-// Base64 encoding table
 static const char kBase64Chars[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -47,82 +33,82 @@ static std::string jsonEscape(const std::string& s) {
     out.reserve(s.size() + 8);
     for (char c : s) {
         switch (c) {
-            case '"':  out += "\\\""; break;
+            case '"': out += "\\\""; break;
             case '\\': out += "\\\\"; break;
             case '\n': out += "\\n"; break;
             case '\r': out += "\\r"; break;
             case '\t': out += "\\t"; break;
             default:
                 if (static_cast<unsigned char>(c) < 0x20) {
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(c));
-                    out += buf;
-                } else {
-                    out += c;
-                }
-                break;
+                    char buf[8]; std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned>(static_cast<unsigned char>(c))); out += buf;
+                } else out += c;
         }
     }
     return out;
 }
 
-// Check if a type URI represents a string-like value (store as JSON string, not base64)
 static bool isStringType(const std::string& typeUri) {
     return typeUri == "http://lv2plug.in/ns/ext/atom#String" ||
            typeUri == "http://lv2plug.in/ns/ext/atom#Path" ||
            typeUri == "http://lv2plug.in/ns/ext/atom#URI";
 }
 
-std::string serializeChainStateToJson(const PluginChain::ChainState& state) {
-    std::ostringstream os;
-    os << "{\n  \"version\": 1,\n  \"plugins\": [";
-
+static void serializePlugins(std::ostringstream& os, const PluginChain::ChainState& state, const char* indent) {
+    os << "[";
     for (size_t pi = 0; pi < state.plugins.size(); ++pi) {
         const auto& ps = state.plugins[pi];
         if (pi > 0) os << ",";
-        os << "\n    {\n      \"uri\": \"" << jsonEscape(ps.pluginUri) << "\",\n";
-        os << "      \"format\": \"" << jsonEscape(ps.format) << "\",\n";
-
-        // Control ports
-        os << "      \"controlPorts\": [";
+        os << "\n" << indent << "  {\n";
+        os << indent << "    \"uri\": \"" << jsonEscape(ps.pluginUri) << "\",\n";
+        os << indent << "    \"format\": \"" << jsonEscape(ps.format) << "\",\n";
+        os << indent << "    \"controlPorts\": [";
         for (size_t ci = 0; ci < ps.controlPortValues.size(); ++ci) {
             if (ci > 0) os << ", ";
-            os << "{\"index\": " << ps.controlPortValues[ci].first
-               << ", \"value\": " << ps.controlPortValues[ci].second << "}";
+            os << "{\"index\": " << ps.controlPortValues[ci].first << ", \"value\": " << ps.controlPortValues[ci].second << "}";
         }
-        os << "],\n";
-
-        // State properties
-        os << "      \"stateProperties\": [";
+        os << "],\n" << indent << "    \"stateProperties\": [";
         for (size_t si = 0; si < ps.properties.size(); ++si) {
             const auto& prop = ps.properties[si];
             if (si > 0) os << ",";
-            os << "\n        {\n";
-            os << "          \"key\": \"" << jsonEscape(prop.keyUri) << "\",\n";
-            os << "          \"type\": \"" << jsonEscape(prop.typeUri) << "\",\n";
-            os << "          \"flags\": " << prop.flags << ",\n";
-
+            os << "\n" << indent << "      {\n";
+            os << indent << "        \"key\": \"" << jsonEscape(prop.keyUri) << "\",\n";
+            os << indent << "        \"type\": \"" << jsonEscape(prop.typeUri) << "\",\n";
+            os << indent << "        \"flags\": " << prop.flags << ",\n";
             if (isStringType(prop.typeUri) && !prop.value.empty()) {
-                // String value — strip trailing null if present
-                size_t len = prop.value.size();
-                if (len > 0 && prop.value[len - 1] == 0) --len;
-                std::string strVal(reinterpret_cast<const char*>(prop.value.data()), len);
-                os << "          \"value\": \"" << jsonEscape(strVal) << "\"\n";
+                size_t len = prop.value.size(); if (len > 0 && prop.value[len - 1] == 0) --len;
+                os << indent << "        \"value\": \"" << jsonEscape(std::string(reinterpret_cast<const char*>(prop.value.data()), len)) << "\"\n";
             } else if (!prop.value.empty()) {
-                // Binary — base64 encode
-                os << "          \"encoding\": \"base64\",\n";
-                os << "          \"value\": \"" << base64Encode(prop.value.data(), prop.value.size()) << "\"\n";
-            } else {
-                os << "          \"value\": \"\"\n";
-            }
-            os << "        }";
+                os << indent << "        \"encoding\": \"base64\",\n" << indent << "        \"value\": \"" << base64Encode(prop.value.data(), prop.value.size()) << "\"\n";
+            } else os << indent << "        \"value\": \"\"\n";
+            os << indent << "      }";
         }
-        if (!ps.properties.empty()) os << "\n      ";
-        os << "]\n    }";
+        if (!ps.properties.empty()) os << "\n" << indent << "    ";
+        os << "]\n" << indent << "  }";
     }
+    if (!state.plugins.empty()) os << "\n" << indent;
+    os << "]";
+}
 
-    if (!state.plugins.empty()) os << "\n  ";
-    os << "]\n}\n";
+static void serializeChainObject(std::ostringstream& os, const PluginChain::ChainState& chain, float volume, bool armed, bool includeControls) {
+    os << "{\n";
+    if (includeControls) os << "  \"volume\": " << volume << ",\n  \"inputArmed\": " << (armed ? "true" : "false") << ",\n";
+    os << "  \"plugins\": ";
+    serializePlugins(os, chain, "  ");
+    os << "\n}";
+}
+
+std::string serializeRackStateToJson(const RackGraph::State& state) {
+    std::ostringstream os;
+    os << "{\n  \"version\": 2,\n  \"tracks\": [";
+    for (size_t i = 0; i < state.tracks.size(); ++i) {
+        if (i > 0) os << ",";
+        os << "\n    ";
+        serializeChainObject(os, state.tracks[i].chain, state.tracks[i].volume, state.tracks[i].inputArmed, true);
+    }
+    if (!state.tracks.empty()) os << "\n  ";
+    os << "],\n  \"master\": ";
+    serializeChainObject(os, state.master, 0.0f, false, false);
+    os << "\n}\n";
     return os.str();
 }
 

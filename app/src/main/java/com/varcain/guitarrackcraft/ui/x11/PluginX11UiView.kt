@@ -141,7 +141,10 @@ private fun buildX11TouchListener(
  */
 @Composable
 fun PluginX11UiView(
+    pathId: Long,
     pluginIndex: Int,
+    pluginInstanceId: Long,
+    uiInstanceId: Long,
     displayNumber: Int,
     isVisible: Boolean = true,
     modifier: Modifier = Modifier,
@@ -198,18 +201,17 @@ fun PluginX11UiView(
             Log.i("AudioLifecycle", "[LIFECYCLE] PluginX11UiView DisposableEffect.onDispose plugin=$currentPluginIndex display=$displayNumber shouldDestroyOnDispose=$shouldDestroyOnDispose thread=${Thread.currentThread().name} isAllocated=${X11DisplayManager.isDisplayAllocated(displayNumber)} isSurfaceDestroyed=$isSurfaceDestroyed")
 
             if (shouldDestroyOnDispose && !isSurfaceDestroyed) {
-                // Full cleanup when removing plugin - run off main thread to avoid ANR
-                Log.i(TAG, "[LIFECYCLE] Destroying plugin UI (shouldDestroyOnDispose=true)")
-                val pIdx = currentPluginIndex
-                X11DisplayManager.teardownExecutor.execute { X11Bridge.destroyPluginUI(pIdx) }
+                val capturedPluginInstanceId = pluginInstanceId
+                val capturedUiInstanceId = uiInstanceId
+                X11DisplayManager.teardownExecutor.execute {
+                    X11Bridge.destroyPluginUI(pathId, capturedPluginInstanceId, capturedUiInstanceId)
+                }
             } else if (!shouldDestroyOnDispose) {
                 Log.i(TAG, "[LIFECYCLE] Keeping X11 display alive (shouldDestroyOnDispose=false)")
             } else {
                 Log.i(TAG, "[LIFECYCLE] Skipping destroyPluginUI in onDispose - surface destruction in progress, will cleanup in deferred task")
             }
-            // Do NOT detach/destroy/release here — surfaceDestroyed will run when the view is
-            // torn down; detaching here while HWUI may still use the view causes "pthread_mutex_lock
-            // called on a destroyed mutex" in hwuiTask0. Release is done in surfaceDestroyed.
+            // Surface cleanup remains in surfaceDestroyed.
         }
     }
 
@@ -234,22 +236,17 @@ fun PluginX11UiView(
                 val rootId = X11Bridge.attachSurfaceToDisplay(displayNumber, surface, width, height)
                 if (rootId == 0L) {
                     Log.e(TAG, "attachSurfaceToDisplay failed for plugin $pluginIndex")
-                    onUiError("Failed to attach surface")
                     attached = false
                     return
                 }
                 Log.i("AudioLifecycle", "PluginX11UiView attachSurfaceToDisplay ok rootId=$rootId -> nativeBeginCreatePluginUI then create")
-                X11Bridge.beginCreatePluginUI(displayNumber, pluginIndex)
-                // Each plugin uses its own X11 display + pluginUI thread, so
-                // createPluginUI calls don't need to be serialized.  Running them
-                // on separate threads avoids the single-threaded executor
-                // bottleneck where one slow/hung plugin blocks all others.
+                X11Bridge.beginCreatePluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId, displayNumber)
                 Thread({
                     Log.i("AudioLifecycle", "PluginX11UiView create thread STARTED display=$displayNumber (ensureX11LibsDir, sleep ${X11_INIT_DELAY_MS}ms, then createPluginUI)")
                     X11Bridge.ensureX11LibsDir(ctx)
                     Thread.sleep(X11_INIT_DELAY_MS)
                     Log.i("AudioLifecycle", "createPluginUI START pluginIndex=$pluginIndex display=$displayNumber rootId=$rootId thread=${Thread.currentThread().name}")
-                    val ok = X11Bridge.createPluginUI(pluginIndex, displayNumber, rootId)
+                    val ok = X11Bridge.createPluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId, displayNumber, rootId)
                     Log.i("AudioLifecycle", "createPluginUI DONE pluginIndex=$pluginIndex ok=$ok thread=${Thread.currentThread().name}")
                     Handler(Looper.getMainLooper()).postDelayed({
                         Log.i("X11Debug", "createPluginUI done callback (1ms) thread=${Thread.currentThread().name} ok=$ok pendingDetach=$pendingDetachDisplayNumber")
@@ -275,7 +272,7 @@ fun PluginX11UiView(
                                 try {
                                     // First destroy the plugin UI (since we skipped it in onDispose)
                                     // This must happen before detaching the display to ensure proper cleanup order
-                                    X11Bridge.destroyPluginUI(currentPluginIndex)
+                                    X11Bridge.destroyPluginUI(pathId, pluginInstanceId, uiInstanceId)
                                     // Then detach and destroy the display
                                     X11Bridge.detachAndDestroyX11DisplayIfExists(displayToClean)
                                     // Release display number AFTER the display is fully destroyed

@@ -59,6 +59,7 @@ fun ToneDetailScreen(
     toneId: String,
     initialTone: Tone? = null,
     onNavigateBack: () -> Unit,
+    sourcePathId: Long = -1L,
     sourcePluginIndex: Int = -1,
     sourceSlot: String? = null,
     architecture: String? = null,
@@ -75,8 +76,8 @@ fun ToneDetailScreen(
     val filesDir = context.filesDir
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(sourcePluginIndex, sourceSlot) {
-        viewModel.setSourcePlugin(sourcePluginIndex, sourceSlot)
+    LaunchedEffect(sourcePathId, sourcePluginIndex, sourceSlot) {
+        viewModel.setSourcePlugin(sourcePathId, sourcePluginIndex, sourceSlot)
     }
 
     LaunchedEffect(toneId, initialTone, architecture) {

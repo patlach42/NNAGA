@@ -45,6 +45,7 @@ import com.varcain.guitarrackcraft.engine.readPresetJson
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RecordingsScreen(
+    targetPathId: Long,
     onNavigateBack: () -> Unit,
     onPlayRecording: (path: String) -> Unit,
     onLoadRecordingPreset: (json: String) -> Unit = {}
@@ -91,6 +92,7 @@ fun RecordingsScreen(
                 items(recordings, key = { it.timestamp }) { entry ->
                     RecordingCard(
                         entry = entry,
+                        canPlay = targetPathId > 0L,
                         onPlayRaw = { onPlayRecording(entry.rawFile.absolutePath) },
                         onPlayProcessed = { onPlayRecording(entry.processedFile.absolutePath) },
                         onShare = {
@@ -139,6 +141,7 @@ fun RecordingsScreen(
 @Composable
 private fun RecordingCard(
     entry: RecordingEntry,
+    canPlay: Boolean,
     onPlayRaw: () -> Unit,
     onPlayProcessed: () -> Unit,
     onShare: () -> Unit,
@@ -171,6 +174,7 @@ private fun RecordingCard(
             ) {
                 OutlinedButton(
                     onClick = onPlayRaw,
+                    enabled = canPlay,
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
@@ -178,6 +182,7 @@ private fun RecordingCard(
                 }
                 OutlinedButton(
                     onClick = onPlayProcessed,
+                    enabled = canPlay,
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {

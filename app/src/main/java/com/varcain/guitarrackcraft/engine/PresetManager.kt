@@ -27,8 +27,8 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Manages preset save/load using JSON files stored in filesDir/presets/.
- * Each preset captures the full chain state (all plugins' control ports + state properties).
+ * Manages versioned rack presets stored in filesDir/presets/.
+ * Presets contain graph controls and plugin state; WAV/transport data is transient.
  */
 class PresetManager(private val engine: NativeEngine) {
 
@@ -48,37 +48,44 @@ class PresetManager(private val engine: NativeEngine) {
      * @return true if saved successfully.
      */
     fun savePreset(context: Context, name: String): Boolean {
-        val stateJson = engine.saveChainState()
+        val stateJson = engine.saveRackState()
         if (stateJson == null) {
-            Log.e(TAG, "savePreset: nativeSaveChainState returned null")
+            Log.e(TAG, "savePreset: nativeSaveRackState returned null")
             return false
         }
 
-        // Parse the native JSON and add metadata
-        val root = JSONObject(stateJson)
-        root.put("presetName", name)
-        root.put("timestamp", System.currentTimeMillis())
+        return try {
+            val root = JSONObject(stateJson)
+            if (root.optInt("version", -1) != 2 ||
+                !root.has("tracks") || !root.has("master")) return false
+            root.put("presetName", name)
+            root.put("timestamp", System.currentTimeMillis())
 
-        // Collect plugin URIs for quick identification
-        val plugins = root.optJSONArray("plugins")
-        if (plugins != null) {
+            // Flatten track + master URIs for quick identification.
             val uris = JSONArray()
-            for (i in 0 until plugins.length()) {
-                uris.put(plugins.getJSONObject(i).optString("uri", ""))
+            root.optJSONArray("tracks")?.let { tracks ->
+                for (i in 0 until tracks.length()) {
+                    tracks.optJSONObject(i)?.optJSONArray("plugins")?.let { plugins ->
+                        for (j in 0 until plugins.length()) uris.put(plugins.optJSONObject(j)?.optString("uri", "") ?: "")
+                    }
+                }
+            }
+            root.optJSONObject("master")?.optJSONArray("plugins")?.let { plugins ->
+                for (j in 0 until plugins.length()) uris.put(plugins.optJSONObject(j)?.optString("uri", "") ?: "")
             }
             root.put("pluginUris", uris)
+
+            val file = File(presetsDir(context), "$name.json")
+            file.writeText(root.toString(2))
+            Log.i(TAG, "savePreset: saved '$name' to ${file.absolutePath}")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "savePreset: invalid native state", e)
+            false
         }
 
-        val file = File(presetsDir(context), "$name.json")
-        file.writeText(root.toString(2))
-        Log.i(TAG, "savePreset: saved '$name' to ${file.absolutePath}")
-        return true
     }
 
-    /**
-     * Load a preset by name: reads the file and delegates to [loadPresetFromJson].
-     * @return true if all plugins restored successfully.
-     */
     fun loadPreset(context: Context, name: String): Boolean {
         val file = File(presetsDir(context), "$name.json")
         if (!file.exists()) {
@@ -88,58 +95,75 @@ class PresetManager(private val engine: NativeEngine) {
         return loadPresetFromJson(file.readText())
     }
 
-    /**
-     * Load a preset from a raw JSON string: clears the current rack, adds plugins by URI,
-     * then restores their control port values and state properties.
-     * @return true if all plugins restored successfully.
-     */
     fun loadPresetFromJson(json: String): Boolean {
-        val root = JSONObject(json)
-        val plugins = root.optJSONArray("plugins")
-        if (plugins == null) {
-            Log.e(TAG, "loadPresetFromJson: no plugins array in preset")
-            return false
+        val root = try { JSONObject(json) } catch (e: Exception) {
+            Log.e(TAG, "loadPresetFromJson: malformed JSON", e); return false
         }
-
-        // Clear current rack (remove in reverse order to keep indices valid)
-        val rackSize = engine.getRackSize()
-        for (i in (rackSize - 1) downTo 0) {
-            engine.removePluginFromRack(i)
-        }
-
-        // Add each plugin by URI. The native engine accepts "FORMAT:id":
-        //   LV2  → "LV2:<lv2-uri>"
-        //   VST2 → "VST2:<uuid>"
-        //   VST3 → "VST3:<uuid>"
-        // Legacy presets (pre-2026-05-26) wrote only "uri" without a "format"
-        // field — back then only LV2 was supported, so default to "LV2".
-        for (i in 0 until plugins.length()) {
-            val pluginObj = plugins.getJSONObject(i)
-            val uri = pluginObj.optString("uri", "")
-            val format = pluginObj.optString("format", "").ifEmpty { "LV2" }
-            if (uri.isEmpty()) {
-                Log.e(TAG, "loadPresetFromJson: plugin[$i] has no URI")
-                return false
+        val version = if (root.has("version")) root.optInt("version", -1) else 1
+        val trackObjects = ArrayList<JSONObject>()
+        val masterObject: JSONObject
+        when (version) {
+            1 -> {
+                val plugins = root.optJSONArray("plugins") ?: return false
+                trackObjects += JSONObject().put("volume", 1.0).put("inputArmed", true).put("plugins", plugins)
+                masterObject = JSONObject().put("plugins", JSONArray())
             }
-            val fullId = "$format:$uri"
-            val pos = engine.addPluginToRack(fullId, -1)
-            if (pos < 0) {
-                Log.e(TAG, "loadPresetFromJson: failed to add plugin '$fullId'")
-                return false
+            2 -> {
+                val tracks = root.optJSONArray("tracks") ?: return false
+                if (tracks.length() == 0) return false
+                for (i in 0 until tracks.length()) {
+                    val t = tracks.optJSONObject(i) ?: return false
+                    if (t.optJSONArray("plugins") == null) return false
+                    trackObjects += t
+                }
+                masterObject = root.optJSONObject("master") ?: return false
+                if (masterObject.optJSONArray("plugins") == null) return false
             }
+            else -> return false
         }
-
-        // Restore parameters for each plugin
-        var allOk = true
-        for (i in 0 until plugins.length()) {
-            val pluginObj = plugins.getJSONObject(i)
-            if (!restorePluginFromJson(i, pluginObj)) {
-                allOk = false
+        // Validate every plugin entry completely before touching the current graph.
+        fun validatePlugins(plugins: JSONArray): Boolean {
+            for (i in 0 until plugins.length()) {
+                val p = plugins.optJSONObject(i) ?: return false
+                if (p.optString("uri", "").isEmpty()) return false
+                if (p.optJSONArray("controlPorts") == null || p.optJSONArray("stateProperties") == null) return false
             }
+            return true
         }
+        if (trackObjects.any { !validatePlugins(it.getJSONArray("plugins")) } ||
+            !validatePlugins(masterObject.getJSONArray("plugins"))) return false
 
-        Log.i(TAG, "loadPresetFromJson: restored, allOk=$allOk")
-        return allOk
+        if (!engine.clearTrackWavs()) return false
+        val existing = engine.getTracks().toMutableList()
+        while (existing.size < trackObjects.size) {
+            val id = engine.addTrack()
+            if (id == 0L) return false
+            existing += engine.getTracks().last()
+        }
+        while (existing.size > trackObjects.size && existing.size > 1) {
+            if (!engine.removeTrack(existing.removeLast().id)) return false
+        }
+        fun restorePath(pathId: Long, obj: JSONObject, controls: Boolean): Boolean {
+            val size = engine.getRackSize(pathId)
+            for (i in size - 1 downTo 0) if (!engine.removePluginFromRack(pathId, i)) return false
+            if (controls) {
+                val idx = existing.indexOfFirst { it.id == pathId }
+                if (idx >= 0) {
+                    val t = trackObjects[idx]
+                    if (!engine.setTrackVolume(pathId, t.optDouble("volume", 1.0).toFloat()) ||
+                        !engine.setTrackInputArmed(pathId, t.optBoolean("inputArmed", false))) return false
+                }
+            }
+            val plugins = obj.getJSONArray("plugins")
+            for (i in 0 until plugins.length()) {
+                val p = plugins.getJSONObject(i)
+                val pos = engine.addPluginToRack(pathId, "${p.optString("format", "LV2")}:${p.getString("uri")}", -1)
+                if (pos < 0 || !restorePluginFromJson(pathId, pos, p)) return false
+            }
+            return true
+        }
+        for (i in trackObjects.indices) if (!restorePath(existing[i].id, trackObjects[i], true)) return false
+        return restorePath(0L, masterObject, false)
     }
 
     /**
@@ -170,7 +194,7 @@ class PresetManager(private val engine: NativeEngine) {
         return if (file.exists()) file.readText() else null
     }
 
-    private fun restorePluginFromJson(pluginIndex: Int, pluginObj: JSONObject): Boolean {
+    private fun restorePluginFromJson(pathId: Long, pluginIndex: Int, pluginObj: JSONObject): Boolean {
         // Control ports
         val controlPortsArr = pluginObj.optJSONArray("controlPorts")
         val portCount = controlPortsArr?.length() ?: 0
@@ -206,7 +230,7 @@ class PresetManager(private val engine: NativeEngine) {
         }
 
         return engine.restorePluginState(
-            pluginIndex, portValues, portIndices,
+            pathId, pluginIndex, portValues, portIndices,
             propKeys, propTypes, propValues, propFlags
         )
     }

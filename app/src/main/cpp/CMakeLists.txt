@@ -149,6 +149,7 @@ target_link_libraries(direct_usb_output
 # Plugin abstraction layer
 add_library(plugin_abstraction STATIC
     plugin/PluginChain.cpp
+    plugin/RackGraph.cpp
     plugin/PluginRegistry.cpp
     plugin/PluginUIGuard.cpp
     plugin/PluginUIManager.cpp
@@ -193,7 +194,6 @@ add_library(utils STATIC
 add_library(audio_engine STATIC
     engine/AudioEngine.cpp
     engine/AudioRecorder.cpp
-    engine/OfflineProcessor.cpp
 )
 target_link_libraries(audio_engine
     utils

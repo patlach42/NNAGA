@@ -431,7 +431,7 @@ class PluginBrowserViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
-    suspend fun addPluginToRack(plugin: PluginInfo, position: Int = -1): Boolean {
+    suspend fun addPluginToRack(pathId: Long, plugin: PluginInfo, position: Int = -1): Boolean {
         if (_blockingOperation.value != null) return false
         return withBlockingOperation("Adding plugin") {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -442,7 +442,7 @@ class PluginBrowserViewModel(application: Application) : AndroidViewModel(applic
                 // ANR watchdog and the system SIGKILLs the app.
                 android.util.Log.i("PluginBrowser", "[LIFECYCLE] addPluginToRack called: ${plugin.name} (${plugin.fullId})")
                 try {
-                    val index = RackManager.addPlugin(plugin.fullId, position)
+                    val index = RackManager.addPlugin(pathId, plugin.fullId, position)
                     android.util.Log.i("PluginBrowser", "[LIFECYCLE] addPluginToRack result: ${plugin.name} -> index=$index")
                     if (index >= 0) {
                         true
@@ -459,16 +459,16 @@ class PluginBrowserViewModel(application: Application) : AndroidViewModel(applic
         }
     }
 
-    suspend fun replacePluginInRack(position: Int, plugin: PluginInfo): Boolean {
+    suspend fun replacePluginInRack(pathId: Long, position: Int, plugin: PluginInfo): Boolean {
         if (_blockingOperation.value != null) return false
         return withBlockingOperation("Replacing plugin") {
             kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 // Same off-main-thread reason as addPluginToRack — VST replace
                 // triggers activate() which blocks on guest_ready.
-                android.util.Log.i("PluginBrowser", "[LIFECYCLE] replacePluginInRack called: position=$position, ${plugin.name} (${plugin.fullId})")
+                android.util.Log.i("PluginBrowser", "[LIFECYCLE] replacePluginInRack called: pathId=$pathId, position=$position, ${plugin.name} (${plugin.fullId})")
                 try {
-                    RackManager.removePlugin(position)
-                    val index = RackManager.addPlugin(plugin.fullId, position)
+                    RackManager.removePlugin(pathId, position)
+                    val index = RackManager.addPlugin(pathId, plugin.fullId, position)
                     android.util.Log.i("PluginBrowser", "[LIFECYCLE] replacePluginInRack result: ${plugin.name} -> index=$index")
                     if (index >= 0) {
                         true

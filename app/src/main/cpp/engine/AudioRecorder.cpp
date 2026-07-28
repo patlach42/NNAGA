@@ -45,6 +45,8 @@ bool AudioRecorder::startRecording(const std::string& rawPath, const std::string
 
     sampleRate_ = sampleRate;
     totalRawFrames_.store(0);
+    rawWrittenSamples_ = 0;
+    processedWrittenSamples_ = 0;
 
     // Size ring buffers: 2 seconds of audio
     size_t rawCapacity = static_cast<size_t>(sampleRate * 2);           // mono
@@ -80,25 +82,19 @@ bool AudioRecorder::startRecording(const std::string& rawPath, const std::string
 }
 
 void AudioRecorder::stopRecording() {
-    if (!recording_.load()) return;
-
-    recording_.store(false);
-    writerRunning_.store(false);
+    if (!recording_.exchange(false, std::memory_order_acq_rel)) return;
+    while (activeFeeds_.load(std::memory_order_acquire) != 0)
+        std::this_thread::yield();
+    writerRunning_.store(false, std::memory_order_release);
 
     if (writerThread_.joinable()) {
         writerThread_.join();
     }
 
-    // Final drain
-    size_t rawTotalSamples = 0;
-    size_t processedTotalSamples = 0;
-    drainRing(rawRing_, rawFile_, rawTotalSamples);
-    drainRing(processedRing_, processedFile_, processedTotalSamples);
-
-    // Finalize WAV headers with actual sizes
-    size_t totalFrames = totalRawFrames_.load();
-    finalizeWavFile(rawFile_, totalFrames, 1);
-    finalizeWavFile(processedFile_, totalFrames, 2);
+    // The writer thread performs its final drain before joining, so these
+    // counters are the exact samples physically written to each file.
+    finalizeWavFile(rawFile_, rawWrittenSamples_, 1);
+    finalizeWavFile(processedFile_, processedWrittenSamples_ / 2, 2);
 
     rawFile_.close();
     processedFile_.close();
@@ -106,7 +102,8 @@ void AudioRecorder::stopRecording() {
     rawRing_.reset();
     processedRing_.reset();
 
-    LOGI("Recording stopped: %zu frames (%.1f sec)", totalFrames, totalFrames / static_cast<double>(sampleRate_));
+    LOGI("Recording stopped: %zu frames (%.1f sec)", rawWrittenSamples_,
+         rawWrittenSamples_ / static_cast<double>(sampleRate_));
 }
 
 double AudioRecorder::getDurationSec() const {
@@ -114,50 +111,51 @@ double AudioRecorder::getDurationSec() const {
     return static_cast<double>(totalRawFrames_.load()) / sampleRate_;
 }
 
-void AudioRecorder::feedAudio(const float* rawMono, const float* processedL, const float* processedR, int32_t numFrames) {
-    if (!recording_.load(std::memory_order_relaxed)) return;
-
-    // Write raw mono
-    rawRing_.write(rawMono, static_cast<size_t>(numFrames));
-
-    // Interleave stereo into stack-local buffer if small enough, otherwise use member
-    size_t stereoSamples = static_cast<size_t>(numFrames) * 2;
-    float stackBuf[1024];
-    float* buf;
-    if (stereoSamples <= 1024) {
-        buf = stackBuf;
-    } else {
-        // Very large buffer — use heap (should be rare at typical buffer sizes)
-        interleaveBuffer_.resize(stereoSamples);
-        buf = interleaveBuffer_.data();
+void AudioRecorder::feedAudio(const float* rawMono, const float* processedL,
+                              const float* processedR, int32_t numFrames) {
+    if (!recording_.load(std::memory_order_acquire) || numFrames <= 0) return;
+    activeFeeds_.fetch_add(1, std::memory_order_acq_rel);
+    if (!recording_.load(std::memory_order_acquire)) {
+        activeFeeds_.fetch_sub(1, std::memory_order_release);
+        return;
     }
 
-    for (int32_t i = 0; i < numFrames; ++i) {
-        buf[i * 2] = processedL[i];
-        buf[i * 2 + 1] = processedR[i];
-    }
-    processedRing_.write(buf, stereoSamples);
+    const size_t rawFramesWritten =
+        rawRing_.write(rawMono, static_cast<size_t>(numFrames));
 
-    totalRawFrames_.fetch_add(static_cast<size_t>(numFrames), std::memory_order_relaxed);
+    // Fixed-size chunks keep the callback allocation-free for every supported
+    // graph quantum, including 1024 frames.
+    constexpr int32_t kChunkFrames = 512;
+    float interleaved[kChunkFrames * 2];
+    int32_t offset = 0;
+    while (offset < numFrames) {
+        const int32_t chunk = std::min(kChunkFrames, numFrames - offset);
+        for (int32_t i = 0; i < chunk; ++i) {
+            interleaved[i * 2] = processedL[offset + i];
+            interleaved[i * 2 + 1] = processedR[offset + i];
+        }
+        processedRing_.write(interleaved, static_cast<size_t>(chunk) * 2);
+        offset += chunk;
+    }
+
+    totalRawFrames_.fetch_add(rawFramesWritten, std::memory_order_relaxed);
+    activeFeeds_.fetch_sub(1, std::memory_order_release);
 }
 
 void AudioRecorder::writerLoop() {
     LOGI("Writer thread started");
 
-    size_t rawTotalSamples = 0;
-    size_t processedTotalSamples = 0;
-
     while (writerRunning_.load()) {
-        drainRing(rawRing_, rawFile_, rawTotalSamples);
-        drainRing(processedRing_, processedFile_, processedTotalSamples);
+        drainRing(rawRing_, rawFile_, rawWrittenSamples_);
+        drainRing(processedRing_, processedFile_, processedWrittenSamples_);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     // One final drain after stopping
-    drainRing(rawRing_, rawFile_, rawTotalSamples);
-    drainRing(processedRing_, processedFile_, processedTotalSamples);
-
-    LOGI("Writer thread exiting: rawSamples=%zu processedSamples=%zu", rawTotalSamples, processedTotalSamples);
+    drainRing(rawRing_, rawFile_, rawWrittenSamples_);
+    drainRing(processedRing_, processedFile_, processedWrittenSamples_);
+    LOGI("Writer thread exiting: rawSamples=%zu processedSamples=%zu",
+         rawWrittenSamples_, processedWrittenSamples_);
 }
 
 void AudioRecorder::drainRing(RingBuffer& ring, std::ofstream& file, size_t& totalSamples) {

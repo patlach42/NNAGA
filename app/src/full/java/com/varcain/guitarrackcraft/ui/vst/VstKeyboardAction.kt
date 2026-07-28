@@ -14,9 +14,9 @@ import com.varcain.vsthost.ui.EditorViewRegistry
  *  composed; no-op if it isn't mounted yet (rack chrome shouldn't show the
  *  button before the inline editor renders, but be defensive). */
 object VstKeyboardAction {
-    fun showKeyboard(pluginIndex: Int) {
+    fun showKeyboard(pathId: Long, pluginIndex: Int) {
         val displayNumber = runCatching {
-            NativeEngine.getInstance().nativeGetRackPluginX11Display(pluginIndex)
+            NativeEngine.getInstance().nativeGetRackPluginX11Display(pathId, pluginIndex)
         }.getOrDefault(-1)
         if (displayNumber < 0) return
         EditorViewRegistry.showKeyboard(displayNumber)

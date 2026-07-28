@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -32,6 +33,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 import com.varcain.guitarrackcraft.ui.browser.PluginBrowserScreen
 import com.varcain.guitarrackcraft.ui.modgui.ModguiScreen
 import com.varcain.guitarrackcraft.ui.rack.RackScreen
@@ -46,14 +48,16 @@ import com.varcain.guitarrackcraft.ui.tone3000.ToneDetailScreen
 
 sealed class Screen(val route: String) {
     object Rack : Screen("rack")
-    object Browser : Screen("browser?replaceIndex={replaceIndex}") {
-        fun route(replaceIndex: Int = -1) = "browser?replaceIndex=$replaceIndex"
+    object Browser : Screen("browser?pathId={pathId}&replaceIndex={replaceIndex}") {
+        fun route(pathId: Long, replaceIndex: Int = -1) = "browser?pathId=$pathId&replaceIndex=$replaceIndex"
     }
-    object Modgui : Screen("modgui/{pluginIndex}?w={w}&h={h}") {
-        fun route(pluginIndex: Int, w: Int = 0, h: Int = 0) = "modgui/$pluginIndex?w=$w&h=$h"
+    object Modgui : Screen("modgui/{pluginIndex}?pathId={pathId}&w={w}&h={h}") {
+        fun route(pathId: Long, pluginIndex: Int, w: Int = 0, h: Int = 0) = "modgui/$pluginIndex?pathId=$pathId&w=$w&h=$h"
     }
     object Settings : Screen("settings")
-    object Recordings : Screen("recordings")
+    object Recordings : Screen("recordings?targetPathId={targetPathId}") {
+        fun route(targetPathId: Long) = "recordings?targetPathId=$targetPathId"
+    }
     object Tone3000 : Screen("tone3000?tag={tag}&gear={gear}&platform={platform}&sourcePlugin={sourcePlugin}&sourceSlot={sourceSlot}") {
         fun route(tag: String? = null, gear: String? = null, platform: String? = null, sourcePluginIndex: Int = -1, sourceSlot: String? = null): String {
             val tagPart = tag?.let { "tag=$it" } ?: ""
@@ -89,21 +93,22 @@ fun AppNavigation(
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val rackViewModel: RackViewModel = viewModel()
+    val recordingScope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize()) {
         // RackScreen is ALWAYS composed — kept alive so X11/modgui UIs don't re-render.
         val isRackVisible = currentRoute == null || currentRoute == Screen.Rack.route
         RackScreen(
             isVisible = isRackVisible,
-            onNavigateToBrowser = { navController.navigate(Screen.Browser.route(-1)) },
+            onNavigateToBrowser = { pathId -> navController.navigate(Screen.Browser.route(pathId)) },
             onNavigateToSettings = { navController.navigate(Screen.Settings.route) },
-            onNavigateToRecordings = { navController.navigate(Screen.Recordings.route) },
+            onNavigateToRecordings = { pathId -> navController.navigate(Screen.Recordings.route(pathId)) },
             onNavigateToTone3000 = { tag, gear, platform, sourcePluginIndex, sourceSlot ->
                 navController.navigate(Screen.Tone3000.route(tag, gear, platform, sourcePluginIndex, sourceSlot))
             },
             onNavigateToVstManager = { navController.navigate(VST_MANAGER_ROUTE) },
-            onReplacePlugin = { replaceIndex ->
-                navController.navigate(Screen.Browser.route(replaceIndex))
+            onReplacePlugin = { pathId, replaceIndex ->
+                navController.navigate(Screen.Browser.route(pathId, replaceIndex))
             },
             viewModel = rackViewModel
         )
@@ -125,14 +130,17 @@ fun AppNavigation(
                 route = Screen.Modgui.route,
                 arguments = listOf(
                     navArgument("pluginIndex") { type = NavType.IntType },
+                    navArgument("pathId") { type = NavType.LongType },
                     navArgument("w") { type = NavType.IntType; defaultValue = 0 },
                     navArgument("h") { type = NavType.IntType; defaultValue = 0 }
                 )
             ) { entry ->
+                val pathId = entry.arguments?.getLong("pathId") ?: 0L
                 val pluginIndex = entry.arguments?.getInt("pluginIndex") ?: 0
                 val contentWidth = entry.arguments?.getInt("w") ?: 0
                 val contentHeight = entry.arguments?.getInt("h") ?: 0
                 ModguiScreen(
+                    pathId = pathId,
                     pluginIndex = pluginIndex,
                     contentWidth = contentWidth,
                     contentHeight = contentHeight,
@@ -141,13 +149,18 @@ fun AppNavigation(
             }
             composable(
                 route = Screen.Browser.route,
-                arguments = listOf(navArgument("replaceIndex") {
-                    type = NavType.IntType
-                    defaultValue = -1
-                })
+                arguments = listOf(
+                    navArgument("pathId") { type = NavType.LongType },
+                    navArgument("replaceIndex") {
+                        type = NavType.IntType
+                        defaultValue = -1
+                    }
+                )
             ) { entry ->
+                val pathId = entry.arguments?.getLong("pathId") ?: 0L
                 val replaceIndex = entry.arguments?.getInt("replaceIndex") ?: -1
                 PluginBrowserScreen(
+                    pathId = pathId,
                     replaceIndex = replaceIndex,
                     onNavigateBack = { navController.popBackStack() }
                 )
@@ -158,17 +171,23 @@ fun AppNavigation(
                     onNavigateBack = { navController.popBackStack() }
                 )
             }
-            composable(Screen.Recordings.route) {
+            composable(
+                route = Screen.Recordings.route,
+                arguments = listOf(navArgument("targetPathId") { type = NavType.LongType })
+            ) { entry ->
+                val targetPathId = entry.arguments?.getLong("targetPathId") ?: -1L
                 RecordingsScreen(
+                    targetPathId = targetPathId,
                     onNavigateBack = { navController.popBackStack() },
                     onPlayRecording = { path ->
-                        navController.popBackStack()
-                        val fileName = java.io.File(path).name
-                        // Raw recordings should be processed through effects;
-                        // processed recordings already have effects baked in.
-                        val isRaw = fileName.startsWith("Raw_")
-                        rackViewModel.setWavProcessEffects(isRaw)
-                        rackViewModel.loadWav(path, fileName)
+                        if (targetPathId > 0L) {
+                            val fileName = java.io.File(path).name
+                            recordingScope.launch {
+                                if (rackViewModel.loadTrackWav(targetPathId, path, fileName)) {
+                                    navController.popBackStack()
+                                }
+                            }
+                        }
                     },
                     onLoadRecordingPreset = { json ->
                         rackViewModel.loadRecordingPreset(json)

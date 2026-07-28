@@ -22,10 +22,20 @@
 #include <android/log.h>
 #include <algorithm>
 #include <chrono>
+#include <atomic>
 #include <cstring>
 
 #define LOG_TAG "PluginChain"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
+
+namespace {
+std::atomic<uint64_t> gNextPluginInstanceId{1};
+
+uint64_t nextPluginInstanceId() {
+    const uint64_t id = gNextPluginInstanceId.fetch_add(1, std::memory_order_relaxed);
+    return id == 0 ? gNextPluginInstanceId.fetch_add(1, std::memory_order_relaxed) : id;
+}
+} // namespace
 
 namespace guitarrackcraft {
 
@@ -84,10 +94,12 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
 
         int index;
         if (position < 0 || position >= static_cast<int>(plugins_.size())) {
-            plugins_.push_back(std::move(plugin));
+            plugins_.push_back({nextPluginInstanceId(), std::move(plugin)});
             index = static_cast<int>(plugins_.size() - 1);
         } else {
-            plugins_.insert(plugins_.begin() + position, std::move(plugin));
+            plugins_.insert(
+                plugins_.begin() + position,
+                {nextPluginInstanceId(), std::move(plugin)});
             index = position;
         }
 
@@ -105,7 +117,7 @@ bool PluginChain::removePlugin(int index) {
             return false;
         }
 
-        removedPlugin = std::move(plugins_[index]);
+        removedPlugin = std::move(plugins_[index].plugin);
         plugins_.erase(plugins_.begin() + index);
     }
 
@@ -185,12 +197,6 @@ void PluginChain::process(const float* const* inputs, float* const* outputs, uin
     // Shared lock so we can run alongside get/setParameter; only fail when add/remove holds exclusive
     std::shared_lock lock(chainMutex_, std::try_to_lock);
     if (!lock.owns_lock()) {
-        static auto lastLogFail = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - lastLogFail).count() >= 1.0) {
-            lastLogFail = now;
-            LOGI("process: lock failed tid=%ld passthrough", getTid());
-        }
         if (inputs && outputs && numFrames > 0) {
             for (uint32_t ch = 0; ch < 2; ++ch) {
                 if (inputs[ch] && outputs[ch]) {
@@ -202,12 +208,6 @@ void PluginChain::process(const float* const* inputs, float* const* outputs, uin
     }
 
     if (plugins_.empty()) {
-        static auto lastLogEmpty = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - lastLogEmpty).count() >= 1.0) {
-            lastLogEmpty = now;
-            LOGI("process: chain empty, passthrough");
-        }
         if (inputs && outputs && numFrames > 0) {
             for (uint32_t ch = 0; ch < 2; ++ch) {
                 if (inputs[ch] && outputs[ch]) {
@@ -218,24 +218,23 @@ void PluginChain::process(const float* const* inputs, float* const* outputs, uin
         return;
     }
 
-    // Rate-limited: confirm we're running the chain (helps debug shutdown race)
-    {
-        static auto lastLogRun = std::chrono::steady_clock::now();
-        auto now = std::chrono::steady_clock::now();
-        if (std::chrono::duration<double>(now - lastLogRun).count() >= 1.0) {
-            lastLogRun = now;
-            LOGI("process: running chain tid=%ld size=%zu", getTid(), plugins_.size());
-        }
-    }
 
     // Process through chain
     const float* currentInputs[2] = {inputs[0], inputs[1]};
     float* currentOutputs[2] = {nullptr, nullptr};
 
-    ensureBuffers(numFrames, 2);
+    if (intermediateBuffers_.size() < 2 ||
+        intermediateBuffers_[0].size() < numFrames ||
+        intermediateBuffers_[1].size() < numFrames) {
+        for (uint32_t ch = 0; ch < 2; ++ch) {
+            if (inputs[ch] && outputs[ch])
+                std::memcpy(outputs[ch], inputs[ch], numFrames * sizeof(float));
+        }
+        return;
+    }
 
     for (size_t i = 0; i < plugins_.size(); ++i) {
-        auto& plugin = plugins_[i];
+        auto& plugin = plugins_[i].plugin;
         
         // Set up outputs
         if (i == plugins_.size() - 1) {
@@ -264,8 +263,9 @@ void PluginChain::setSampleRate(float sampleRate, uint32_t bufferSize) {
     std::unique_lock lock(chainMutex_);
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize;
-    for (auto& plugin : plugins_) {
-        plugin->activate(sampleRate, bufferSize);
+    ensureBuffers(bufferSize_, 2);
+    for (auto& slot : plugins_) {
+        slot.plugin->activate(sampleRate, bufferSize);
     }
 }
 
@@ -277,8 +277,8 @@ void PluginChain::deactivate() {
     LOGI("deactivate() entered tid=%ld", getTid());
     std::unique_lock lock(chainMutex_);
     LOGI("deactivate() chainMutex_ acquired tid=%ld", getTid());
-    for (auto& plugin : plugins_) {
-        plugin->deactivate();
+    for (auto& slot : plugins_) {
+        slot.plugin->deactivate();
     }
     LOGI("deactivate() done tid=%ld", getTid());
 }
@@ -293,7 +293,15 @@ IPlugin* PluginChain::getPlugin(int index) {
     if (index < 0 || index >= static_cast<int>(plugins_.size())) {
         return nullptr;
     }
-    return plugins_[index].get();
+    return plugins_[index].plugin.get();
+}
+
+uint64_t PluginChain::getPluginInstanceId(int index) const {
+    std::shared_lock lock(chainMutex_);
+    if (index < 0 || index >= static_cast<int>(plugins_.size())) {
+        return 0;
+    }
+    return plugins_[index].instanceId;
 }
 
 void PluginChain::setParameter(int pluginIndex, uint32_t portIndex, float value) {
@@ -301,7 +309,7 @@ void PluginChain::setParameter(int pluginIndex, uint32_t portIndex, float value)
     if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) {
         return;
     }
-    plugins_[pluginIndex]->setParameter(portIndex, value);
+    plugins_[pluginIndex].plugin->setParameter(portIndex, value);
 }
 
 float PluginChain::getParameter(int pluginIndex, uint32_t portIndex) const {
@@ -309,7 +317,7 @@ float PluginChain::getParameter(int pluginIndex, uint32_t portIndex) const {
     if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) {
         return 0.0f;
     }
-    return plugins_[pluginIndex]->getParameter(portIndex);
+    return plugins_[pluginIndex].plugin->getParameter(portIndex);
 }
 
 void PluginChain::setPluginFilePath(int pluginIndex, const std::string& propertyUri, const std::string& path) {
@@ -317,7 +325,7 @@ void PluginChain::setPluginFilePath(int pluginIndex, const std::string& property
     if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) {
         return;
     }
-    plugins_[pluginIndex]->setFilePath(propertyUri, path);
+    plugins_[pluginIndex].plugin->setFilePath(propertyUri, path);
 }
 
 void PluginChain::injectAtom(int pluginIndex, const void* data, uint32_t size) {
@@ -325,27 +333,27 @@ void PluginChain::injectAtom(int pluginIndex, const void* data, uint32_t size) {
     if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) {
         return;
     }
-    plugins_[pluginIndex]->injectAtom(data, size);
+    plugins_[pluginIndex].plugin->injectAtom(data, size);
 }
 
 PluginChain::ChainState PluginChain::saveChainState() {
     std::shared_lock lock(chainMutex_);
     ChainState cs;
     cs.plugins.reserve(plugins_.size());
-    for (auto& plugin : plugins_) {
-        auto ps = plugin->saveState();
+    for (auto& slot : plugins_) {
+        auto ps = slot.plugin->saveState();
         // Tag format from getInfo() so the preset can pick the right factory
         // on reload. Plugins that don't override saveState() return an empty
         // PluginState; we still want their format so PresetManager can at
         // least re-instantiate them (e.g. VST plugins that don't yet sync
         // params back from wine).
         if (ps.format.empty()) {
-            ps.format = plugin->getInfo().format;
+            ps.format = slot.plugin->getInfo().format;
         }
         if (ps.pluginUri.empty()) {
             // Default to getInfo().id with any "FORMAT:" prefix stripped so
             // PresetManager can rebuild fullId = "$format:$uri" cleanly.
-            auto id = plugin->getInfo().id;
+            auto id = slot.plugin->getInfo().id;
             auto colon = id.find(':');
             if (colon != std::string::npos && id.substr(0, colon) == ps.format) {
                 ps.pluginUri = id.substr(colon + 1);
@@ -364,7 +372,7 @@ bool PluginChain::restorePluginState(int index, const PluginState& state) {
     if (index < 0 || index >= static_cast<int>(plugins_.size())) {
         return false;
     }
-    bool ok = plugins_[index]->restoreState(state);
+    bool ok = plugins_[index].plugin->restoreState(state);
     LOGI("restorePluginState: index=%d ok=%d", index, ok);
     return ok;
 }

@@ -34,7 +34,6 @@
 
 #include "../engine/AudioEngine.h"
 #include "../plugin/PluginUIGuard.h"
-#include "../engine/OfflineProcessor.h"
 #include "../plugin/PluginRegistry.h"
 #include "../plugin/IPlugin.h"
 #include "../plugin/IPluginFactory.h"
@@ -66,8 +65,8 @@ struct NativeContext {
     std::unique_ptr<DirectUsbOutput> directUsbOutput;
     std::unique_ptr<AudioEngine> audioEngine;
     std::unique_ptr<PluginRegistry> pluginRegistry;
-    std::unique_ptr<OfflineProcessor> offlineProcessor;
     std::unique_ptr<PluginUIManager> pluginUIManager;
+    std::mutex rackControlMutex;
     std::string lv2Path;
     std::string nativeLibDir;
     std::string filesDir;
@@ -328,12 +327,10 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeInit(JNIEnv* env, job
     g_ctx->audioEngine = std::make_unique<AudioEngine>();
     g_ctx->audioEngine->setDirectUsbOutput(g_ctx->directUsbOutput.get());
 
-    // Create plugin UI manager
+    // Plugin UI manager follows the master until path-aware editor migration.
     g_ctx->pluginUIManager = std::make_unique<guitarrackcraft::PluginUIManager>();
-    g_ctx->pluginUIManager->setChain(&g_ctx->audioEngine->getChain());
-
-    // Create offline processor (uses same chain as audio engine)
-    g_ctx->offlineProcessor = std::make_unique<OfflineProcessor>(g_ctx->audioEngine->getChain());
+    auto masterChain = g_ctx->audioEngine->getRackGraph().getChain(kMasterPathId);
+    g_ctx->pluginUIManager->setChain(masterChain.get());
 
     // Start the X11Worker thread for single-threaded X11 operations
     // This prevents xcb_xlib_threads_sequence_lost crashes by ensuring
@@ -346,24 +343,22 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeInit(JNIEnv* env, job
 }
 
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginX11Display(JNIEnv* env, jobject thiz, jint position) {
-    // Returns the X11 display slot the plugin at the given rack position
-    // renders to, or -1 if the position is invalid or the plugin doesn't
-    // render via the in-process X11 server. Used by VstEditorActivity to
-    // bind the right SurfaceView to the wine subprocess.
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginX11Display(
+    JNIEnv*, jobject, jlong pathId, jint position) {
     if (!g_ctx || !g_ctx->audioEngine) return -1;
-    auto* plugin = g_ctx->audioEngine->getChain().getPlugin(static_cast<int>(position));
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    auto* plugin = chain ? chain->getPlugin(position) : nullptr;
     return plugin ? plugin->getX11DisplayNumber() : -1;
 }
 
 JNIEXPORT jlong JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginEditorSize(JNIEnv* env, jobject thiz, jint position) {
-    // Encoded as one long: high 32 bits = width, low 32 bits = height.
-    // 0 if the plugin has no editor or its size isn't known yet (wine
-    // populates these via shm after effEditGetRect; takes a few hundred
-    // ms after activate()).
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginEditorSize(
+    JNIEnv*, jobject, jlong pathId, jint position) {
     if (!g_ctx || !g_ctx->audioEngine) return 0;
-    auto* plugin = g_ctx->audioEngine->getChain().getPlugin(static_cast<int>(position));
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    auto* plugin = chain ? chain->getPlugin(position) : nullptr;
     if (!plugin) return 0;
     const int64_t w = plugin->getEditorWidth();
     const int64_t h = plugin->getEditorHeight();
@@ -452,6 +447,38 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsDirectUsbOutputStre
         JNIEnv* env, jobject thiz) {
     return g_ctx && g_ctx->directUsbOutput &&
         g_ctx->directUsbOutput->isStreaming() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetDirectUsbStats(
+        JNIEnv* env, jobject thiz) {
+    constexpr jsize kStatCount = 15;
+    jlong values[kStatCount] = {};
+    if (g_ctx && g_ctx->directUsbOutput) {
+        const auto capture = g_ctx->directUsbOutput->captureStats();
+        const auto transport = g_ctx->directUsbOutput->transportStats();
+        values[0] = static_cast<jlong>(capture.sequence);
+        values[1] = static_cast<jlong>(capture.overruns);
+        values[2] = static_cast<jlong>(capture.underruns);
+        values[3] = static_cast<jlong>(transport.fifoDepth);
+        values[4] = static_cast<jlong>(transport.fallbackPackets);
+        values[5] = static_cast<jlong>(transport.captureTransferErrors);
+        values[6] = static_cast<jlong>(transport.playbackTransferErrors);
+        values[7] = static_cast<jlong>(transport.ringFrames);
+        values[8] = static_cast<jlong>(transport.captureRingFrames);
+        values[9] = static_cast<jlong>(transport.lifecycleFailures);
+        values[10] = transport.transportFailed ? 1 : 0;
+        values[11] = transport.eventThreadUrgentAudio ? 1 : 0;
+        values[12] = g_ctx->audioEngine &&
+                g_ctx->audioEngine->isDirectUsbRenderUrgentAudio() ? 1 : 0;
+        values[13] =
+            static_cast<jlong>(g_ctx->directUsbOutput->writtenFrames());
+        values[14] =
+            static_cast<jlong>(g_ctx->directUsbOutput->playedFrames());
+    }
+    jlongArray out = env->NewLongArray(kStatCount);
+    if (out) env->SetLongArrayRegion(out, 0, kStatCount, values);
+    return out;
 }
 
 JNIEXPORT void JNICALL
@@ -682,227 +709,225 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetAvailablePlugins(J
 }
 
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeAddPluginToRack(JNIEnv* env, jobject thiz, jstring pluginId, jint position) {
-    if (!g_ctx || !g_ctx->pluginRegistry || !g_ctx->audioEngine) {
-        return -1;
-    }
-
-    const char* idStr = env->GetStringUTFChars(pluginId, nullptr);
-    if (!idStr) {
-        return -1;
-    }
-
-    std::string fullId = std::string(idStr);
-    env->ReleaseStringUTFChars(pluginId, idStr);
-
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeAddPluginToRack(
+    JNIEnv* env, jobject, jlong pathId, jstring pluginId, jint position) {
+    if (!g_ctx || !g_ctx->pluginRegistry || !g_ctx->audioEngine || !pluginId) return -1;
+    const char* id = env->GetStringUTFChars(pluginId, nullptr);
+    if (!id) return -1;
+    std::string fullId(id);
+    env->ReleaseStringUTFChars(pluginId, id);
     auto plugin = g_ctx->pluginRegistry->createPlugin(fullId);
-    if (!plugin) {
-        LOGE("Failed to create plugin: %s", fullId.c_str());
-        return -1;
-    }
-
-    int pos = g_ctx->audioEngine->getChain().addPlugin(std::move(plugin), position);
-    if (pos >= 0) {
-        LOGI("nativeAddPluginToRack: pluginId=%s position=%d -> index=%d",
-             fullId.c_str(), position, pos);
-    }
-    return pos;
+    if (!plugin) return -1;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
+    return chain ? chain->addPlugin(std::move(plugin), position) : -1;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRemovePluginFromRack(JNIEnv* env, jobject thiz, jint position) {
-    if (!g_ctx->audioEngine) {
-        return JNI_FALSE;
-    }
-
-    // Detach the UI whose captured chain index matches the position being removed,
-    // then shift all higher captured indices down by one so they stay in sync
-    // with the chain's erase.  This prevents stale indexPtrs from causing
-    // subsequent detachPlugin calls to target the wrong UI entry.
-    if (g_ctx->pluginUIManager) {
-        g_ctx->pluginUIManager->detachAndShiftForRemoval(position);
-    }
-
-    return g_ctx->audioEngine->getChain().removePlugin(position) ? JNI_TRUE : JNI_FALSE;
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRemovePluginFromRack(
+    JNIEnv*, jobject, jlong pathId, jint position) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
+    return chain && chain->removePlugin(position) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeReorderRack(JNIEnv* env, jobject thiz, jint fromPos, jint toPos) {
-    if (!g_ctx->audioEngine) {
-        return JNI_FALSE;
-    }
-
-    if (g_ctx->pluginUIManager) {
-        g_ctx->pluginUIManager->pauseAllUIs();
-    }
-    bool ok = g_ctx->audioEngine->getChain().reorderPlugins(fromPos, toPos);
-    if (g_ctx->pluginUIManager && ok) {
-        g_ctx->pluginUIManager->reorderUIs(fromPos, toPos);
-    }
-    if (g_ctx->pluginUIManager) {
-        g_ctx->pluginUIManager->resumeAllUIs();
-    }
-    return ok ? JNI_TRUE : JNI_FALSE;
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeReorderRack(
+    JNIEnv*, jobject, jlong pathId, jint fromPos, jint toPos) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
+    return chain && chain->reorderPlugins(fromPos, toPos) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetPluginFilePath(JNIEnv* env, jobject thiz, jint pluginIndex, jstring propertyUri, jstring filePath) {
-    if (!g_ctx || !g_ctx->audioEngine) {
-        return;
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetPluginFilePath(
+    JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jstring propertyUri, jstring filePath) {
+    if (!g_ctx || !g_ctx->audioEngine || !propertyUri || !filePath) return;
+    const char* property = env->GetStringUTFChars(propertyUri, nullptr);
+    const char* path = env->GetStringUTFChars(filePath, nullptr);
+    if (property && path) {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        if (auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId))) {
+            chain->setPluginFilePath(pluginIndex, property, path);
+        }
     }
-
-    const char* propStr = env->GetStringUTFChars(propertyUri, nullptr);
-    const char* pathStr = env->GetStringUTFChars(filePath, nullptr);
-    if (propStr && pathStr) {
-        g_ctx->audioEngine->getChain().setPluginFilePath(
-            pluginIndex, std::string(propStr), std::string(pathStr));
-    }
-    if (propStr) env->ReleaseStringUTFChars(propertyUri, propStr);
-    if (pathStr) env->ReleaseStringUTFChars(filePath, pathStr);
+    if (property) env->ReleaseStringUTFChars(propertyUri, property);
+    if (path) env->ReleaseStringUTFChars(filePath, path);
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetParameter(JNIEnv* env, jobject thiz, jint pluginIndex, jint portIndex, jfloat value) {
-    if (!g_ctx->audioEngine) {
-        return;
-    }
-
-    g_ctx->audioEngine->getChain().setParameter(pluginIndex, static_cast<uint32_t>(portIndex), static_cast<float>(value));
-    if (g_ctx->pluginUIManager) {
-        g_ctx->pluginUIManager->notifyUIParameterChange(pluginIndex, static_cast<uint32_t>(portIndex), static_cast<float>(value));
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetParameter(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex, jfloat value) {
+    if (!g_ctx || !g_ctx->audioEngine) return;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    if (auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId))) {
+        chain->setParameter(pluginIndex, static_cast<uint32_t>(portIndex), value);
     }
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetParameter(JNIEnv* env, jobject thiz, jint pluginIndex, jint portIndex) {
-    if (!g_ctx->audioEngine) {
-        return 0.0f;
-    }
-
-    return g_ctx->audioEngine->getChain().getParameter(pluginIndex, static_cast<uint32_t>(portIndex));
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetParameter(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex) {
+    if (!g_ctx || !g_ctx->audioEngine) return 0.0f;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
+    return chain ? chain->getParameter(pluginIndex, static_cast<uint32_t>(portIndex)) : 0.0f;
 }
 
-// --- WAV real-time playback ---
-
-JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeLoadWav(JNIEnv* env, jobject thiz, jstring path) {
-    if (!g_ctx->audioEngine) {
-        return JNI_FALSE;
-    }
-    if (!path) {
-        return JNI_FALSE;
-    }
-    const char* pathStr = env->GetStringUTFChars(path, nullptr);
-    if (!pathStr) {
-        return JNI_FALSE;
-    }
-    bool result = g_ctx->audioEngine->loadWav(std::string(pathStr));
-    env->ReleaseStringUTFChars(path, pathStr);
-    return result ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeUnloadWav(JNIEnv* env, jobject thiz) {
-    if (g_ctx->audioEngine) {
-        g_ctx->audioEngine->unloadWav();
-    }
-}
-
-JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeWavPlay(JNIEnv* env, jobject thiz) {
-    if (g_ctx->audioEngine) {
-        g_ctx->audioEngine->wavPlay();
-    }
-}
-
-JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeWavPause(JNIEnv* env, jobject thiz) {
-    if (g_ctx->audioEngine) {
-        g_ctx->audioEngine->wavPause();
-    }
-}
-
-JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeWavSeek(JNIEnv* env, jobject thiz, jdouble positionSec) {
-    if (!g_ctx->audioEngine) {
-        return;
-    }
-    double sr = static_cast<double>(g_ctx->audioEngine->getSampleRate());
-    if (sr <= 0.0) return;
-    size_t frame = static_cast<size_t>(positionSec * sr + 0.5);
-    g_ctx->audioEngine->wavSeekToFrame(frame);
-}
-
-JNIEXPORT jdouble JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetWavDurationSec(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
-        return 0.0;
-    }
-    return g_ctx->audioEngine->getWavDurationSec();
-}
-
-JNIEXPORT jdouble JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetWavPositionSec(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
-        return 0.0;
-    }
-    return g_ctx->audioEngine->getWavPositionSec();
+JNIEXPORT jlong JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeAddTrack(JNIEnv*, jobject) {
+    if (!g_ctx || !g_ctx->audioEngine) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return static_cast<jlong>(g_ctx->audioEngine->getRackGraph().addTrack());
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsWavPlaying(JNIEnv* env, jobject thiz) {
-    return g_ctx->audioEngine && g_ctx->audioEngine->isWavPlaying() ? JNI_TRUE : JNI_FALSE;
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRemoveTrack(JNIEnv*, jobject, jlong trackId) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().removeTrack(trackId) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeIsWavLoaded(JNIEnv* env, jobject thiz) {
-    return g_ctx->audioEngine && g_ctx->audioEngine->isWavLoaded() ? JNI_TRUE : JNI_FALSE;
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetTrackVolume(
+    JNIEnv*, jobject, jlong trackId, jfloat volume) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setTrackVolume(trackId, volume) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeProcessFile(JNIEnv* env, jobject thiz, jstring inputPath, jstring outputPath) {
-    if (!g_ctx || !g_ctx->offlineProcessor) {
-        return JNI_FALSE;
-    }
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetTrackInputArmed(
+    JNIEnv*, jobject, jlong trackId, jboolean armed) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setTrackInputArmed(trackId, armed == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
 
-    const char* inputStr = env->GetStringUTFChars(inputPath, nullptr);
-    const char* outputStr = env->GetStringUTFChars(outputPath, nullptr);
-    
-    if (!inputStr || !outputStr) {
-        if (inputStr) env->ReleaseStringUTFChars(inputPath, inputStr);
-        if (outputStr) env->ReleaseStringUTFChars(outputPath, outputStr);
-        return JNI_FALSE;
-    }
+JNIEXPORT jboolean JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeLoadTrackWav(
+    JNIEnv* env, jobject, jlong trackId, jstring path, jstring displayName) {
+    if (!g_ctx || !g_ctx->audioEngine || !path || !displayName) return JNI_FALSE;
+    const char* filePath = env->GetStringUTFChars(path, nullptr);
+    const char* name = env->GetStringUTFChars(displayName, nullptr);
+    const bool ok = filePath && name && g_ctx->audioEngine->loadTrackWav(trackId, filePath, name);
+    if (filePath) env->ReleaseStringUTFChars(path, filePath);
+    if (name) env->ReleaseStringUTFChars(displayName, name);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
 
-    bool result = g_ctx->offlineProcessor->processFile(std::string(inputStr), std::string(outputStr));
+JNIEXPORT jboolean JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeUnloadTrackWav(JNIEnv*, jobject, jlong trackId) {
+    return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->unloadTrackWav(trackId) ? JNI_TRUE : JNI_FALSE;
+}
 
-    env->ReleaseStringUTFChars(inputPath, inputStr);
-    env->ReleaseStringUTFChars(outputPath, outputStr);
+JNIEXPORT jboolean JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeClearTrackWavs(JNIEnv*, jobject) {
+    return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->getRackGraph().clearTrackWavs() ? JNI_TRUE : JNI_FALSE;
+}
 
-    return result ? JNI_TRUE : JNI_FALSE;
+JNIEXPORT jboolean JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetWavTransportPlaying(JNIEnv*, jobject, jboolean playing) {
+    return g_ctx && g_ctx->audioEngine &&
+        g_ctx->audioEngine->getRackGraph().setTransportPlaying(playing == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRestartWavTransport(JNIEnv*, jobject) {
+    return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->isRunning() &&
+        g_ctx->audioEngine->getRackGraph().restartTransport() ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT void JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetWavTransportLooping(JNIEnv*, jobject, jboolean looping) {
+    if (g_ctx && g_ctx->audioEngine) g_ctx->audioEngine->getRackGraph().setTransportLooping(looping == JNI_TRUE);
 }
 
 JNIEXPORT jint JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackSize(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
-        return 0;
-    }
-    return static_cast<jint>(g_ctx->audioEngine->getChain().getSize());
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackSize(JNIEnv*, jobject, jlong pathId) {
+    if (!g_ctx || !g_ctx->audioEngine) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    return chain ? static_cast<jint>(chain->getSize()) : 0;
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginInfo(JNIEnv* env, jobject thiz, jint index) {
-    if (!g_ctx->audioEngine) {
-        return nullptr;
-    }
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginInfo(JNIEnv* env, jobject, jlong pathId, jint index) {
+    if (!g_ctx || !g_ctx->audioEngine) return nullptr;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    IPlugin* plugin = chain ? chain->getPlugin(index) : nullptr;
+    return plugin ? createPluginInfoObject(env, plugin->getInfo()) : nullptr;
+}
 
-    IPlugin* plugin = g_ctx->audioEngine->getChain().getPlugin(index);
-    if (!plugin) {
-        return nullptr;
-    }
+JNIEXPORT jlong JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPluginInstanceId(JNIEnv*, jobject, jlong pathId, jint index) {
+    if (!g_ctx || !g_ctx->audioEngine) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    return chain ? static_cast<jlong>(chain->getPluginInstanceId(index)) : 0;
+}
 
-    PluginInfo info = plugin->getInfo();
-    return createPluginInfoObject(env, info);
+JNIEXPORT jobjectArray JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRackPlugins(
+    JNIEnv* env, jobject, jlong pathId) {
+    if (!g_ctx || !g_ctx->audioEngine) return nullptr;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    if (!chain) return nullptr;
+    jclass entryClass = env->FindClass("com/varcain/guitarrackcraft/engine/RackPluginEntry");
+    if (!entryClass) return nullptr;
+    jmethodID ctor = env->GetMethodID(
+        entryClass, "<init>", "(IJLcom/varcain/guitarrackcraft/engine/PluginInfo;)V");
+    if (!ctor) return nullptr;
+    const size_t size = chain->getSize();
+    jobjectArray result = env->NewObjectArray(static_cast<jsize>(size), entryClass, nullptr);
+    for (size_t index = 0; index < size; ++index) {
+        IPlugin* plugin = chain->getPlugin(static_cast<int>(index));
+        if (!plugin) continue;
+        jobject info = createPluginInfoObject(env, plugin->getInfo());
+        jobject entry = env->NewObject(entryClass, ctor, static_cast<jint>(index),
+                                       static_cast<jlong>(chain->getPluginInstanceId(index)), info);
+        env->SetObjectArrayElement(result, static_cast<jsize>(index), entry);
+        env->DeleteLocalRef(info);
+        env->DeleteLocalRef(entry);
+    }
+    return result;
+}
+
+JNIEXPORT jobjectArray JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
+    if (!g_ctx || !g_ctx->audioEngine) return nullptr;
+    const auto tracks = g_ctx->audioEngine->getRackGraph().getTracks();
+    jclass clazz = env->FindClass("com/varcain/guitarrackcraft/engine/RackTrackInfo");
+    if (!clazz) return nullptr;
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;D)V");
+    if (!ctor) return nullptr;
+    jobjectArray result = env->NewObjectArray(static_cast<jsize>(tracks.size()), clazz, nullptr);
+    for (size_t index = 0; index < tracks.size(); ++index) {
+        const auto& track = tracks[index];
+        jstring name = env->NewStringUTF(track.wavDisplayName.c_str());
+        jobject item = env->NewObject(clazz, ctor, static_cast<jlong>(track.id), track.volume,
+                                      track.inputArmed ? JNI_TRUE : JNI_FALSE,
+                                      track.wavLoaded ? JNI_TRUE : JNI_FALSE, name,
+                                      track.wavDurationSec);
+        env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
+        env->DeleteLocalRef(name);
+        env->DeleteLocalRef(item);
+    }
+    return result;
+}
+
+JNIEXPORT jobject JNICALL
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetWavTransportInfo(JNIEnv* env, jobject) {
+    const TransportSnapshot state = g_ctx && g_ctx->audioEngine
+        ? g_ctx->audioEngine->getRackGraph().getTransportSnapshot() : TransportSnapshot{};
+    jclass clazz = env->FindClass("com/varcain/guitarrackcraft/engine/WavTransportInfo");
+    if (!clazz) return nullptr;
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZZDDI)V");
+    return ctor ? env->NewObject(clazz, ctor, state.playing ? JNI_TRUE : JNI_FALSE,
+                                 state.looping ? JNI_TRUE : JNI_FALSE, state.positionSec,
+                                 state.durationSec, static_cast<jint>(state.loadedTrackCount)) : nullptr;
 }
 
 JNIEXPORT void JNICALL
@@ -1209,11 +1234,11 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeDeliverFileToPluginUI
 
 JNIEXPORT jobjectArray JNICALL
 Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativePollVstFilePickerRequest(
-    JNIEnv* env, jobject thiz, jint pluginIndex)
+    JNIEnv* env, jobject, jlong pathId, jint pluginIndex)
 {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
-
-    IPlugin* plugin = g_ctx->audioEngine->getChain().getPlugin(static_cast<int>(pluginIndex));
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    IPlugin* plugin = chain ? chain->getPlugin(pluginIndex) : nullptr;
     if (!plugin) return nullptr;
 
     NativeFilePickerRequest req;
@@ -1242,11 +1267,11 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativePollVstFilePickerRequ
 
 JNIEXPORT void JNICALL
 Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRespondVstFilePicker(
-    JNIEnv* env, jobject thiz, jint pluginIndex, jint sequence, jboolean cancelled, jstring windowsPath)
+    JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jint sequence, jboolean cancelled, jstring windowsPath)
 {
     if (!g_ctx || !g_ctx->audioEngine) return;
-
-    IPlugin* plugin = g_ctx->audioEngine->getChain().getPlugin(static_cast<int>(pluginIndex));
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    IPlugin* plugin = chain ? chain->getPlugin(pluginIndex) : nullptr;
     if (!plugin) return;
 
     std::string path;
@@ -1314,19 +1339,16 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeGetRecordingDurationS
 // --- State save/restore (presets) ---
 
 JNIEXPORT jstring JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSaveChainState(JNIEnv* env, jobject thiz) {
-    if (!g_ctx || !g_ctx->audioEngine) {
-        return nullptr;
-    }
-
-    auto chainState = g_ctx->audioEngine->getChain().saveChainState();
-    std::string json = serializeChainStateToJson(chainState);
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSaveRackState(JNIEnv* env, jobject) {
+    if (!g_ctx || !g_ctx->audioEngine) return nullptr;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    const std::string json = serializeRackStateToJson(g_ctx->audioEngine->getRackGraph().saveState());
     return env->NewStringUTF(json.c_str());
 }
 
 JNIEXPORT jboolean JNICALL
 Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRestorePluginState(
-    JNIEnv* env, jobject thiz, jint pluginIndex,
+    JNIEnv* env, jobject, jlong pathId, jint pluginIndex,
     jfloatArray portValues, jintArray portIndices,
     jobjectArray propKeys, jobjectArray propTypes,
     jobjectArray propValues, jintArray propFlags)
@@ -1386,21 +1408,17 @@ Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeRestorePluginState(
         if (flags) env->ReleaseIntArrayElements(propFlags, flags, JNI_ABORT);
     }
 
-    bool ok = g_ctx->audioEngine->getChain().restorePluginState(pluginIndex, state);
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
+    const bool ok = chain && chain->restorePluginState(pluginIndex, state);
     return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetChainBypass(JNIEnv* /*env*/, jobject /*thiz*/, jboolean bypass) {
+Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetRackBypass(
+    JNIEnv*, jobject, jboolean bypass) {
     if (g_ctx && g_ctx->audioEngine) {
-        g_ctx->audioEngine->setChainBypass(bypass == JNI_TRUE);
-    }
-}
-
-JNIEXPORT void JNICALL
-Java_com_varcain_guitarrackcraft_engine_NativeEngine_nativeSetWavBypassChain(JNIEnv* /*env*/, jobject /*thiz*/, jboolean bypass) {
-    if (g_ctx && g_ctx->audioEngine) {
-        g_ctx->audioEngine->setWavBypassChain(bypass == JNI_TRUE);
+        g_ctx->audioEngine->setRackBypass(bypass == JNI_TRUE);
     }
 }
 

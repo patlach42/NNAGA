@@ -600,10 +600,15 @@ private fun stageInstaller(context: Context, uris: List<Uri>): File? {
 /** Find the rack position of the VST with [uuid] (if added) and launch
  *  VstEditorActivity bound to its wine display. Otherwise toast a hint. */
 private fun openVstEditor(context: Context, uuid: String) {
-    val rackPlugins = runCatching { RackManager.getRackPlugins() }.getOrNull().orEmpty()
+    val pathId = runCatching { RackManager.getTracks().firstOrNull()?.id }.getOrNull()
+    if (pathId == null) {
+        Toast.makeText(context, "No rack track available.", Toast.LENGTH_LONG).show()
+        return
+    }
+    val rackPlugins = runCatching { RackManager.getRackPlugins(pathId) }.getOrNull().orEmpty()
     val expectedId = "VST2:$uuid"
-    val position = rackPlugins.indexOfFirst { it.id == expectedId || it.id.endsWith(":$uuid") }
-    if (position < 0) {
+    val pluginIndex = rackPlugins.indexOfFirst { it.info.id == expectedId || it.info.id.endsWith(":$uuid") }
+    if (pluginIndex < 0) {
         Toast.makeText(
             context,
             "Add this plugin to the rack first, then open its editor.",
@@ -611,7 +616,7 @@ private fun openVstEditor(context: Context, uuid: String) {
         ).show()
         return
     }
-    val display = NativeEngine.getInstance().nativeGetRackPluginX11Display(position)
+    val display = NativeEngine.getInstance().nativeGetRackPluginX11Display(pathId, pluginIndex)
     if (display < 0) {
         Toast.makeText(
             context,
@@ -620,7 +625,7 @@ private fun openVstEditor(context: Context, uuid: String) {
         ).show()
         return
     }
-    context.startActivity(VstEditorActivity.intent(context, display, position))
+    context.startActivity(VstEditorActivity.intent(context, display, pathId, pluginIndex))
 }
 
 /** Filesystem + JSON I/O for the VST registry. Schema matches what

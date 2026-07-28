@@ -54,9 +54,10 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
     private val _downloadStatus = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val downloadStatus = _downloadStatus.asSharedFlow()
 
-    // Source plugin tracking
+    private var _sourcePathId: Long = -1L
     private var _sourcePluginIndex: Int = -1
     val sourcePluginIndex: Int get() = _sourcePluginIndex
+    val sourcePathId: Long get() = _sourcePathId
 
     // Source slot (URI fragment) for multi-slot plugins like NeuralRack
     private var _sourceSlot: String? = null
@@ -65,7 +66,8 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
     private val _downloadedModelIds = MutableStateFlow<Set<String>>(emptySet())
     val downloadedModelIds: StateFlow<Set<String>> = _downloadedModelIds
 
-    fun setSourcePlugin(index: Int, slot: String?) {
+    fun setSourcePlugin(pathId: Long, index: Int, slot: String?) {
+        _sourcePathId = pathId
         _sourcePluginIndex = index
         _sourceSlot = slot
     }
@@ -144,16 +146,14 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
                         targetToneDir.mkdirs()
                         destFile.copyTo(File(targetToneDir, destFile.name), overwrite = true)
                     }
-
-                    // Load into plugin based on source context
-                    if (_sourcePluginIndex >= 0) {
-                        val pluginInfo = RackManager.getRackPluginInfo(_sourcePluginIndex)
+                    if (_sourcePathId >= 0L && _sourcePluginIndex >= 0) {
+                        val pluginInfo = RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
                         if (pluginInfo != null) {
                             loadFileIntoPlugin(_sourcePluginIndex, fileInfo, destFile, _sourceSlot)
                             _downloadStatus.emit("Model loaded into rack")
                         }
                     }
-                    // When _sourcePluginIndex == -1: download only, no auto-load
+                    // When source path is -1: download only, no auto-load
                 } else {
                     _error.value = "Failed to download model file"
                 }
@@ -166,16 +166,16 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private fun loadFileIntoPlugin(pluginIndex: Int, fileInfo: ModelFileInfo, file: File, slot: String? = null) {
-        val rackPlugin = RackManager.getRackPluginInfo(pluginIndex)
+        val rackPlugin = RackManager.getRackPluginInfo(_sourcePathId, pluginIndex)
         if (rackPlugin?.format == "VST2" || rackPlugin?.format == "VST3") {
-            RackManager.notifyVstTone3000FileSelected(pluginIndex, file.absolutePath)
+            RackManager.notifyVstTone3000FileSelected(_sourcePathId, pluginIndex, file.absolutePath)
             return
         }
 
         val propertyUri = ToneFileUtils.resolvePropertyUri(fileInfo, rackPlugin?.id, slot)
-        NativeEngine.getInstance().setPluginFilePath(pluginIndex, propertyUri, file.absolutePath)
-        X11Bridge.deliverFileToPluginUI(pluginIndex, propertyUri, file.absolutePath)
-        RackManager.notifyModelLoaded(pluginIndex, file.nameWithoutExtension)
+        RackManager.setPluginFilePath(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
+        X11Bridge.deliverFileToPluginUI(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
+        RackManager.notifyModelLoaded(_sourcePathId, pluginIndex, file.nameWithoutExtension)
     }
 
     fun loadModelToPlugin(tone: Tone, model: Model) {
@@ -189,12 +189,12 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
                 return@launch
             }
 
-            if (_sourcePluginIndex < 0) {
+            if (_sourcePluginIndex < 0 || _sourcePathId < 0) {
                 _downloadStatus.tryEmit("Already downloaded")
                 return@launch
             }
 
-            val pluginInfo = RackManager.getRackPluginInfo(_sourcePluginIndex)
+            val pluginInfo = RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
             if (pluginInfo == null) {
                 _downloadStatus.tryEmit("Source plugin was removed")
                 return@launch

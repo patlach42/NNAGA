@@ -47,21 +47,20 @@ class VstEditorActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val displayNumber = intent.getIntExtra(EXTRA_DISPLAY_NUMBER, -1)
-        val rackPosition  = intent.getIntExtra(EXTRA_RACK_POSITION, -1)
-        if (displayNumber < 0) {
-            Log.e(TAG, "missing EXTRA_DISPLAY_NUMBER")
+        val pathId = intent.getLongExtra(EXTRA_PATH_ID, -1L)
+        val pluginIndex = intent.getIntExtra(EXTRA_PLUGIN_INDEX, -1)
+        if (displayNumber < 0 || pathId < 0L || pluginIndex < 0) {
+            Log.e(TAG, "missing VST editor identity")
             finish(); return
         }
-        Log.i(TAG, "onCreate display=$displayNumber rack=$rackPosition")
+        Log.i(TAG, "onCreate display=$displayNumber path=$pathId plugin=$pluginIndex")
 
-        // Start the X11 server early (idempotent if already up — wine subprocess
-        // brought it up at activate(), but harmless to call again).
         NativeBridge.nativeStartX11Server(displayNumber, 4096, 2160)
 
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
-                    EditorScreen(displayNumber = displayNumber, rackPosition = rackPosition)
+                    EditorScreen(displayNumber = displayNumber, pathId = pathId, pluginIndex = pluginIndex)
                 }
             }
         }
@@ -70,27 +69,25 @@ class VstEditorActivity : ComponentActivity() {
     companion object {
         private const val TAG = "VstEditorActivity"
         const val EXTRA_DISPLAY_NUMBER = "display_number"
-        const val EXTRA_RACK_POSITION  = "rack_position"
+        const val EXTRA_PATH_ID = "path_id"
+        const val EXTRA_PLUGIN_INDEX = "plugin_index"
 
-        fun intent(ctx: Context, displayNumber: Int, rackPosition: Int = -1): Intent =
+        fun intent(ctx: Context, displayNumber: Int, pathId: Long, pluginIndex: Int): Intent =
             Intent(ctx, VstEditorActivity::class.java).apply {
                 putExtra(EXTRA_DISPLAY_NUMBER, displayNumber)
-                putExtra(EXTRA_RACK_POSITION,  rackPosition)
+                putExtra(EXTRA_PATH_ID, pathId)
+                putExtra(EXTRA_PLUGIN_INDEX, pluginIndex)
             }
     }
 }
 
 @androidx.compose.runtime.Composable
-private fun EditorScreen(displayNumber: Int, rackPosition: Int) {
-    // Poll the rack-position-keyed editor size until wine populates it via
-    // shm. Wine sets editor_width/height after effEditGetRect (~100-500 ms
-    // post-activate). Default to a square placeholder until known.
-    var size by remember { mutableStateOf<Pair<Int, Int>?>(null) }
-    LaunchedEffect(rackPosition) {
-        if (rackPosition < 0) return@LaunchedEffect
+private fun EditorScreen(displayNumber: Int, pathId: Long, pluginIndex: Int) {
+    var size by remember(pathId, pluginIndex) { mutableStateOf<Pair<Int, Int>?>(null) }
+    LaunchedEffect(pathId, pluginIndex) {
         while (size == null) {
             val encoded = runCatching {
-                NativeEngine.getInstance().nativeGetRackPluginEditorSize(rackPosition)
+                NativeEngine.getInstance().nativeGetRackPluginEditorSize(pathId, pluginIndex)
             }.getOrDefault(0L)
             val w = (encoded ushr 32).toInt()
             val h = (encoded and 0xffffffffL).toInt()
@@ -108,12 +105,11 @@ private fun EditorScreen(displayNumber: Int, rackPosition: Int) {
     if (s != null) {
         PluginSurface(
             displayNumber = displayNumber,
-            pluginWidth   = s.first,
-            pluginHeight  = s.second,
-            modifier      = Modifier.fillMaxSize(),
+            pluginWidth = s.first,
+            pluginHeight = s.second,
+            modifier = Modifier.fillMaxSize(),
         )
     } else {
-        // Loading state — plugin's editor size not yet reported by wine.
         Box(
             modifier = Modifier.fillMaxSize().background(Color.Black),
             contentAlignment = Alignment.Center,

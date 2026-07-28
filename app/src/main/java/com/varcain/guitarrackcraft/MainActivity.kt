@@ -257,8 +257,14 @@ class MainActivity : ComponentActivity() {
             val logPath = File(cacheDir, "ahbspike.log").absolutePath
             withContext(Dispatchers.IO) {
                 android.util.Log.i("AhbSpike", "running spike (hook=${applicationInfo.nativeLibraryDir} turnip=$turnipDir log=$logPath)")
-                val ok = com.varcain.vsthost.NativeBridge.nativeAhbSpike(
-                    applicationInfo.nativeLibraryDir, turnipDir, "vulkan.ad07xx.so", logPath)
+                val bridgeClass = Class.forName("com.varcain.vsthost.NativeBridge")
+                val method = bridgeClass.getMethod(
+                    "nativeAhbSpike",
+                    String::class.java, String::class.java, String::class.java, String::class.java
+                )
+                val ok = method.invoke(
+                    null, applicationInfo.nativeLibraryDir, turnipDir, "vulkan.ad07xx.so", logPath
+                ) as Boolean
                 android.util.Log.i("AhbSpike", "spike returned ok=$ok")
             }
         } catch (e: Throwable) {
@@ -291,11 +297,14 @@ class MainActivity : ComponentActivity() {
             // single vst_host log for pipe tracing). Absent (normal) => add to rack.
             if (!File(cacheDir, "autostart_norack").exists()) {
                 withContext(Dispatchers.IO) {
-                    if (rm.getRackSize() == 0) {
-                        val pos = rm.addPlugin(match.fullId)
+                    val trackId = rm.getTracks().firstOrNull()?.id
+                    if (trackId == null) {
+                        android.util.Log.w("Autostart", "no rack track available")
+                    } else if (rm.getRackSize(trackId) == 0) {
+                        val pos = rm.addPlugin(trackId, match.fullId)
                         android.util.Log.i("Autostart", "added ${match.name} to rack at pos=$pos")
                     } else {
-                        android.util.Log.i("Autostart", "rack already has ${rm.getRackSize()} plugin(s), skip add")
+                        android.util.Log.i("Autostart", "rack already has ${rm.getRackSize(trackId)} plugin(s), skip add")
                     }
                 }
             }

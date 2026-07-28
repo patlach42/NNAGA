@@ -45,6 +45,34 @@ add_executable(x11_unit_tests
     x11/TestPropertyStore.cpp
 )
 target_link_libraries(x11_unit_tests PRIVATE x11_core gtest_main)
+# Native direct-USB scheduling contract tests (no Android/libusb I/O).
+add_executable(usb_scheduling_tests
+    usb/TestUsbScheduling.cpp
+)
+target_link_libraries(usb_scheduling_tests PRIVATE gtest_main)
+target_include_directories(usb_scheduling_tests PRIVATE
+    ${CPP_SRC_DIR}/usb
+)
+
+enable_testing()
+# Allocation-free direct audio callback tests.
+add_subdirectory(audio)
+
+
+# Direct USB duplex lifecycle tests. Keep the host suite usable on machines
+# without development libusb headers/libraries.
+find_package(PkgConfig QUIET)
+if(PKG_CONFIG_FOUND)
+    pkg_check_modules(LIBUSB QUIET libusb-1.0)
+    if(LIBUSB_FOUND)
+        add_subdirectory(usb/driver)
+    else()
+        message(STATUS "USB driver tests: DISABLED (libusb-1.0 not found)")
+    endif()
+else()
+    message(STATUS "USB driver tests: DISABLED (pkg-config not found)")
+endif()
+
 
 # Wire-level integration tests (uses POSIX sockets)
 add_executable(x11_wire_tests
@@ -73,7 +101,6 @@ if(PKG_CONFIG_FOUND)
     endif()
 endif()
 
-enable_testing()
 
 # CTest integration
 include(GoogleTest)
@@ -82,3 +109,4 @@ gtest_discover_tests(x11_wire_tests)
 if(TARGET x11_xcb_tests)
     gtest_discover_tests(x11_xcb_tests)
 endif()
+gtest_discover_tests(usb_scheduling_tests)
