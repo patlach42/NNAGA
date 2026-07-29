@@ -42,7 +42,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -129,7 +128,7 @@ fun ToneDetailScreen(
                         .fillMaxSize()
                         .padding(padding)
                 ) {
-                    // Hero image with gradient overlay and back button
+                    // Hero image and back button
                     item {
                         Box(
                             modifier = Modifier
@@ -144,7 +143,6 @@ fun ToneDetailScreen(
                                     model = ImageRequest.Builder(context)
                                         .data(imageUrl)
                                         .size(800, 520)
-                                        .crossfade(true)
                                         .build(),
                                     contentDescription = null,
                                     modifier = Modifier.fillMaxSize(),
@@ -158,37 +156,6 @@ fun ToneDetailScreen(
                                 )
                             }
 
-                            // Gradient overlay bottom
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(120.dp)
-                                    .align(Alignment.BottomCenter)
-                                    .background(
-                                        Brush.verticalGradient(
-                                            colors = listOf(
-                                                Color.Transparent,
-                                                MaterialTheme.colorScheme.surface
-                                            )
-                                        )
-                                    )
-                            )
-
-                            // Gradient overlay top for back button visibility
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(80.dp)
-                                    .align(Alignment.TopCenter)
-                                    .background(
-                                        Brush.verticalGradient(
-                                            colors = listOf(
-                                                Color.Black.copy(alpha = 0.4f),
-                                                Color.Transparent
-                                            )
-                                        )
-                                    )
-                            )
 
                             // Back button
                             IconButton(
@@ -223,7 +190,7 @@ fun ToneDetailScreen(
                     // Author and tags
                     item {
                         Column(
-                            modifier = Modifier.padding(horizontal = 16.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
                             // Author row
@@ -234,7 +201,6 @@ fun ToneDetailScreen(
                                         model = ImageRequest.Builder(context)
                                             .data(avatarUrl)
                                             .size(64, 64)
-                                            .crossfade(true)
                                             .build(),
                                         contentDescription = null,
                                         modifier = Modifier
@@ -323,7 +289,7 @@ fun ToneDetailScreen(
                     // Divider
                     item {
                         Divider(
-                            modifier = Modifier.padding(horizontal = 16.dp),
+                            modifier = Modifier.padding(horizontal = 12.dp),
                             color = MaterialTheme.colorScheme.outlineVariant
                         )
                     }
@@ -354,7 +320,7 @@ fun ToneDetailScreen(
                             text = "Available Models",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 12.dp)
+                            modifier = Modifier.padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp)
                         )
                     }
 
@@ -364,11 +330,13 @@ fun ToneDetailScreen(
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(horizontal = 16.dp),
+                                    .padding(horizontal = 12.dp),
                                 colors = CardDefaults.cardColors(
                                     containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
                                 ),
-                                shape = RoundedCornerShape(12.dp)
+                                shape = RoundedCornerShape(12.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                                border = CardDefaults.outlinedCardBorder()
                             ) {
                                 Column(
                                     modifier = Modifier
@@ -403,7 +371,7 @@ fun ToneDetailScreen(
                     } else if (models.isEmpty() && isLoading) {
                         item {
                             Box(
-                                modifier = Modifier.fillMaxWidth().padding(24.dp),
+                                modifier = Modifier.fillMaxWidth().padding(12.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 CircularProgressIndicator(
@@ -473,11 +441,13 @@ fun ModelItem(
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = CardDefaults.outlinedCardBorder()
     ) {
         Row(
             modifier = Modifier

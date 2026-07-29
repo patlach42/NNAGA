@@ -689,8 +689,8 @@ private fun buildAssetLoader(
                         /* Bypass indicator light — CSS-only, no external PNG required */
                         .mod-pedal .mod-light { display: flex; align-items: center; justify-content: center; }
                         .mod-pedal .mod-light::after { content: ''; width: 14px; height: 14px; border-radius: 50%; display: block; }
-                        .mod-pedal .mod-light.on::after  { background: radial-gradient(circle at 35% 35%, #ff6060, #cc0000); box-shadow: 0 0 6px 2px rgba(200,0,0,0.7); }
-                        .mod-pedal .mod-light.off::after { background: radial-gradient(circle at 35% 35%, #552222, #331111); }
+                        .mod-pedal .mod-light.on::after  { background: #cc0000; }
+                        .mod-pedal .mod-light.off::after { background: #331111; }
                         </style>
                         $scaleStyle
                         </head>

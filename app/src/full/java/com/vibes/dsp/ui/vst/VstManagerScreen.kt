@@ -230,9 +230,13 @@ fun VstManagerScreen(onNavigateBack: () -> Unit) {
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
             topBar = {
                 TopAppBar(
                     title = { Text("Manage VST") },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                    ),
                     navigationIcon = {
                         IconButton(onClick = onNavigateBack) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -260,7 +264,7 @@ fun VstManagerScreen(onNavigateBack: () -> Unit) {
                                 scope.launch(Dispatchers.IO) { WineEnvFile.applyRenderer(context, r) }
                             }
                         )
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(8.dp))
                         Text(
                             if (isAdreno)
                                 "Applies to plugin editors opened after this change. Remove and re-add a plugin (or restart the app) to switch a running one."
@@ -269,7 +273,7 @@ fun VstManagerScreen(onNavigateBack: () -> Unit) {
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(16.dp))
                     }
                     item {
                         Text(
@@ -313,12 +317,12 @@ fun VstManagerScreen(onNavigateBack: () -> Unit) {
                         }
                     }
                     item {
-                        Spacer(Modifier.height(16.dp))
+                        Spacer(Modifier.height(8.dp))
                         Text(
                             "Activation environments",
                             style = MaterialTheme.typography.titleMedium
                         )
-                        Spacer(Modifier.height(4.dp))
+                        Spacer(Modifier.height(8.dp))
                         Text(
                             "Plugin managers (IK Multimedia, Native Access, etc.). Each hosts its " +
                             "plugins in one prefix so licences stay live. ▶ opens/re-validates; " +
@@ -376,7 +380,7 @@ fun VstManagerScreen(onNavigateBack: () -> Unit) {
                         }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(8.dp))
                 Button(
                     onClick = { pickerLauncher.launch(arrayOf("*/*")) },
                     enabled = blockingOperation == null,
@@ -392,7 +396,7 @@ fun VstManagerScreen(onNavigateBack: () -> Unit) {
                 ) {
                     Text("Install from .exe…")
                 }
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(8.dp))
                 Text(
                     "For multi-part installers (Inno Setup, NSIS with .bin payloads), " +
                     "select the .exe AND its companion .bin files together.",
@@ -425,15 +429,13 @@ private fun VstBlockingOperationOverlay(label: String) {
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            tonalElevation = 8.dp,
-            shadowElevation = 8.dp,
-            shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surface
+            color = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(8.dp)
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 CircularProgressIndicator(strokeWidth = 3.dp)
                 Text(

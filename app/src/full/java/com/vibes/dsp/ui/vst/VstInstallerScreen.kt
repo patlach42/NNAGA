@@ -19,8 +19,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,7 +74,7 @@ fun VstInstallerScreen(vm: VstInstallerViewModel = viewModel()) {
             ) {
                 Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                     PhaseHeader(state, mode, session?.displayName ?: "…", onCancel = null)
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     PickList(
                         mode = mode,
                         discovered = discovered,
@@ -93,7 +93,7 @@ fun VstInstallerScreen(vm: VstInstallerViewModel = viewModel()) {
                 Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                     PhaseHeader(state, mode, session?.displayName ?: "…",
                                 onCancel = { vm.cancel() })
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(8.dp))
                     SpinnerBox()
                 }
             }
@@ -125,7 +125,8 @@ private fun RunningOverlay(mode: VstInstallerViewModel.Mode, onCancel: () -> Uni
         NativeBridge.nativeSetX11PluginSize(displayNumber, screenW, screenH)
         onDispose { /* server stays alive across phase changes */ }
     }
-    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+    val colors = MaterialTheme.colorScheme
+    Box(modifier = Modifier.fillMaxSize().background(colors.background)) {
         PluginSurface(
             displayNumber = displayNumber,
             pluginWidth = screenW,
@@ -135,29 +136,26 @@ private fun RunningOverlay(mode: VstInstallerViewModel.Mode, onCancel: () -> Uni
             // on dispose so the next install starts from a clean slot.
             destroyOnDispose = true,
         )
-        // Floating controls: top-right column, 50% black backdrops for
-        // visibility over any wine background. Close mirrors the LV2/VST
-        // fullscreen exit; the keyboard toggle raises the soft IME against
-        // the installer surface (PluginSurface's EditorSurfaceView routes
-        // commitText/key events into the X server) — needed for installers
-        // and vendor managers with login forms (e.g. IK Product Manager).
+        // Floating controls use a raised theme surface for visibility over
+        // any wine background. The keyboard toggle raises the soft IME
+        // against the installer surface for login forms and wizards.
         Column(
-            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
+            modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             IconButton(
                 onClick = onCancel,
-                modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                modifier = Modifier.background(colors.surfaceVariant.copy(alpha = 0.85f), CircleShape),
             ) {
                 Icon(Icons.Default.Close, contentDescription = closeDescription,
-                     tint = Color.White)
+                     tint = colors.onSurface)
             }
             IconButton(
                 onClick = { EditorViewRegistry.showKeyboard(displayNumber) },
-                modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape),
+                modifier = Modifier.background(colors.surfaceVariant.copy(alpha = 0.85f), CircleShape),
             ) {
                 Icon(Icons.Default.Keyboard, contentDescription = "Toggle keyboard",
-                     tint = Color.White)
+                     tint = colors.onSurface)
             }
         }
     }
@@ -247,7 +245,7 @@ private fun PickList(
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(discovered, key = { it.absPath }) { p ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Checkbox(
@@ -282,7 +280,7 @@ private fun PickList(
                 Divider()
             }
         }
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(8.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

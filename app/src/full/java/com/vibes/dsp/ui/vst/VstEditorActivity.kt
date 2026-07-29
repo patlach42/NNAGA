@@ -26,7 +26,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import com.vibes.dsp.engine.NativeEngine
 import com.varcain.vsthost.NativeBridge
 import com.varcain.vsthost.ui.PluginSurface
@@ -59,7 +58,10 @@ class VstEditorActivity : ComponentActivity() {
 
         setContent {
             MaterialTheme {
-                Surface(modifier = Modifier.fillMaxSize(), color = Color.Black) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = MaterialTheme.colorScheme.background
+                ) {
                     EditorScreen(displayNumber = displayNumber, pathId = pathId, pluginIndex = pluginIndex)
                 }
             }
@@ -111,10 +113,10 @@ private fun EditorScreen(displayNumber: Int, pathId: Long, pluginIndex: Int) {
         )
     } else {
         Box(
-            modifier = Modifier.fillMaxSize().background(Color.Black),
+            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background),
             contentAlignment = Alignment.Center,
         ) {
-            Text("Loading editor…", color = Color.White)
+            Text("Loading editor…", color = MaterialTheme.colorScheme.onSurface)
         }
     }
 }

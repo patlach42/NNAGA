@@ -64,7 +64,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
-import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -83,6 +82,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
@@ -90,7 +90,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
@@ -411,7 +410,7 @@ fun RackScreen(
             }
 
             Surface(
-                tonalElevation = 3.dp,
+                color = MaterialTheme.colorScheme.background,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(modifier = Modifier.fillMaxWidth()) {
@@ -599,46 +598,97 @@ fun RackScreen(
                     .padding(if (isFullscreenActive) PaddingValues(0.dp) else padding)
             ) {
     if (selectedPathId != MASTER_PATH_ID) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             tracks.forEachIndexed { index, track ->
-                FilterChip(selected = track.id == selectedPathId, onClick = { viewModel.selectPath(track.id) }, label = { Text("Track ${index + 1}") })
+                FilterChip(
+                    selected = track.id == selectedPathId,
+                    onClick = { viewModel.selectPath(track.id) },
+                    label = { Text("Track ${index + 1}") },
+                    modifier = Modifier.heightIn(min = 44.dp)
+                )
             }
-            FilterChip(selected = false, onClick = { viewModel.selectPath(MASTER_PATH_ID) }, label = { Text("Master") })
-            IconButton(onClick = { viewModel.addTrack() }) { Icon(Icons.Default.Add, "Add track") }
+            FilterChip(
+                selected = false,
+                onClick = { viewModel.selectPath(MASTER_PATH_ID) },
+                label = { Text("Master") },
+                modifier = Modifier.heightIn(min = 44.dp)
+            )
+            IconButton(onClick = { viewModel.addTrack() }, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.Default.Add, "Add track")
+            }
         }
         selectedTrack?.let { track ->
-            Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("REC")
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("REC", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Switch(checked = track.inputArmed, onCheckedChange = { viewModel.setTrackInputArmed(track.id, it) })
-                Text("Vol ${(track.volume * 100).roundToInt()}%")
+                Text("Vol ${(track.volume * 100).roundToInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Slider(value = track.volume, onValueChange = { viewModel.setTrackVolume(track.id, it) }, modifier = Modifier.weight(1f))
-                IconButton(onClick = { viewModel.removeTrack(track.id) }) { Icon(Icons.Default.Delete, "Delete track") }
+                IconButton(onClick = { viewModel.removeTrack(track.id) }, modifier = Modifier.size(44.dp)) {
+                    Icon(Icons.Default.Delete, "Delete track")
+                }
             }
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 if (!track.wavLoaded) {
-                    Button(onClick = { pendingWavTargetId = track.id; wavFilePickerLauncher.launch("audio/*") }) { Text("Load WAV") }
+                    Button(
+                        onClick = { pendingWavTargetId = track.id; wavFilePickerLauncher.launch("audio/*") },
+                        modifier = Modifier.heightIn(min = 44.dp)
+                    ) { Text("Load WAV") }
                 } else {
                     Text(track.wavDisplayName, Modifier.weight(1f), maxLines = 1)
-                    Text("WAV → FX")
-                    TextButton(onClick = { viewModel.unloadTrackWav(track.id) }) { Text("Unload") }
+                    Text("WAV → FX", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    TextButton(onClick = { viewModel.unloadTrackWav(track.id) }, modifier = Modifier.heightIn(min = 44.dp)) { Text("Unload") }
                 }
             }
         }
     } else {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp)) {
-            tracks.forEachIndexed { index, track -> FilterChip(selected = false, onClick = { viewModel.selectPath(track.id) }, label = { Text("Track ${index + 1}") }) }
-            FilterChip(selected = true, onClick = {}, label = { Text("Master") })
-            IconButton(onClick = { viewModel.addTrack() }) { Icon(Icons.Default.Add, "Add track") }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            tracks.forEachIndexed { index, track ->
+                FilterChip(
+                    selected = false,
+                    onClick = { viewModel.selectPath(track.id) },
+                    label = { Text("Track ${index + 1}") },
+                    modifier = Modifier.heightIn(min = 44.dp)
+                )
+            }
+            FilterChip(selected = true, onClick = {}, label = { Text("Master") }, modifier = Modifier.heightIn(min = 44.dp))
+            IconButton(onClick = { viewModel.addTrack() }, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.Default.Add, "Add track")
+            }
         }
     }
     if (wavTransport.loadedTrackCount > 0) {
-        Row(Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { if (wavTransport.playing) viewModel.wavTransportPause() else viewModel.wavTransportPlay() }) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            IconButton(
+                onClick = { if (wavTransport.playing) viewModel.wavTransportPause() else viewModel.wavTransportPlay() },
+                modifier = Modifier.size(44.dp)
+            ) {
                 Icon(if (wavTransport.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/Pause")
             }
-            IconButton(onClick = { viewModel.wavTransportRestart() }) { Icon(Icons.Default.SkipPrevious, "Restart") }
-            FilterChip(selected = wavTransport.looping, onClick = { viewModel.wavTransportToggleLoop() }, label = { Text("Loop") })
-            Text("${formatWavTime(wavTransport.positionSec)} / ${formatWavTime(wavTransport.durationSec)}")
+            IconButton(onClick = { viewModel.wavTransportRestart() }, modifier = Modifier.size(44.dp)) {
+                Icon(Icons.Default.SkipPrevious, "Restart")
+            }
+            FilterChip(selected = wavTransport.looping, onClick = { viewModel.wavTransportToggleLoop() }, label = { Text("Loop") }, modifier = Modifier.heightIn(min = 44.dp))
+            Text("${formatWavTime(wavTransport.positionSec)} / ${formatWavTime(wavTransport.durationSec)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
         // Drag-reorder state — use scrollable Column so all plugin cards stay in composition (no re-render when scrolling)
@@ -774,12 +824,12 @@ fun RackScreen(
                         )
                     }
                 )
-                Card(
+                Surface(
                     onClick = { viewModel.startEngine() },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    )
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                 ) {
                     Text(
                         text = bannerText,
@@ -791,11 +841,11 @@ fun RackScreen(
                 Spacer(modifier = Modifier.height(8.dp))
             }
             errorMessage?.let { error ->
-                Card(
+                Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.errorContainer
-                    )
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f))
                 ) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 4.dp, bottom = 4.dp, end = 4.dp),
@@ -902,7 +952,7 @@ fun RackScreen(
                                             else displacementOffset
                                         scaleX = if (isDragged) 1.05f else 1f
                                         scaleY = if (isDragged) 1.05f else 1f
-                                        shadowElevation = if (isDragged) 16f else 0f
+                                        shadowElevation = 0f
                                     }
                             )
                         }
@@ -942,10 +992,9 @@ private fun BlockingOperationOverlay(label: String) {
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            tonalElevation = 8.dp,
-            shadowElevation = 8.dp,
-            shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.surface
+            shape = RoundedCornerShape(4.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(
                 modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
@@ -1000,6 +1049,7 @@ private fun ResizeHandle(
 ) {
     val scaleState = rememberUpdatedState(currentScale)
     val callbackState = rememberUpdatedState(onScaleChange)
+    val outlineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
     Box(
         modifier = modifier
             .width(48.dp)
@@ -1016,7 +1066,7 @@ private fun ResizeHandle(
     ) {
         Canvas(modifier = Modifier.width(24.dp).height(10.dp)) {
             val strokeWidth = 1.5.dp.toPx()
-            val color = Color.Gray.copy(alpha = 0.7f)
+            val color = outlineColor
             val gap = size.height / 4f
             for (i in 0..2) {
                 val y = gap + i * gap
@@ -1039,56 +1089,42 @@ private fun VuMeter(
     clipping: Boolean,
     onClippingTap: () -> Unit
 ) {
-    val barHeight = 6.dp
-    val trackColor = MaterialTheme.colorScheme.surfaceVariant
-    val green = Color(0xFF4CAF50)
-    val yellow = Color(0xFFFFC107)
-    val red = Color(0xFFF44336)
-    Column(
+    val levelColor = when {
+        level >= 0.9f -> Color(0xFFF44336)
+        level >= 0.7f -> Color(0xFFFFC107)
+        else -> Color(0xFF4CAF50)
+    }
+    Row(
         modifier = modifier,
-        verticalArrangement = Arrangement.spacedBy(2.dp)
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(6.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
         ) {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
             Box(
                 modifier = Modifier
-                    .weight(1f)
-                    .height(barHeight)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(trackColor)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxHeight()
-                        .fillMaxWidth(level.coerceIn(0f, 1f))
-                        .background(
-                            brush = Brush.horizontalGradient(
-                                colors = listOf(green, yellow, red),
-                                startX = 0f,
-                                endX = 500f
-                            ),
-                            shape = RoundedCornerShape(4.dp)
-                        )
-                )
-            }
+                    .fillMaxHeight()
+                    .fillMaxWidth(level.coerceIn(0f, 1f))
+                    .background(levelColor)
+            )
+        }
+        Box(
+            modifier = Modifier
+                .sizeIn(minWidth = 44.dp, minHeight = 44.dp)
+                .clickable(onClick = onClippingTap),
+            contentAlignment = Alignment.Center
+        ) {
             Box(
                 modifier = Modifier
                     .size(8.dp)
                     .clip(CircleShape)
-                    .background(
-                        if (clipping) red
-                        else MaterialTheme.colorScheme.surfaceVariant
-                    )
-                    .clickable(onClick = onClippingTap),
-                contentAlignment = Alignment.Center
-            ) { }
+                    .background(if (clipping) Color(0xFFF44336) else MaterialTheme.colorScheme.surfaceVariant)
+            )
         }
     }
 }
@@ -1125,10 +1161,11 @@ fun PluginCard(
     }
     val pluginInfo = pluginInfoState.value
 
-    Card(
+    Surface(
         modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color.Transparent),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(4.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
             modifier = Modifier.fillMaxWidth()
@@ -1164,11 +1201,8 @@ fun PluginCard(
                 if (!isFullscreen) Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(
-                            MaterialTheme.colorScheme.surfaceColorAtElevation(2.dp),
-                            RoundedCornerShape(8.dp)
-                        )
-                        .padding(horizontal = 2.dp, vertical = 0.dp),
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Context menu button
@@ -1176,7 +1210,7 @@ fun PluginCard(
                     Box {
                         IconButton(
                             onClick = { showContextMenu = true },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(44.dp)
                         ) {
                             Icon(Icons.Default.MoreVert, contentDescription = "Options", modifier = Modifier.size(20.dp))
                         }
@@ -1253,7 +1287,7 @@ fun PluginCard(
                     // Collapse
                     IconButton(
                         onClick = { expanded = !expanded },
-                        modifier = Modifier.size(32.dp).testTag("plugin_card_expand")
+                        modifier = Modifier.size(44.dp).testTag("plugin_card_expand")
                     ) {
                         Icon(
                             if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
@@ -1298,7 +1332,7 @@ fun PluginCard(
                                 }
                                 onOpenFullscreen(pluginIndex, UiType.X11, w, h)
                             },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(44.dp)
                         ) {
                             Icon(
                                 Icons.Default.Fullscreen,
@@ -1315,7 +1349,7 @@ fun PluginCard(
                             onClick = {
                                 com.vibes.dsp.ui.vst.VstKeyboardAction.showKeyboard(pathId, pluginIndex)
                             },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier.size(44.dp)
                         ) {
                             Icon(
                                 Icons.Default.Keyboard,
@@ -1327,7 +1361,7 @@ fun PluginCard(
                     // Replace
                     IconButton(
                         onClick = onReplace,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(44.dp)
                     ) {
                         Icon(
                             Icons.Default.SwapHoriz,
@@ -1338,7 +1372,7 @@ fun PluginCard(
                     // Remove
                     IconButton(
                         onClick = onRemove,
-                        modifier = Modifier.size(32.dp)
+                        modifier = Modifier.size(44.dp)
                     ) {
                         Icon(
                             Icons.Default.Close,
@@ -1679,12 +1713,12 @@ fun PluginCard(
                             modifier = Modifier
                                 .align(Alignment.TopStart)
                                 .padding(16.dp)
-                                .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)
                         ) {
                             Icon(
                                 Icons.Default.Close,
                                 contentDescription = "Exit fullscreen",
-                                tint = Color.White
+                                tint = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -1767,12 +1801,12 @@ fun PluginCard(
                             ) {
                                 IconButton(
                                     onClick = onExitFullscreen,
-                                    modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)
                                 ) {
                                     Icon(
                                         Icons.Default.Close,
                                         contentDescription = "Exit fullscreen",
-                                        tint = Color.White
+                                        tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
                                 // Soft-keyboard toggle — mirrors the exe-installer fullscreen
@@ -1780,12 +1814,12 @@ fun PluginCard(
                                 // plugins with text fields (license keys, in-editor search).
                                 IconButton(
                                     onClick = { com.vibes.dsp.ui.vst.VstKeyboardAction.showKeyboard(pathId, pluginIndex) },
-                                    modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    modifier = Modifier.background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)
                                 ) {
                                     Icon(
                                         Icons.Default.Keyboard,
                                         contentDescription = "Toggle keyboard",
-                                        tint = Color.White
+                                        tint = MaterialTheme.colorScheme.onSurface
                                     )
                                 }
                             }
@@ -1883,12 +1917,12 @@ fun PluginCard(
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
                                     .padding(16.dp)
-                                    .background(Color.Black.copy(alpha = 0.5f), CircleShape)
+                                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)
                             ) {
                                 Icon(
                                     Icons.Default.Close,
                                     contentDescription = "Exit fullscreen",
-                                    tint = Color.White
+                                    tint = MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }
@@ -2871,7 +2905,7 @@ private fun RackBottomBar(
     recordingDurationSec: Double,
     onToggleRecording: () -> Unit,
 ) {
-    Surface(tonalElevation = 3.dp) {
+    Surface(color = MaterialTheme.colorScheme.background) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2895,7 +2929,7 @@ private fun RackBottomBar(
                 icon = if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
                 label = if (isRecording) formatRecordingDuration(recordingDurationSec) else "Record",
                 onClick = onToggleRecording,
-                tint = if (isRecording) MaterialTheme.colorScheme.error else Color(0xFFE53935)
+                tint = MaterialTheme.colorScheme.error
             )
             BottomBarButton(
                 icon = if (isEngineRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
@@ -2927,7 +2961,8 @@ private fun BottomBarButton(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .sizeIn(minWidth = 64.dp, minHeight = 44.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
             .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
     ) {
         Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(24.dp))

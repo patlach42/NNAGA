@@ -274,7 +274,7 @@ fun Tone3000Screen(
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(16.dp),
-                        modifier = Modifier.padding(32.dp)
+                        modifier = Modifier.padding(12.dp)
                     ) {
                         Surface(
                             shape = CircleShape,
@@ -324,7 +324,7 @@ fun Tone3000Screen(
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(12.dp),
-                        modifier = Modifier.padding(32.dp)
+                        modifier = Modifier.padding(12.dp)
                     ) {
                         Text(
                             text = error ?: "Something went wrong",
@@ -373,7 +373,7 @@ fun Tone3000Screen(
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(24.dp),
+                                .padding(12.dp),
                                 contentAlignment = Alignment.Center
                             ) {
                                 CircularProgressIndicator(
@@ -397,7 +397,7 @@ fun Tone3000Screen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
+                    .padding(horizontal = 12.dp)
                     .padding(bottom = 32.dp)
             ) {
                 Row(
@@ -531,7 +531,7 @@ fun Tone3000Screen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp)
+                    .padding(horizontal = 12.dp)
                     .padding(bottom = 32.dp)
             ) {
                 Text(
@@ -599,7 +599,9 @@ private fun ModelSelectionItem(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
         ),
-        shape = RoundedCornerShape(12.dp)
+        shape = RoundedCornerShape(12.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = CardDefaults.outlinedCardBorder()
     ) {
         Row(
             modifier = Modifier
@@ -640,7 +642,7 @@ private fun ModelSelectionItem(
                 isDownloaded && hasSourcePlugin -> {
                     FilledIconButton(
                         onClick = onSelect,
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(44.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = Color(0xFF4CAF50)
                         )
@@ -656,7 +658,7 @@ private fun ModelSelectionItem(
                     FilledIconButton(
                         onClick = {},
                         enabled = false,
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(44.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant,
                             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
@@ -673,7 +675,7 @@ private fun ModelSelectionItem(
                 else -> {
                     FilledIconButton(
                         onClick = onSelect,
-                        modifier = Modifier.size(36.dp),
+                        modifier = Modifier.size(44.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primary
                         )
@@ -702,7 +704,9 @@ fun ToneItem(
         shape = RoundedCornerShape(12.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        )
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = CardDefaults.outlinedCardBorder()
     ) {
         Row(
             modifier = Modifier
@@ -722,7 +726,6 @@ fun ToneItem(
                     model = ImageRequest.Builder(LocalContext.current)
                         .data(imageUrl)
                         .size(256, 256)
-                        .crossfade(true)
                         .build(),
                     contentDescription = null,
                     modifier = Modifier.fillMaxSize(),
