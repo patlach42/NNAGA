@@ -10,6 +10,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <future>
 
 static_assert(
     std::is_same_v<
@@ -77,6 +78,10 @@ struct UsbDriverTestAccess {
         return d.pendingImplicitCount_;
     }
     static void onCapture(LibusbUacDriver& d, libusb_transfer* xfr) { d.onCapture(xfr); }
+    static libusb_transfer* playbackTransfer(LibusbUacDriver& d,
+                                              size_t index) {
+        return d.transfers_.at(index);
+    }
     static void onIso(LibusbUacDriver& d, libusb_transfer* xfr) { d.onIso(xfr); }
     static void feedbackState(LibusbUacDriver& d, int interval, int maxFrames) {
         d.packetIntervalUframes_ = interval;
@@ -98,6 +103,32 @@ struct UsbDriverTestAccess {
     static int inflight(const LibusbUacDriver& d) {
         return d.inflight_.load(std::memory_order_acquire);
     }
+    static void isoStartupState(LibusbUacDriver& d,
+                                int sampleRate = 48000,
+                                int bitsPerSample = 16,
+                                int channels = 2,
+                                int bytesPerSample = 2,
+                                bool highSpeed = true,
+                                int bInterval = 1) {
+        d.ctx_ = reinterpret_cast<libusb_context*>(static_cast<uintptr_t>(1));
+        d.device_ = reinterpret_cast<libusb_device_handle*>(
+            static_cast<uintptr_t>(1));
+        d.format_.sampleRateHz = sampleRate;
+        d.format_.bitsPerSample = bitsPerSample;
+        d.format_.bytesPerSample = bytesPerSample;
+        d.format_.channels = channels;
+        d.format_.endpointAddress = 1;
+        d.format_.isHighSpeed = highSpeed;
+        d.format_.bInterval = bInterval;
+        d.format_.feedbackEndpointAddress = 0;
+        d.stopRequested_.store(false, std::memory_order_release);
+        d.streaming_.store(false, std::memory_order_release);
+    }
+    static bool startIsoPump(LibusbUacDriver& d) { return d.startIsoPump(); }
+    static bool prepareIsoPump(LibusbUacDriver& d) {
+        return d.startIsoPump(false);
+    }
+    static bool stopIsoPump(LibusbUacDriver& d) { return d.stopIsoPump(); }
 };
 
 } // namespace monotrypt::usb
@@ -106,6 +137,12 @@ namespace {
 
 extern "C" void usb_driver_mock_set_submit_result(int result);
 extern "C" int usb_driver_mock_submit_calls();
+extern "C" void usb_driver_mock_set_max_iso_packet_size(int bytes);
+extern "C" int usb_driver_mock_submitted_transfer_count();
+extern "C" int usb_driver_mock_submitted_payload_size(int transfer);
+extern "C" uint8_t usb_driver_mock_submitted_payload_byte(int transfer,
+                                                            int offset);
+extern "C" int usb_driver_mock_cancel_callback_calls();
 extern "C" void usb_driver_mock_reset();
 
 libusb_transfer* makeTransfer(std::vector<uint8_t>& payload, int packets = 1) {
@@ -127,6 +164,8 @@ void resetMock() {
     usb_driver_mock_reset();
 }
 
+void LIBUSB_CALL noopTransferCallback(libusb_transfer*) {}
+
 } // namespace
 
 TEST(UsbDriverLifecycle, StartWithoutDeviceReportsNoDeviceAndStopIsIdempotent) {
@@ -141,6 +180,27 @@ TEST(UsbDriverLifecycle, StartWithoutDeviceReportsNoDeviceAndStopIsIdempotent) {
     driver.stop();
     EXPECT_FALSE(driver.isStreaming());
 }
+TEST(UsbDriverMock, CancelOnlyInvokesAcceptedTransferOnce) {
+    resetMock();
+
+    auto* unsubmitted = libusb_alloc_transfer(0);
+    ASSERT_NE(unsubmitted, nullptr);
+    unsubmitted->callback = &noopTransferCallback;
+    EXPECT_EQ(libusb_cancel_transfer(unsubmitted), LIBUSB_ERROR_NOT_FOUND);
+    EXPECT_EQ(usb_driver_mock_cancel_callback_calls(), 0);
+    libusb_free_transfer(unsubmitted);
+
+    auto* accepted = libusb_alloc_transfer(0);
+    ASSERT_NE(accepted, nullptr);
+    accepted->callback = &noopTransferCallback;
+    ASSERT_EQ(libusb_submit_transfer(accepted), LIBUSB_SUCCESS);
+    EXPECT_EQ(libusb_cancel_transfer(accepted), LIBUSB_SUCCESS);
+    EXPECT_EQ(usb_driver_mock_cancel_callback_calls(), 1);
+    EXPECT_EQ(libusb_cancel_transfer(accepted), LIBUSB_ERROR_NOT_FOUND);
+    EXPECT_EQ(usb_driver_mock_cancel_callback_calls(), 1);
+    libusb_free_transfer(accepted);
+}
+
 
 TEST(UsbDriverRing, WriteAndDrainPreserveWholeFramesAcrossWrap) {
     monotrypt::usb::LibusbUacDriver driver;
@@ -168,7 +228,7 @@ TEST(UsbDriverRing, WriteAndDrainPreserveWholeFramesAcrossWrap) {
 TEST(UsbDriverRing, WatermarkRejectsPartialFrameAndCoalescesOverrun) {
     monotrypt::usb::LibusbUacDriver driver;
     monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
-    driver.setGraphQuantum(16);
+    driver.setGraphQuantum(16, 2);  // explicit legacy 2x watermark admits 48 of 49
     std::vector<uint8_t> input(49 * 4, 0xA5);
 
     EXPECT_EQ(driver.writePcm(input.data(), 49), 48);
@@ -179,10 +239,29 @@ TEST(UsbDriverRing, WatermarkRejectsPartialFrameAndCoalescesOverrun) {
     EXPECT_EQ(driver.playbackXRunCount(), 1u);
 }
 
+TEST(UsbDriverRing, DefaultWatermarkAdmits49FramesWithin64FrameLimit) {
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
+    driver.setGraphQuantum(16);  // default 3x target: 48 + 16 = 64
+
+    constexpr int frameStride = 4;
+    std::vector<uint8_t> input(64 * frameStride, 0xA5);
+
+    EXPECT_EQ(driver.writePcm(input.data(), 49), 49);
+    EXPECT_EQ(driver.bufferedFrames(), 49);
+    EXPECT_EQ(driver.writableFrames(), 15);
+    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+
+    EXPECT_EQ(driver.writePcm(input.data() + 49 * frameStride, 15), 15);
+    EXPECT_EQ(driver.bufferedFrames(), 64);
+    EXPECT_EQ(driver.writableFrames(), 0);
+    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+}
+
 TEST(UsbDriverRing, PartialAdmissionReportsWholeFramesAndCallerCanSubmitTail) {
     monotrypt::usb::LibusbUacDriver driver;
     monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
-    driver.setGraphQuantum(16);  // watermark admits 48 of the 49-frame block
+    driver.setGraphQuantum(16, 2);  // explicit legacy 2x watermark admits 48 of 49
 
     constexpr int frameStride = 4;
     constexpr int requestedFrames = 49;
@@ -356,15 +435,15 @@ TEST(UsbDriverCapture, ImplicitMetadataFifoResynchronizesAfterSaturation) {
     EXPECT_EQ(stats.fifoDepth, 1u);
     EXPECT_EQ(stats.fallbackPackets, 0u);
     EXPECT_EQ(driver.captureStats().overruns, 1u);
-    EXPECT_EQ(driver.captureAvailableFrames(), 32);
+    EXPECT_EQ(driver.captureAvailableFrames(), 64);
 
     std::vector<uint8_t> output(257 * 4, 0);
-    ASSERT_EQ(driver.readCapturePcm(output.data(), 257), 32);
-    // The bounded read exposes the newest 32 frames (225..256), not the
+    ASSERT_EQ(driver.readCapturePcm(output.data(), 257), 64);
+    // The bounded read exposes the newest 64 frames (193..256), not the
     // oldest physical backlog.
-    EXPECT_EQ(output[0], 225);
+    EXPECT_EQ(output[0], 193);
     EXPECT_EQ(output[1], 0);
-    constexpr size_t last = 31 * 4;
+    constexpr size_t last = 63 * 4;
     EXPECT_EQ(output[last], 0);
     EXPECT_EQ(output[last + 1], 1);
     EXPECT_EQ(driver.captureAvailableFrames(), 0);
@@ -449,4 +528,200 @@ TEST(UsbDriverTelemetry, IsoDeviceRemovalIncrementsDirectionSpecificCounters) {
     EXPECT_EQ(playbackStats.captureTransferErrors, 0u);
     EXPECT_EQ(playbackStats.playbackTransferErrors, 1u);
     libusb_free_transfer(playbackTransfer);
+}
+TEST(UsbDriverLifecycle, InitialOutQueueConsumesOrderedPcmBeforeSubmit) {
+    resetMock();
+    usb_driver_mock_set_max_iso_packet_size(7 * 4);
+
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::isoStartupState(driver);
+
+    constexpr int kTransfers = 4;
+    constexpr int kPacketsPerTransfer = 8;
+    constexpr int kFramesPerPacket = 6;  // 48 kHz / 8 kHz packet cadence.
+    constexpr int kFrameBytes = 4;       // stereo 16-bit PCM.
+    constexpr int kInitialFrames =
+        kTransfers * kPacketsPerTransfer * kFramesPerPacket;
+    constexpr int kInitialBytes = kInitialFrames * kFrameBytes;
+
+    std::vector<uint8_t> ring(monotrypt::usb::kPlaybackRingBytes, 0);
+    for (int frame = 0; frame < kInitialFrames; ++frame) {
+        for (int byte = 0; byte < kFrameBytes; ++byte) {
+            ring[frame * kFrameBytes + byte] =
+                static_cast<uint8_t>(0x40 + frame + byte);
+        }
+    }
+    monotrypt::usb::UsbDriverTestAccess::setRingBytes(driver, ring);
+    monotrypt::usb::UsbDriverTestAccess::playbackCursors(
+        driver, kInitialBytes, 0);
+
+    ASSERT_TRUE(monotrypt::usb::UsbDriverTestAccess::prepareIsoPump(driver));
+    ASSERT_TRUE(driver.startPlayback());
+    EXPECT_FALSE(driver.startPlayback());
+    ASSERT_EQ(usb_driver_mock_submitted_transfer_count(), kTransfers);
+    EXPECT_EQ(driver.bufferedFrames(), 0);
+
+    for (int transfer = 0; transfer < kTransfers; ++transfer) {
+        SCOPED_TRACE(transfer);
+        ASSERT_EQ(usb_driver_mock_submitted_payload_size(transfer),
+                  kPacketsPerTransfer * kFramesPerPacket * kFrameBytes);
+        for (int offset = 0;
+             offset < kPacketsPerTransfer * kFramesPerPacket * kFrameBytes;
+             ++offset) {
+            const int frame =
+                (transfer * kPacketsPerTransfer * kFramesPerPacket) +
+                (offset / kFrameBytes);
+            const int byte = offset % kFrameBytes;
+            ASSERT_EQ(usb_driver_mock_submitted_payload_byte(transfer, offset),
+                      static_cast<uint8_t>(0x40 + frame + byte))
+                << "offset " << offset;
+        }
+    }
+}
+TEST(UsbDriverLifecycle, PreparedHighRateQueueUsesOneMillisecondTransfers) {
+    resetMock();
+
+    constexpr int kTransfers = 4;
+    constexpr int kPacketRate = 1000;  // high-speed bInterval=4
+    constexpr int kPacketsPerTransfer =
+        monotrypt::usb::packetsPerTransferForRate(kPacketRate);
+    constexpr int kFramesPerPacket = 192;  // 192 kHz / 1 kHz
+    constexpr int kFrameBytes = 4 * 4;     // 4ch S32
+    constexpr int kInitialFrames =
+        kTransfers * kPacketsPerTransfer * kFramesPerPacket;
+    constexpr int kInitialBytes = kInitialFrames * kFrameBytes;
+    ASSERT_LE(kInitialBytes,
+              static_cast<int>(monotrypt::usb::kPlaybackRingBytes));
+
+    usb_driver_mock_set_max_iso_packet_size(kFramesPerPacket * kFrameBytes);
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::isoStartupState(
+        driver, 192000, 32, 4, 4, true, 4);
+
+    std::vector<uint8_t> ring(monotrypt::usb::kPlaybackRingBytes, 0);
+    for (int frame = 0; frame < kInitialFrames; ++frame) {
+        for (int byte = 0; byte < kFrameBytes; ++byte) {
+            ring[frame * kFrameBytes + byte] =
+                static_cast<uint8_t>(0x70 + frame + byte);
+        }
+    }
+    monotrypt::usb::UsbDriverTestAccess::setRingBytes(driver, ring);
+    monotrypt::usb::UsbDriverTestAccess::playbackCursors(
+        driver, kInitialBytes, 0);
+
+    ASSERT_TRUE(monotrypt::usb::UsbDriverTestAccess::prepareIsoPump(driver));
+    EXPECT_EQ(driver.startupPrimeFrames(), kInitialFrames);
+    ASSERT_TRUE(driver.startPlayback());
+    EXPECT_FALSE(driver.startPlayback());
+    ASSERT_EQ(usb_driver_mock_submitted_transfer_count(), kTransfers);
+
+    for (int transfer = 0; transfer < kTransfers; ++transfer) {
+        SCOPED_TRACE(transfer);
+        ASSERT_EQ(usb_driver_mock_submitted_payload_size(transfer),
+                  kFramesPerPacket * kFrameBytes);
+        for (int offset = 0; offset < kFramesPerPacket * kFrameBytes;
+             ++offset) {
+            const int frame = transfer * kFramesPerPacket +
+                              offset / kFrameBytes;
+            const int byte = offset % kFrameBytes;
+            ASSERT_EQ(usb_driver_mock_submitted_payload_byte(transfer, offset),
+                      static_cast<uint8_t>(0x70 + frame + byte))
+                << "offset " << offset;
+        }
+    }
+}
+
+TEST(UsbDriverLifecycle, StopPreparedPumpDoesNotCallbackUnsubmittedTransfers) {
+    resetMock();
+    usb_driver_mock_set_max_iso_packet_size(7 * 4);
+
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::isoStartupState(driver);
+    ASSERT_TRUE(monotrypt::usb::UsbDriverTestAccess::prepareIsoPump(driver));
+    EXPECT_EQ(usb_driver_mock_submit_calls(), 0);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::inflight(driver), 0);
+
+    driver.stop();
+
+    EXPECT_EQ(usb_driver_mock_cancel_callback_calls(), 0);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::inflight(driver), 0);
+    EXPECT_FALSE(driver.isStreaming());
+}
+
+
+
+TEST(UsbDriverLifecycle, StopWakesBlockedWritableWait) {
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
+    driver.setGraphQuantum(16, 1);
+
+    std::vector<uint8_t> full(32 * 4, 0x55);
+    ASSERT_EQ(driver.writePcm(full.data(), 32), 32);
+    monotrypt::usb::UsbDriverTestAccess::streaming(driver, true);
+
+    std::promise<void> entered;
+    auto enteredFuture = entered.get_future();
+    std::atomic<bool> waitResult{true};
+    std::thread waiter([&] {
+        entered.set_value();
+        waitResult.store(driver.waitForWritableFrames(1, -1),
+                         std::memory_order_release);
+    });
+
+    enteredFuture.wait();
+    driver.stop();
+    waiter.join();
+
+    EXPECT_FALSE(waitResult.load(std::memory_order_acquire));
+    EXPECT_FALSE(driver.isStreaming());
+}
+TEST(UsbDriverLifecycle, QueuedOutFramesTracksCompletionAndStop) {
+    resetMock();
+    usb_driver_mock_set_max_iso_packet_size(7 * 4);
+
+    constexpr int kTransfers = 4;
+    constexpr int kPacketsPerTransfer = 8;
+    constexpr int kFrameBytes = 4;
+    constexpr int kFramesPerPacket = 6;
+    constexpr int kInitialFrames =
+        kTransfers * kPacketsPerTransfer * kFramesPerPacket;
+
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::isoStartupState(driver);
+    std::vector<uint8_t> ring(monotrypt::usb::kPlaybackRingBytes, 0);
+    monotrypt::usb::UsbDriverTestAccess::setRingBytes(driver, ring);
+    monotrypt::usb::UsbDriverTestAccess::playbackCursors(
+        driver, kInitialFrames * kFrameBytes, 0);
+
+    ASSERT_TRUE(monotrypt::usb::UsbDriverTestAccess::prepareIsoPump(driver));
+    ASSERT_TRUE(driver.startPlayback());
+
+    uint64_t descriptorFrames = 0;
+    auto* completed =
+        monotrypt::usb::UsbDriverTestAccess::playbackTransfer(driver, 0);
+    ASSERT_NE(completed, nullptr);
+    for (int transfer = 0; transfer < kTransfers; ++transfer) {
+        auto* submitted =
+            monotrypt::usb::UsbDriverTestAccess::playbackTransfer(
+                driver, static_cast<size_t>(transfer));
+        ASSERT_NE(submitted, nullptr);
+        for (int packet = 0; packet < submitted->num_iso_packets; ++packet) {
+            descriptorFrames +=
+                submitted->iso_packet_desc[packet].length / kFrameBytes;
+        }
+    }
+    ASSERT_EQ(descriptorFrames, static_cast<uint64_t>(kInitialFrames));
+    EXPECT_EQ(driver.queuedOutFrames(), descriptorFrames);
+
+    completed->status = LIBUSB_TRANSFER_COMPLETED;
+    for (int packet = 0; packet < completed->num_iso_packets; ++packet) {
+        completed->iso_packet_desc[packet].status = LIBUSB_TRANSFER_COMPLETED;
+    }
+    monotrypt::usb::UsbDriverTestAccess::onIso(driver, completed);
+
+    EXPECT_EQ(driver.queuedOutFrames(), descriptorFrames);
+    EXPECT_EQ(driver.queuedOutFrames(), static_cast<uint64_t>(kInitialFrames));
+
+    driver.stop();
+    EXPECT_EQ(driver.queuedOutFrames(), uint64_t{0});
 }

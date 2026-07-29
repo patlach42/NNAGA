@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
  *  are no VST2-format plugins in the registry). */
 @Composable
 fun VstInlineEditor(
+    pathId: Long,
     pluginIndex: Int,
     isFullscreen: Boolean = false,
     onPluginSizeKnown: (width: Int, height: Int) -> Unit = { _, _ -> },

@@ -126,6 +126,9 @@ private fun DirectUsbSessionSettings() {
     var selectedOutputPair by remember {
         mutableIntStateOf(AudioSettingsManager.getDirectUsbOutputPair(context))
     }
+    var selectedPeriodMultiplier by remember {
+        mutableIntStateOf(AudioSettingsManager.getDirectUsbPeriodMultiplier(context))
+    }
     var message by remember { mutableStateOf<String?>(null) }
     var devicesExpanded by remember { mutableStateOf(false) }
 
@@ -284,6 +287,20 @@ private fun DirectUsbSessionSettings() {
             }
         }
     }
+    IntSelector(
+        label = "Period multiplier",
+        selected = selectedPeriodMultiplier,
+        options = (1..8).toList()
+    ) { multiplier ->
+        selectedPeriodMultiplier = multiplier
+        AudioSettingsManager.setDirectUsbPeriodMultiplier(context, multiplier)
+    }
+    Text(
+        text = "Lower values reduce latency but increase the risk of audio dropouts. " +
+            "Changes apply on the next engine start.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
     message?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
@@ -301,6 +318,7 @@ private fun IntSelector(label: String, selected: Int, options: List<Int>, onSele
                     "Sample rate" -> "$selected Hz"
                     "Input" -> "Input $selected"
                     "Output" -> "Outputs ${selected * 2 - 1}–${selected * 2}"
+                    "Period multiplier" -> "$selected×"
                     else -> "$selected-bit"
                 },
                 onValueChange = {},
@@ -317,6 +335,7 @@ private fun IntSelector(label: String, selected: Int, options: List<Int>, onSele
                                     "Sample rate" -> "$value Hz"
                                     "Input" -> "Input $value"
                                     "Output" -> "Outputs ${value * 2 - 1}–${value * 2}"
+                                    "Period multiplier" -> "$value×"
                                     else -> "$value-bit"
                                 }
                             )

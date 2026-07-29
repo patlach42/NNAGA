@@ -121,6 +121,7 @@ import com.vibes.dsp.engine.RackManager
 import com.vibes.dsp.engine.X11Bridge
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.UiType
+import com.vibes.dsp.engine.DirectUsbSessionState
 import com.vibes.dsp.ui.modgui.InlineModguiView
 import com.vibes.dsp.ui.x11.PluginX11UiView
 import com.vibes.dsp.ui.x11.X11DisplayManager
@@ -268,7 +269,6 @@ fun RackScreen(
     }
 
     val isEngineRunning by viewModel.isEngineRunning.collectAsState()
-    val latencyMs by viewModel.latencyMs.collectAsState()
     val inputLevel by viewModel.inputLevel.collectAsState()
     val outputLevel by viewModel.outputLevel.collectAsState()
     val cpuLoad by viewModel.cpuLoad.collectAsState()
@@ -278,6 +278,8 @@ fun RackScreen(
     val tracks by viewModel.tracks.collectAsState()
     val selectedPathId by viewModel.selectedPathId.collectAsState()
     val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
+    val directUsbState by viewModel.directUsbState.collectAsState()
+    val directUsbStats by viewModel.directUsbStats.collectAsState()
     val wavTransport by viewModel.wavTransport.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val presetMessage by viewModel.presetMessage.collectAsState()
@@ -356,14 +358,25 @@ fun RackScreen(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
-            if (isFullscreenActive) return@Scaffold
-            val statusText = if (isEngineRunning) {
-                var s = "Running · %.1f ms · CPU %.0f%%".format(latencyMs, cpuLoad * 100f)
-                if (xRunCount > 0) s += " · XRuns $xRunCount"
-                if (inputClipping || outputClipping) s += " · Clip!"
-                s
-            } else "Stopped"
-            val statusColor = if (inputClipping || outputClipping)
+            val statusText = when (directUsbState) {
+                DirectUsbSessionState.Starting,
+                DirectUsbSessionState.Stopping -> "Starting USB"
+                DirectUsbSessionState.Failed -> "USB failed"
+                DirectUsbSessionState.Running -> {
+                    var s = "Running · Host ~%.1f ms · CPU %.0f%%".format(
+                        if (directUsbStats.sampleRateHz > 0)
+                            directUsbStats.knownHostLatencyFrames.toDouble() /
+                                directUsbStats.sampleRateHz * 1000.0 else 0.0,
+                        cpuLoad * 100f
+                    )
+                    if (xRunCount > 0) s += " · XRuns $xRunCount"
+                    if (inputClipping || outputClipping) s += " · Clip!"
+                    s
+                }
+                else -> "Stopped"
+            }
+            val statusColor = if (directUsbState == DirectUsbSessionState.Failed ||
+                inputClipping || outputClipping)
                 MaterialTheme.colorScheme.error
             else
                 MaterialTheme.colorScheme.onSurfaceVariant

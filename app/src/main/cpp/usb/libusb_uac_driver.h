@@ -45,6 +45,8 @@ enum class StartError : int {
     SetSampleRateFailed,       // SET_CUR/GET_CUR all fell through
     IsoPumpAllocFailed,        // libusb_alloc_transfer returned null
     IsoPumpSubmitFailed,       // initial libusb_submit_transfer
+    TransportStoppedUnexpectedly,
+    Unknown,
 };
 
 // One subrange entry returned by GET_RANGE on a clock entity. UAC2
@@ -164,9 +166,14 @@ public:
     // Negotiates UAC2 alt setting matching the requested format,
     // claims the streaming interface, sets the clock source rate via
     // a class-specific control transfer, and starts the iso pump.
-    // Starts playback and a compatible PCM Type-I capture stream.
+    // Starts capture and prepares playback storage; OUT is submitted by startPlayback().
     bool startDuplex(int sampleRateHz, int bitsPerSample, int channels,
                      int bytesPerSample = 0);
+    // Consumes the initial ring prime and submits feedback/OUT transfers.
+    bool startPlayback() noexcept;
+    // Non-blocking stop request; final resource teardown remains stop().
+    void requestStop() noexcept;
+    int startupPrimeFrames() const noexcept;
     int readCapturePcm(uint8_t* dst, int frames);
     int captureAvailableFrames() const;
     const CaptureFormat& currentCaptureFormat() const { return captureFormat_; }
@@ -177,6 +184,7 @@ public:
     }
     int discardCaptureFrames(int maxFrames) noexcept;
     ImplicitFeedbackStats implicitFeedbackStats() const {
+        std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
         const size_t depth = implicitWrite_.load(std::memory_order_acquire) -
                              implicitRead_.load(std::memory_order_acquire);
         const int stride = std::max(1, format_.channels * format_.bytesPerSample);
@@ -218,9 +226,18 @@ public:
     void flushRing();
 
     // Current queued playback frames, used to enforce bounded latency.
+    uint64_t queuedOutFrames() const noexcept {
+        return queuedOutFrames_.load(std::memory_order_acquire);
+    }
+    int captureTransferFrames() const noexcept {
+        return captureTransferFrames_.load(std::memory_order_acquire);
+    }
+    int playbackTargetFrames() const noexcept {
+        return playbackTargetFrames_.load(std::memory_order_acquire);
+    }
     int bufferedFrames() const;
-    // Set the application graph quantum; controls the playback watermark.
-    void setGraphQuantum(int frames);
+    // Set graph quantum and direct-USB playback period multiplier.
+    void setGraphQuantum(int frames, int periodMultiplier = kDefaultPeriodMultiplier);
 
     // Returns true when the iso pump is already streaming a stream
     // matching [sampleRate]/[bitsPerSample]/[channels]. Used by
@@ -306,12 +323,13 @@ private:
     static void LIBUSB_CALL onCaptureTrampoline(libusb_transfer* xfr);
     void onCapture(libusb_transfer* xfr);
     // (min, max, res) subranges into supportedRates_. No-op if the
-    // device returns less than the 2-byte wNumSubRanges header. Used
-    // on the success path of setSampleRate so the UI can list "44.1 /
-    // 48 / 88.2 / 96 / 176.4 / 192 kHz" beneath the active rate.
+    // device returns less than the 2-byte wNumSubRanges header.
     void captureRangeForClock(uint8_t clockId);
 
-    bool startIsoPump();
+    bool startIsoPump(bool submit = true);
+    // Number of frames in all initially prepared OUT packets.
+    int exactInitialPacketFrames_ = 0;
+    bool submitIsoPump();
     bool stopIsoPump();
 
     // libusb iso completion callback — static trampoline into onIso().
@@ -336,8 +354,9 @@ private:
     std::atomic<size_t> ringTail_{0};  // consumer cursor (onIso)
     // Frame-based latency budget, configured by the graph quantum.
     std::atomic<int> graphQuantum_{64};
-    std::atomic<int> targetWatermark_{128};
-
+    std::atomic<int> playbackTargetFrames_{128};
+    std::atomic<int> startupPrimeFrames_{128};
+    std::atomic<uint64_t> queuedOutFrames_{0};
     mutable std::mutex mutex_;          // guards open/start/stop only
     mutable std::recursive_mutex sessionMutex_; // serializes start/duplex/stop
     libusb_context* ctx_ = nullptr;
@@ -382,6 +401,9 @@ private:
     static constexpr size_t kImplicitFifoCapacity = 256;
     std::array<std::atomic<uint32_t>, kImplicitFifoCapacity> implicitFrames_{};
     std::atomic<size_t> implicitRead_{0};
+    int playbackPacketsPerTransfer_ = 1;
+    int capturePacketsPerTransfer_ = 1;
+    std::atomic<int> captureTransferFrames_{0};
     std::atomic<size_t> implicitWrite_{0};
     std::atomic<uint64_t> implicitFallbackPackets_{0};
     std::atomic<uint64_t> captureTransferErrors_{0};

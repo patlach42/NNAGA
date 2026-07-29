@@ -87,6 +87,14 @@ void walkExtra(const uint8_t* extra, int extraLen, Cb&& cb) {
     }
 }
 
+void subtractQueued(std::atomic<uint64_t>& value, uint64_t amount) noexcept {
+    uint64_t current = value.load(std::memory_order_relaxed);
+    while (current != 0) {
+        const uint64_t next = current > amount ? current - amount : 0;
+        if (value.compare_exchange_weak(current, next, std::memory_order_acq_rel,
+                                         std::memory_order_relaxed)) return;
+    }
+}
 } // namespace
 void signalWakeFd(int fd) noexcept {
     if (fd < 0) return;
@@ -1440,7 +1448,11 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                     libusb_handle_events_timeout(ctx_, &tv);
                 }
             });
-            constexpr size_t required = kNumTransfers * kPacketsPerTransfer;
+            const int startupPacketsPerTransfer = packetsPerTransferForRate(
+                packetsPerSecondForInterval(format_.isHighSpeed,
+                                            format_.bInterval));
+            const size_t required = static_cast<size_t>(kNumTransfers) *
+                                    static_cast<size_t>(startupPacketsPerTransfer);
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
             while (implicitWrite_.load(std::memory_order_acquire) -
                        implicitRead_.load(std::memory_order_acquire) < required &&
@@ -1459,7 +1471,9 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                 return false;
             }
         }
-        if (!startIsoPump()) {
+        // Capture is live; now prepare OUT descriptors. No playback transfer
+        // is submitted until startPlayback() has primed the ring.
+        if (!startIsoPump(false)) {
             stop();
             return false;
         }
@@ -1475,7 +1489,6 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
 
 bool LibusbUacDriver::startCapturePump() {
     ErrorSink err{&lastError_, &errorMutex_, &lastErrorDetail_};
-    const int packets = kPacketsPerTransfer;
     const int mps = libusb_get_max_iso_packet_size(
         libusb_get_device(device_), captureFormat_.endpointAddress);
     if (mps <= 0) {
@@ -1490,15 +1503,11 @@ bool LibusbUacDriver::startCapturePump() {
             "capture format has no usable PCM frame stride");
         return false;
     }
-    const int captureHostPeriods =
-        captureFormat_.isHighSpeed ? 8000 : 1000;
-    const int captureInterval = captureFormat_.isHighSpeed
-        ? (1 << std::min<int>(
-              15, captureFormat_.bInterval > 0
-                      ? captureFormat_.bInterval - 1 : 0))
-        : std::max<int>(1, captureFormat_.bInterval);
-    const int capturePacketsPerSecond =
-        std::max(1, captureHostPeriods / captureInterval);
+    const int capturePacketsPerSecond = packetsPerSecondForInterval(
+        captureFormat_.isHighSpeed, captureFormat_.bInterval);
+    capturePacketsPerTransfer_ =
+        packetsPerTransferForRate(capturePacketsPerSecond);
+    const int packets = capturePacketsPerTransfer_;
     const int captureNominalMax =
         (captureFormat_.sampleRateHz + capturePacketsPerSecond - 1) /
         capturePacketsPerSecond;
@@ -1510,6 +1519,8 @@ bool LibusbUacDriver::startCapturePump() {
     }
     captureMaxFramesPerPacket_ =
         std::min(capturePhysicalMax, captureNominalMax + 1);
+    captureTransferFrames_.store(captureMaxFramesPerPacket_ * packets,
+                                  std::memory_order_release);
     captureTransfers_.reserve(kNumTransfers);
     captureTransferBuffers_.reserve(kNumTransfers);
     for (int i = 0; i < kNumTransfers; ++i) {
@@ -1535,6 +1546,9 @@ bool LibusbUacDriver::startCapturePump() {
         if (rc != LIBUSB_SUCCESS) {
             captureInflight_.fetch_sub(1, std::memory_order_acq_rel);
             captureTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+            LOGE("capture transfer submit failed: %s endpoint=0x%02x packets=%d packetBytes=%d totalBytes=%zu",
+                 libusb_strerror(rc), captureFormat_.endpointAddress, packets, mps,
+                 captureTransferBuffers_.empty() ? 0U : captureTransferBuffers_.back().size());
             err(StartError::IsoPumpSubmitFailed,
                 std::string("capture transfer submit failed: ") +
                 libusb_strerror(rc));
@@ -1564,6 +1578,7 @@ bool LibusbUacDriver::stopCapturePump() {
     captureTransfers_.clear();
     captureTransferBuffers_.clear();
     captureMaxFramesPerPacket_ = 0;
+    captureTransferFrames_.store(0, std::memory_order_release);
     return true;
 }
 
@@ -1674,11 +1689,19 @@ int LibusbUacDriver::captureFrameLimit() const noexcept {
         captureFormat_.channels * captureFormat_.bytesPerSample;
     if (stride <= 0 || captureRing_.empty()) return 0;
     const int graph = graphQuantum_.load(std::memory_order_acquire);
-    const int transferBurstFrames =
-        std::max(maxFramesPerPacket_, captureMaxFramesPerPacket_) *
-        kPacketsPerTransfer;
+    // Four completions can arrive in one event-loop turn. Keep two newly
+    // resubmitted transfers plus a graph block so a brief scheduler delay
+    // does not discard capture before the render thread wakes.
+    const int captureTransferFrames =
+        std::max(1, capturePacketsPerTransfer_) *
+        std::max(0, captureMaxFramesPerPacket_);
+    const int queuedCaptureFrames =
+        (kNumTransfers + 2) * captureTransferFrames;
+    const int playbackBudget =
+        playbackTargetFrames_.load(std::memory_order_acquire) + graph;
     const int latencyLimit =
-        std::max(graph * 2, transferBurstFrames * 2);
+        std::max(graph * 2, std::max(queuedCaptureFrames + graph,
+                                     playbackBudget));
     const int physicalLimit =
         static_cast<int>(captureRing_.size() / static_cast<size_t>(stride));
     return std::min(physicalLimit, latencyLimit);
@@ -1788,12 +1811,17 @@ bool LibusbUacDriver::isStreamingFormat(int sampleRate, int bitsPerSample, int c
         && format_.bitsPerSample == bitsPerSample
         && format_.channels == channels;
 }
+
+void LibusbUacDriver::requestStop() noexcept {
+    stopRequested_.store(true, std::memory_order_release);
+    captureActive_.store(false, std::memory_order_release);
+    streaming_.store(false, std::memory_order_release);
+    signalWakeFd(captureWakeFd_);
+}
 void LibusbUacDriver::stop() {
     std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
-    captureActive_.store(false, std::memory_order_release);
-    const bool was = streaming_.exchange(false, std::memory_order_acq_rel);
-    signalWakeFd(captureWakeFd_);
-    if (!was && transfers_.empty() && captureTransfers_.empty() &&
+    requestStop();
+    if (transfers_.empty() && captureTransfers_.empty() &&
         !interfaceClaimed_ && !controlInterfaceClaimed_ &&
         !captureInterfaceClaimed_) return;
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1830,7 +1858,7 @@ void LibusbUacDriver::stop() {
 
 // --- Iso pump ---------------------------------------------------------
 
-bool LibusbUacDriver::startIsoPump() {
+bool LibusbUacDriver::startIsoPump(bool submit) {
     auto setErr = [this](StartError c, const std::string& d) {
         lastError_.store(c, std::memory_order_release);
         std::lock_guard<std::mutex> lock(errorMutex_);
@@ -1851,6 +1879,7 @@ bool LibusbUacDriver::startIsoPump() {
         : std::max<int>(1, format_.bInterval);
     microframesPerSec_ =
         std::max(1, hostPeriodHz / packetIntervalUframes_);
+    playbackPacketsPerTransfer_ = packetsPerTransferForRate(microframesPerSec_);
     int baseFrames = format_.sampleRateHz / microframesPerSec_;
     int rateRemainder = format_.sampleRateHz % microframesPerSec_;
     LOGI("iso pump: %d packets/sec (HS=%d, bInterval=%u), "
@@ -1892,9 +1921,8 @@ bool LibusbUacDriver::startIsoPump() {
     transfers_.reserve(kNumTransfers);
     transferBuffers_.reserve(kNumTransfers);
 
-
     for (int t = 0; t < kNumTransfers; ++t) {
-        libusb_transfer* xfr = libusb_alloc_transfer(kPacketsPerTransfer);
+        libusb_transfer* xfr = libusb_alloc_transfer(playbackPacketsPerTransfer_);
         if (!xfr) {
             LOGE("libusb_alloc_transfer failed at #%d", t);
             setErr(StartError::IsoPumpAllocFailed,
@@ -1905,15 +1933,15 @@ bool LibusbUacDriver::startIsoPump() {
         }
         // Worst-case sized buffer — every packet is the +1 size.
         // Per-packet `length` (set in onIso) trims to actual.
-        std::vector<uint8_t> buf(maxBytesPerPacket * kPacketsPerTransfer, 0);
+        std::vector<uint8_t> buf(maxBytesPerPacket * playbackPacketsPerTransfer_, 0);
         libusb_fill_iso_transfer(
             xfr, device_, format_.endpointAddress,
-            buf.data(), buf.size(), kPacketsPerTransfer,
+            buf.data(), buf.size(), playbackPacketsPerTransfer_,
             &LibusbUacDriver::onIsoTrampoline, this, /*timeout=*/0);
         // Prime every packet with the same exact rational cadence used after
         // the first completion. At 44.1 kHz, filling all initial packets with
         // the five-frame floor would undersend 16 frames in the first 4 ms.
-        for (int packet = 0; packet < kPacketsPerTransfer; ++packet) {
+        for (int packet = 0; packet < playbackPacketsPerTransfer_; ++packet) {
             xfr->iso_packet_desc[packet].length =
                 static_cast<unsigned int>(nominalScheduler_.next()) * frameStride;
         }
@@ -1955,6 +1983,22 @@ bool LibusbUacDriver::startIsoPump() {
         }
     }
 
+    exactInitialPacketFrames_ = 0;
+    for (const libusb_transfer* xfr : transfers_) {
+        for (int packet = 0; packet < xfr->num_iso_packets; ++packet) {
+            exactInitialPacketFrames_ +=
+                static_cast<int>(xfr->iso_packet_desc[packet].length) / frameStride;
+        }
+    }
+    const int strideFrames = std::max(1, frameStride);
+    const int physicalFrames = static_cast<int>(kRingBytes / strideFrames);
+    const int maxPrime = std::max(0, physicalFrames -
+                                      graphQuantum_.load(std::memory_order_acquire));
+    startupPrimeFrames_.store(
+        std::min(maxPrime, effectivePlaybackPrimeFrames(
+            playbackTargetFrames_.load(std::memory_order_acquire),
+            exactInitialPacketFrames_)), std::memory_order_release);
+
     // Optional feedback EP. UAC2 §5.2.2.4.1: feedback IN, 4 bytes
     // (16.16 fixed) on high-speed, 3 bytes (10.14 fixed) on full-speed.
     constexpr int kFeedbackTransfers = 2;
@@ -1989,14 +2033,55 @@ bool LibusbUacDriver::startIsoPump() {
             }
         });
     }
+    if (!submit) return true;
+    return submitIsoPump();
+}
+
+bool LibusbUacDriver::startPlayback() noexcept {
+    bool expected = false;
+    if (!playbackStarted_.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel)) return false;
+    if (!submitIsoPump()) {
+        playbackStarted_.store(false, std::memory_order_release);
+        return false;
+    }
+    return true;
+}
+bool LibusbUacDriver::submitIsoPump() {
+    if (stopRequested_.load(std::memory_order_acquire)) {
+        LOGE("playback submit rejected: stop already requested");
+        return false;
+    }
+    auto setErr = [this](StartError c, const std::string& d) {
+        lastError_.store(c, std::memory_order_release);
+        std::lock_guard<std::mutex> lock(errorMutex_);
+        lastErrorDetail_ = d;
+    };
+    // All initial packet payloads are filled before the first submit.
+    const int stride = format_.channels * format_.bytesPerSample;
+    if (stride <= 0 || startupPrimeFrames() > bufferedFrames()) {
+        LOGE("playback submit rejected: stride=%d prime=%d buffered=%d",
+             stride, startupPrimeFrames(), bufferedFrames());
+        setErr(StartError::IsoPumpSubmitFailed,
+               "insufficient ring frames for initial playback prime");
+        return false;
+    }
+    for (libusb_transfer* xfr : transfers_) {
+        size_t offset = 0;
+        for (int packet = 0; packet < xfr->num_iso_packets; ++packet) {
+            const int bytes = static_cast<int>(xfr->iso_packet_desc[packet].length);
+            drainRing(xfr->buffer + offset, bytes);
+            offset += static_cast<size_t>(bytes);
+        }
+    }
     for (libusb_transfer* fxfr : feedbackTransfers_) {
         inflight_.fetch_add(1, std::memory_order_acq_rel);
         const int rc = libusb_submit_transfer(fxfr);
         if (rc != LIBUSB_SUCCESS) {
             inflight_.fetch_sub(1, std::memory_order_acq_rel);
+            LOGE("feedback transfer submit failed: %s", libusb_strerror(rc));
             setErr(StartError::IsoPumpSubmitFailed,
-                   std::string("feedback transfer submit failed: ") +
-                   libusb_strerror(rc));
+                   std::string("feedback transfer submit failed: ") + libusb_strerror(rc));
             stopIsoPump();
             return false;
         }
@@ -2006,13 +2091,19 @@ bool LibusbUacDriver::startIsoPump() {
         const int rc = libusb_submit_transfer(xfr);
         if (rc != LIBUSB_SUCCESS) {
             inflight_.fetch_sub(1, std::memory_order_acq_rel);
+            LOGE("playback transfer submit failed: %s", libusb_strerror(rc));
             setErr(StartError::IsoPumpSubmitFailed,
-                   std::string("playback transfer submit failed: ") +
-                   libusb_strerror(rc));
+                   std::string("playback transfer submit failed: ") + libusb_strerror(rc));
             stopIsoPump();
             return false;
         }
+        uint64_t frames = 0;
+        for (int p = 0; p < xfr->num_iso_packets; ++p)
+            frames += static_cast<uint64_t>(xfr->iso_packet_desc[p].length / stride);
+        queuedOutFrames_.fetch_add(frames, std::memory_order_acq_rel);
     }
+    playbackStarted_.store(true, std::memory_order_release);
+    streaming_.store(true, std::memory_order_release);
     return true;
 }
 bool LibusbUacDriver::stopIsoPump() {
@@ -2040,6 +2131,8 @@ bool LibusbUacDriver::stopIsoPump() {
     transferBuffers_.clear();
     feedbackTransfers_.clear();
     feedbackBuffers_.clear();
+    queuedOutFrames_.store(0, std::memory_order_release);
+    playbackStarted_.store(false, std::memory_order_release);
     return true;
 }
 
@@ -2157,6 +2250,12 @@ void LibusbUacDriver::submitPendingImplicitTransfers() {
             break;
         }
         ++submitted;
+        uint64_t frames = 0;
+        const int stride = format_.channels * format_.bytesPerSample;
+        if (stride > 0)
+            for (int p = 0; p < xfr->num_iso_packets; ++p)
+                frames += static_cast<uint64_t>(xfr->iso_packet_desc[p].length / stride);
+        queuedOutFrames_.fetch_add(frames, std::memory_order_acq_rel);
     }
     if (submitted > 0) {
         for (size_t i = submitted; i < pendingImplicitCount_; ++i)
@@ -2167,6 +2266,13 @@ void LibusbUacDriver::submitPendingImplicitTransfers() {
 }
 
 void LibusbUacDriver::onIso(libusb_transfer* xfr) {
+    const int queuedStride = format_.channels * format_.bytesPerSample;
+    uint64_t completedFrames = 0;
+    if (queuedStride > 0)
+        for (int p = 0; p < xfr->num_iso_packets; ++p)
+            completedFrames += static_cast<uint64_t>(
+                xfr->iso_packet_desc[p].length / queuedStride);
+    subtractQueued(queuedOutFrames_, completedFrames);
     if (xfr->status == LIBUSB_TRANSFER_CANCELLED ||
         stopRequested_.load(std::memory_order_acquire)) {
         inflight_.fetch_sub(1, std::memory_order_acq_rel);
@@ -2229,6 +2335,14 @@ void LibusbUacDriver::onIso(libusb_transfer* xfr) {
         inflight_.fetch_sub(1, std::memory_order_acq_rel);
         markTransportFailed();
     }
+    else {
+        uint64_t frames = 0;
+        const int stride = format_.channels * format_.bytesPerSample;
+        if (stride > 0)
+            for (int p = 0; p < xfr->num_iso_packets; ++p)
+                frames += static_cast<uint64_t>(xfr->iso_packet_desc[p].length / stride);
+        queuedOutFrames_.fetch_add(frames, std::memory_order_acq_rel);
+    }
 }
 
 // --- Ring buffer ------------------------------------------------------
@@ -2276,8 +2390,11 @@ int LibusbUacDriver::writePcm(const uint8_t* data, int frames) {
     size_t free = kRingBytes - (head - tail);
     int frameStride = format_.channels * format_.bytesPerSample;
     const size_t queuedFrames = frameStride > 0 ? (head - tail) / static_cast<size_t>(frameStride) : 0;
-    const size_t frameLimit = static_cast<size_t>(targetWatermark_.load(std::memory_order_acquire) +
-                                                   graphQuantum_.load(std::memory_order_acquire));
+    const bool started = playbackStarted_.load(std::memory_order_acquire);
+    const size_t frameLimit = static_cast<size_t>(
+        (started ? playbackTargetFrames_.load(std::memory_order_acquire)
+                 : startupPrimeFrames_.load(std::memory_order_acquire)) +
+        graphQuantum_.load(std::memory_order_acquire));
     if (queuedFrames >= frameLimit) free = 0;
     else free = std::min(free, (frameLimit - queuedFrames) * static_cast<size_t>(frameStride));
     int writable = static_cast<int>(std::min<size_t>(free, static_cast<size_t>(bytes)));
@@ -2301,8 +2418,11 @@ int LibusbUacDriver::writePcm(const uint8_t* data, int frames) {
     ringHead_.store(head + writable, std::memory_order_release);
     int framesPushed = writable / frameStride;
     writtenFrames_.fetch_add(framesPushed, std::memory_order_acq_rel);
-    playbackStarted_.store(true, std::memory_order_release);
     return framesPushed;
+}
+
+int LibusbUacDriver::startupPrimeFrames() const noexcept {
+    return startupPrimeFrames_.load(std::memory_order_acquire);
 }
 
 int LibusbUacDriver::bufferedFrames() const {
@@ -2313,19 +2433,32 @@ int LibusbUacDriver::bufferedFrames() const {
                             static_cast<size_t>(stride));
 }
 
-void LibusbUacDriver::setGraphQuantum(int frames) {
-    const auto config = playbackWatermarkConfig(frames);
+void LibusbUacDriver::setGraphQuantum(int frames, int periodMultiplier) {
+    const auto config = playbackWatermarkConfig(frames, periodMultiplier);
     const int stride = format_.channels * format_.bytesPerSample;
     const int physicalFrames = stride > 0
         ? static_cast<int>(kRingBytes / static_cast<size_t>(stride))
         : config.frameLimit;
-    const int transferBurstFrames =
-        maxFramesPerPacket_ * kPacketsPerTransfer;
     const int maxTarget = std::max(0, physicalFrames - config.graphQuantum);
+    // The event thread may retire the whole async queue before the render
+    // thread runs. Even 1x keeps two transfer intervals of wake-up reserve;
+    // higher period multipliers add one interval each.
+    const int transferFrames =
+        std::max(1, playbackPacketsPerTransfer_) *
+        std::max(0, maxFramesPerPacket_);
+    const int reserveTransfers =
+        clampPeriodMultiplier(periodMultiplier) + 1;
+    const int queuedTransferFrames =
+        (kNumTransfers + reserveTransfers) * transferFrames;
     const int target = std::min(
-        maxTarget, std::max(config.targetFrames, transferBurstFrames));
+        effectivePlaybackTargetFrames(config.targetFrames,
+                                      queuedTransferFrames),
+        maxTarget);
+    const int prime = std::min(
+        maxTarget, effectivePlaybackPrimeFrames(target, exactInitialPacketFrames_));
     graphQuantum_.store(config.graphQuantum, std::memory_order_release);
-    targetWatermark_.store(target, std::memory_order_release);
+    playbackTargetFrames_.store(target, std::memory_order_release);
+    startupPrimeFrames_.store(prime, std::memory_order_release);
 }
 
 int LibusbUacDriver::writableFrames() const {
@@ -2334,8 +2467,10 @@ int LibusbUacDriver::writableFrames() const {
     const size_t head = ringHead_.load(std::memory_order_relaxed);
     const size_t tail = ringTail_.load(std::memory_order_acquire);
     const size_t queuedFrames = (head - tail) / static_cast<size_t>(frameStride);
+    const bool started = playbackStarted_.load(std::memory_order_acquire);
     const size_t frameLimit = static_cast<size_t>(
-        targetWatermark_.load(std::memory_order_acquire) +
+        (started ? playbackTargetFrames_.load(std::memory_order_acquire)
+                 : startupPrimeFrames_.load(std::memory_order_acquire)) +
         graphQuantum_.load(std::memory_order_acquire));
     const size_t physicalFree = (kRingBytes - (head - tail)) /
                                 static_cast<size_t>(frameStride);

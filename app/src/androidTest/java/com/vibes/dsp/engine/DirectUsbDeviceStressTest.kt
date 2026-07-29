@@ -31,7 +31,8 @@ class DirectUsbDeviceStressTest {
     private val durationMs = 1_500L
     private val warmupMs = 250L
     private val maxXrunGrowth = 0L
-    private val buffers = intArrayOf(512, 1024)
+    private val buffers = intArrayOf(16, 32, 64, 128, 256, 512, 1024)
+    private val multipliers = intArrayOf(1, 2, 3)
 
     @Test
     fun duplexRateBufferLifecycleStress() {
@@ -59,11 +60,18 @@ class DirectUsbDeviceStressTest {
         val originalInputChannel = AudioSettingsManager.getDirectUsbInputChannel(context)
         val originalOutputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
         val originalBuffer = AudioSettingsManager.getBufferSize(context)
+        val originalMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
         var cases = 0
         AudioSettingsManager.setDirectUsbInputChannel(context, 0)
         AudioSettingsManager.setDirectUsbOutputPair(context, 0)
         var passed = true
         try {
+            EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
+            val nativeInitialized = EngineInitHelper.initEngine(context)
+            if (!nativeInitialized) {
+                Log.e(tag, "FAIL phase=native-init reason=nativeInit-failed")
+                assertTrue("Native engine initialization failed", false)
+            }
             val probe = runBlocking {
                 DirectUsbAudioManager.probeFormats(context, option!!)
             }
@@ -73,8 +81,25 @@ class DirectUsbDeviceStressTest {
                 assertTrue("Direct USB probe failed: $message", false)
             }
             val matrix = probe.getOrThrow()
-                .filter { it.sampleRate == 44_100 || it.sampleRate == 48_000 }
-                .distinctBy { listOf(it.sampleRate, it.bits, it.subslotBytes, it.channels) }
+                .filter { format ->
+                    format.sampleRate == 44_100 || format.sampleRate == 48_000
+                }
+                .filter { format ->
+                    format.bits > 0 && format.subslotBytes > 0 &&
+                        format.bits <= format.subslotBytes * 8 && format.channels >= 2 &&
+                        format.channels % 2 == 0
+                }
+                .groupBy { it.sampleRate }
+                .values
+                .map { formats ->
+                    formats.sortedWith(
+                        compareByDescending<DirectUsbFormat> { it.bits == 24 }
+                            .thenByDescending { it.subslotBytes }
+                            .thenByDescending { it.channels }
+                            .thenByDescending { it.bits }
+                    ).first()
+                }
+                .sortedBy { it.sampleRate }
             if (matrix.isEmpty()) {
                 Log.i(tag, "SKIP reason=no-supported-44100-or-48000-format")
             }
@@ -85,25 +110,43 @@ class DirectUsbDeviceStressTest {
             )
 
             for (cycle in 1..2) {
-                for (format in matrix) {
-                    for (buffer in buffers) {
-                        cases++
-                        val result = runCase(context, engine, format, buffer, cycle)
-                        passed = passed && result
-                        DirectUsbAudioManager.disable(context)
-                        val lifecycleStats = engine.nativeGetDirectUsbStats()
-                        val stopped = !engine.nativeIsDirectUsbOutputStreaming()
-                        Log.i(
-                            tag,
-                            telemetry(
-                                "lifecycle-after-stop", cycle, format, buffer,
-                                lifecycleStats, engine.getXRunCount().toLong()
-                            ) { stopped }
-                        )
-                        assertTrue(
-                            "Direct USB remained streaming after stop; inspect lifecycle telemetry",
-                            stopped
-                        )
+                for (multiplier in multipliers) {
+                    AudioSettingsManager.setDirectUsbPeriodMultiplier(context, multiplier)
+                    for (format in matrix) {
+                        for (buffer in buffers) {
+                            cases++
+                            val result = runCase(
+                                context = context,
+                                engine = engine,
+                                format = format,
+                                buffer = buffer,
+                                multiplier = multiplier,
+                                cycle = cycle,
+                            )
+                            if (!result) {
+                                assertTrue(
+                                    "Direct USB case failed: cycle=$cycle rate=${format.sampleRate} " +
+                                        "buffer=$buffer multiplier=$multiplier",
+                                    result
+                                )
+                            }
+                            passed = passed && result
+                            val lifecycleStats = engine.getDirectUsbStats()
+                            val stopped = lifecycleStats.state != DirectUsbSessionState.Running &&
+                                lifecycleStats.state != DirectUsbSessionState.Starting
+                            Log.i(
+                                tag,
+                                telemetry(
+                                    "lifecycle-after-stop", cycle, format, buffer, multiplier,
+                                    lifecycleStats, rawStats = engine.nativeGetDirectUsbStats(),
+                                    predicate = { stopped }
+                                )
+                            )
+                            assertTrue(
+                                "Direct USB remained active after stop; inspect lifecycle telemetry",
+                                stopped
+                            )
+                        }
                     }
                 }
             }
@@ -111,14 +154,13 @@ class DirectUsbDeviceStressTest {
             assertTrue("One or more direct USB cases failed; inspect FAIL telemetry", passed)
         } finally {
             DirectUsbAudioManager.disable(context)
-            engine.setChainBypass(false)
-            engine.setWavBypassChain(false)
             AudioSettingsManager.setDirectUsbFormat(
                 context, originalRate, originalBits, originalSubslot, originalChannels
             )
             AudioSettingsManager.setBufferSize(context, originalBuffer)
             AudioSettingsManager.setDirectUsbInputChannel(context, originalInputChannel)
             AudioSettingsManager.setDirectUsbOutputPair(context, originalOutputPair)
+            AudioSettingsManager.setDirectUsbPeriodMultiplier(context, originalMultiplier)
         }
         Log.i(tag, "SUMMARY cases=$cases result=${if (passed) "PASS" else "FAIL"}")
     }
@@ -128,191 +170,231 @@ class DirectUsbDeviceStressTest {
         engine: NativeEngine,
         format: DirectUsbFormat,
         buffer: Int,
+        multiplier: Int,
         cycle: Int,
     ): Boolean {
         AudioSettingsManager.setBufferSize(context, buffer)
         DirectUsbAudioManager.startSelected(context, format)
-        engine.setChainBypass(true)
-        val started = runBlocking { DirectUsbAudioManager.startConfigured(context) }
-        if (started.isFailure) {
-            val detail = started.exceptionOrNull()?.message ?: "unknown-start-failure"
-            Log.e(
-                tag,
-                "FAIL phase=start cycle=$cycle rate=${format.sampleRate} bits=${format.bits} " +
-                    "bytes=${format.subslotBytes} channels=${format.channels} buffer=$buffer " +
-                    "reason=start-failed detail=$detail"
-            )
-            return false
-        }
-
-        val startWaitDeadline = SystemClock.elapsedRealtime() + 1_000L
-        while (!engine.nativeIsDirectUsbOutputStreaming() &&
-            SystemClock.elapsedRealtime() < startWaitDeadline
-        ) {
-            SystemClock.sleep(10)
-        }
-        if (!engine.nativeIsDirectUsbOutputStreaming()) {
-            val stats = engine.nativeGetDirectUsbStats()
-            Log.e(tag, telemetry("not-streaming", cycle, format, buffer, stats, engine.getXRunCount().toLong()))
-            return false
-        }
-        val initialStats = engine.nativeGetDirectUsbStats()
-        if (initialStats.size < REQUIRED_STATS_SIZE) {
-            Log.e(
-                tag,
-                "FAIL phase=diagnostics reason=diagnostics-seam-unavailable " +
-                    "required_stats=$REQUIRED_STATS_SIZE actual_stats=${initialStats.size}"
-            )
-            return false
-        }
-
-        val start = SystemClock.elapsedRealtime()
-        val deadline = start + durationMs
-        val warmupDeadline = start + warmupMs
-        var warmupStats: LongArray? = if (warmupMs == 0L) engine.nativeGetDirectUsbStats() else null
-        var warmupXruns = if (warmupMs == 0L) engine.getXRunCount().toLong() else 0L
-        var previousSequence = engine.nativeGetDirectUsbStats().getOrZero(CAPTURE_SEQUENCE)
-        var framesObserved = 0L
-        var failure: String? = null
-        while (SystemClock.elapsedRealtime() < deadline && failure == null) {
-            val stats = engine.nativeGetDirectUsbStats()
-            val sequence = stats.getOrZero(CAPTURE_SEQUENCE)
-            if (stats.size < REQUIRED_STATS_SIZE) {
-                failure = "diagnostics-seam-unavailable"
-            } else if (sequence < previousSequence) {
-                failure = "capture-sequence-regressed"
-            } else if (stats.getOrZero(CAPTURE_RING_FRAMES) > ringFrameLimit(format)) {
-                failure = "capture-ring-depth-exceeded"
-            } else if (stats.getOrZero(PLAYBACK_RING_FRAMES) > ringFrameLimit(format)) {
-                failure = "playback-ring-depth-exceeded"
-            } else if (stats.getOrZero(IMPLICIT_FIFO_DEPTH) > MAX_IMPLICIT_FIFO) {
-                failure = "implicit-fifo-depth-exceeded"
-            } else if (stats.getOrZero(CAPTURE_TRANSFER_ERRORS) != 0L ||
-                stats.getOrZero(PLAYBACK_TRANSFER_ERRORS) != 0L
-            ) {
-                failure = "transfer-errors"
-            } else if (stats.getOrZero(LIFECYCLE_FAILURES) != 0L) {
-                failure = "lifecycle-failure"
-            } else if (stats.getOrZero(TRANSPORT_FAILED) != 0L) {
-                failure = "transport-failed"
-            }
-            previousSequence = sequence
-            if (sequence > 0L) framesObserved = sequence
-            if (warmupStats == null && SystemClock.elapsedRealtime() >= warmupDeadline) {
-                warmupStats = stats
-                warmupXruns = engine.getXRunCount().toLong()
-                if (stats.getOrZero(EVENT_THREAD_URGENT_AUDIO) != 1L ||
-                    stats.getOrZero(RENDER_THREAD_URGENT_AUDIO) != 1L
-                ) {
-                    failure = "urgent-audio-thread-not-enabled"
-                }
-            }
-            SystemClock.sleep(10)
-        }
-        val captureStats = engine.nativeGetDirectUsbStats()
-        if (warmupStats == null) {
-            warmupStats = captureStats
-            warmupXruns = engine.getXRunCount().toLong()
-        }
-        val captureXruns = engine.getXRunCount().toLong()
-        val captureXrunGrowth = (captureXruns - warmupXruns).coerceAtLeast(0L)
-        if (failure == null && framesObserved == 0L) failure = "no-capture-sequence-progress"
-        if (failure == null && captureXrunGrowth > maxXrunGrowth) failure = "xrun-growth-exceeded"
-        if (failure == null) {
-            failure = runWavPhase(context, engine, format, buffer, cycle)
-        }
-
-        val finalStats = engine.nativeGetDirectUsbStats()
-        val finalXruns = engine.getXRunCount().toLong()
-        DirectUsbAudioManager.disable(context)
-        if (failure != null || engine.nativeIsDirectUsbOutputStreaming()) {
-            val reason = failure ?: "streaming-after-stop"
-            Log.e(tag, telemetry(reason, cycle, format, buffer, finalStats, finalXruns))
-            return false
-        }
-        Log.i(tag, telemetry("pass", cycle, format, buffer, finalStats, finalXruns))
-        return true
-    }
-
-    private fun runWavPhase(
-        context: Context,
-        engine: NativeEngine,
-        format: DirectUsbFormat,
-        buffer: Int,
-        cycle: Int,
-    ): String? {
-        val wav = createStressWav(context.cacheDir, format.sampleRate)
+        var temporaryTrackId = 0L
+        var wav: File? = null
+        var wavAttached = false
+        var originalLooping = false
         var failure: String? = null
         try {
-            if (!engine.loadWav(wav)) return "wav-load-failed"
-            engine.setWavBypassChain(true)
-            val before = engine.nativeGetDirectUsbStats()
-            val beforeWritten = before.getOrZero(WRITTEN_FRAMES)
-            val beforePlayed = before.getOrZero(PLAYED_FRAMES)
-            var previousWritten = beforeWritten
-            var previousPlayed = beforePlayed
-            var previousPosition = engine.getWavPositionSec()
-            var outputSeen = false
-            val start = SystemClock.elapsedRealtime()
-            val warmupDeadline = start + warmupMs
-            val deadline = start + durationMs.coerceAtMost(1_000L)
-            var warmupXruns: Long? = null
-            engine.wavPlay()
-            while (SystemClock.elapsedRealtime() < deadline && failure == null) {
-                val stats = engine.nativeGetDirectUsbStats()
-                val position = engine.getWavPositionSec()
-                val written = stats.getOrZero(WRITTEN_FRAMES)
-                val played = stats.getOrZero(PLAYED_FRAMES)
-                if (position < previousPosition) {
-                    failure = "wav-position-regressed"
-                } else if (written < previousWritten || played < previousPlayed) {
-                    failure = "wav-frame-counter-regressed"
-                } else if (stats.getOrZero(CAPTURE_RING_FRAMES) > ringFrameLimit(format)) {
-                    failure = "wav-capture-ring-depth-exceeded"
-                } else if (stats.getOrZero(CAPTURE_TRANSFER_ERRORS) != 0L ||
-                    stats.getOrZero(PLAYBACK_TRANSFER_ERRORS) != 0L ||
-                    stats.getOrZero(LIFECYCLE_FAILURES) != 0L ||
-                    stats.getOrZero(TRANSPORT_FAILED) != 0L
-                ) {
-                    failure = "wav-transport-or-lifecycle-failure"
+            val started = runBlocking { DirectUsbAudioManager.startConfigured(context) }
+            if (started.isFailure) {
+                val detail = started.exceptionOrNull()?.message ?: "unknown-start-failure"
+                val reason = "start-failed detail=$detail"
+                logFailure(reason, cycle, format, buffer, multiplier, engine)
+                return false
+            }
+
+            val runningDeadline = SystemClock.elapsedRealtime() + 1_000L
+            var runningStats: DirectUsbStats? = null
+            while (SystemClock.elapsedRealtime() < runningDeadline) {
+                val stats = engine.getDirectUsbStats()
+                if (stats.state == DirectUsbSessionState.Failed) {
+                    failure = "session-failed code=${stats.failure}"
+                    break
                 }
-                previousPosition = position
-                previousWritten = written
-                previousPlayed = played
-                outputSeen = outputSeen || engine.getOutputLevel() > 0.0001f
-                if (warmupXruns == null && SystemClock.elapsedRealtime() >= warmupDeadline) {
-                    warmupXruns = engine.getXRunCount().toLong()
+                if (stats.state == DirectUsbSessionState.Running) {
+                    runningStats = stats
+                    break
                 }
                 SystemClock.sleep(10)
             }
-            val finalStats = engine.nativeGetDirectUsbStats()
-            val finalPosition = engine.getWavPositionSec()
-            val finalXruns = engine.getXRunCount().toLong()
-            val xrunGrowth = warmupXruns?.let { (finalXruns - it).coerceAtLeast(0L) } ?: 0L
-            if (failure == null && finalPosition <= 0.0) failure = "wav-position-did-not-advance"
-            if (failure == null && finalStats.getOrZero(WRITTEN_FRAMES) <= beforeWritten) {
-                failure = "wav-written-frames-did-not-advance"
+            if (failure == null && runningStats == null) {
+                failure = "session-not-running-within-1s"
             }
-            if (failure == null && finalStats.getOrZero(PLAYED_FRAMES) <= beforePlayed) {
-                failure = "wav-played-frames-did-not-advance"
+            if (failure == null && runningStats != null) {
+                failure = validateConfiguration(runningStats, format, buffer, multiplier)
             }
-            if (failure == null && !outputSeen) failure = "wav-output-level-remained-zero"
-            if (failure == null && xrunGrowth > maxXrunGrowth) failure = "wav-xrun-growth-exceeded"
+            if (failure != null) {
+                logFailure(failure, cycle, format, buffer, multiplier, engine)
+                return false
+            }
+            originalLooping = engine.getWavTransportInfo().looping
+
+
+            temporaryTrackId = engine.addTrack()
+            if (temporaryTrackId <= 0L) {
+                val reason = "temporary-track-create-failed"
+                logFailure(reason, cycle, format, buffer, multiplier, engine)
+                return false
+            }
+            wav = createStressWav(context.cacheDir, format.sampleRate)
+            if (!engine.loadTrackWav(temporaryTrackId, wav.absolutePath, wav.name)) {
+                val reason = "track-wav-load-failed"
+                logFailure(reason, cycle, format, buffer, multiplier, engine)
+                return false
+            }
+            wavAttached = true
+
+            engine.setWavTransportLooping(true)
+            if (!engine.restartWavTransport() || !engine.setWavTransportPlaying(true)) {
+                val reason = "wav-transport-start-failed"
+                logFailure(reason, cycle, format, buffer, multiplier, engine)
+                return false
+            }
+            val transport = engine.getWavTransportInfo()
+            if (!transport.playing || !transport.looping || transport.loadedTrackCount <= 0 ||
+                transport.durationSec <= 0.0
+            ) {
+                val reason = "wav-transport-info-invalid"
+                logFailure(reason, cycle, format, buffer, multiplier, engine)
+                return false
+            }
+
+            val start = SystemClock.elapsedRealtime()
+            val deadline = start + durationMs
+            val warmupDeadline = start + warmupMs
+            var warmupStats: DirectUsbStats? = null
+            var previousSequence = engine.getDirectUsbStats().sequence
+            var framesObserved = 0L
+            var previousPosition = transport.positionSec
+            var positionChanged = false
+            while (SystemClock.elapsedRealtime() < deadline && failure == null) {
+                val stats = engine.getDirectUsbStats()
+                val rawStats = engine.nativeGetDirectUsbStats()
+                failure = validateRunningStats(stats, rawStats, format, buffer, multiplier)
+                if (failure == null && stats.sequence < previousSequence) {
+                    failure = "capture-sequence-regressed"
+                }
+                if (failure == null && stats.sequence > previousSequence) {
+                    framesObserved += stats.sequence - previousSequence
+                }
+                previousSequence = stats.sequence
+                val currentTransport = engine.getWavTransportInfo()
+                positionChanged = positionChanged || currentTransport.positionSec != previousPosition
+                previousPosition = currentTransport.positionSec
+                if (warmupStats == null && SystemClock.elapsedRealtime() >= warmupDeadline) {
+                    warmupStats = stats
+                    if (rawStats.getOrZero(EVENT_THREAD_URGENT_AUDIO) != 1L ||
+                        rawStats.getOrZero(RENDER_THREAD_URGENT_AUDIO) != 1L
+                    ) {
+                        failure = "urgent-audio-thread-not-enabled"
+                    }
+                }
+                SystemClock.sleep(10)
+            }
+            val finalStats = engine.getDirectUsbStats()
+            val finalRawStats = engine.nativeGetDirectUsbStats()
+            val finalTransport = engine.getWavTransportInfo()
+            val baselineActualXruns = warmupStats?.actualXruns ?: finalStats.actualXruns
+            val actualXrunGrowth = (finalStats.actualXruns - baselineActualXruns).coerceAtLeast(0L)
+            if (failure == null && framesObserved == 0L) failure = "no-capture-sequence-progress"
+            if (failure == null && !positionChanged) failure = "wav-position-did-not-advance"
+            if (failure == null && actualXrunGrowth > maxXrunGrowth) {
+                failure = "actual-xrun-growth-exceeded"
+            }
+            if (failure == null) {
+                failure = validateRunningStats(finalStats, finalRawStats, format, buffer, multiplier)
+            }
             Log.i(
                 tag,
-                "WAV_TELEMETRY reason=${failure ?: "pass"} cycle=$cycle rate=${format.sampleRate} " +
-                    "bits=${format.bits} bytes=${format.subslotBytes} channels=${format.channels} " +
-                    "buffer=$buffer position_sec=$finalPosition duration_sec=${engine.getWavDurationSec()} " +
-                    "output_level=${engine.getOutputLevel()} written_frames=${finalStats.getOrZero(WRITTEN_FRAMES)} " +
-                    "played_frames=${finalStats.getOrZero(PLAYED_FRAMES)} capture_ring_frames=${finalStats.getOrZero(CAPTURE_RING_FRAMES)} " +
-                    "xrun_count=$finalXruns"
+                telemetry(
+                    failure ?: "pass", cycle, format, buffer, multiplier, finalStats,
+                    finalRawStats, predicate = {
+                        finalTransport.playing && finalTransport.looping &&
+                            finalTransport.loadedTrackCount > 0
+                    }
+                ) + " wav_position_sec=${finalTransport.positionSec} " +
+                    "wav_duration_sec=${finalTransport.durationSec} " +
+                    "wav_loaded_tracks=${finalTransport.loadedTrackCount} " +
+                    "actual_xrun_growth=$actualXrunGrowth"
             )
+            return failure == null
         } finally {
-            engine.wavPause()
-            engine.unloadWav()
-            wav.delete()
+            if (wavAttached) {
+                runCatching { engine.setWavTransportPlaying(false) }
+            }
+            if (temporaryTrackId > 0L) {
+                runCatching { engine.unloadTrackWav(temporaryTrackId) }
+                runCatching { engine.removeTrack(temporaryTrackId) }
+                runCatching { engine.setWavTransportLooping(originalLooping) }
+            }
+            wav?.delete()
+            DirectUsbAudioManager.disable(context)
         }
-        return failure
+    }
+
+    private fun validateConfiguration(
+        stats: DirectUsbStats,
+        format: DirectUsbFormat,
+        buffer: Int,
+        multiplier: Int,
+    ): String? {
+        if (stats.schemaVersion < 2L) return "unsupported-stats-schema-${stats.schemaVersion}"
+        if (stats.periodMultiplier != multiplier.toLong()) {
+            return "period-multiplier-mismatch-${stats.periodMultiplier}"
+        }
+        if (stats.effectiveQuantum != buffer.toLong()) {
+            return "effective-quantum-mismatch-${stats.effectiveQuantum}"
+        }
+        val configuredTarget = minOf(1024L, buffer.toLong() * multiplier)
+        if (stats.steadyTarget < configuredTarget) {
+            return "steady-target-below-configured-${stats.steadyTarget}-expected-at-least-$configuredTarget"
+        }
+        if (stats.steadyTarget < stats.startupPrime) {
+            return "steady-target-below-startup-prime-${stats.steadyTarget}-${stats.startupPrime}"
+        }
+        if (stats.steadyTarget + stats.effectiveQuantum > ringFrameLimit(format)) {
+            return "steady-target-exceeds-ring-capacity-${stats.steadyTarget}"
+        }
+        if (stats.startupPrime < configuredTarget) return "startup-prime-too-small-${stats.startupPrime}"
+        if (stats.knownHostLatencyFrames <= 0L) return "host-latency-unavailable"
+        if (stats.sampleRateHz != format.sampleRate.toLong()) return "sample-rate-mismatch-${stats.sampleRateHz}"
+        return null
+    }
+
+    private fun validateRunningStats(
+        stats: DirectUsbStats,
+        rawStats: LongArray,
+        format: DirectUsbFormat,
+        buffer: Int,
+        multiplier: Int,
+    ): String? {
+        if (stats.state == DirectUsbSessionState.Failed) return "session-failed code=${stats.failure}"
+        if (stats.state != DirectUsbSessionState.Running) return "session-state-${stats.state}"
+        validateConfiguration(stats, format, buffer, multiplier)?.let { return it }
+        if (stats.queuedOut <= 0L) return "queued-output-empty"
+        if (stats.captureTransferErrors != 0L ||
+            stats.playbackTransferErrors != 0L ||
+            rawStats.getOrZero(CAPTURE_TRANSFER_ERRORS) != 0L ||
+            rawStats.getOrZero(PLAYBACK_TRANSFER_ERRORS) != 0L ||
+            rawStats.getOrZero(LIFECYCLE_FAILURES) != 0L ||
+            rawStats.getOrZero(TRANSPORT_FAILED) != 0L
+        ) {
+            return "transfer-lifecycle-transport-failure"
+        }
+        if (rawStats.getOrZero(CAPTURE_RING_FRAMES) > ringFrameLimit(format) ||
+            rawStats.getOrZero(PLAYBACK_RING_FRAMES) > ringFrameLimit(format) ||
+            rawStats.getOrZero(IMPLICIT_FIFO_DEPTH) > MAX_IMPLICIT_FIFO
+        ) {
+            return "usb-queue-depth-exceeded"
+        }
+        return null
+    }
+
+    private fun logFailure(
+        reason: String,
+        cycle: Int,
+        format: DirectUsbFormat,
+        buffer: Int,
+        multiplier: Int,
+        engine: NativeEngine,
+    ) {
+        val stats = engine.getDirectUsbStats()
+        val nativeDetail = runCatching {
+            engine.nativeGetDirectUsbErrorDetail()
+                .replace("\r", " ")
+                .replace("\n", " ")
+        }.getOrDefault("")
+        Log.e(
+            tag,
+            telemetry(reason, cycle, format, buffer, multiplier, stats, engine.nativeGetDirectUsbStats()) +
+                " native_detail=$nativeDetail"
+        )
     }
 
     private fun telemetry(
@@ -320,28 +402,27 @@ class DirectUsbDeviceStressTest {
         cycle: Int,
         format: DirectUsbFormat,
         buffer: Int,
-        stats: LongArray,
-        xruns: Long,
+        multiplier: Int,
+        stats: DirectUsbStats,
+        rawStats: LongArray,
         predicate: () -> Boolean = { true },
     ): String {
         return "TELEMETRY reason=$reason cycle=$cycle rate=${format.sampleRate} " +
             "bits=${format.bits} bytes=${format.subslotBytes} channels=${format.channels} " +
-            "buffer=$buffer sequence=${stats.getOrZero(CAPTURE_SEQUENCE)} " +
-            "capture_overruns=${stats.getOrZero(CAPTURE_OVERRUNS)} " +
-            "capture_underruns=${stats.getOrZero(CAPTURE_UNDERRUNS)} " +
-            "fifo_depth=${stats.getOrZero(IMPLICIT_FIFO_DEPTH)} " +
-            "fallback_packets=${stats.getOrZero(IMPLICIT_FALLBACK_PACKETS)} " +
-            "capture_transfer_errors=${stats.getOrZero(CAPTURE_TRANSFER_ERRORS)} " +
-            "playback_transfer_errors=${stats.getOrZero(PLAYBACK_TRANSFER_ERRORS)} " +
-            "playback_ring_frames=${stats.getOrZero(PLAYBACK_RING_FRAMES)} " +
-            "capture_ring_frames=${stats.getOrZero(CAPTURE_RING_FRAMES)} " +
-            "lifecycle_failures=${stats.getOrZero(LIFECYCLE_FAILURES)} " +
-            "transport_failed=${stats.getOrZero(TRANSPORT_FAILED)} " +
-            "event_thread_urgent_audio=${stats.getOrZero(EVENT_THREAD_URGENT_AUDIO)} " +
-            "render_thread_urgent_audio=${stats.getOrZero(RENDER_THREAD_URGENT_AUDIO)} " +
-            "written_frames=${stats.getOrZero(WRITTEN_FRAMES)} " +
-            "played_frames=${stats.getOrZero(PLAYED_FRAMES)} " +
-            "xrun_count=$xruns predicate=${predicate()}"
+            "buffer=$buffer multiplier=$multiplier schema=${stats.schemaVersion} " +
+            "state=${stats.state} failure=${stats.failure} period_multiplier=${stats.periodMultiplier} " +
+            "effective_quantum=${stats.effectiveQuantum} steady_target_frames=${stats.steadyTarget} " +
+            "startup_prime_frames=${stats.startupPrime} queued_out_frames=${stats.queuedOut} " +
+            "known_host_latency_frames=${stats.knownHostLatencyFrames} sequence=${stats.sequence} " +
+            "capture_overruns=${rawStats.getOrZero(CAPTURE_OVERRUNS)} " +
+            "capture_underruns=${rawStats.getOrZero(CAPTURE_UNDERRUNS)} " +
+            "capture_transfer_errors=${stats.captureTransferErrors} playback_transfer_errors=${stats.playbackTransferErrors} " +
+            "capture_wait_pressure=${stats.captureWaitPressure} write_wait_pressure=${stats.writeWaitPressure} " +
+            "playback_xruns=${stats.playbackXruns} lifecycle_failures=${rawStats.getOrZero(LIFECYCLE_FAILURES)} " +
+            "transport_failed=${rawStats.getOrZero(TRANSPORT_FAILED)} capture_ring_frames=${rawStats.getOrZero(CAPTURE_RING_FRAMES)} " +
+            "playback_ring_frames=${rawStats.getOrZero(PLAYBACK_RING_FRAMES)} implicit_fifo_depth=${rawStats.getOrZero(IMPLICIT_FIFO_DEPTH)} " +
+            "last_dsp_ns=${stats.lastDspNs} peak_dsp_ns=${stats.peakDspNs} actual_xruns=${stats.actualXruns} " +
+            "capture_transfer_frames=${stats.captureTransferFrames} predicate=${predicate()}"
     }
 
     private fun createStressWav(directory: File, sampleRate: Int): File {
@@ -376,7 +457,7 @@ class DirectUsbDeviceStressTest {
             val sample = (sin(2.0 * PI * 440.0 * frame / sampleRate) * 12_000.0).roundToInt()
             le16(44 + frame * 2, sample)
         }
-        val file = File(directory, "direct-usb-stress-${sampleRate}.wav")
+        val file = File.createTempFile("direct-usb-stress-$sampleRate-", ".wav", directory)
         file.writeBytes(bytes)
         return file
     }
@@ -392,12 +473,9 @@ class DirectUsbDeviceStressTest {
 
     private companion object {
         const val MAX_IMPLICIT_FIFO = 256L
-        const val REQUIRED_STATS_SIZE = 15
-        const val CAPTURE_SEQUENCE = 0
         const val CAPTURE_OVERRUNS = 1
         const val CAPTURE_UNDERRUNS = 2
         const val IMPLICIT_FIFO_DEPTH = 3
-        const val IMPLICIT_FALLBACK_PACKETS = 4
         const val CAPTURE_TRANSFER_ERRORS = 5
         const val PLAYBACK_TRANSFER_ERRORS = 6
         const val PLAYBACK_RING_FRAMES = 7
@@ -406,7 +484,5 @@ class DirectUsbDeviceStressTest {
         const val TRANSPORT_FAILED = 10
         const val EVENT_THREAD_URGENT_AUDIO = 11
         const val RENDER_THREAD_URGENT_AUDIO = 12
-        const val WRITTEN_FRAMES = 13
-        const val PLAYED_FRAMES = 14
     }
 }

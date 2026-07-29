@@ -17,7 +17,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <mutex>
 #include <thread>
+#include <string>
 #include <vector>
 
 namespace guitarrackcraft {
@@ -56,6 +58,10 @@ public:
 
     bool start(int sampleRate, int bitsPerSample, int bytesPerSample, int channels,
                int inputChannel, int outputPair) {
+        {
+            std::lock_guard<std::mutex> lock(errorMutex_);
+            startErrorDetail_.clear();
+        }
         if (!driver_.isOpen() || sampleRate <= 0 ||
             (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
             bytesPerSample < (bitsPerSample + 7) / 8 ||
@@ -64,8 +70,11 @@ public:
             inputChannel < 0 || inputChannel >= captureChannelCount() ||
             outputPair < 0 || outputPair * 2 + 1 >= channels) return false;
         stop();
-        if (!driver_.startDuplex(sampleRate, bitsPerSample, channels, bytesPerSample))
+        if (!driver_.startDuplex(sampleRate, bitsPerSample, channels, bytesPerSample)) {
+            std::lock_guard<std::mutex> lock(errorMutex_);
+            startErrorDetail_ = driver_.lastErrorDetail();
             return false;
+        }
         formatBits_ = bitsPerSample;
         formatBytes_ = bytesPerSample;
         deviceChannels_ = driver_.currentFormat().channels;
@@ -76,6 +85,11 @@ public:
             capture.bytesPerSample > kMaxSubslotBytes ||
             inputChannel >= capture.channels ||
             outputPair * 2 + 1 >= deviceChannels_) {
+            {
+                std::lock_guard<std::mutex> lock(errorMutex_);
+                startErrorDetail_ =
+                    "negotiated USB format is incompatible with the selected channels";
+            }
             driver_.stop();
             return false;
         }
@@ -84,6 +98,40 @@ public:
         accepting_.store(true, std::memory_order_release);
         streaming_.store(true, std::memory_order_release);
         return true;
+    }
+
+    bool startPlayback() noexcept {
+        if (driver_.startPlayback()) return true;
+        std::lock_guard<std::mutex> lock(errorMutex_);
+        startErrorDetail_ = driver_.lastErrorDetail();
+        return false;
+    }
+
+    int lastErrorCode() const noexcept {
+        return static_cast<int>(driver_.lastError());
+    }
+    std::string lastErrorDetail() const {
+        std::lock_guard<std::mutex> lock(errorMutex_);
+        return startErrorDetail_.empty() ? driver_.lastErrorDetail() : startErrorDetail_;
+    }
+
+    int startupPrimeFrames() const noexcept {
+        return driver_.startupPrimeFrames();
+    }
+    uint64_t queuedOutFrames() const noexcept {
+        return driver_.queuedOutFrames();
+    }
+    int captureTransferFrames() const noexcept {
+        return driver_.captureTransferFrames();
+    }
+    int playbackTargetFrames() const noexcept {
+        return driver_.playbackTargetFrames();
+    }
+
+    void requestStop() noexcept {
+        accepting_.store(false, std::memory_order_release);
+        streaming_.store(false, std::memory_order_release);
+        driver_.requestStop();
     }
 
     int captureChannelCount() const noexcept {
@@ -106,6 +154,12 @@ public:
 
     bool isStreaming() const {
         return streaming_.load(std::memory_order_acquire) && driver_.isStreaming();
+    }
+    bool adapterStreaming() const noexcept {
+        return streaming_.load(std::memory_order_acquire);
+    }
+    bool driverStreaming() const noexcept {
+        return driver_.isStreaming();
     }
 
     // Called only from the dedicated render thread. No allocation, locks,
@@ -192,7 +246,10 @@ public:
     uint64_t xrunCount() const noexcept {
         return driver_.playbackXRunCount();
     }
-    void setGraphQuantum(int frames) noexcept { driver_.setGraphQuantum(frames); }
+    void setGraphQuantum(int frames, int periodMultiplier =
+                         monotrypt::usb::kDefaultPeriodMultiplier) noexcept {
+        driver_.setGraphQuantum(frames, periodMultiplier);
+    }
     int bufferedFrames() const noexcept { return driver_.bufferedFrames(); }
     int writableFrames() const noexcept { return driver_.writableFrames(); }
     uint64_t captureXRunCount() const noexcept {
@@ -235,6 +292,8 @@ private:
     int deviceChannels_ = kChannels;
     int inputChannel_ = 0;
     int outputPair_ = 0;
+    mutable std::mutex errorMutex_;
+    std::string startErrorDetail_;
     monotrypt::usb::LibusbUacDriver driver_;
     std::vector<uint8_t> pcm_;
     std::vector<uint8_t> capturePcm_;

@@ -148,10 +148,11 @@ object DirectUsbAudioManager {
             return Result.failure(IllegalStateException("Configured USB output pair is unavailable"))
         }
         val bufferFrames = AudioSettingsManager.getBufferSize(context)
+        val periodMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
         val engine = NativeEngine.getInstance()
         if (!engine.nativeStartDirectUsbSession(
                 exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels,
-                inputChannel, outputPair, bufferFrames
+                inputChannel, outputPair, bufferFrames, periodMultiplier
             )
         ) {
             disable(context)

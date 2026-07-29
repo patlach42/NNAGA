@@ -21,6 +21,9 @@
 #define GUITARRACKCRAFT_AUDIO_ENGINE_H
 
 #include <oboe/Oboe.h>
+#include <cstdint>
+#include <condition_variable>
+#include <mutex>
 #include <atomic>
 #include <thread>
 #include <string>
@@ -35,9 +38,33 @@ namespace guitarrackcraft {
 /**
  * Audio engine using Oboe for low-latency audio I/O.
  * Processes audio through the plugin chain in real-time.
+
  */
 class AudioEngine : public oboe::AudioStreamCallback {
 public:
+
+    enum class DirectUsbState : uint8_t { Stopped, Starting, Running, Failed, Stopping };
+    struct DirectUsbRuntimeStats {
+        DirectUsbState state = DirectUsbState::Stopped;
+        uint64_t sessionId = 0;
+        int32_t failureCode = 0;
+        uint32_t effectiveQuantum = 0;
+        int32_t requestedPeriodMultiplier = 0;
+        uint32_t startupPrimeFrames = 0;
+        uint32_t steadyTargetFrames = 0;
+        uint32_t captureRingFrames = 0;
+        uint32_t playbackRingFrames = 0;
+        uint32_t queuedOutFrames = 0;
+        uint32_t captureTransferFrames = 0;
+        uint64_t lastDspNanoseconds = 0;
+        uint64_t peakDspNanoseconds = 0;
+        uint64_t captureWaitTimeouts = 0;
+        uint64_t writeWaitTimeouts = 0;
+        uint64_t captureOverruns = 0;
+        uint64_t captureUnderruns = 0;
+        uint64_t playbackXruns = 0;
+    };
+    DirectUsbRuntimeStats getDirectUsbRuntimeStats() const noexcept;
     AudioEngine();
     ~AudioEngine();
 
@@ -60,7 +87,7 @@ public:
     bool startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                int32_t subslotBytes, int32_t channels,
                                int32_t inputChannel, int32_t outputPair,
-                               int32_t bufferFrames);
+                               int32_t bufferFrames, int32_t periodMultiplier);
 
     void stop();
 
@@ -120,8 +147,8 @@ public:
     float getCpuLoad() const;
 
     /**
-     * Get cumulative render discontinuities: Oboe XRuns plus direct-USB
-     * ring, transfer, and render-pacing failures for this engine session.
+     * Get cumulative actual render discontinuities: Oboe XRuns plus direct-USB
+     * playback/capture ring overruns and underruns.
      */
     int32_t getXRunCount() const;
 
@@ -169,6 +196,27 @@ private:
     void directUsbRenderLoop();
     std::thread directUsbRenderThread_;
     std::atomic<bool> directUsbSession_{false};
+    void cleanupWorkerLoop();
+    void requestDirectUsbCleanup(int32_t failureCode) noexcept;
+    void finishDirectUsbCleanup();
+    bool waitForDirectUsbCleanup();
+    std::thread cleanupWorker_;
+    mutable std::mutex lifecycleMutex_;
+    std::mutex publicLifecycleMutex_;
+    std::condition_variable lifecycleCv_;
+    std::condition_variable cleanupDoneCv_;
+    std::atomic<bool> cleanupRequested_{false};
+    std::atomic<bool> cleanupWorkerStop_{false};
+    bool cleanupInProgress_ = false;
+    std::atomic<DirectUsbState> directUsbState_{DirectUsbState::Stopped};
+    std::atomic<uint64_t> directUsbSessionId_{0};
+    std::atomic<int32_t> directUsbFailureCode_{0};
+    std::atomic<uint32_t> directUsbEffectiveQuantum_{0};
+    std::atomic<int32_t> directUsbPeriodMultiplier_{0};
+    std::atomic<uint32_t> directUsbPrimeFrames_{0};
+    std::atomic<uint32_t> directUsbSteadyTargetFrames_{0};
+    std::atomic<uint64_t> directUsbLastDspNs_{0};
+    std::atomic<uint64_t> directUsbPeakDspNs_{0};
     std::atomic<bool> directUsbRenderUrgentAudio_{false};
     std::atomic<bool> cleanupStarted_{true};
     int32_t directUsbBits_ = 0;
@@ -179,6 +227,7 @@ private:
     std::atomic<uint64_t> directUsbCaptureWaitTimeouts_{0};
     std::vector<float> directUsbStartupLeft_;
     std::vector<float> directUsbStartupRight_;
+    int32_t directUsbStartupBlocks_ = 0;
     std::atomic<uint64_t> directUsbWriteWaitTimeouts_{0};
     std::vector<float> directUsbOutputRight_;
 

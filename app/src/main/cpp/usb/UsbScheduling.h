@@ -20,12 +20,48 @@ struct PlaybackWatermarkConfig {
     int frameLimit;
 };
 
-inline PlaybackWatermarkConfig playbackWatermarkConfig(int requestedFrames) {
+constexpr int kDefaultPeriodMultiplier = 3;
+constexpr int kMinPeriodMultiplier = 1;
+constexpr int kMaxPeriodMultiplier = 8;
+constexpr int kMinPacketsPerTransfer = 1;
+constexpr int kMaxPacketsPerTransfer = 8;
+
+constexpr int packetsPerSecondForInterval(bool highSpeed,
+                                          int bInterval) noexcept {
+    const int hostPeriods = highSpeed ? 8000 : 1000;
+    const int interval = highSpeed
+        ? (1 << std::clamp(bInterval - 1, 0, 15))
+        : std::max(1, bInterval);
+    return std::max(1, hostPeriods / interval);
+}
+
+constexpr int packetsPerTransferForRate(int packetsPerSecond) noexcept {
+    if (packetsPerSecond >= 8000) return 8;
+    if (packetsPerSecond >= 4000) return 4;
+    if (packetsPerSecond >= 2000) return 2;
+    return 1;
+}
+
+inline int clampPeriodMultiplier(int multiplier) noexcept {
+    return std::clamp(multiplier, kMinPeriodMultiplier, kMaxPeriodMultiplier);
+}
+
+// Keep the requested number of graph quanta queued before admitting one more.
+inline PlaybackWatermarkConfig playbackWatermarkConfig(
+        int requestedFrames, int periodMultiplier = kDefaultPeriodMultiplier) {
     const int quantum = std::clamp(requestedFrames,
                                    kMinGraphQuantum,
                                    kMaxGraphQuantum);
-    const int target = std::min(kMaxGraphQuantum, quantum * 2);
+    const int multiplier = clampPeriodMultiplier(periodMultiplier);
+    const int target = std::min(kMaxGraphQuantum, quantum * multiplier);
     return {quantum, target, quantum + target};
+}
+inline int effectivePlaybackTargetFrames(int configured,
+                                         int queuedTransferFrames) noexcept {
+    return std::max(0, std::max(configured, queuedTransferFrames));
+}
+inline int effectivePlaybackPrimeFrames(int configured, int exact) noexcept {
+    return std::max(0, std::max(configured, exact));
 }
 
 // Exact rational packet scheduler. Each next() returns floor((rate + remainder)/period)

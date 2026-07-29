@@ -103,7 +103,7 @@ TEST(UsbPacketSchedule, SupportedRatesAtFullSpeedUseMillisecondCadence) {
 
 
 
-TEST(UsbPlaybackWatermark, ClampsGraphQuantumsAndComputesFrameLimits) {
+TEST(UsbPlaybackWatermark, UsesThreeQuantumTargetAndAdmissionHeadroom) {
     struct WatermarkCase {
         int request;
         int expectedGraphQuantum;
@@ -112,15 +112,15 @@ TEST(UsbPlaybackWatermark, ClampsGraphQuantumsAndComputesFrameLimits) {
         const char* name;
     };
     const WatermarkCase cases[] = {
-        {16, 16, 32, 48, "minimum graph quantum"},
-        {64, 64, 128, 192, "64-frame request"},
-        {256, 256, 512, 768, "256-frame request"},
-        {512, 512, 1024, 1536, "512-frame request"},
+        {16, 16, 48, 64, "minimum graph quantum"},
+        {64, 64, 192, 256, "64-frame direct-USB low-latency request"},
+        {256, 256, 768, 1024, "256-frame direct-USB low-latency request"},
+        {512, 512, 1024, 1536, "512-frame request capped at maximum target"},
         {1024, 1024, 1024, 2048, "maximum graph quantum request"},
         {monotrypt::usb::kMaxGraphQuantum + 1, 1024, 1024, 2048,
          "oversized request"},
-        {0, 16, 32, 48, "zero request"},
-        {-1, 16, 32, 48, "negative request"},
+        {0, 16, 48, 64, "zero request"},
+        {-1, 16, 48, 64, "negative request"},
     };
 
     for (const auto& test : cases) {
@@ -129,8 +129,49 @@ TEST(UsbPlaybackWatermark, ClampsGraphQuantumsAndComputesFrameLimits) {
         EXPECT_EQ(config.graphQuantum, test.expectedGraphQuantum);
         EXPECT_EQ(config.targetFrames, test.expectedTargetFrames);
         EXPECT_EQ(config.frameLimit, test.expectedFrameLimit);
+        EXPECT_EQ(config.targetFrames,
+                  std::min(monotrypt::usb::kMaxGraphQuantum,
+                           config.graphQuantum * 3));
+        EXPECT_EQ(config.frameLimit, config.targetFrames + config.graphQuantum);
         EXPECT_GE(config.frameLimit, config.graphQuantum);
     }
+}
+
+TEST(UsbPlaybackWatermark, ExplicitMultiplierControlsTargetAndClampsBounds) {
+    struct MultiplierCase {
+        int multiplier;
+        int expectedTargetFrames;
+        int expectedFrameLimit;
+        const char* name;
+    };
+    const MultiplierCase q256Cases[] = {
+        {1, 256, 512, "one graph quantum"},
+        {2, 512, 768, "two graph quanta"},
+        {3, 768, 1024, "three graph quanta"},
+        {8, 1024, 1280, "eight graph quanta capped by target maximum"},
+    };
+
+    for (const auto& test : q256Cases) {
+        SCOPED_TRACE(test.name);
+        const auto config =
+            monotrypt::usb::playbackWatermarkConfig(256, test.multiplier);
+        EXPECT_EQ(config.graphQuantum, 256);
+        EXPECT_EQ(config.targetFrames, test.expectedTargetFrames);
+        EXPECT_EQ(config.frameLimit, test.expectedFrameLimit);
+        EXPECT_EQ(config.frameLimit, config.targetFrames + config.graphQuantum);
+    }
+
+    const auto belowMinimum =
+        monotrypt::usb::playbackWatermarkConfig(64, 0);
+    EXPECT_EQ(belowMinimum.graphQuantum, 64);
+    EXPECT_EQ(belowMinimum.targetFrames, 64);
+    EXPECT_EQ(belowMinimum.frameLimit, 128);
+
+    const auto aboveMaximum =
+        monotrypt::usb::playbackWatermarkConfig(64, 9);
+    EXPECT_EQ(aboveMaximum.graphQuantum, 64);
+    EXPECT_EQ(aboveMaximum.targetFrames, 512);
+    EXPECT_EQ(aboveMaximum.frameLimit, 576);
 }
 
 TEST(UsbPlaybackWatermark, EveryWatermarkFitsPhysicalWorstFormatRing) {
@@ -168,5 +209,117 @@ TEST(UsbPlaybackWatermark, EveryWatermarkFitsPhysicalWorstFormatRing) {
         EXPECT_LE(config.frameLimit, kRingCapacityFrames);
         EXPECT_LE(frameBytes, monotrypt::usb::kPlaybackRingBytes);
         EXPECT_GE(config.frameLimit, config.graphQuantum);
+    }
+}
+TEST(UsbPlaybackWatermark, EffectiveTargetIncludesQueuedTransferFloor) {
+    constexpr int kGraphQuantum = 16;
+    constexpr int kInitialTransfers = 4;
+    constexpr int kPacketsPerTransfer = 8;
+    constexpr int kMaxFramesPerPacket = 7;
+    constexpr int kNominalFloor = kMaxFramesPerPacket - 1;
+    constexpr int kExactQueuedTransferFrames =
+        kInitialTransfers * kPacketsPerTransfer * kNominalFloor;
+
+    const int target = monotrypt::usb::effectivePlaybackTargetFrames(
+        kGraphQuantum, kExactQueuedTransferFrames);
+    EXPECT_EQ(kExactQueuedTransferFrames, 192);
+    EXPECT_EQ(target, 192);
+    EXPECT_EQ(target + kGraphQuantum, 208);
+
+    EXPECT_EQ(monotrypt::usb::effectivePlaybackTargetFrames(
+                  256, kExactQueuedTransferFrames),
+              256);
+
+    struct ClampCase {
+        int configuredTarget;
+        int queuedTransferFrames;
+        int expectedTarget;
+        const char* name;
+    };
+    const ClampCase cases[] = {
+        {-1, -1, 0, "both inputs negative"},
+        {-1, 0, 0, "negative configured target"},
+        {0, -1, 0, "negative queued-transfer floor"},
+        {16, -1, 16, "negative floor does not lower configured target"},
+        {-1, 192, 192, "positive floor dominates negative target"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::effectivePlaybackTargetFrames(
+                      test.configuredTarget, test.queuedTransferFrames),
+                  test.expectedTarget);
+    }
+}
+TEST(UsbPacketSchedule, PacketsPerTransferKeepsTransfersNearOneMillisecond) {
+    struct RateCase {
+        uint32_t packetsPerSecond;
+        int expectedPacketsPerTransfer;
+        const char* name;
+    };
+    const RateCase cases[] = {
+        {8000, 8, "one packet per 125 microseconds"},
+        {4000, 4, "one packet per 250 microseconds"},
+        {2000, 2, "one packet per 500 microseconds"},
+        {1000, 1, "one packet per millisecond"},
+        {500, 1, "sub-millisecond packet rates still use one packet"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::packetsPerTransferForRate(
+                      test.packetsPerSecond),
+                  test.expectedPacketsPerTransfer);
+    }
+}
+TEST(UsbPacketSchedule, PacketsPerSecondReflectsEndpointInterval) {
+    struct IntervalCase {
+        bool highSpeed;
+        int bInterval;
+        int expectedPacketsPerSecond;
+        const char* name;
+    };
+    const IntervalCase cases[] = {
+        {true, 1, 8000, "high-speed bInterval 1"},
+        {true, 2, 4000, "high-speed bInterval 2"},
+        {true, 4, 1000, "high-speed bInterval 4"},
+        {false, 1, 1000, "full-speed bInterval 1"},
+        {false, 4, 250, "full-speed bInterval 4"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::packetsPerSecondForInterval(
+                      test.highSpeed, test.bInterval),
+                  test.expectedPacketsPerSecond);
+    }
+}
+
+TEST(UsbPacketSchedule, EndpointIntervalProducesNonzeroOutTransferBatch) {
+    struct IntervalCase {
+        bool highSpeed;
+        int bInterval;
+        int expectedPacketsPerSecond;
+        int expectedPacketsPerTransfer;
+        const char* name;
+    };
+    const IntervalCase cases[] = {
+        {true, 1, 8000, 8, "high-speed bInterval 1"},
+        {true, 2, 4000, 4, "high-speed bInterval 2"},
+        {true, 4, 1000, 1, "high-speed bInterval 4"},
+        {false, 1, 1000, 1, "full-speed bInterval 1"},
+        {false, 4, 250, 1, "full-speed bInterval 4"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        const int packetsPerSecond =
+            monotrypt::usb::packetsPerSecondForInterval(
+                test.highSpeed, test.bInterval);
+        const int packetsPerTransfer =
+            monotrypt::usb::packetsPerTransferForRate(packetsPerSecond);
+        EXPECT_EQ(packetsPerSecond, test.expectedPacketsPerSecond);
+        EXPECT_EQ(packetsPerTransfer, test.expectedPacketsPerTransfer);
+        EXPECT_GT(packetsPerTransfer, 0);
     }
 }

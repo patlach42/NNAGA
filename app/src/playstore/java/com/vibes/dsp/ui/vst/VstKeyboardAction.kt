@@ -8,5 +8,5 @@ package com.vibes.dsp.ui.vst
 /** playstore-flavor stub. No VSTs in this flavor → no inline editor → the
  *  rack chrome never shows the Keyboard button. */
 object VstKeyboardAction {
-    fun showKeyboard(pluginIndex: Int) { /* no-op */ }
+    fun showKeyboard(pathId: Long, pluginIndex: Int) { /* no-op */ }
 }

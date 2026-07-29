@@ -80,8 +80,17 @@ private:
     float sampleRate_ = 0.0f;
     uint32_t bufferSize_ = 0;
 
+    // Render-owned scratch buffers are sized only during lifecycle setup. Structural
+    // control mutations never resize or otherwise touch these buffers.
     std::vector<std::vector<float>> intermediateBuffers_;
+    std::vector<std::vector<float>> continuityBuffers_;
+    uint32_t renderBufferSize_ = 0;
+    uint32_t continuityFrames_ = 0;
+    bool continuityValid_ = false;
+
     void ensureBuffers(uint32_t numFrames, uint32_t numChannels);
+    void copyContinuity(float* const* outputs, uint32_t numFrames) const noexcept;
+    void clearOutputs(float* const* outputs, uint32_t numFrames) const noexcept;
 
     std::deque<std::unique_ptr<IPlugin>> teardownQueue_;
     std::mutex teardownMutex_;

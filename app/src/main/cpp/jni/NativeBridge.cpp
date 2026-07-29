@@ -20,6 +20,7 @@
 #include <jni.h>
 #include <android/log.h>
 #include <atomic>
+#include <algorithm>
 #include <csignal>
 #include <cstring>
 #include <signal.h>
@@ -401,7 +402,7 @@ JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         JNIEnv* env, jobject thiz, jint sampleRate, jint bitsPerSample,
         jint bytesPerSample, jint channels, jint inputChannel, jint outputPair,
-        jint bufferFrames) {
+        jint bufferFrames, jint periodMultiplier) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->audioEngine->startDirectUsbSession(
         static_cast<float>(sampleRate),
@@ -410,7 +411,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         static_cast<int32_t>(channels),
         static_cast<int32_t>(inputChannel),
         static_cast<int32_t>(outputPair),
-        static_cast<int32_t>(bufferFrames)
+        static_cast<int32_t>(bufferFrames),
+        static_cast<int32_t>(periodMultiplier)
     ) ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -452,7 +454,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 18;
+    constexpr jsize kStatCount = 33;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -471,25 +473,55 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         values[11] = transport.eventThreadUrgentAudio ? 1 : 0;
         values[12] = g_ctx->audioEngine &&
                 g_ctx->audioEngine->isDirectUsbRenderUrgentAudio() ? 1 : 0;
-        values[13] =
-            static_cast<jlong>(g_ctx->directUsbOutput->writtenFrames());
-        values[14] =
-            static_cast<jlong>(g_ctx->directUsbOutput->playedFrames());
+        values[13] = static_cast<jlong>(g_ctx->directUsbOutput->writtenFrames());
+        values[14] = static_cast<jlong>(g_ctx->directUsbOutput->playedFrames());
         values[15] = static_cast<jlong>(g_ctx->directUsbOutput->xrunCount());
         values[16] = g_ctx->audioEngine
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbCaptureWaitTimeouts()) : 0;
         values[17] = g_ctx->audioEngine
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
+        if (g_ctx->audioEngine) {
+            const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
+            values[18] = 2;
+            values[19] = static_cast<jlong>(stats.sessionId);
+            values[20] = static_cast<jlong>(stats.state);
+            values[21] = static_cast<jlong>(stats.failureCode);
+            values[22] = static_cast<jlong>(g_ctx->audioEngine->getSampleRate());
+            values[23] = static_cast<jlong>(stats.effectiveQuantum);
+            values[24] = static_cast<jlong>(stats.requestedPeriodMultiplier);
+            values[25] = static_cast<jlong>(stats.startupPrimeFrames);
+            values[26] = static_cast<jlong>(stats.steadyTargetFrames);
+            values[27] = static_cast<jlong>(stats.queuedOutFrames);
+            values[28] = static_cast<jlong>(stats.captureTransferFrames);
+            values[29] = static_cast<jlong>(stats.lastDspNanoseconds);
+            values[30] = static_cast<jlong>(stats.peakDspNanoseconds);
+            const uint64_t hostFrames = std::max<uint32_t>(
+                stats.effectiveQuantum,
+                std::max(stats.captureRingFrames, stats.captureTransferFrames));
+            values[31] = static_cast<jlong>(
+                hostFrames + stats.playbackRingFrames + stats.queuedOutFrames);
+            values[32] = static_cast<jlong>(
+                stats.playbackXruns + stats.captureOverruns + stats.captureUnderruns);
+        }
     }
     jlongArray out = env->NewLongArray(kStatCount);
     if (out) env->SetLongArrayRegion(out, 0, kStatCount, values);
     return out;
 }
+JNIEXPORT jstring JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbErrorDetail(
+        JNIEnv* env, jobject thiz) {
+    if (!g_ctx || !g_ctx->directUsbOutput) return env->NewStringUTF("");
+    const std::string detail = g_ctx->directUsbOutput->lastErrorDetail();
+    return env->NewStringUTF(detail.c_str());
+}
+
+
 
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStopEngine(JNIEnv* env, jobject thiz) {
     LOGI("nativeStopEngine CALLED tid=%ld (Java requested stop; will call closeStreams from this thread)", getTid());
-    if (g_ctx->audioEngine) {
+    if (g_ctx && g_ctx->audioEngine) {
         g_ctx->audioEngine->stop();
     }
     LOGI("nativeStopEngine RETURNED tid=%ld", getTid());
@@ -497,12 +529,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStopEngine(JNIEnv* env, jobject thi
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeIsEngineRunning(JNIEnv* env, jobject thiz) {
-    return g_ctx->audioEngine && g_ctx->audioEngine->isRunning() ? JNI_TRUE : JNI_FALSE;
+    return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->isRunning() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jfloat JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetSampleRate(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return 0.0f;
     }
     return g_ctx->audioEngine->getSampleRate();
@@ -510,7 +542,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetSampleRate(JNIEnv* env, jobject 
 
 JNIEXPORT jint JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetBufferFrameCount(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return 0;
     }
     return static_cast<jint>(g_ctx->audioEngine->getCallbackFrameCount());
@@ -520,7 +552,7 @@ JNIEXPORT jintArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetStreamInfo(JNIEnv* env, jobject thiz) {
     // Returns [isAAudio, inputExclusive, outputExclusive, inputLowLatency, outputLowLatency, outputMMap, outputCallback, framesPerBurst]
     jint arr[8] = {};
-    if (g_ctx->audioEngine && g_ctx->audioEngine->isRunning()) {
+    if (g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->isRunning()) {
         auto info = g_ctx->audioEngine->getStreamInfo();
         arr[0] = info.isAAudio ? 1 : 0;
         arr[1] = info.inputExclusive ? 1 : 0;
@@ -540,7 +572,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetStreamInfo(JNIEnv* env, jobject 
 
 JNIEXPORT jdouble JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetLatencyMs(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return 0.0;
     }
     return g_ctx->audioEngine->getLatencyMs();
@@ -548,7 +580,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetLatencyMs(JNIEnv* env, jobject t
 
 JNIEXPORT jfloat JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetInputLevel(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return 0.0f;
     }
     return g_ctx->audioEngine->getInputLevel();
@@ -556,7 +588,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetInputLevel(JNIEnv* env, jobject 
 
 JNIEXPORT jfloat JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetOutputLevel(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return 0.0f;
     }
     return g_ctx->audioEngine->getOutputLevel();
@@ -564,7 +596,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetOutputLevel(JNIEnv* env, jobject
 
 JNIEXPORT jfloat JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetCpuLoad(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return 0.0f;
     }
     return g_ctx->audioEngine->getCpuLoad();
@@ -572,7 +604,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetCpuLoad(JNIEnv* env, jobject thi
 
 JNIEXPORT jint JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetXRunCount(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return 0;
     }
     return g_ctx->audioEngine->getXRunCount();
@@ -580,7 +612,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetXRunCount(JNIEnv* env, jobject t
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeIsInputClipping(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return JNI_FALSE;
     }
     return g_ctx->audioEngine->isInputClipping() ? JNI_TRUE : JNI_FALSE;
@@ -588,7 +620,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsInputClipping(JNIEnv* env, jobjec
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeIsOutputClipping(JNIEnv* env, jobject thiz) {
-    if (!g_ctx->audioEngine) {
+    if (!g_ctx || !g_ctx->audioEngine) {
         return JNI_FALSE;
     }
     return g_ctx->audioEngine->isOutputClipping() ? JNI_TRUE : JNI_FALSE;
@@ -596,7 +628,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsOutputClipping(JNIEnv* env, jobje
 
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeResetClipping(JNIEnv* env, jobject thiz) {
-    if (g_ctx->audioEngine) {
+    if (g_ctx && g_ctx->audioEngine) {
         g_ctx->audioEngine->resetClipping();
     }
 }

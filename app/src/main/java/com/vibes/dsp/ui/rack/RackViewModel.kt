@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
 
@@ -31,6 +33,10 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val _outputClipping = MutableStateFlow(false); val outputClipping = _outputClipping.asStateFlow()
     private val _tracks = MutableStateFlow<List<RackTrackInfo>>(emptyList()); val tracks: StateFlow<List<RackTrackInfo>> = _tracks.asStateFlow()
     private val _selectedPathId = MutableStateFlow<RackPathId>(1L); val selectedPathId = _selectedPathId.asStateFlow()
+    private val _directUsbStats = MutableStateFlow(DirectUsbStats())
+    val directUsbStats: StateFlow<DirectUsbStats> = _directUsbStats.asStateFlow()
+    private val _directUsbState = MutableStateFlow(DirectUsbSessionState.Stopped)
+    val directUsbState: StateFlow<DirectUsbSessionState> = _directUsbState.asStateFlow()
     private val _selectedPathPlugins = MutableStateFlow<List<RackPlugin>>(emptyList()); val selectedPathPlugins = _selectedPathPlugins.asStateFlow()
     private val _wavTransport = MutableStateFlow(WavTransportInfo(false, false, 0.0, 0.0, 0)); val wavTransport = _wavTransport.asStateFlow()
     private val _errorMessage = MutableStateFlow<String?>(null); val errorMessage = _errorMessage.asStateFlow()
@@ -42,45 +48,64 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val _recordingDurationSec = MutableStateFlow(0.0); val recordingDurationSec = _recordingDurationSec.asStateFlow()
     private val presetManager = PresetManager(native)
     private var recentPresetsManager: RecentPresetsManager? = null
+    private var lastUsbSignature: List<Long>? = null
+    private var failedUsbSessionId: Long = 0
+    private val lifecycleMutex = Mutex()
     private var restartJob: Job? = null
-    private var lastLoggedXRun = Int.MIN_VALUE
 
     init {
         viewModelScope.launch {
             while (true) {
-                if (_isEngineRunning.value) {
-                    runCatching {
-                        _inputLevel.value = AudioEngine.getInputLevel()
-                        _outputLevel.value = AudioEngine.getOutputLevel()
-                        _inputClipping.value = AudioEngine.isInputClipping()
-                        _outputClipping.value = AudioEngine.isOutputClipping()
-                        _cpuLoad.value = AudioEngine.getCpuLoad()
-                        _latencyMs.value = AudioEngine.getLatencyMs()
-                        _xRunCount.value = AudioEngine.getXRunCount()
-                        logDirectUsbDiagnosticsOnChange(_xRunCount.value)
-                        if (_isRecording.value) {
-                            _recordingDurationSec.value = RecordingManager.getRecordingDurationSec()
+                if (nativeReady) {
+                    runCatching { pollDirectUsbStats() }
+                    if (_isEngineRunning.value) {
+                        runCatching {
+                            _inputLevel.value = AudioEngine.getInputLevel()
+                            _outputLevel.value = AudioEngine.getOutputLevel()
+                            _inputClipping.value = AudioEngine.isInputClipping()
+                            _outputClipping.value = AudioEngine.isOutputClipping()
+                            _cpuLoad.value = AudioEngine.getCpuLoad()
+                            _latencyMs.value = AudioEngine.getLatencyMs()
+                            _xRunCount.value = maxOf(AudioEngine.getXRunCount(), _directUsbStats.value.actualXruns.toInt())
+                            if (_isRecording.value) _recordingDurationSec.value = RecordingManager.getRecordingDurationSec()
                         }
                     }
+                    refreshWavTransport()
                 }
-                if (nativeReady) refreshWavTransport()
                 delay(200)
             }
         }
     }
-    private fun logDirectUsbDiagnosticsOnChange(xRuns: Int) {
-        if (xRuns == lastLoggedXRun) return
-        lastLoggedXRun = xRuns
-        val stats = native.nativeGetDirectUsbStats()
-        if (stats.size < 18) return
-        Log.i(
-            "DirectUsbDiag",
-            "xruns=$xRuns playbackXruns=${stats[15]} captureOver=${stats[1]} " +
-                "captureUnder=${stats[2]} captureTransfer=${stats[5]} " +
-                "playbackTransfer=${stats[6]} captureWaitTimeout=${stats[16]} " +
-                "writeWaitTimeout=${stats[17]} ringFrames=${stats[7]} " +
-                "captureFrames=${stats[8]} written=${stats[13]} played=${stats[14]}"
+
+    private suspend fun pollDirectUsbStats() {
+        val stats = withContext(Dispatchers.IO) { native.getDirectUsbStats() }
+        _directUsbStats.value = stats
+        _directUsbState.value = stats.state
+        _isEngineRunning.value = stats.state == DirectUsbSessionState.Running
+        if (stats.state == DirectUsbSessionState.Failed && stats.sessionId != 0L &&
+            stats.sessionId != failedUsbSessionId) {
+            failedUsbSessionId = stats.sessionId
+            _errorMessage.value = "USB failed: ${stats.failure}"
+        }
+        val signature = listOf(
+            stats.playbackXruns, stats.captureOverruns, stats.captureUnderruns,
+            stats.captureTransferErrors, stats.playbackTransferErrors,
+            stats.captureWaitPressure, stats.writeWaitPressure,
+            stats.effectiveQuantum, stats.periodMultiplier, stats.startupPrime,
+            stats.steadyTarget, stats.captureRingFrames, stats.playbackRingFrames,
+            stats.knownHostLatencyFrames, stats.queuedOut,
         )
+        if (signature != lastUsbSignature) {
+            lastUsbSignature = signature
+            Log.i("DirectUsbDiag", "playbackXruns=${stats.playbackXruns} " +
+                "captureOver=${stats.captureOverruns} captureUnder=${stats.captureUnderruns} " +
+                "transferErrors(capture=${stats.captureTransferErrors},playback=${stats.playbackTransferErrors}) " +
+                "waitPressure(capture=${stats.captureWaitPressure},write=${stats.writeWaitPressure}) " +
+                "ring(capture=${stats.captureRingFrames},playback=${stats.playbackRingFrames}) " +
+                "queued/prime/target=${stats.queuedOut}/${stats.startupPrime}/${stats.steadyTarget} " +
+                "Q=${stats.effectiveQuantum} multiplier=${stats.periodMultiplier} " +
+                "DSP(last=${stats.lastDspNs},peak=${stats.peakDspNs})")
+        }
     }
 
 
@@ -101,7 +126,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             if (_selectedPathId.value != MASTER_PATH_ID && all.none { it.id == _selectedPathId.value }) _selectedPathId.value = all.firstOrNull()?.id ?: MASTER_PATH_ID
             refreshSelectedPath(force)
             refreshWavTransport()
-            _errorMessage.value = null
+            if (_directUsbState.value != DirectUsbSessionState.Failed) _errorMessage.value = null
         }.onFailure {
             android.util.Log.e("RackViewModel", "Failed to refresh rack", it)
             _errorMessage.value = "Failed to refresh rack: ${it.message}"
@@ -147,9 +172,43 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun getPreferredUiTypeForPlugin(info: PluginInfo): UiType { val stored = PluginUiPreferenceManager.getStoredUiType(getApplication(), info.fullId); return if (stored != null && info.guiTypes.contains(stored)) stored else info.preferredUiType }
     fun setPreferredUiTypeForPlugin(id: String, type: UiType) = PluginUiPreferenceManager.setStoredUiType(getApplication(), id, type)
 
-    fun startEngine() { viewModelScope.launch { val r = DirectUsbAudioManager.startConfigured(getApplication<Application>()); _isEngineRunning.value = r.isSuccess; if (!r.isSuccess) _errorMessage.value = "USB audio session unavailable: ${r.exceptionOrNull()?.message}"; refreshRackNow() } }
-    fun stopEngine() { stopRecording(); DirectUsbAudioManager.disable(getApplication()); _isEngineRunning.value = false; refreshRack() }
-    fun restartEngine() { if (_isEngineRunning.value) { restartJob?.cancel(); restartJob = viewModelScope.launch { stopEngine(); delay(100); startEngine() } } }
+    fun startEngine() {
+        _directUsbState.value = DirectUsbSessionState.Starting
+        viewModelScope.launch {
+            lifecycleMutex.withLock {
+                withContext(Dispatchers.IO) {
+                    val result = DirectUsbAudioManager.startConfigured(getApplication<Application>())
+                    if (!result.isSuccess) _errorMessage.value =
+                        "USB audio session unavailable: ${result.exceptionOrNull()?.message}"
+                }
+            }
+        }
+    }
+    fun stopEngine() {
+        stopRecording()
+        _directUsbState.value = DirectUsbSessionState.Stopping
+        _isEngineRunning.value = false
+        viewModelScope.launch {
+            lifecycleMutex.withLock {
+                withContext(Dispatchers.IO) { DirectUsbAudioManager.disable(getApplication()) }
+            }
+        }
+    }
+    fun restartEngine() {
+        restartJob?.cancel()
+        _directUsbState.value = DirectUsbSessionState.Starting
+        restartJob = viewModelScope.launch {
+            lifecycleMutex.withLock {
+                withContext(Dispatchers.IO) { DirectUsbAudioManager.disable(getApplication()) }
+                delay(100)
+                withContext(Dispatchers.IO) {
+                    val result = DirectUsbAudioManager.startConfigured(getApplication<Application>())
+                    if (!result.isSuccess) _errorMessage.value =
+                        "USB audio session unavailable: ${result.exceptionOrNull()?.message}"
+                }
+            }
+        }
+    }
     fun resetClipping() { AudioEngine.resetClipping(); _inputClipping.value = false; _outputClipping.value = false }
     fun toggleRecording(context: Context) { if (_isRecording.value) stopRecording() else if (!_isEngineRunning.value) _errorMessage.value = "Start the engine first to record" else { _isRecording.value = RecordingManager.startRecording(context); if (!_isRecording.value) _errorMessage.value = "Failed to start recording" } }
     fun stopRecording() { if (_isRecording.value) { RecordingManager.stopRecording(); _isRecording.value = false; _recordingDurationSec.value = 0.0 } }

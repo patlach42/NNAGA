@@ -37,6 +37,25 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_CHANNELS = "directUsbChannels"
     private const val KEY_DIRECT_USB_INPUT_CHANNEL = "directUsbInputChannel"
     private const val KEY_DIRECT_USB_OUTPUT_PAIR = "directUsbOutputPair"
+    private const val KEY_DIRECT_USB_PERIOD_MULTIPLIER = "directUsbPeriodMultiplier"
+
+    private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 3
+    private const val MIN_DIRECT_USB_PERIOD_MULTIPLIER = 1
+    private const val MAX_DIRECT_USB_PERIOD_MULTIPLIER = 8
+
+    private fun clampDirectUsbPeriodMultiplier(value: Int): Int =
+        value.coerceIn(MIN_DIRECT_USB_PERIOD_MULTIPLIER, MAX_DIRECT_USB_PERIOD_MULTIPLIER)
+
+    fun getDirectUsbPeriodMultiplier(context: Context): Int =
+        clampDirectUsbPeriodMultiplier(
+            prefs(context).getInt(KEY_DIRECT_USB_PERIOD_MULTIPLIER, DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER)
+        )
+
+    fun setDirectUsbPeriodMultiplier(context: Context, multiplier: Int) {
+        prefs(context).edit()
+            .putInt(KEY_DIRECT_USB_PERIOD_MULTIPLIER, clampDirectUsbPeriodMultiplier(multiplier))
+            .apply()
+    }
 
     val BUFFER_SIZE_OPTIONS = listOf(
         0 to "Auto", 16 to "16", 32 to "32", 64 to "64",

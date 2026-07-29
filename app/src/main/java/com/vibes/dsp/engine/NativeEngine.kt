@@ -22,6 +22,113 @@ package com.vibes.dsp.engine
 import android.content.Context
 import java.io.File
 
+enum class DirectUsbSessionState {
+    Stopped, Starting, Running, Failed, Stopping, Unknown;
+
+    companion object {
+        fun fromOrdinal(value: Long): DirectUsbSessionState =
+            values().getOrNull(value.toInt()) ?: Unknown
+    }
+}
+
+enum class DirectUsbFailure {
+    Ok, NoDevice, NoMatchingAlt, ClaimInterfaceFailed, SetAltFailed,
+    SetSampleRateFailed, IsoPumpAllocFailed, IsoPumpSubmitFailed,
+    TransportStoppedUnexpectedly, Unknown;
+
+    companion object {
+        fun fromCode(value: Long): DirectUsbFailure =
+            values().getOrNull(value.toInt()) ?: Unknown
+    }
+}
+
+data class DirectUsbStats(
+    val sequence: Long = 0,
+    val captureOverruns: Long = 0,
+    val captureUnderruns: Long = 0,
+    val captureRingFrames: Long = 0,
+    val playbackRingFrames: Long = 0,
+    val captureTransferErrors: Long = 0,
+    val playbackTransferErrors: Long = 0,
+    val captureWaitPressure: Long = 0,
+    val writeWaitPressure: Long = 0,
+    val playbackXruns: Long = 0,
+    val schemaVersion: Long = 0,
+    val sessionId: Long = 0,
+    val state: DirectUsbSessionState = DirectUsbSessionState.Unknown,
+    val failure: DirectUsbFailure = DirectUsbFailure.Unknown,
+    val sampleRateHz: Long = 0,
+    val effectiveQuantum: Long = 0,
+    val periodMultiplier: Long = 0,
+    val startupPrime: Long = 0,
+    val steadyTarget: Long = 0,
+    val queuedOut: Long = 0,
+    val captureTransferFrames: Long = 0,
+    val lastDspNs: Long = 0,
+    val peakDspNs: Long = 0,
+    val knownHostLatencyFrames: Long = 0,
+    val actualXruns: Long = 0,
+) {
+    companion object {
+        private const val SEQUENCE = 0
+        private const val CAPTURE_OVERRUNS = 1
+        private const val CAPTURE_UNDERRUNS = 2
+        private const val CAPTURE_RING = 8
+        private const val PLAYBACK_RING = 7
+        private const val CAPTURE_TRANSFER_ERRORS = 5
+        private const val PLAYBACK_TRANSFER_ERRORS = 6
+        private const val PLAYBACK_XRUNS = 15
+        private const val CAPTURE_WAIT_PRESSURE = 16
+        private const val WRITE_WAIT_PRESSURE = 17
+        private const val SCHEMA = 18
+        private const val SESSION = 19
+        private const val STATE = 20
+        private const val FAILURE = 21
+        private const val RATE = 22
+        private const val QUANTUM = 23
+        private const val MULTIPLIER = 24
+        private const val PRIME = 25
+        private const val TARGET = 26
+        private const val QUEUED = 27
+        private const val TRANSFER_FRAMES = 28
+        private const val LAST_DSP = 29
+        private const val PEAK_DSP = 30
+        private const val HOST_LATENCY = 31
+        private const val ACTUAL_XRUNS = 32
+
+        fun fromRaw(raw: LongArray): DirectUsbStats {
+            fun at(index: Int) = raw.getOrElse(index) { 0L }
+            return DirectUsbStats(
+                sequence = at(SEQUENCE),
+                captureOverruns = at(CAPTURE_OVERRUNS),
+                captureUnderruns = at(CAPTURE_UNDERRUNS),
+                captureRingFrames = at(CAPTURE_RING),
+                playbackRingFrames = at(PLAYBACK_RING),
+                captureTransferErrors = at(CAPTURE_TRANSFER_ERRORS),
+                playbackTransferErrors = at(PLAYBACK_TRANSFER_ERRORS),
+                captureWaitPressure = at(CAPTURE_WAIT_PRESSURE),
+                writeWaitPressure = at(WRITE_WAIT_PRESSURE),
+                playbackXruns = at(PLAYBACK_XRUNS),
+                schemaVersion = at(SCHEMA),
+                sessionId = at(SESSION),
+                state = DirectUsbSessionState.fromOrdinal(at(STATE)),
+                failure = DirectUsbFailure.fromCode(at(FAILURE)),
+                sampleRateHz = at(RATE),
+                effectiveQuantum = at(QUANTUM),
+                periodMultiplier = at(MULTIPLIER),
+                startupPrime = at(PRIME),
+                steadyTarget = at(TARGET),
+                queuedOut = at(QUEUED),
+                captureTransferFrames = at(TRANSFER_FRAMES),
+                lastDspNs = at(LAST_DSP),
+                peakDspNs = at(PEAK_DSP),
+                knownHostLatencyFrames = at(HOST_LATENCY),
+                actualXruns = at(ACTUAL_XRUNS),
+            )
+        }
+    }
+}
+
 data class AudioStreamInfo(
     val isAAudio: Boolean = false,
     val inputExclusive: Boolean = false,
@@ -151,7 +258,8 @@ class NativeEngine private constructor() {
         channels: Int,
         inputChannel: Int,
         outputPair: Int,
-        bufferFrames: Int
+        bufferFrames: Int,
+        periodMultiplier: Int
     ): Boolean
 
 
@@ -170,7 +278,9 @@ class NativeEngine private constructor() {
      * Direct USB transport diagnostics. Indices are documented by the
      * instrumentation stress test and remain stable for field telemetry.
      */
+    fun getDirectUsbStats(): DirectUsbStats = DirectUsbStats.fromRaw(nativeGetDirectUsbStats())
     external fun nativeGetDirectUsbStats(): LongArray
+    external fun nativeGetDirectUsbErrorDetail(): String
 
     /**
      * Stop the audio engine.
