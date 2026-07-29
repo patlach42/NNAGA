@@ -46,6 +46,8 @@ import com.vibes.dsp.engine.AudioSettingsManager
 import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.DirectUsbDeviceOption
 import com.vibes.dsp.engine.DirectUsbFormat
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 
 import com.vibes.dsp.ui.rack.RackViewModel
@@ -112,10 +114,8 @@ fun AudioSettingsScreen(
 private fun DirectUsbSessionSettings() {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var devices by remember { mutableStateOf(DirectUsbAudioManager.getAudioDevices(context)) }
-    var selectedDevice by remember {
-        mutableStateOf(devices.firstOrNull { it.id == AudioSettingsManager.getDirectUsbDeviceId(context) })
-    }
+    var devices by remember { mutableStateOf<List<DirectUsbDeviceOption>>(emptyList()) }
+    var selectedDevice by remember { mutableStateOf<DirectUsbDeviceOption?>(null) }
     var formats by remember { mutableStateOf<List<DirectUsbFormat>>(emptyList()) }
     var selectedRate by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRate(context)) }
     var selectedBits by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbBits(context)) }
@@ -132,16 +132,25 @@ private fun DirectUsbSessionSettings() {
     var message by remember { mutableStateOf<String?>(null) }
     var devicesExpanded by remember { mutableStateOf(false) }
 
-    fun refreshDevices() {
+    suspend fun refreshDevices() {
         val previousDeviceId = selectedDevice?.id
-        devices = DirectUsbAudioManager.getAudioDevices(context)
-        selectedDevice = devices.firstOrNull { it.id == previousDeviceId }
-            ?: devices.firstOrNull()
+        val preferredDeviceId = previousDeviceId
+            ?: AudioSettingsManager.getDirectUsbDeviceId(context)
+        val refreshedDevices = withContext(Dispatchers.IO) {
+            DirectUsbAudioManager.getAudioDevices(context)
+        }
+        devices = refreshedDevices
+        selectedDevice = refreshedDevices.firstOrNull { it.id == preferredDeviceId }
+            ?: refreshedDevices.firstOrNull()
         if (selectedDevice?.id != previousDeviceId) {
             formats = emptyList()
             inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
         }
         message = null
+    }
+
+    LaunchedEffect(context) {
+        refreshDevices()
     }
 
     DisposableEffect(context) {
@@ -150,7 +159,7 @@ private fun DirectUsbSessionSettings() {
                 if (intent.action == UsbManager.ACTION_USB_DEVICE_ATTACHED ||
                     intent.action == UsbManager.ACTION_USB_DEVICE_DETACHED
                 ) {
-                    refreshDevices()
+                    scope.launch { refreshDevices() }
                 }
             }
         }
@@ -166,6 +175,7 @@ private fun DirectUsbSessionSettings() {
         }
         onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
+
 
     fun selectCompatibleFormat() {
         val selected = formats.firstOrNull {
@@ -213,7 +223,7 @@ private fun DirectUsbSessionSettings() {
     }
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(
-            onClick = { refreshDevices() },
+            onClick = { scope.launch { refreshDevices() } },
             modifier = Modifier.weight(1f)
         ) { Text("Refresh") }
         Button(

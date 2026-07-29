@@ -31,6 +31,8 @@ import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.coroutines.resume
 
 data class DirectUsbDeviceOption(
@@ -88,41 +90,51 @@ object DirectUsbAudioManager {
             }
     }
 
-    suspend fun probeFormats(context: Context, option: DirectUsbDeviceOption): Result<List<DirectUsbFormat>> {
-        val engine = NativeEngine.getInstance()
-        val reusingOpenDevice = activeDeviceId == option.id && connection != null
-        if (!reusingOpenDevice) {
-            disable(context)
-            val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
-            if (!requestPermission(context, usbManager, option.device)) {
-                return Result.failure(SecurityException("USB access was not granted"))
+    suspend fun probeFormats(context: Context, option: DirectUsbDeviceOption): Result<List<DirectUsbFormat>> =
+        withContext(Dispatchers.IO) {
+            val engine = NativeEngine.getInstance()
+            val reusingOpenDevice = activeDeviceId == option.id && connection != null
+            if (!reusingOpenDevice) {
+                disable(context)
+                val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+                if (!requestPermission(context, usbManager, option.device)) {
+                    return@withContext Result.failure(SecurityException("USB access was not granted"))
+                }
+                val opened = usbManager.openDevice(option.device)
+                    ?: return@withContext Result.failure(
+                        IllegalStateException("Android could not open the USB interface")
+                    )
+                if (opened.fileDescriptor < 0 || !engine.nativeOpenDirectUsbOutput(opened.fileDescriptor)) {
+                    opened.close()
+                    return@withContext Result.failure(
+                        IllegalStateException(
+                            "Could not take control of USB audio. Enable Disable USB audio routing and reconnect the interface."
+                        )
+                    )
+                }
+                connection = opened
+                activeDeviceId = option.id
+                AudioSettingsManager.setDirectUsbDeviceId(context, option.id)
+                registerDetachReceiver(context.applicationContext)
             }
-            val opened = usbManager.openDevice(option.device)
-                ?: return Result.failure(IllegalStateException("Android could not open the USB interface"))
-            if (opened.fileDescriptor < 0 || !engine.nativeOpenDirectUsbOutput(opened.fileDescriptor)) {
-                opened.close()
-                return Result.failure(IllegalStateException("Could not take control of USB audio. Enable Disable USB audio routing and reconnect the interface."))
+            availableInputChannels = engine.nativeGetDirectUsbInputChannelCount()
+            if (availableInputChannels <= 0) {
+                disable(context)
+                return@withContext Result.failure(
+                    IllegalStateException("The USB interface exposes no PCM capture channels")
+                )
             }
-            connection = opened
-            activeDeviceId = option.id
-            AudioSettingsManager.setDirectUsbDeviceId(context, option.id)
-            registerDetachReceiver(context.applicationContext)
+            val packedFormats = runCatching { engine.nativeGetDirectUsbOutputFormats() }
+                .getOrDefault(intArrayOf())
+            val nativeFormats = packedFormats
+                .asSequence()
+                .chunked(4)
+                .filter { it.size == 4 && it[0] > 0 && it[1] > 0 && it[2] > 0 && it[3] > 0 }
+                .map { DirectUsbFormat(it[0], it[1], it[2], it[3]) }
+                .toList()
+            // Keep the known iD4 UAC2 alternate available when descriptor probing is incomplete.
+            Result.success((nativeFormats + fallbackFormats).distinct())
         }
-        availableInputChannels = engine.nativeGetDirectUsbInputChannelCount()
-        if (availableInputChannels <= 0) {
-            disable(context)
-            return Result.failure(IllegalStateException("The USB interface exposes no PCM capture channels"))
-        }
-        val packedFormats = runCatching { engine.nativeGetDirectUsbOutputFormats() }.getOrDefault(intArrayOf())
-        val nativeFormats = packedFormats
-            .asSequence()
-            .chunked(4)
-            .filter { it.size == 4 && it[0] > 0 && it[1] > 0 && it[2] > 0 && it[3] > 0 }
-            .map { DirectUsbFormat(it[0], it[1], it[2], it[3]) }
-            .toList()
-        // Keep the known iD4 UAC2 alternate available when descriptor probing is incomplete.
-        return Result.success((nativeFormats + fallbackFormats).distinct())
-    }
 
     suspend fun startConfigured(context: Context): Result<Unit> {
         val deviceId = AudioSettingsManager.getDirectUsbDeviceId(context)

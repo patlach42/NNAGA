@@ -103,12 +103,14 @@ public:
     /**
      * Get current sample rate.
      */
-    float getSampleRate() const { return sampleRate_; }
+    float getSampleRate() const { return publishedSampleRate_.load(std::memory_order_acquire); }
 
     /**
      * Get actual callback frame count (buffer size used by the audio callback).
      */
-    uint32_t getCallbackFrameCount() const { return callbackFrameCount_; }
+    uint32_t getCallbackFrameCount() const {
+        return publishedCallbackFrameCount_.load(std::memory_order_acquire);
+    }
 
     struct StreamInfo {
         bool isAAudio = false;         // AAudio vs OpenSL ES
@@ -265,12 +267,30 @@ private:
     std::atomic<float> cpuLoad_{0.0f};
     std::atomic<bool> inputClipping_{false};
     std::atomic<bool> outputClipping_{false};
+    // Immutable UI telemetry snapshots. Writers are lifecycle/audio threads; getters never touch streams.
+    std::atomic<float> publishedSampleRate_{48000.0f};
+    std::atomic<uint32_t> publishedCallbackFrameCount_{0};
+    std::atomic<double> publishedLatencyMs_{0.0};
+    std::atomic<int32_t> publishedXRunCount_{0};
+    std::atomic<bool> streamIsAAudio_{false};
+    std::atomic<bool> streamInputExclusive_{false};
+    std::atomic<bool> streamOutputExclusive_{false};
+    std::atomic<bool> streamInputLowLatency_{false};
+    std::atomic<bool> streamOutputLowLatency_{false};
+    std::atomic<bool> streamOutputMMap_{false};
+    std::atomic<int32_t> streamFramesPerBurst_{0};
+    std::atomic<uint32_t> directCaptureRingFrames_{0};
+    std::atomic<uint32_t> directPlaybackRingFrames_{0};
+    std::atomic<uint32_t> directQueuedOutFrames_{0};
+    std::atomic<uint32_t> directCaptureTransferFrames_{0};
+    std::atomic<uint64_t> directCaptureOverruns_{0};
+    std::atomic<uint64_t> directCaptureUnderruns_{0};
+    std::atomic<uint64_t> directPlaybackXruns_{0};
     float inputPeakHold_{0.0f};
     float outputPeakHold_{0.0f};
 
 
     static constexpr float kClippingThreshold = 0.99f;
-    static constexpr float kPeakDecay = 0.95f;
 
 
     AudioRecorder recorder_;

@@ -124,10 +124,12 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
         viewModelScope.launch {
             _isLoading.value = true
             try {
-                val fileInfo = ToneFileUtils.classifyModel(tone, model)
-                val filesDir = getApplication<Application>().filesDir
-                val destFile = fileInfo.resolveFile(filesDir)
-                destFile.parentFile?.mkdirs()
+                val (fileInfo, filesDir, destFile) = withContext(Dispatchers.IO) {
+                    val info = ToneFileUtils.classifyModel(tone, model)
+                    val dir = getApplication<Application>().filesDir
+                    Triple(info, dir, info.resolveFile(dir))
+                }
+                withContext(Dispatchers.IO) { destFile.parentFile?.mkdirs() }
 
                 _downloadStatus.emit("Downloading model ${model.name}...")
                 val success = withContext(Dispatchers.IO) {
@@ -140,14 +142,18 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
 
                     // If it's AIDA-X, also copy to neural_models so NAM can see it
                     if (fileInfo.isAidaX) {
-                        val neuralDir = File(filesDir, "neural_models")
-                        neuralDir.mkdirs()
-                        val targetToneDir = File(neuralDir, fileInfo.toneDirName)
-                        targetToneDir.mkdirs()
-                        destFile.copyTo(File(targetToneDir, destFile.name), overwrite = true)
+                        withContext(Dispatchers.IO) {
+                            val neuralDir = File(filesDir, "neural_models")
+                            neuralDir.mkdirs()
+                            val targetToneDir = File(neuralDir, fileInfo.toneDirName)
+                            targetToneDir.mkdirs()
+                            destFile.copyTo(File(targetToneDir, destFile.name), overwrite = true)
+                        }
                     }
                     if (_sourcePathId >= 0L && _sourcePluginIndex >= 0) {
-                        val pluginInfo = RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
+                        val pluginInfo = withContext(Dispatchers.IO) {
+                            RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
+                        }
                         if (pluginInfo != null) {
                             loadFileIntoPlugin(_sourcePluginIndex, fileInfo, destFile, _sourceSlot)
                             _downloadStatus.emit("Model loaded into rack")
@@ -165,26 +171,28 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    private fun loadFileIntoPlugin(pluginIndex: Int, fileInfo: ModelFileInfo, file: File, slot: String? = null) {
-        val rackPlugin = RackManager.getRackPluginInfo(_sourcePathId, pluginIndex)
-        if (rackPlugin?.format == "VST2" || rackPlugin?.format == "VST3") {
-            RackManager.notifyVstTone3000FileSelected(_sourcePathId, pluginIndex, file.absolutePath)
-            return
-        }
+    private suspend fun loadFileIntoPlugin(pluginIndex: Int, fileInfo: ModelFileInfo, file: File, slot: String? = null) =
+        withContext(Dispatchers.IO) {
+            val rackPlugin = RackManager.getRackPluginInfo(_sourcePathId, pluginIndex)
+            if (rackPlugin?.format == "VST2" || rackPlugin?.format == "VST3") {
+                RackManager.notifyVstTone3000FileSelected(_sourcePathId, pluginIndex, file.absolutePath)
+                return@withContext
+            }
 
-        val propertyUri = ToneFileUtils.resolvePropertyUri(fileInfo, rackPlugin?.id, slot)
-        RackManager.setPluginFilePath(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
-        X11Bridge.deliverFileToPluginUI(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
-        RackManager.notifyModelLoaded(_sourcePathId, pluginIndex, file.nameWithoutExtension)
-    }
+            val propertyUri = ToneFileUtils.resolvePropertyUri(fileInfo, rackPlugin?.id, slot)
+            RackManager.setPluginFilePath(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
+            X11Bridge.deliverFileToPluginUI(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
+            RackManager.notifyModelLoaded(_sourcePathId, pluginIndex, file.nameWithoutExtension)
+        }
 
     fun loadModelToPlugin(tone: Tone, model: Model) {
         viewModelScope.launch {
-            val fileInfo = ToneFileUtils.classifyModel(tone, model)
-            val filesDir = getApplication<Application>().filesDir
-            val destFile = fileInfo.resolveFile(filesDir)
+            val (fileInfo, destFile) = withContext(Dispatchers.IO) {
+                val info = ToneFileUtils.classifyModel(tone, model)
+                info to info.resolveFile(getApplication<Application>().filesDir)
+            }
 
-            if (!destFile.exists()) {
+            if (!withContext(Dispatchers.IO) { destFile.exists() }) {
                 _downloadStatus.tryEmit("Model file not found on disk")
                 return@launch
             }
@@ -194,7 +202,9 @@ class ToneDetailViewModel(application: Application) : AndroidViewModel(applicati
                 return@launch
             }
 
-            val pluginInfo = RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
+            val pluginInfo = withContext(Dispatchers.IO) {
+                RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
+            }
             if (pluginInfo == null) {
                 _downloadStatus.tryEmit("Source plugin was removed")
                 return@launch

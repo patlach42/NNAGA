@@ -129,7 +129,7 @@ private:
     std::vector<std::shared_ptr<const WavClip>> clips_;
     std::shared_ptr<PluginChain> master_;
     RackPathId nextTrackId_ = 1;
-    float sampleRate_ = 0.0f;
+    std::atomic<float> sampleRate_{0.0f};
     uint32_t bufferSize_ = 0;
 
     Mailbox mailbox_;

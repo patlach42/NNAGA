@@ -42,6 +42,15 @@ namespace {
 constexpr int32_t usbFailureCode(monotrypt::usb::StartError error) noexcept {
     return static_cast<int32_t>(error);
 }
+constexpr float kMeterReleaseSeconds = 0.15f;
+
+float meterDecayForBlock(int32_t frames, float sampleRate) noexcept {
+    if (frames <= 0 || sampleRate <= 0.0f) return 0.0f;
+    return std::max(
+        0.0f,
+        1.0f - static_cast<float>(frames) / (sampleRate * kMeterReleaseSeconds)
+    );
+}
 } // namespace
 
 AudioEngine::AudioEngine()
@@ -79,6 +88,7 @@ bool AudioEngine::start(float sampleRate, int32_t inputDeviceId,
         return true;
     }
     sampleRate_ = sampleRate;
+    publishedSampleRate_.store(sampleRate, std::memory_order_release);
     inputDeviceId_ = inputDeviceId;
     outputDeviceId_ = outputDeviceId;
     requestedBufferFrames_ = bufferFrames;
@@ -88,6 +98,8 @@ bool AudioEngine::start(float sampleRate, int32_t inputDeviceId,
         return false;
     }
 
+    publishedSampleRate_.store(sampleRate_, std::memory_order_release);
+    publishedCallbackFrameCount_.store(callbackFrameCount_, std::memory_order_release);
     // Configure every track and the master chain for this callback quantum.
     LOGI("Using callback frame count: %u (power-of-2)", callbackFrameCount_);
     rackGraph_.setSampleRate(sampleRate_, callbackFrameCount_);
@@ -176,6 +188,8 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     }
     sampleRate_ = sampleRate;
     callbackFrameCount_ = static_cast<uint32_t>(renderFrames);
+    publishedSampleRate_.store(sampleRate, std::memory_order_release);
+    publishedCallbackFrameCount_.store(callbackFrameCount_, std::memory_order_release);
     requestedBufferFrames_ = bufferFrames;
     directUsbBits_ = bitsPerSample;
     directUsbSubslotBytes_ = subslotBytes;
@@ -255,6 +269,16 @@ void AudioEngine::finishDirectUsbCleanup() {
     if (directUsbRenderThread_.joinable()) directUsbRenderThread_.join();
     if (directUsbOutput_) directUsbOutput_->stop();
     cleanupEngineState();
+    publishedLatencyMs_.store(0.0, std::memory_order_release);
+    publishedXRunCount_.store(0, std::memory_order_release);
+    publishedCallbackFrameCount_.store(0, std::memory_order_release);
+    directCaptureRingFrames_.store(0, std::memory_order_release);
+    directPlaybackRingFrames_.store(0, std::memory_order_release);
+    directQueuedOutFrames_.store(0, std::memory_order_release);
+    directCaptureTransferFrames_.store(0, std::memory_order_release);
+    directCaptureOverruns_.store(0, std::memory_order_release);
+    directCaptureUnderruns_.store(0, std::memory_order_release);
+    directPlaybackXruns_.store(0, std::memory_order_release);
     const int32_t failure = directUsbFailureCode_.load(std::memory_order_acquire);
     directUsbState_.store(failure ? DirectUsbState::Failed : DirectUsbState::Stopped,
                           std::memory_order_release);
@@ -281,22 +305,13 @@ AudioEngine::DirectUsbRuntimeStats AudioEngine::getDirectUsbRuntimeStats() const
     out.peakDspNanoseconds = directUsbPeakDspNs_.load(std::memory_order_relaxed);
     out.captureWaitTimeouts = directUsbCaptureWaitTimeouts_.load(std::memory_order_relaxed);
     out.writeWaitTimeouts = directUsbWriteWaitTimeouts_.load(std::memory_order_relaxed);
-    if (directUsbOutput_) {
-        const auto transport = directUsbOutput_->transportStats();
-        out.captureRingFrames = static_cast<uint32_t>(std::min<uint64_t>(
-            transport.captureRingFrames, std::numeric_limits<uint32_t>::max()));
-        out.playbackRingFrames = static_cast<uint32_t>(std::min<uint64_t>(
-            transport.ringFrames, std::numeric_limits<uint32_t>::max()));
-        out.queuedOutFrames = static_cast<uint32_t>(std::min<uint64_t>(
-            directUsbOutput_->queuedOutFrames(),
-            std::numeric_limits<uint32_t>::max()));
-        out.captureTransferFrames = static_cast<uint32_t>(
-            std::max(0, directUsbOutput_->captureTransferFrames()));
-        const auto captures = directUsbOutput_->captureStats();
-        out.captureOverruns = captures.overruns;
-        out.captureUnderruns = captures.underruns;
-        out.playbackXruns = directUsbOutput_->xrunCount();
-    }
+    out.captureRingFrames = directCaptureRingFrames_.load(std::memory_order_acquire);
+    out.playbackRingFrames = directPlaybackRingFrames_.load(std::memory_order_acquire);
+    out.queuedOutFrames = directQueuedOutFrames_.load(std::memory_order_acquire);
+    out.captureTransferFrames = directCaptureTransferFrames_.load(std::memory_order_acquire);
+    out.captureOverruns = directCaptureOverruns_.load(std::memory_order_acquire);
+    out.captureUnderruns = directCaptureUnderruns_.load(std::memory_order_acquire);
+    out.playbackXruns = directPlaybackXruns_.load(std::memory_order_acquire);
     return out;
 }
 
@@ -336,36 +351,19 @@ bool AudioEngine::isRunning() const {
 }
 AudioEngine::StreamInfo AudioEngine::getStreamInfo() const {
     StreamInfo info;
-    if (outputStream_) {
-        info.isAAudio = outputStream_->getAudioApi() == oboe::AudioApi::AAudio;
-        info.outputExclusive = outputStream_->getSharingMode() == oboe::SharingMode::Exclusive;
-        info.outputLowLatency = outputStream_->getPerformanceMode() == oboe::PerformanceMode::LowLatency;
-        info.outputMMap = oboe::OboeExtensions::isMMapUsed(outputStream_.get());
-        info.outputCallback = true; // always using callback
-        info.framesPerBurst = outputStream_->getFramesPerBurst();
-    }
-    if (inputStream_) {
-        info.inputExclusive = inputStream_->getSharingMode() == oboe::SharingMode::Exclusive;
-        info.inputLowLatency = inputStream_->getPerformanceMode() == oboe::PerformanceMode::LowLatency;
-    }
+    info.isAAudio = streamIsAAudio_.load(std::memory_order_acquire);
+    info.inputExclusive = streamInputExclusive_.load(std::memory_order_acquire);
+    info.outputExclusive = streamOutputExclusive_.load(std::memory_order_acquire);
+    info.inputLowLatency = streamInputLowLatency_.load(std::memory_order_acquire);
+    info.outputLowLatency = streamOutputLowLatency_.load(std::memory_order_acquire);
+    info.outputMMap = streamOutputMMap_.load(std::memory_order_acquire);
+    info.outputCallback = true;
+    info.framesPerBurst = streamFramesPerBurst_.load(std::memory_order_acquire);
     return info;
 }
 
 double AudioEngine::getLatencyMs() const {
-    if (directUsbSession_.load(std::memory_order_acquire) && directUsbOutput_) {
-        const auto stats = getDirectUsbRuntimeStats();
-        const uint64_t hostFrames = std::max<uint64_t>(
-            stats.effectiveQuantum,
-            std::max<uint64_t>(stats.captureRingFrames, stats.captureTransferFrames));
-        const uint64_t frames = hostFrames + stats.playbackRingFrames + stats.queuedOutFrames;
-        return sampleRate_ > 0.0f ? static_cast<double>(frames) / sampleRate_ * 1000.0 : 0.0;
-    }
-    if (!outputStream_) return 0.0;
-    int64_t framesWritten = outputStream_->getFramesWritten();
-    int64_t framesRead = outputStream_->getFramesRead();
-    int32_t bufferSize = outputStream_->getBufferSizeInFrames();
-    double latencyFrames = bufferSize + (framesWritten - framesRead);
-    return (latencyFrames / sampleRate_) * 1000.0;
+    return publishedLatencyMs_.load(std::memory_order_acquire);
 }
 
 float AudioEngine::getInputLevel() const {
@@ -381,19 +379,7 @@ float AudioEngine::getCpuLoad() const {
 }
 
 int32_t AudioEngine::getXRunCount() const {
-    int32_t oboeXruns = 0;
-    if (outputStream_) {
-        auto result = outputStream_->getXRunCount();
-        oboeXruns = result ? result.value() : 0;
-    }
-    uint64_t direct = 0;
-    if (directUsbOutput_) {
-        direct = directUsbOutput_->xrunCount() +
-                 directUsbOutput_->captureXRunCount();
-    }
-    const uint64_t total = static_cast<uint64_t>(std::max(0, oboeXruns)) + direct;
-    return static_cast<int32_t>(std::min<uint64_t>(
-        total, static_cast<uint64_t>(std::numeric_limits<int32_t>::max())));
+    return publishedXRunCount_.load(std::memory_order_acquire);
 }
 
 bool AudioEngine::isInputClipping() const {
@@ -408,6 +394,8 @@ void AudioEngine::resetClipping() {
     inputClipping_.store(false);
     outputClipping_.store(false);
 }
+
+
 
 bool AudioEngine::loadTrackWav(RackPathId trackId, const std::string& path,
                                const std::string& displayName) {
@@ -506,6 +494,32 @@ void AudioEngine::directUsbRenderLoop() {
         const uint64_t dspNs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
         directUsbLastDspNs_.store(dspNs, std::memory_order_relaxed);
+        const auto transport = directUsbOutput_->transportStats();
+        directCaptureRingFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
+            transport.captureRingFrames, std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
+        directPlaybackRingFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
+            transport.ringFrames, std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
+        directQueuedOutFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
+            directUsbOutput_->queuedOutFrames(), std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
+        directCaptureTransferFrames_.store(static_cast<uint32_t>(
+            std::max(0, directUsbOutput_->captureTransferFrames())), std::memory_order_relaxed);
+        const auto captures = directUsbOutput_->captureStats();
+        directCaptureOverruns_.store(captures.overruns, std::memory_order_relaxed);
+        directCaptureUnderruns_.store(captures.underruns, std::memory_order_relaxed);
+        directPlaybackXruns_.store(directUsbOutput_->xrunCount(), std::memory_order_relaxed);
+        const uint64_t latencyFrames = std::max<uint64_t>(
+            directUsbEffectiveQuantum_.load(std::memory_order_relaxed),
+            std::max<uint64_t>(transport.captureRingFrames,
+                               directCaptureTransferFrames_.load(std::memory_order_relaxed)))
+            + transport.ringFrames + directUsbOutput_->queuedOutFrames();
+        publishedLatencyMs_.store(
+            static_cast<double>(latencyFrames) / publishedSampleRate_.load(std::memory_order_relaxed) * 1000.0,
+            std::memory_order_relaxed);
+        const uint64_t totalXruns = directUsbOutput_->xrunCount() +
+                                    directUsbOutput_->captureXRunCount();
+        publishedXRunCount_.store(static_cast<int32_t>(std::min<uint64_t>(
+            totalXruns, static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))),
+            std::memory_order_relaxed);
         uint64_t peak = directUsbPeakDspNs_.load(std::memory_order_relaxed);
         while (peak < dspNs &&
                !directUsbPeakDspNs_.compare_exchange_weak(
@@ -522,8 +536,9 @@ void AudioEngine::directUsbRenderLoop() {
             outputPeak = std::max(outputPeak, std::max(
                 std::fabs(directUsbOutputLeft_[i]), std::fabs(directUsbOutputRight_[i])));
         }
-        inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * kPeakDecay);
-        outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * kPeakDecay);
+        const float peakDecay = meterDecayForBlock(frames, sampleRate_);
+        inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * peakDecay);
+        outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * peakDecay);
         inputPeakLevel_.store(inputPeakHold_, std::memory_order_relaxed);
         outputPeakLevel_.store(outputPeakHold_, std::memory_order_relaxed);
         if (inputPeak >= kClippingThreshold) inputClipping_.store(true, std::memory_order_relaxed);
@@ -664,6 +679,17 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
     if (audioStream != outputStream_.get()) {
         return oboe::DataCallbackResult::Continue;
     }
+    const int64_t framesWritten = audioStream->getFramesWritten();
+    const int64_t framesRead = audioStream->getFramesRead();
+    const int32_t streamBuffer = audioStream->getBufferSizeInFrames();
+    const float rate = publishedSampleRate_.load(std::memory_order_relaxed);
+    if (rate > 0.0f) {
+        publishedLatencyMs_.store(
+            (static_cast<double>(streamBuffer + framesWritten - framesRead) / rate) * 1000.0,
+            std::memory_order_relaxed);
+    }
+    const auto xrun = audioStream->getXRunCount();
+    publishedXRunCount_.store(xrun ? xrun.value() : 0, std::memory_order_relaxed);
     // Direct USB owns the graph and the USB sink on its capture-clocked
     // render thread. Never process or write it from an Oboe callback: that
     // would race the graph and violate the driver's SPSC playback ring.
@@ -700,6 +726,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         }
     }
 
+    const float peakDecay = meterDecayForBlock(numFrames, sampleRate_);
     // Input peak metering and clipping
     float inputPeak = 0.0f;
     bool inputClip = false;
@@ -708,7 +735,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         if (s > inputPeak) inputPeak = s;
         if (s >= kClippingThreshold) inputClip = true;
     }
-    inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * kPeakDecay);
+    inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * peakDecay);
     inputPeakLevel_.store(inputPeakHold_);
     if (inputClip) inputClipping_.store(true);
 
@@ -740,7 +767,7 @@ oboe::DataCallbackResult AudioEngine::onAudioReady(
         if (s > outputPeak) outputPeak = s;
         if (s >= kClippingThreshold) outputClip = true;
     }
-    outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * kPeakDecay);
+    outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * peakDecay);
     outputPeakLevel_.store(outputPeakHold_);
     if (outputClip) outputClipping_.store(true);
 
@@ -921,6 +948,26 @@ bool AudioEngine::createAudioStreams(float sampleRate) {
     }
 
     outputStream_.reset(outputStreamPtr);
+    publishedSampleRate_.store(sampleRate_, std::memory_order_release);
+    publishedCallbackFrameCount_.store(callbackFrameCount_, std::memory_order_release);
+    streamIsAAudio_.store(outputStreamPtr->getAudioApi() == oboe::AudioApi::AAudio,
+                          std::memory_order_release);
+    streamOutputExclusive_.store(
+        outputStreamPtr->getSharingMode() == oboe::SharingMode::Exclusive,
+        std::memory_order_release);
+    streamOutputLowLatency_.store(
+        outputStreamPtr->getPerformanceMode() == oboe::PerformanceMode::LowLatency,
+        std::memory_order_release);
+    streamOutputMMap_.store(oboe::OboeExtensions::isMMapUsed(outputStreamPtr),
+                            std::memory_order_release);
+    streamFramesPerBurst_.store(outputStreamPtr->getFramesPerBurst(),
+                                std::memory_order_release);
+    streamInputExclusive_.store(
+        inputStream_->getSharingMode() == oboe::SharingMode::Exclusive,
+        std::memory_order_release);
+    streamInputLowLatency_.store(
+        inputStream_->getPerformanceMode() == oboe::PerformanceMode::LowLatency,
+        std::memory_order_release);
 
     // Start streams
     // Allocate every callback buffer before the output stream can invoke us.
@@ -956,6 +1003,16 @@ void AudioEngine::closeStreams() {
     LOGI("closeStreams() ENTER tid=%ld (caller thread; AudioTrack callback is different tid)", getTid());
     
     // First, signal the callback to stop immediately to prevent new callbacks
+    publishedLatencyMs_.store(0.0, std::memory_order_release);
+    publishedXRunCount_.store(0, std::memory_order_release);
+    publishedCallbackFrameCount_.store(0, std::memory_order_release);
+    streamIsAAudio_.store(false, std::memory_order_release);
+    streamInputExclusive_.store(false, std::memory_order_release);
+    streamOutputExclusive_.store(false, std::memory_order_release);
+    streamInputLowLatency_.store(false, std::memory_order_release);
+    streamOutputLowLatency_.store(false, std::memory_order_release);
+    streamOutputMMap_.store(false, std::memory_order_release);
+    streamFramesPerBurst_.store(0, std::memory_order_release);
     // from starting while we're tearing down.
     isRunning_.store(false);
     

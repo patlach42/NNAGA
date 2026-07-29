@@ -73,6 +73,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -249,37 +250,33 @@ fun RackScreen(
     viewModel: RackViewModel = viewModel()
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, isVisible) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
+            if (event == Lifecycle.Event.ON_RESUME && isVisible) {
                 viewModel.refreshRack()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
+    DisposableEffect(viewModel) {
+        onDispose { viewModel.setRackVisible(false) }
+    }
 
     val context = LocalContext.current
 
     // Refresh when navigating back to this screen (isVisible changes to true)
     LaunchedEffect(isVisible) {
+        viewModel.setRackVisible(isVisible)
         if (isVisible) {
             viewModel.refreshRack()
         }
     }
 
     val isEngineRunning by viewModel.isEngineRunning.collectAsState()
-    val inputLevel by viewModel.inputLevel.collectAsState()
-    val outputLevel by viewModel.outputLevel.collectAsState()
-    val cpuLoad by viewModel.cpuLoad.collectAsState()
-    val xRunCount by viewModel.xRunCount.collectAsState()
-    val inputClipping by viewModel.inputClipping.collectAsState()
-    val outputClipping by viewModel.outputClipping.collectAsState()
     val tracks by viewModel.tracks.collectAsState()
     val selectedPathId by viewModel.selectedPathId.collectAsState()
     val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
-    val directUsbState by viewModel.directUsbState.collectAsState()
-    val directUsbStats by viewModel.directUsbStats.collectAsState()
     val wavTransport by viewModel.wavTransport.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val presetMessage by viewModel.presetMessage.collectAsState()
@@ -358,6 +355,16 @@ fun RackScreen(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
+            // Keep high-frequency meter/status invalidations inside the top bar
+            // restart scope instead of recomposing the complete rack screen.
+            val inputLevel by viewModel.inputLevel.collectAsState()
+            val outputLevel by viewModel.outputLevel.collectAsState()
+            val cpuLoad by viewModel.cpuLoad.collectAsState()
+            val xRunCount by viewModel.xRunCount.collectAsState()
+            val inputClipping by viewModel.inputClipping.collectAsState()
+            val outputClipping by viewModel.outputClipping.collectAsState()
+            val directUsbState by viewModel.directUsbState.collectAsState()
+            val directUsbStats by viewModel.directUsbStats.collectAsState()
             val statusText = when (directUsbState) {
                 DirectUsbSessionState.Starting,
                 DirectUsbSessionState.Stopping -> "Starting USB"
@@ -1107,7 +1114,16 @@ fun PluginCard(
     val selectedPathId = pathId
     var expanded by rememberSaveable { mutableStateOf(true) }
     val uiInstanceId = remember { System.nanoTime() }
-    val pluginInfo = remember(pluginIndex) { RackManager.getRackPluginInfo(pathId, pluginIndex) }
+    val pluginInfoState = produceState<PluginInfo?>(
+        initialValue = null,
+        key1 = pathId,
+        key2 = plugin.instanceId
+    ) {
+        value = withContext(Dispatchers.IO) {
+            RackManager.getRackPluginInfo(pathId, pluginIndex)
+        }
+    }
+    val pluginInfo = pluginInfoState.value
 
     Card(
         modifier = modifier,
@@ -2009,12 +2025,14 @@ fun ParameterControl(
     viewModel: RackViewModel
 ) {
     val selectedPathId = pathId
-    val currentValue = remember { mutableStateOf(viewModel.getParameter(selectedPathId, pluginIndex, port.index)) }
+    val currentValue = remember(pathId, pluginIndex, port.index) {
+        mutableFloatStateOf(port.defaultValue)
+    }
     var isUserInteracting by remember { mutableStateOf(false) }
 
     // Poll native parameter value periodically so that changes made via the X11 UI
     // (or other external sources) are reflected in the Android slider controls.
-    LaunchedEffect(pluginIndex, port.index) {
+    LaunchedEffect(selectedPathId, pluginIndex, port.index) {
         while (true) {
             delay(200)
             if (!isUserInteracting) {
@@ -2941,6 +2959,7 @@ private fun PresetBottomSheet(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val presetList by viewModel.presetList.collectAsState()
     val recentPresets by viewModel.recentPresets.collectAsState()
     var showSaveDialog by remember { mutableStateOf(false) }
@@ -2962,7 +2981,7 @@ private fun PresetBottomSheet(
                 ) {
                     Text("Recently Used", style = MaterialTheme.typography.titleSmall)
                     TextButton(onClick = {
-                        viewModel.clearRecentPresets(context)
+                        viewModel.clearRecentPresets()
                     }) {
                         Text("Clear")
                     }
@@ -2975,14 +2994,16 @@ private fun PresetBottomSheet(
                             onDismiss()
                         },
                         onShare = {
-                            val json = viewModel.getPresetJson(context, name)
-                            if (json != null) {
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, json)
-                                    putExtra(Intent.EXTRA_SUBJECT, "$name.json")
+                            scope.launch {
+                                val json = viewModel.getPresetJson(context, name)
+                                if (json != null) {
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, json)
+                                        putExtra(Intent.EXTRA_SUBJECT, "$name.json")
+                                    }
+                                    context.startActivity(Intent.createChooser(intent, "Share preset"))
                                 }
-                                context.startActivity(Intent.createChooser(intent, "Share preset"))
                             }
                         },
                         showDelete = false
@@ -3009,14 +3030,16 @@ private fun PresetBottomSheet(
                             onDismiss()
                         },
                         onShare = {
-                            val json = viewModel.getPresetJson(context, name)
-                            if (json != null) {
-                                val intent = Intent(Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(Intent.EXTRA_TEXT, json)
-                                    putExtra(Intent.EXTRA_SUBJECT, "$name.json")
+                            scope.launch {
+                                val json = viewModel.getPresetJson(context, name)
+                                if (json != null) {
+                                    val intent = Intent(Intent.ACTION_SEND).apply {
+                                        type = "text/plain"
+                                        putExtra(Intent.EXTRA_TEXT, json)
+                                        putExtra(Intent.EXTRA_SUBJECT, "$name.json")
+                                    }
+                                    context.startActivity(Intent.createChooser(intent, "Share preset"))
                                 }
-                                context.startActivity(Intent.createChooser(intent, "Share preset"))
                             }
                         },
                         onDelete = {
@@ -3131,7 +3154,11 @@ private fun RecordingPickerDialog(
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
-    val recordings = remember { RecordingManager.listRecordings(context) }
+    val recordings by produceState<List<RecordingEntry>>(emptyList(), context) {
+        value = withContext(Dispatchers.IO) {
+            RecordingManager.listRecordings(context)
+        }
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,

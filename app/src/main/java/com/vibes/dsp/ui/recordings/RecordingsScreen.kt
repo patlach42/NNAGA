@@ -41,6 +41,9 @@ import com.vibes.dsp.engine.RecordingEntry
 import com.vibes.dsp.engine.RecordingManager
 import com.vibes.dsp.engine.hasPreset
 import com.vibes.dsp.engine.readPresetJson
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -51,8 +54,19 @@ fun RecordingsScreen(
     onLoadRecordingPreset: (json: String) -> Unit = {}
 ) {
     val context = LocalContext.current
-    var recordings by remember { mutableStateOf(RecordingManager.listRecordings(context)) }
+    var recordings by remember { mutableStateOf<List<RecordingEntry>>(emptyList()) }
     var deleteTarget by remember { mutableStateOf<RecordingEntry?>(null) }
+    val scope = rememberCoroutineScope()
+
+    suspend fun refreshRecordings() {
+        recordings = withContext(Dispatchers.IO) {
+            RecordingManager.listRecordings(context)
+        }
+    }
+
+    LaunchedEffect(context) {
+        refreshRecordings()
+    }
 
     BackHandler { onNavigateBack() }
 
@@ -122,9 +136,13 @@ fun RecordingsScreen(
             text = { Text("Delete recording from ${entry.displayName}? This cannot be undone.") },
             confirmButton = {
                 TextButton(onClick = {
-                    RecordingManager.deleteRecording(entry)
-                    recordings = RecordingManager.listRecordings(context)
-                    deleteTarget = null
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            RecordingManager.deleteRecording(entry)
+                        }
+                        refreshRecordings()
+                        deleteTarget = null
+                    }
                 }) {
                     Text("Delete", color = MaterialTheme.colorScheme.error)
                 }
@@ -150,6 +168,10 @@ private fun RecordingCard(
 ) {
     val context = LocalContext.current
     var presetMenuExpanded by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val hasPreset by produceState(false, entry) {
+        value = withContext(Dispatchers.IO) { entry.hasPreset() }
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth()
@@ -191,7 +213,7 @@ private fun RecordingCard(
                 Box {
                     IconButton(
                         onClick = { presetMenuExpanded = true },
-                        enabled = entry.hasPreset(),
+                        enabled = hasPreset,
                         modifier = Modifier.size(36.dp)
                     ) {
                         Icon(
@@ -208,19 +230,27 @@ private fun RecordingCard(
                             text = { Text("Load Preset") },
                             onClick = {
                                 presetMenuExpanded = false
-                                entry.readPresetJson()?.let { onLoadPreset(it) }
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        entry.readPresetJson()
+                                    }?.let { onLoadPreset(it) }
+                                }
                             }
                         )
                         DropdownMenuItem(
                             text = { Text("Share Preset") },
                             onClick = {
                                 presetMenuExpanded = false
-                                entry.readPresetJson()?.let { json ->
-                                    val intent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(Intent.EXTRA_TEXT, json)
+                                scope.launch {
+                                    withContext(Dispatchers.IO) {
+                                        entry.readPresetJson()
+                                    }?.let { json ->
+                                        val intent = Intent(Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(Intent.EXTRA_TEXT, json)
+                                        }
+                                        context.startActivity(Intent.createChooser(intent, "Share Preset"))
                                     }
-                                    context.startActivity(Intent.createChooser(intent, "Share Preset"))
                                 }
                             }
                         )

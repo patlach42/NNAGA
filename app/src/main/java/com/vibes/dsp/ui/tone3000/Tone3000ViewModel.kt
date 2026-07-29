@@ -300,10 +300,12 @@ class Tone3000ViewModel(application: Application) : AndroidViewModel(application
             return
         }
 
-        val fileInfo = ToneFileUtils.classifyModel(tone, model)
-        val filesDir = getApplication<Application>().filesDir
-        val destFile = fileInfo.resolveFile(filesDir)
-        destFile.parentFile?.mkdirs()
+        val (fileInfo, filesDir, destFile) = withContext(Dispatchers.IO) {
+            val info = ToneFileUtils.classifyModel(tone, model)
+            val dir = getApplication<Application>().filesDir
+            Triple(info, dir, info.resolveFile(dir))
+        }
+        withContext(Dispatchers.IO) { destFile.parentFile?.mkdirs() }
 
         _downloadStatus.emit("Downloading ${tone.title}...")
         val success = withContext(Dispatchers.IO) {
@@ -316,21 +318,25 @@ class Tone3000ViewModel(application: Application) : AndroidViewModel(application
 
             // If it's AIDA-X, also copy to neural_models so NAM can see it
             if (fileInfo.isAidaX) {
-                val neuralDir = File(filesDir, "neural_models")
-                neuralDir.mkdirs()
-                val targetToneDir = File(neuralDir, fileInfo.toneDirName)
-                targetToneDir.mkdirs()
-                destFile.copyTo(File(targetToneDir, destFile.name), overwrite = true)
+                withContext(Dispatchers.IO) {
+                    val neuralDir = File(filesDir, "neural_models")
+                    neuralDir.mkdirs()
+                    val targetToneDir = File(neuralDir, fileInfo.toneDirName)
+                    targetToneDir.mkdirs()
+                    destFile.copyTo(File(targetToneDir, destFile.name), overwrite = true)
+                }
             }
 
             // Determine which plugin to load into
             if (_sourcePluginIndex >= 0 || useAutoFind) {
-                val targetPluginIndex = if (_sourcePluginIndex >= 0) {
-                    val pluginInfo = RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
-                    if (pluginInfo != null) _sourcePluginIndex else -1
-                } else {
-                    // Auto-find behavior (deep-link downloads)
-                    findOrAddCompatiblePlugin(fileInfo)
+                val targetPluginIndex = withContext(Dispatchers.IO) {
+                    if (_sourcePluginIndex >= 0) {
+                        val pluginInfo = RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
+                        if (pluginInfo != null) _sourcePluginIndex else -1
+                    } else {
+                        // Auto-find behavior (deep-link downloads)
+                        findOrAddCompatiblePlugin(fileInfo)
+                    }
                 }
 
                 if (targetPluginIndex >= 0) {
@@ -344,55 +350,59 @@ class Tone3000ViewModel(application: Application) : AndroidViewModel(application
             _error.value = "Failed to download model file"
         }
     }
-    private fun findOrAddCompatiblePlugin(fileInfo: ModelFileInfo): Int {
-        val pathId = if (_sourcePathId >= 0L) _sourcePathId
-        else RackManager.getTracks().firstOrNull()?.id ?: -1L
-        if (pathId < 0L) return -1
-        _sourcePathId = pathId
-        val rackPlugins = RackManager.getRackPlugins(pathId).map { it.info }
-        var targetPluginIndex = rackPlugins.indexOfFirst {
-            when {
-                fileInfo.isIr -> it.id.contains("ImpulseLoader") || it.id.contains("neuralrack", ignoreCase = true) || it.id.contains("aidadsp")
-                fileInfo.isNam || fileInfo.isAidaX -> it.id.contains("neural-amp-modeler") || it.id.contains("neuralrack", ignoreCase = true)
-                else -> it.id.contains("aidadsp") || it.id.contains("rt-neural-generic")
-            }
-        }
-
-        if (targetPluginIndex == -1) {
-            val available = RackManager.getAvailablePlugins()
-            val pluginIdToAdd = when {
-                fileInfo.isIr -> available.find { it.id.contains("ImpulseLoader") }?.id
-                fileInfo.isNam -> available.find { it.id.contains("neural-amp-modeler") }?.id
-                fileInfo.isAidaX -> available.find { it.id.contains("aidadsp") || it.id.contains("rt-neural-generic") }?.id
-                else -> available.find { it.id.contains("aidadsp") || it.id.contains("rt-neural-generic") }?.id
+    private suspend fun findOrAddCompatiblePlugin(fileInfo: ModelFileInfo): Int =
+        withContext(Dispatchers.IO) {
+            val pathId = if (_sourcePathId >= 0L) _sourcePathId
+            else RackManager.getTracks().firstOrNull()?.id ?: -1L
+            if (pathId < 0L) return@withContext -1
+            _sourcePathId = pathId
+            val rackPlugins = RackManager.getRackPlugins(pathId).map { it.info }
+            var targetPluginIndex = rackPlugins.indexOfFirst {
+                when {
+                    fileInfo.isIr -> it.id.contains("ImpulseLoader") || it.id.contains("neuralrack", ignoreCase = true) || it.id.contains("aidadsp")
+                    fileInfo.isNam || fileInfo.isAidaX -> it.id.contains("neural-amp-modeler") || it.id.contains("neuralrack", ignoreCase = true)
+                    else -> it.id.contains("aidadsp") || it.id.contains("rt-neural-generic")
+                }
             }
 
-            if (pluginIdToAdd != null) {
-                targetPluginIndex = RackManager.addPlugin(pathId, pluginIdToAdd)
+            if (targetPluginIndex == -1) {
+                val available = RackManager.getAvailablePlugins()
+                val pluginIdToAdd = when {
+                    fileInfo.isIr -> available.find { it.id.contains("ImpulseLoader") }?.id
+                    fileInfo.isNam -> available.find { it.id.contains("neural-amp-modeler") }?.id
+                    fileInfo.isAidaX -> available.find { it.id.contains("aidadsp") || it.id.contains("rt-neural-generic") }?.id
+                    else -> available.find { it.id.contains("aidadsp") || it.id.contains("rt-neural-generic") }?.id
+                }
+
+                if (pluginIdToAdd != null) {
+                    targetPluginIndex = RackManager.addPlugin(pathId, pluginIdToAdd)
+                }
             }
-        }
-        return targetPluginIndex
-    }
-    private fun loadFileIntoPlugin(pluginIndex: Int, fileInfo: ModelFileInfo, file: File, slot: String? = null) {
-        val rackPlugin = RackManager.getRackPluginInfo(_sourcePathId, pluginIndex)
-        if (rackPlugin?.format == "VST2" || rackPlugin?.format == "VST3") {
-            RackManager.notifyVstTone3000FileSelected(_sourcePathId, pluginIndex, file.absolutePath)
-            return
+            targetPluginIndex
         }
 
-        val propertyUri = ToneFileUtils.resolvePropertyUri(fileInfo, rackPlugin?.id, slot)
-        RackManager.setPluginFilePath(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
-        X11Bridge.deliverFileToPluginUI(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
-        RackManager.notifyModelLoaded(_sourcePathId, pluginIndex, file.nameWithoutExtension)
-    }
+    private suspend fun loadFileIntoPlugin(pluginIndex: Int, fileInfo: ModelFileInfo, file: File, slot: String? = null) =
+        withContext(Dispatchers.IO) {
+            val rackPlugin = RackManager.getRackPluginInfo(_sourcePathId, pluginIndex)
+            if (rackPlugin?.format == "VST2" || rackPlugin?.format == "VST3") {
+                RackManager.notifyVstTone3000FileSelected(_sourcePathId, pluginIndex, file.absolutePath)
+                return@withContext
+            }
+
+            val propertyUri = ToneFileUtils.resolvePropertyUri(fileInfo, rackPlugin?.id, slot)
+            RackManager.setPluginFilePath(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
+            X11Bridge.deliverFileToPluginUI(_sourcePathId, pluginIndex, propertyUri, file.absolutePath)
+            RackManager.notifyModelLoaded(_sourcePathId, pluginIndex, file.nameWithoutExtension)
+        }
 
     fun loadModelToPlugin(tone: Tone, model: Model) {
         viewModelScope.launch {
-            val fileInfo = ToneFileUtils.classifyModel(tone, model)
-            val filesDir = getApplication<Application>().filesDir
-            val destFile = fileInfo.resolveFile(filesDir)
+            val (fileInfo, destFile) = withContext(Dispatchers.IO) {
+                val info = ToneFileUtils.classifyModel(tone, model)
+                info to info.resolveFile(getApplication<Application>().filesDir)
+            }
 
-            if (!destFile.exists()) {
+            if (!withContext(Dispatchers.IO) { destFile.exists() }) {
                 _toastMessage.tryEmit("Model file not found on disk")
                 return@launch
             }
@@ -402,7 +412,9 @@ class Tone3000ViewModel(application: Application) : AndroidViewModel(application
                 return@launch
             }
 
-            val pluginInfo = RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
+            val pluginInfo = withContext(Dispatchers.IO) {
+                RackManager.getRackPluginInfo(_sourcePathId, _sourcePluginIndex)
+            }
             if (pluginInfo == null) {
                 _toastMessage.tryEmit("Source plugin was removed")
                 return@launch
@@ -412,6 +424,7 @@ class Tone3000ViewModel(application: Application) : AndroidViewModel(application
             _downloadStatus.tryEmit("Model loaded into rack")
         }
     }
+
 
     private fun fetchUser() {
         viewModelScope.launch {

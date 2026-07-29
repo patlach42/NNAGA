@@ -134,7 +134,9 @@ RackPathId RackGraph::addTrack() {
         node->sourceRight.resize(bufferSize_);
         node->outputLeft.resize(bufferSize_);
         node->outputRight.resize(bufferSize_);
-        if (sampleRate_ > 0.0f) node->chain->setSampleRate(sampleRate_, bufferSize_);
+        if (sampleRate_.load(std::memory_order_acquire) > 0.0f) {
+            node->chain->setSampleRate(sampleRate_.load(std::memory_order_acquire), bufferSize_);
+        }
         auto nodes = tracks_;
         auto clips = clips_;
         nodes.push_back(node);
@@ -284,7 +286,7 @@ std::shared_ptr<PluginChain> RackGraph::getChain(RackPathId pathId) const {
 
 void RackGraph::setSampleRate(float sampleRate, uint32_t bufferSize) {
     std::lock_guard lock(controlMutex_);
-    sampleRate_ = sampleRate;
+    sampleRate_.store(sampleRate, std::memory_order_release);
     bufferSize_ = bufferSize;
     for (const auto& node : tracks_) {
         node->sourceLeft.resize(bufferSize);
@@ -344,7 +346,8 @@ void RackGraph::process(const float* const* liveInputs, float* const* outputs, u
     const double duration = statusDurationSec_.load(std::memory_order_acquire);
     std::fill(snapshot->mixLeft.begin(), snapshot->mixLeft.begin() + frames, 0.0f);
     std::fill(snapshot->mixRight.begin(), snapshot->mixRight.begin() + frames, 0.0f);
-    const double rate = sampleRate_ > 0.0f ? sampleRate_ : 48000.0;
+    const float configuredRate = sampleRate_.load(std::memory_order_acquire);
+    const double rate = configuredRate > 0.0f ? configuredRate : 48000.0;
     for (const auto& view : snapshot->tracks) {
         auto& node = *view.node;
         float* source[2] = {node.sourceLeft.data(), node.sourceRight.data()};

@@ -311,20 +311,28 @@ class PluginBrowserViewModel(application: Application) : AndroidViewModel(applic
         _errorMessage.value = null
 
         try {
-            val allPlugins = RackManager.getAvailablePlugins()
-            val availablePluginNamesLower = availablePlugins.map { it.lowercase() }.toSet()
+            val (allPluginCount, filteredPlugins) =
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val allPlugins = RackManager.getAvailablePlugins()
+                    val availablePluginNamesLower =
+                        availablePlugins.map { it.lowercase() }.toSet()
 
-            // If metadata lists specific available plugins, filter to only those.
-            // If the list is empty (no metadata), show all plugins from the native engine.
-            val filteredPlugins = if (availablePluginNamesLower.isEmpty()) {
-                allPlugins.map { applyMetadata(it) }
-            } else {
-                allPlugins.filter { plugin ->
-                    availablePluginNamesLower.contains(plugin.name.lowercase())
-                }.map { applyMetadata(it) }
-            }
+                    // Native enumeration and metadata mapping stay off Main:
+                    // registry scans and VST metadata can be expensive.
+                    val filtered = if (availablePluginNamesLower.isEmpty()) {
+                        allPlugins.map { applyMetadata(it) }
+                    } else {
+                        allPlugins.filter { plugin ->
+                            availablePluginNamesLower.contains(plugin.name.lowercase())
+                        }.map { applyMetadata(it) }
+                    }
+                    allPlugins.size to filtered
+                }
 
-            android.util.Log.i("PluginBrowser", "Showing ${filteredPlugins.size} out of ${allPlugins.size} discovered plugins (metadata filter=${availablePluginNamesLower.size})")
+            android.util.Log.i(
+                "PluginBrowser",
+                "Showing ${filteredPlugins.size} out of $allPluginCount discovered plugins"
+            )
 
             _plugins.value = filteredPlugins
             _groupedPlugins.value = groupPluginsByAuthorAndCategory(filteredPlugins)

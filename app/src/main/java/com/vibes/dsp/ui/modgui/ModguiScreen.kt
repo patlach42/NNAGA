@@ -46,8 +46,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -137,7 +140,14 @@ fun ModguiScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val pluginInfo = remember(pathId, pluginIndex) { RackManager.getRackPluginInfo(pathId, pluginIndex) }
+    var pluginInfo by remember(pathId, pluginIndex) { mutableStateOf<PluginInfo?>(null) }
+    var pluginInfoLoaded by remember(pathId, pluginIndex) { mutableStateOf(false) }
+    LaunchedEffect(pathId, pluginIndex) {
+        pluginInfo = withContext(Dispatchers.IO) {
+            RackManager.getRackPluginInfo(pathId, pluginIndex)
+        }
+        pluginInfoLoaded = true
+    }
 
     // Landscape orientation for wide plugins
     val activity = context as? Activity
@@ -150,28 +160,48 @@ fun ModguiScreen(
         onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
     }
 
-    if (pluginInfo == null || !pluginInfo.hasModgui) {
+    if (!pluginInfoLoaded) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
+    }
+    val loadedPluginInfo = pluginInfo
+    if (loadedPluginInfo == null || !loadedPluginInfo.hasModgui) {
         Box(modifier = Modifier.fillMaxSize()) {
             Text(
-                text = if (pluginInfo == null) "Plugin not found" else "No modgui UI for this plugin",
+                text = if (loadedPluginInfo == null) "Plugin not found" else "No modgui UI for this plugin",
                 modifier = Modifier.padding(16.dp)
             )
         }
         return
     }
 
-    val basePath = pluginInfo.modguiBasePath
-    val iconTemplate = pluginInfo.modguiIconTemplate
+    val basePath = loadedPluginInfo.modguiBasePath
+    val iconTemplate = loadedPluginInfo.modguiIconTemplate
     val baseDir = File(basePath)
-    val templateData = remember(basePath, pluginInfo) {
-        parseModguiTtlAndPluginInfo(basePath, pluginInfo)
+    val templateDataState = produceState<ModguiTemplateData?>(
+        initialValue = null,
+        key1 = basePath,
+        key2 = loadedPluginInfo
+    ) {
+        value = withContext(Dispatchers.IO) {
+            parseModguiTtlAndPluginInfo(basePath, loadedPluginInfo)
+        }
+    }
+    val templateData = templateDataState.value
+    if (templateData == null) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
     }
     val assetLoader = remember(context, basePath, iconTemplate, templateData) {
-        buildAssetLoader(context, baseDir, iconTemplate, templateData, pluginInfo, inline = false)
+        buildAssetLoader(context, baseDir, iconTemplate, templateData, loadedPluginInfo, inline = false)
     }
     val loadUrl = "https://modgui.app/$iconTemplate"
-    val bridge = remember(pathId, pluginIndex, pluginInfo) {
-        ModguiHostBridge(pathId, pluginIndex, pluginInfo)
+    val bridge = remember(pathId, pluginIndex, loadedPluginInfo) {
+        ModguiHostBridge(pathId, pluginIndex, loadedPluginInfo)
     }
     bridge.pluginIndex = pluginIndex  // keep current after reorders
 
@@ -226,8 +256,21 @@ fun InlineModguiView(
     val basePath = pluginInfo.modguiBasePath
     val iconTemplate = pluginInfo.modguiIconTemplate
     val baseDir = File(basePath)
-    val templateData = remember(basePath, pluginInfo) {
-        parseModguiTtlAndPluginInfo(basePath, pluginInfo)
+    val templateDataState = produceState<ModguiTemplateData?>(
+        initialValue = null,
+        key1 = basePath,
+        key2 = pluginInfo
+    ) {
+        value = withContext(Dispatchers.IO) {
+            parseModguiTtlAndPluginInfo(basePath, pluginInfo)
+        }
+    }
+    val templateData = templateDataState.value
+    if (templateData == null) {
+        Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator()
+        }
+        return
     }
     val assetLoader = remember(context, basePath, iconTemplate, templateData) {
         buildAssetLoader(context, baseDir, iconTemplate, templateData, pluginInfo, inline = true)
