@@ -82,7 +82,10 @@ data class VstExecutableEntry(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun VstManagerScreen(onNavigateBack: () -> Unit) {
+fun VstManagerScreen(
+    onNavigateBack: () -> Unit,
+    embedded: Boolean = false,
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var entries by remember { mutableStateOf(VstRegistry.read(context)) }
@@ -232,17 +235,19 @@ fun VstManagerScreen(onNavigateBack: () -> Unit) {
         Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             topBar = {
-                TopAppBar(
-                    title = { Text("Manage VST") },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background,
-                    ),
-                    navigationIcon = {
-                        IconButton(onClick = onNavigateBack) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                if (!embedded) {
+                    TopAppBar(
+                        title = { Text("Manage VST") },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.background,
+                        ),
+                        navigationIcon = {
+                            IconButton(onClick = onNavigateBack) {
+                                Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
         ) { padding ->
             Column(

@@ -5,14 +5,9 @@
 
 package com.vibes.dsp.ui.vst
 
-import androidx.navigation.NavController
-import androidx.navigation.NavGraphBuilder
-import androidx.navigation.compose.composable
+import androidx.compose.runtime.Composable
 
-const val VST_MANAGER_ROUTE = "vst_manager"
-
-fun NavGraphBuilder.vstManagerRoute(navController: NavController) {
-    composable(VST_MANAGER_ROUTE) {
-        VstManagerScreen(onNavigateBack = { navController.popBackStack() })
-    }
+@Composable
+fun VstManagerTab() {
+    VstManagerScreen(onNavigateBack = {}, embedded = true)
 }

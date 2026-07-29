@@ -68,7 +68,8 @@ fun Tone3000Screen(
     sourcePathId: Long = -1L,
     sourcePluginIndex: Int = -1,
     sourceSlot: String? = null,
-    viewModel: Tone3000ViewModel = viewModel()
+    viewModel: Tone3000ViewModel = viewModel(),
+    embedded: Boolean = false
 ) {
     val tones by viewModel.tones.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
@@ -125,7 +126,8 @@ fun Tone3000Screen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
-            TopAppBar(
+            if (!embedded) {
+                TopAppBar(
                 title = {
                     Column {
                         Text("TONE3000", fontWeight = FontWeight.Bold)
@@ -172,6 +174,7 @@ fun Tone3000Screen(
                     containerColor = MaterialTheme.colorScheme.surface
                 )
             )
+            }
         }
     ) { padding ->
         Column(

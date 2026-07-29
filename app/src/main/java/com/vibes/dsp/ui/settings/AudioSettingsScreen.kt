@@ -56,55 +56,69 @@ import com.vibes.dsp.ui.rack.RackViewModel
 @Composable
 fun AudioSettingsScreen(
     viewModel: RackViewModel,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    embedded: Boolean = false
+) {
+    if (embedded) {
+        AudioSettingsContent(viewModel = viewModel)
+    } else {
+        BackHandler { onNavigateBack() }
+        Scaffold(
+            topBar = {
+                TopAppBar(
+                    title = { Text("USB Audio Settings") },
+                    navigationIcon = {
+                        IconButton(onClick = onNavigateBack) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                )
+            }
+        ) { padding ->
+            AudioSettingsContent(
+                viewModel = viewModel,
+                modifier = Modifier.padding(padding)
+            )
+        }
+    }
+}
+
+@Composable
+private fun AudioSettingsContent(
+    viewModel: RackViewModel,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var selectedBufferSize by remember { mutableIntStateOf(AudioSettingsManager.getBufferSize(context)) }
-    BackHandler { onNavigateBack() }
-
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("USB Audio Settings") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
-    ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            DirectUsbSessionSettings()
-            BufferSizeDropdown(
-                selectedSize = selectedBufferSize,
-                onSelected = { size ->
-                    selectedBufferSize = size
-                    AudioSettingsManager.setBufferSize(context, size)
-                }
-            )
-            Text(
-                text = "The rack uses the configured USB audio interface for both input and output. " +
-                    "Configure the interface before starting a session.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            val isRunning by viewModel.isEngineRunning.collectAsState()
-            if (isRunning) {
-                Divider()
-                Text("Current USB Session", style = MaterialTheme.typography.labelLarge)
-                InfoRow("Sample Rate", "%.0f Hz".format(AudioEngine.getSampleRate()))
-                InfoRow("Buffer Size", "${AudioEngine.getBufferFrameCount()} frames")
-                InfoRow("Input", "USB capture input ${AudioSettingsManager.getDirectUsbInputChannel(context) + 1}")
-                InfoRow("Output", "USB outputs ${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 1}–${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 2}")
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        DirectUsbSessionSettings()
+        BufferSizeDropdown(
+            selectedSize = selectedBufferSize,
+            onSelected = { size ->
+                selectedBufferSize = size
+                AudioSettingsManager.setBufferSize(context, size)
             }
+        )
+        Text(
+            text = "The rack uses the configured USB audio interface for both input and output. " +
+                "Configure the interface before starting a session.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        val isRunning by viewModel.isEngineRunning.collectAsState()
+        if (isRunning) {
+            Divider()
+            Text("Current USB Session", style = MaterialTheme.typography.labelLarge)
+            InfoRow("Sample Rate", "%.0f Hz".format(AudioEngine.getSampleRate()))
+            InfoRow("Buffer Size", "${AudioEngine.getBufferFrameCount()} frames")
+            InfoRow("Input", "USB capture input ${AudioSettingsManager.getDirectUsbInputChannel(context) + 1}")
+            InfoRow("Output", "USB outputs ${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 1}–${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 2}")
         }
     }
 }

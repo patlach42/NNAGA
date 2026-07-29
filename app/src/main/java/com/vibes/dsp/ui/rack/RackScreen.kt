@@ -237,7 +237,6 @@ fun RackScreen(
     onNavigateToSettings: () -> Unit = {},
     onNavigateToRecordings: (Long) -> Unit = {},
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit = { _, _, _, _, _ -> },
-    onNavigateToVstManager: () -> Unit = {},
     onReplacePlugin: (Long, Int) -> Unit = { _, _ -> },
     viewModel: RackViewModel = viewModel()
 ) {
@@ -579,36 +578,6 @@ fun RackScreen(
                                         )
                                     }
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("TONE3000") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        onNavigateToTone3000(null, null, null, -1, null)
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.Cloud,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                )
-                                if (com.vibes.dsp.BuildConfig.HAS_VST_HOST) {
-                                    DropdownMenuItem(
-                                        text = { Text("Manage VST") },
-                                        onClick = {
-                                            showOverflowMenu = false
-                                            onNavigateToVstManager()
-                                        },
-                                        leadingIcon = {
-                                            Icon(
-                                                Icons.Default.Extension,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-                                    )
-                                }
                             }
                         }
                     }
