@@ -29,7 +29,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.zIndex
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -49,7 +48,6 @@ import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MusicNote
@@ -91,12 +89,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.Placeholder
-import androidx.compose.ui.text.PlaceholderVerticalAlign
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
@@ -480,7 +473,6 @@ fun RackScreen(
                         )
                         Box {
                             var showOverflowMenu by remember { mutableStateOf(false) }
-                            var showAboutDialog by remember { mutableStateOf(false) }
                             IconButton(
                                 onClick = { showOverflowMenu = true },
                                 modifier = Modifier.size(28.dp)
@@ -495,6 +487,70 @@ fun RackScreen(
                                 expanded = showOverflowMenu,
                                 onDismissRequest = { showOverflowMenu = false }
                             ) {
+                                DropdownMenuItem(
+                                    text = { Text("Presets") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        viewModel.refreshPresets(context)
+                                        showPresetSheet = true
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.LibraryMusic, contentDescription = null)
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Add plugin") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        onNavigateToBrowser(selectedPathId)
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Add, contentDescription = null)
+                                    },
+                                    modifier = Modifier.testTag("rack_add_plugin")
+                                )
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            if (isRecording) {
+                                                "Stop recording (${formatRecordingDuration(recordingDurationSec)})"
+                                            } else {
+                                                "Start recording"
+                                            }
+                                        )
+                                    },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        viewModel.toggleRecording(context)
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(if (isEngineRunning) "Stop engine" else "Start engine") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        if (isEngineRunning) viewModel.stopEngine() else viewModel.startEngine()
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            if (isEngineRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
+                                            contentDescription = null,
+                                            tint = if (isEngineRunning) {
+                                                MaterialTheme.colorScheme.primary
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            }
+                                        )
+                                    },
+                                    modifier = Modifier.testTag("rack_engine_fab")
+                                )
+                                Divider()
                                 DropdownMenuItem(
                                     text = { Text("Settings") },
                                     onClick = {
@@ -553,43 +609,12 @@ fun RackScreen(
                                         }
                                     )
                                 }
-                                DropdownMenuItem(
-                                    text = { Text("About") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        showAboutDialog = true
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.Info,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                )
-                            }
-                            if (showAboutDialog) {
-                                AboutDialog(
-                                    onDismiss = { showAboutDialog = false }
-                                )
                             }
                         }
                     }
                 }
             }
-        },
-            bottomBar = {
-                if (isFullscreenActive) return@Scaffold
-                RackBottomBar(
-                    isEngineRunning = isEngineRunning,
-                    onToggleEngine = { if (isEngineRunning) viewModel.stopEngine() else viewModel.startEngine() },
-                    onAddPlugin = { onNavigateToBrowser(selectedPathId) },
-                    onOpenPresets = { viewModel.refreshPresets(context); showPresetSheet = true },
-                    isRecording = isRecording,
-                    recordingDurationSec = recordingDurationSec,
-                    onToggleRecording = { viewModel.toggleRecording(context) }
-                )
-            }
+        }
         ) { padding ->
 
             Column(
@@ -803,40 +828,19 @@ fun RackScreen(
             if (!isFullscreenActive) {
             Spacer(modifier = Modifier.height(16.dp))
             if (!isEngineRunning) {
-                val bannerText = buildAnnotatedString {
-                    append("Engine not running, tap ")
-                    appendInlineContent("playIcon", "[>]")
-                    append(" Play to start the engine")
-                }
-                val bannerInlineContent = mapOf(
-                    "playIcon" to InlineTextContent(
-                        Placeholder(
-                            width = 18.sp,
-                            height = 18.sp,
-                            placeholderVerticalAlign = PlaceholderVerticalAlign.Center
-                        )
-                    ) {
-                        Icon(
-                            imageVector = Icons.Filled.PlayArrow,
-                            contentDescription = null,
-                            modifier = Modifier.fillMaxSize(),
-                            tint = MaterialTheme.colorScheme.onSecondaryContainer
-                        )
-                    }
-                )
-                Surface(
+                Button(
                     onClick = { viewModel.startEngine() },
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    shape = RoundedCornerShape(4.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 44.dp)
                 ) {
-                    Text(
-                        text = bannerText,
-                        inlineContent = bannerInlineContent,
-                        modifier = Modifier.padding(16.dp),
-                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                    Icon(
+                        imageVector = Icons.Filled.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp)
                     )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Start engine")
                 }
                 Spacer(modifier = Modifier.height(8.dp))
             }
@@ -2895,52 +2899,6 @@ private fun ModelPicker(
     }
 }
 
-@Composable
-private fun RackBottomBar(
-    isEngineRunning: Boolean,
-    onToggleEngine: () -> Unit,
-    onAddPlugin: () -> Unit,
-    onOpenPresets: () -> Unit,
-    isRecording: Boolean,
-    recordingDurationSec: Double,
-    onToggleRecording: () -> Unit,
-) {
-    Surface(color = MaterialTheme.colorScheme.background) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                .padding(vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            BottomBarButton(
-                icon = Icons.Default.LibraryMusic,
-                label = "Presets",
-                onClick = onOpenPresets
-            )
-            BottomBarButton(
-                icon = Icons.Default.Add,
-                label = "Add",
-                onClick = onAddPlugin,
-                testTag = "rack_add_plugin"
-            )
-            BottomBarButton(
-                icon = if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
-                label = if (isRecording) formatRecordingDuration(recordingDurationSec) else "Record",
-                onClick = onToggleRecording,
-                tint = MaterialTheme.colorScheme.error
-            )
-            BottomBarButton(
-                icon = if (isEngineRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
-                label = if (isEngineRunning) "Stop" else "Play",
-                onClick = onToggleEngine,
-                tint = if (isEngineRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                testTag = "rack_engine_fab"
-            )
-        }
-    }
-}
 
 private fun formatRecordingDuration(seconds: Double): String {
     val totalSec = seconds.toInt()
@@ -2949,30 +2907,6 @@ private fun formatRecordingDuration(seconds: Double): String {
     return "%d:%02d".format(min, sec)
 }
 
-@Composable
-private fun BottomBarButton(
-    icon: ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    tint: Color = MaterialTheme.colorScheme.onSurface,
-    testTag: String? = null
-) {
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .sizeIn(minWidth = 64.dp, minHeight = 44.dp)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
-            .then(if (testTag != null) Modifier.testTag(testTag) else Modifier)
-    ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(24.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = tint
-        )
-    }
-}
 
 
 
@@ -3249,49 +3183,6 @@ private fun RecordingPickerDialog(
         confirmButton = {},
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Close") }
-        }
-    )
-}
-
-@Composable
-fun AboutDialog(
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val appName = remember(context) {
-        context.applicationInfo.loadLabel(context.packageManager).toString()
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("About") },
-        text = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.padding(vertical = 8.dp)
-            ) {
-                Text(
-                    text = "$appName ${BuildConfig.VERSION_NAME}",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    text = "Build: ${BuildConfig.BUILD_DATE} ${BuildConfig.BUILD_TIME} · ${BuildConfig.BUILD_HOST}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = "© \"Varcain\" Kamil Lulko",
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = "This app is free software; you can redistribute it and/or modify it under the terms of the GNU General Public License (GPL).",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("OK") }
         }
     )
 }

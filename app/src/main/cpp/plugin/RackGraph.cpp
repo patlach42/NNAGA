@@ -21,7 +21,7 @@ void silence(float* const* outputs, uint32_t frames) noexcept {
 RackGraph::RackGraph() : master_(std::make_shared<PluginChain>()) {
     auto first = std::make_shared<TrackNode>();
     first->id = nextTrackId_++;
-    first->inputArmed.store(true, std::memory_order_relaxed);
+    first->inputArmed.store(false, std::memory_order_relaxed);
     first->chain = std::make_shared<PluginChain>();
     tracks_.push_back(first);
     clips_.push_back(nullptr);
