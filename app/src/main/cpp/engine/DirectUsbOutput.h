@@ -246,6 +246,9 @@ public:
     uint64_t xrunCount() const noexcept {
         return driver_.playbackXRunCount();
     }
+    uint64_t playbackBackpressureCount() const noexcept {
+        return driver_.playbackBackpressureCount();
+    }
     void setGraphQuantum(int frames, int periodMultiplier =
                          monotrypt::usb::kDefaultPeriodMultiplier) noexcept {
         driver_.setGraphQuantum(frames, periodMultiplier);

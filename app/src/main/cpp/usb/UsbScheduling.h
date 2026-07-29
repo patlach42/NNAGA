@@ -43,8 +43,33 @@ constexpr int packetsPerTransferForRate(int packetsPerSecond) noexcept {
     return 1;
 }
 
+constexpr int nominalTransferFrames(int sampleRate, int packetsPerTransfer,
+                                    int packetsPerSecond) noexcept {
+    if (sampleRate <= 0 || packetsPerTransfer <= 0 || packetsPerSecond <= 0) {
+        return 0;
+    }
+    const int64_t numerator =
+        static_cast<int64_t>(sampleRate) * packetsPerTransfer;
+    return static_cast<int>(
+        std::min<int64_t>(std::numeric_limits<int>::max(),
+                          (numerator + packetsPerSecond - 1) /
+                              packetsPerSecond));
+}
+
 inline int clampPeriodMultiplier(int multiplier) noexcept {
     return std::clamp(multiplier, kMinPeriodMultiplier, kMaxPeriodMultiplier);
+}
+
+constexpr int playbackWatermarkTransferCount(
+        int inflightTransfers, int reserveTransfers,
+        bool exactInFlightAccounting) noexcept {
+    const int inflight = std::max(0, inflightTransfers);
+    const int reserve = std::max(0, reserveTransfers);
+    if (exactInFlightAccounting)
+        return reserve;
+    return inflight > std::numeric_limits<int>::max() - reserve
+        ? std::numeric_limits<int>::max()
+        : inflight + reserve;
 }
 
 // Keep the requested number of graph quanta queued before admitting one more.

@@ -53,6 +53,8 @@ data class DirectUsbStats(
     val captureWaitPressure: Long = 0,
     val writeWaitPressure: Long = 0,
     val playbackXruns: Long = 0,
+    val playbackBackpressure: Long = 0,
+    val performanceHintActive: Boolean = false,
     val schemaVersion: Long = 0,
     val sessionId: Long = 0,
     val state: DirectUsbSessionState = DirectUsbSessionState.Unknown,
@@ -103,6 +105,8 @@ data class DirectUsbStats(
         private const val PEAK_DSP = 30
         private const val HOST_LATENCY = 31
         private const val ACTUAL_XRUNS = 32
+        private const val PLAYBACK_BACKPRESSURE = 37
+        private const val PERFORMANCE_HINT_ACTIVE = 38
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -117,6 +121,8 @@ data class DirectUsbStats(
                 captureWaitPressure = at(CAPTURE_WAIT_PRESSURE),
                 writeWaitPressure = at(WRITE_WAIT_PRESSURE),
                 playbackXruns = at(PLAYBACK_XRUNS),
+                playbackBackpressure = at(PLAYBACK_BACKPRESSURE),
+                performanceHintActive = at(PERFORMANCE_HINT_ACTIVE) != 0L,
                 schemaVersion = at(SCHEMA),
                 sessionId = at(SESSION),
                 state = DirectUsbSessionState.fromOrdinal(at(STATE)),
@@ -205,6 +211,9 @@ class NativeEngine private constructor() {
         }
         System.loadLibrary("guitarrackcraft")
     }
+
+    /** Pins the calling UI thread away from CPUs reserved for Direct USB. */
+    external fun nativeApplyCurrentThreadUiAffinity()
 
     /**
      * Set the path where LV2 bundles (e.g. Guitarix) are extracted.

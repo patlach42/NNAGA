@@ -19,12 +19,19 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+
 #include <unistd.h>
 #include <sys/syscall.h>
 #include <pthread.h>
 #include <sys/resource.h>
 #if defined(__linux__)
 #include <sched.h>
+#endif
+#if defined(__ANDROID__)
+#include <dlfcn.h>
 #endif
 namespace guitarrackcraft {
 
@@ -37,9 +44,9 @@ inline long getTid() {
 }
 
 #if defined(__linux__)
-// Select the upper-half performance CPUs from an allowed set without
-// allocating or consulting system state. On larger systems, leave the
-// highest-ranked allowed CPU for UI/system work.
+// Select the two highest-ranked allowed CPUs without allocating or consulting
+// system state. Direct USB render and event threads need separate performance
+// cores; leaving the fastest core to UI work caused live-session starvation.
 inline cpu_set_t deriveAudioCpuMask(const cpu_set_t& allowed) noexcept {
     cpu_set_t audio;
     CPU_ZERO(&audio);
@@ -50,9 +57,8 @@ inline cpu_set_t deriveAudioCpuMask(const cpu_set_t& allowed) noexcept {
     if (allowedCount == 0)
         return audio;
 
-    const int firstRank = allowedCount / 2;
-    const int lastRank = allowedCount >= 6 ? allowedCount - 2
-                                          : allowedCount - 1;
+    const int firstRank = std::max(0, allowedCount - 2);
+    const int lastRank = allowedCount - 1;
     int rank = 0;
     for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
         if (!CPU_ISSET(cpu, &allowed))
@@ -62,6 +68,38 @@ inline cpu_set_t deriveAudioCpuMask(const cpu_set_t& allowed) noexcept {
         ++rank;
     }
     return audio;
+}
+
+// Keep UI descendants away from the CPUs reserved for Direct USB audio. On
+// constrained one/two-CPU cpusets preserve at least one runnable UI CPU.
+inline cpu_set_t deriveUiCpuMask(const cpu_set_t& allowed) noexcept {
+    cpu_set_t ui = allowed;
+    const int allowedCount = CPU_COUNT(&allowed);
+    if (allowedCount <= 0)
+        return ui;
+    if (allowedCount <= 2) {
+        CPU_ZERO(&ui);
+        for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+            if (CPU_ISSET(cpu, &allowed)) {
+                CPU_SET(cpu, &ui);
+                break;
+            }
+        }
+        return ui;
+    }
+    const cpu_set_t audio = deriveAudioCpuMask(allowed);
+    CPU_XOR(&ui, &allowed, &audio);
+    return ui;
+}
+
+inline void applyCurrentThreadUiAffinity() noexcept {
+    cpu_set_t allowed;
+    if (syscall(SYS_sched_getaffinity, 0, sizeof(allowed), &allowed) != 0)
+        return;
+    const cpu_set_t ui = deriveUiCpuMask(allowed);
+    if (CPU_COUNT(&ui) == 0)
+        return;
+    (void)syscall(SYS_sched_setaffinity, 0, sizeof(ui), &ui);
 }
 
 inline void applyCurrentThreadAudioAffinity() noexcept {
@@ -74,6 +112,83 @@ inline void applyCurrentThreadAudioAffinity() noexcept {
     (void)syscall(SYS_sched_setaffinity, 0, sizeof(audio), &audio);
 }
 #endif
+
+// Android Dynamic Performance Framework session, resolved lazily so the
+// min-SDK 26 binary remains loadable on pre-API-31 devices.
+class PerformanceHintSession {
+public:
+    explicit PerformanceHintSession(int64_t targetDurationNs) noexcept {
+#if defined(__ANDROID__)
+        if (targetDurationNs <= 0) return;
+        library_ = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+        if (!library_) return;
+        getManager_ = reinterpret_cast<GetManagerFn>(
+            dlsym(library_, "APerformanceHint_getManager"));
+        createSession_ = reinterpret_cast<CreateSessionFn>(
+            dlsym(library_, "APerformanceHint_createSession"));
+        reportActual_ = reinterpret_cast<ReportActualFn>(
+            dlsym(library_, "APerformanceHint_reportActualWorkDuration"));
+        closeSession_ = reinterpret_cast<CloseSessionFn>(
+            dlsym(library_, "APerformanceHint_closeSession"));
+        if (!getManager_ || !createSession_ || !reportActual_ || !closeSession_) {
+            dlclose(library_);
+            library_ = nullptr;
+            return;
+        }
+        void* manager = getManager_();
+        const int32_t tid = static_cast<int32_t>(getTid());
+        if (manager) {
+            session_ = createSession_(
+                manager, &tid, 1, targetDurationNs);
+        }
+#else
+        (void)targetDurationNs;
+#endif
+    }
+
+    ~PerformanceHintSession() {
+#if defined(__ANDROID__)
+        if (session_ && closeSession_) closeSession_(session_);
+        if (library_) dlclose(library_);
+#endif
+    }
+
+    PerformanceHintSession(const PerformanceHintSession&) = delete;
+    PerformanceHintSession& operator=(const PerformanceHintSession&) = delete;
+
+    bool active() const noexcept {
+#if defined(__ANDROID__)
+        return session_ != nullptr;
+#else
+        return false;
+#endif
+    }
+
+    void reportActualWorkDuration(uint64_t durationNs) noexcept {
+#if defined(__ANDROID__)
+        if (session_ && durationNs > 0) {
+            (void)reportActual_(session_, static_cast<int64_t>(durationNs));
+        }
+#else
+        (void)durationNs;
+#endif
+    }
+
+private:
+#if defined(__ANDROID__)
+    using GetManagerFn = void* (*)();
+    using CreateSessionFn = void* (*)(void*, const int32_t*, size_t, int64_t);
+    using ReportActualFn = int (*)(void*, int64_t);
+    using CloseSessionFn = void (*)(void*);
+
+    void* library_ = nullptr;
+    void* session_ = nullptr;
+    GetManagerFn getManager_ = nullptr;
+    CreateSessionFn createSession_ = nullptr;
+    ReportActualFn reportActual_ = nullptr;
+    CloseSessionFn closeSession_ = nullptr;
+#endif
+};
 
 // Best-effort Android/Linux realtime scheduling for app-owned audio threads.
 // Prefer SCHED_FIFO when permitted, then Android's urgent-audio nice level.

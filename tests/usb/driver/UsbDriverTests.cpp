@@ -3,6 +3,7 @@
 #include "libusb_uac_driver.h"
 #include "engine/DirectUsbOutput.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -225,7 +226,7 @@ TEST(UsbDriverRing, WriteAndDrainPreserveWholeFramesAcrossWrap) {
     EXPECT_EQ(driver.playedFrames(), 4);
 }
 
-TEST(UsbDriverRing, WatermarkRejectsPartialFrameAndCoalescesOverrun) {
+TEST(UsbDriverRing, WatermarkRejectsPartialFrameAsBackpressureWithoutPlaybackXrun) {
     monotrypt::usb::LibusbUacDriver driver;
     monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
     driver.setGraphQuantum(16, 2);  // startup high watermark admits 64 of 65
@@ -234,8 +235,38 @@ TEST(UsbDriverRing, WatermarkRejectsPartialFrameAndCoalescesOverrun) {
     EXPECT_EQ(driver.writePcm(input.data(), 65), 64);
     EXPECT_EQ(driver.bufferedFrames(), 64);
     EXPECT_EQ(driver.writableFrames(), 0);
-    EXPECT_EQ(driver.playbackXRunCount(), 1u);
+    EXPECT_EQ(driver.playbackBackpressureCount(), 1u);
+    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+
     EXPECT_EQ(driver.writePcm(input.data(), 1), 0);
+    EXPECT_EQ(driver.playbackBackpressureCount(), 1u);
+    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+}
+TEST(UsbDriverRing, DrainStarvationPadsSilenceAndCountsPlaybackUnderrun) {
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
+
+    std::vector<uint8_t> output(2 * 4, 0xA5);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                  driver, output.data(), static_cast<int>(output.size())),
+              0);
+    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+    EXPECT_EQ(driver.playbackBackpressureCount(), 0u);
+
+    monotrypt::usb::UsbDriverTestAccess::playbackStarted(driver, true);
+    std::fill(output.begin(), output.end(), 0xA5);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                  driver, output.data(), static_cast<int>(output.size())),
+              0);
+    EXPECT_EQ(output, std::vector<uint8_t>(output.size(), 0));
+    EXPECT_EQ(driver.playbackXRunCount(), 1u);
+    EXPECT_EQ(driver.playbackBackpressureCount(), 0u);
+
+    // Adjacent silence padding is one underrun event, not one event per
+    // packet.
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                  driver, output.data(), static_cast<int>(output.size())),
+              0);
     EXPECT_EQ(driver.playbackXRunCount(), 1u);
 }
 TEST(UsbDriverRing, DefaultWatermarkUsesHighWatermarkStartupLimit) {

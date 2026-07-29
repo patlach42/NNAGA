@@ -408,7 +408,7 @@ class DirectUsbDeviceStressTest {
             "known_host_latency_frames=${stats.knownHostLatencyFrames} estimated_host_queue_latency_ms=$queueLatencyMs sequence=${stats.sequence} " +
             "capture_overruns=${rawStats.getOrZero(CAPTURE_OVERRUNS)} capture_underruns=${rawStats.getOrZero(CAPTURE_UNDERRUNS)} " +
             "capture_transfer_errors=${stats.captureTransferErrors} playback_transfer_errors=${stats.playbackTransferErrors} capture_wait_pressure=${stats.captureWaitPressure} " +
-            "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${stats.playbackXruns} lifecycle_failures=${rawStats.getOrZero(LIFECYCLE_FAILURES)} " +
+            "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${stats.playbackXruns} playback_backpressure=${stats.playbackBackpressure} performance_hint_active=${if (stats.performanceHintActive) 1 else 0} lifecycle_failures=${rawStats.getOrZero(LIFECYCLE_FAILURES)} " +
             "transport_failed=${rawStats.getOrZero(TRANSPORT_FAILED)} capture_ring_frames=${rawStats.getOrZero(CAPTURE_RING_FRAMES)} playback_ring_frames=${rawStats.getOrZero(PLAYBACK_RING_FRAMES)} " +
             "implicit_fifo_depth=${rawStats.getOrZero(IMPLICIT_FIFO_DEPTH)} last_dsp_ns=${stats.lastDspNs} peak_dsp_ns=${stats.peakDspNs} " +
 

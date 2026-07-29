@@ -254,6 +254,7 @@ void AudioEngine::finishDirectUsbCleanup() {
     directCaptureOverruns_.store(0, std::memory_order_release);
     directCaptureUnderruns_.store(0, std::memory_order_release);
     directPlaybackXruns_.store(0, std::memory_order_release);
+    directUsbPerformanceHintActive_.store(false, std::memory_order_release);
     const int32_t failure = directUsbFailureCode_.load(std::memory_order_acquire);
     directUsbState_.store(failure ? DirectUsbState::Failed : DirectUsbState::Stopped,
                           std::memory_order_release);
@@ -291,6 +292,8 @@ AudioEngine::DirectUsbRuntimeStats AudioEngine::getDirectUsbRuntimeStats() const
     out.captureOverruns = directCaptureOverruns_.load(std::memory_order_acquire);
     out.captureUnderruns = directCaptureUnderruns_.load(std::memory_order_acquire);
     out.playbackXruns = directPlaybackXruns_.load(std::memory_order_acquire);
+    out.performanceHintActive =
+        directUsbPerformanceHintActive_.load(std::memory_order_acquire);
     return out;
 }
 
@@ -421,6 +424,11 @@ void AudioEngine::directUsbRenderLoop() {
         2, static_cast<int>(std::ceil(period.count() * 2000.0)));
     const int captureTimeoutMs = std::min(
         1000, std::max(20, static_cast<int>(std::ceil(period.count() * 4000.0))));
+    const int64_t targetWorkDurationNs = std::max<int64_t>(
+        1, std::chrono::duration_cast<std::chrono::nanoseconds>(period).count());
+    PerformanceHintSession performanceHint(targetWorkDurationNs);
+    directUsbPerformanceHintActive_.store(
+        performanceHint.active(), std::memory_order_release);
     int captureMissStreak = 0;
     int failureCode = 0;
 
@@ -615,24 +623,33 @@ void AudioEngine::directUsbRenderLoop() {
             continue;
         }
         renderBlock();
+        // A full playback ring can make submitBlock wait safely for capacity.
+        // Deadline risk ends once the next block is rendered; do not classify
+        // intentional producer backpressure as an audio deadline miss.
+        const uint64_t renderReadyNs = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - cycleBegan).count());
         const bool submitted = submitBlock(
             directUsbOutputLeft_.data(), directUsbOutputRight_.data());
         const uint64_t cycleNs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - cycleBegan).count());
+        performanceHint.reportActualWorkDuration(cycleNs);
         if (submitted) {
             if (directUsbState_.load(std::memory_order_acquire) == DirectUsbState::Running) {
                 uint64_t peak = directUsbPeakCycleNs_.load(std::memory_order_relaxed);
                 while (peak < cycleNs && !directUsbPeakCycleNs_.compare_exchange_weak(
                     peak, cycleNs, std::memory_order_relaxed)) {}
                 directUsbLastCycleNs_.store(cycleNs, std::memory_order_release);
-                if (cycleDeadlineBudgetNs != 0 && cycleNs > cycleDeadlineBudgetNs) {
+                if (cycleDeadlineBudgetNs != 0 &&
+                    renderReadyNs > cycleDeadlineBudgetNs) {
                     directUsbDeadlineMisses_.fetch_add(1, std::memory_order_relaxed);
                 }
             }
             continue;
         }
-        if (cycleDeadlineBudgetNs != 0 && cycleNs > cycleDeadlineBudgetNs) {
+        if (cycleDeadlineBudgetNs != 0 &&
+            renderReadyNs > cycleDeadlineBudgetNs) {
             directUsbDeadlineMisses_.fetch_add(1, std::memory_order_relaxed);
         }
         if (directUsbSession_.load(std::memory_order_acquire)) {
@@ -641,6 +658,7 @@ void AudioEngine::directUsbRenderLoop() {
         }
         break;
     }
+    directUsbPerformanceHintActive_.store(false, std::memory_order_release);
     const bool sessionWasActive =
         directUsbSession_.exchange(false, std::memory_order_acq_rel);
     if (failureCode == 0 && sessionWasActive) {

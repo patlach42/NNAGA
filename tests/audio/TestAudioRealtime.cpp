@@ -686,19 +686,19 @@ TEST(ThreadUtilsAffinityTest, SelectsRankedPerformanceSubsetWithoutChangingAffin
         cpu_set_t expected;
     };
     const AffinityCase cases[] = {
-        {"8 allowed CPUs reserve highest for UI", makeCpuSet({0, 1, 2, 3, 4, 5, 6, 7}),
-         makeCpuSet({4, 5, 6})},
-        {"6 allowed CPUs reserve highest for UI", makeCpuSet({0, 1, 2, 3, 4, 5}),
-         makeCpuSet({3, 4})},
-        {"4 allowed CPUs keep upper half", makeCpuSet({0, 1, 2, 3}),
+        {"8 allowed CPUs choose fastest two", makeCpuSet({0, 1, 2, 3, 4, 5, 6, 7}),
+         makeCpuSet({6, 7})},
+        {"6 allowed CPUs choose fastest two", makeCpuSet({0, 1, 2, 3, 4, 5}),
+         makeCpuSet({4, 5})},
+        {"4 allowed CPUs choose fastest two", makeCpuSet({0, 1, 2, 3}),
          makeCpuSet({2, 3})},
-        {"2 allowed CPUs keep upper half", makeCpuSet({0, 1}),
-         makeCpuSet({1})},
+        {"2 allowed CPUs keep both", makeCpuSet({0, 1}), makeCpuSet({0, 1})},
+        {"empty mask remains empty", makeCpuSet({}), makeCpuSet({})},
         {"singleton remains available", makeCpuSet({7}), makeCpuSet({7})},
-        {"sparse 8 CPU mask preserves rank ordering",
+        {"sparse 8 CPU mask selects final two by rank",
          makeCpuSet({1, 4, 9, 16, 25, 36, 49, 64}),
-         makeCpuSet({25, 36, 49})},
-        {"sparse 4 CPU mask keeps upper half",
+         makeCpuSet({49, 64})},
+        {"sparse 4 CPU mask selects final two by rank",
          makeCpuSet({2, 7, 19, 31}), makeCpuSet({19, 31})},
     };
 
@@ -712,7 +712,7 @@ TEST(ThreadUtilsAffinityTest, SelectsRankedPerformanceSubsetWithoutChangingAffin
             guitarrackcraft::deriveAudioCpuMask(test.allowed);
 
         EXPECT_TRUE(CPU_EQUAL(&selected, &test.expected));
-        EXPECT_GT(CPU_COUNT(&selected), 0);
+        EXPECT_EQ(CPU_COUNT(&selected), CPU_COUNT(&test.expected));
         for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
             EXPECT_TRUE(!CPU_ISSET(cpu, &selected) ||
                         CPU_ISSET(cpu, &test.allowed))

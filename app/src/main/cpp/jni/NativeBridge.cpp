@@ -199,6 +199,14 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
 }
 
 JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeApplyCurrentThreadUiAffinity(
+        JNIEnv*, jobject) {
+#if defined(__linux__)
+    applyCurrentThreadUiAffinity();
+#endif
+}
+
+JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeSetLv2Path(JNIEnv* env, jobject thiz, jstring path) {
     if (!path) {
         ensureCtx()->lv2Path.clear();
@@ -472,7 +480,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 37;
+    constexpr jsize kStatCount = 39;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -494,13 +502,15 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         values[13] = static_cast<jlong>(g_ctx->directUsbOutput->writtenFrames());
         values[14] = static_cast<jlong>(g_ctx->directUsbOutput->playedFrames());
         values[15] = static_cast<jlong>(g_ctx->directUsbOutput->xrunCount());
+        values[37] = static_cast<jlong>(
+            g_ctx->directUsbOutput->playbackBackpressureCount());
         values[16] = g_ctx->audioEngine
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbCaptureWaitTimeouts()) : 0;
         values[17] = g_ctx->audioEngine
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 3;
+            values[18] = 5;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -524,6 +534,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[34] = static_cast<jlong>(stats.peakCycleNanoseconds);
             values[35] = static_cast<jlong>(stats.deadlineBudgetNanoseconds);
             values[36] = static_cast<jlong>(stats.deadlineMisses);
+            values[38] = stats.performanceHintActive ? 1 : 0;
         }
     }
     jlongArray out = env->NewLongArray(kStatCount);

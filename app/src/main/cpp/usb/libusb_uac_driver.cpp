@@ -48,11 +48,14 @@ constexpr uint8_t FORMAT_TYPE_I         = 0x01;
 constexpr uint8_t REQ_SET_CUR              = 0x01;
 constexpr uint16_t CS_SAM_FREQ_CONTROL_SEL = 0x01;
 
-// Keep several 1 ms batches queued so the kernel can reserve consecutive
-// service intervals while the event thread handles completed batches. This
-// prevents user-space scheduling gaps from starving the asynchronous DAC.
-constexpr int kNumTransfers = 4;
-constexpr int kPacketsPerTransfer = 8;
+// The iD4 profile keeps the same 4 ms kernel runway as eight 0.5 ms batches.
+// Short completion intervals reduce steady-state queue granularity; exact
+// rational frame accounting avoids the conservative max-packet floor.
+constexpr int kDefaultNumTransfers = 4;
+constexpr int kId4NumTransfers = 8;
+constexpr int kId4PacketsPerTransfer = 4;
+constexpr uint16_t kAudientVendorId = 0x2708;
+constexpr uint16_t kAudientId4ProductId = 0x0009;
 // Playback backlog is deliberately bounded: target watermark plus one max graph block.
 // 64 KiB covers 2048 frames at the largest supported 8ch/32-bit format.
 constexpr size_t kRingBytes = kPlaybackRingBytes;
@@ -239,8 +242,21 @@ bool LibusbUacDriver::open(int fileDescriptor) {
     }
     device_ = handle;
     fd_ = fileDescriptor;
+    libusb_device_descriptor descriptor{};
+    const int descriptorResult = libusb_get_device_descriptor(
+        libusb_get_device(device_), &descriptor);
+    lowLatencyProfile_ =
+        descriptorResult == LIBUSB_SUCCESS &&
+        descriptor.idVendor == kAudientVendorId &&
+        descriptor.idProduct == kAudientId4ProductId;
+    transferCount_ =
+        lowLatencyProfile_ ? kId4NumTransfers : kDefaultNumTransfers;
     libusb_set_auto_detach_kernel_driver(device_, 1);
-    LOGI("opened device via fd=%d", fileDescriptor);
+    LOGI("opened device via fd=%d vid=%04x pid=%04x profile=%s",
+         fileDescriptor,
+         descriptorResult == LIBUSB_SUCCESS ? descriptor.idVendor : 0,
+         descriptorResult == LIBUSB_SUCCESS ? descriptor.idProduct : 0,
+         lowLatencyProfile_ ? "audient-id4-low-latency" : "generic");
     return true;
 }
 
@@ -1450,10 +1466,13 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                     libusb_handle_events_timeout(ctx_, &tv);
                 }
             });
-            const int startupPacketsPerTransfer = packetsPerTransferForRate(
-                packetsPerSecondForInterval(format_.isHighSpeed,
-                                            format_.bInterval));
-            const size_t required = static_cast<size_t>(kNumTransfers) *
+            const int startupPacketsPerSecond = packetsPerSecondForInterval(
+                format_.isHighSpeed, format_.bInterval);
+            const int startupPacketsPerTransfer =
+                lowLatencyProfile_ && startupPacketsPerSecond >= 8000
+                    ? kId4PacketsPerTransfer
+                    : packetsPerTransferForRate(startupPacketsPerSecond);
+            const size_t required = static_cast<size_t>(transferCount_) *
                                     static_cast<size_t>(startupPacketsPerTransfer);
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
             while (implicitWrite_.load(std::memory_order_acquire) -
@@ -1508,7 +1527,9 @@ bool LibusbUacDriver::startCapturePump() {
     const int capturePacketsPerSecond = packetsPerSecondForInterval(
         captureFormat_.isHighSpeed, captureFormat_.bInterval);
     capturePacketsPerTransfer_ =
-        packetsPerTransferForRate(capturePacketsPerSecond);
+        lowLatencyProfile_ && capturePacketsPerSecond >= 8000
+            ? kId4PacketsPerTransfer
+            : packetsPerTransferForRate(capturePacketsPerSecond);
     const int packets = capturePacketsPerTransfer_;
     const int captureNominalMax =
         (captureFormat_.sampleRateHz + capturePacketsPerSecond - 1) /
@@ -1523,9 +1544,9 @@ bool LibusbUacDriver::startCapturePump() {
         std::min(capturePhysicalMax, captureNominalMax + 1);
     captureTransferFrames_.store(captureMaxFramesPerPacket_ * packets,
                                   std::memory_order_release);
-    captureTransfers_.reserve(kNumTransfers);
-    captureTransferBuffers_.reserve(kNumTransfers);
-    for (int i = 0; i < kNumTransfers; ++i) {
+    captureTransfers_.reserve(transferCount_);
+    captureTransferBuffers_.reserve(transferCount_);
+    for (int i = 0; i < transferCount_; ++i) {
         libusb_transfer* xfr = libusb_alloc_transfer(packets);
         if (!xfr) {
             err(StartError::IsoPumpAllocFailed,
@@ -1691,16 +1712,24 @@ int LibusbUacDriver::captureFrameLimit() const noexcept {
         captureFormat_.channels * captureFormat_.bytesPerSample;
     if (stride <= 0 || captureRing_.empty()) return 0;
     const int graph = graphQuantum_.load(std::memory_order_acquire);
-    // Four completions can arrive in one event-loop turn. Keep two newly
-    // resubmitted transfers plus a graph block so a brief scheduler delay
-    // does not discard capture before the render thread wakes.
+    // A full completion wave plus two newly resubmitted transfers can arrive
+    // before the render thread wakes. Size this from the active device profile.
     const int captureTransferFrames =
         std::max(1, capturePacketsPerTransfer_) *
         std::max(0, captureMaxFramesPerPacket_);
     const int queuedCaptureFrames =
-        (kNumTransfers + 2) * captureTransferFrames;
+        (transferCount_ + 2) * captureTransferFrames;
+    // Capture must retain at least the complete playback runway (userspace
+    // watermark plus already-submitted USB frames), otherwise a scheduler
+    // stall drops input while the DAC still has enough audio to keep playing.
+    const int capturePacketsPerSecond = packetsPerSecondForInterval(
+        captureFormat_.isHighSpeed, captureFormat_.bInterval);
+    const int submittedPlaybackFrames = transferCount_ * nominalTransferFrames(
+        captureFormat_.sampleRateHz, capturePacketsPerTransfer_,
+        capturePacketsPerSecond);
     const int playbackBudget =
-        playbackTargetFrames_.load(std::memory_order_acquire) + graph;
+        playbackTargetFrames_.load(std::memory_order_acquire) + graph +
+        submittedPlaybackFrames;
     const int latencyLimit =
         std::max(graph * 2, std::max(queuedCaptureFrames + graph,
                                      playbackBudget));
@@ -1881,7 +1910,10 @@ bool LibusbUacDriver::startIsoPump(bool submit) {
         : std::max<int>(1, format_.bInterval);
     microframesPerSec_ =
         std::max(1, hostPeriodHz / packetIntervalUframes_);
-    playbackPacketsPerTransfer_ = packetsPerTransferForRate(microframesPerSec_);
+    playbackPacketsPerTransfer_ =
+        lowLatencyProfile_ && microframesPerSec_ >= 8000
+            ? kId4PacketsPerTransfer
+            : packetsPerTransferForRate(microframesPerSec_);
     int baseFrames = format_.sampleRateHz / microframesPerSec_;
     int rateRemainder = format_.sampleRateHz % microframesPerSec_;
     LOGI("iso pump: %d packets/sec (HS=%d, bInterval=%u), "
@@ -1920,10 +1952,10 @@ bool LibusbUacDriver::startIsoPump(bool submit) {
         std::min(physicalMaxFrames, nominalMaxFrames + 1);
     const int maxBytesPerPacket = maxFramesPerPacket_ * frameStride;
 
-    transfers_.reserve(kNumTransfers);
-    transferBuffers_.reserve(kNumTransfers);
+    transfers_.reserve(transferCount_);
+    transferBuffers_.reserve(transferCount_);
 
-    for (int t = 0; t < kNumTransfers; ++t) {
+    for (int t = 0; t < transferCount_; ++t) {
         libusb_transfer* xfr = libusb_alloc_transfer(playbackPacketsPerTransfer_);
         if (!xfr) {
             LOGE("libusb_alloc_transfer failed at #%d", t);
@@ -2208,8 +2240,8 @@ void LibusbUacDriver::onFeedback(libusb_transfer* xfr) {
 
 bool LibusbUacDriver::prepareImplicitTransfer(libusb_transfer* xfr) {
     const size_t count = static_cast<size_t>(xfr->num_iso_packets);
-    if (count == 0 || count > kPacketsPerTransfer) return false;
-    std::array<int, kPacketsPerTransfer> frameCounts{};
+    if (count == 0 || count > kMaxPacketsPerTransfer) return false;
+    std::array<int, kMaxPacketsPerTransfer> frameCounts{};
     size_t read = implicitRead_.load(std::memory_order_acquire);
     for (;;) {
         const size_t write = implicitWrite_.load(std::memory_order_acquire);
@@ -2443,16 +2475,25 @@ void LibusbUacDriver::setGraphQuantum(int frames, int periodMultiplier) {
         ? static_cast<int>(kRingBytes / static_cast<size_t>(stride))
         : config.frameLimit;
     const int maxTarget = std::max(0, physicalFrames - config.graphQuantum);
-    // The event thread may retire the whole async queue before the render
-    // thread runs. Even 1x keeps two transfer intervals of wake-up reserve;
-    // higher period multipliers add one interval each.
-    const int transferFrames =
+    // Generic devices retain their conservative userspace floor. The
+    // calibrated iD4 watermark counts only completed-transfer reserve here:
+    // its in-flight USB frames are already queued independently at the DAC.
+    const int physicalTransferFrames =
         std::max(1, playbackPacketsPerTransfer_) *
         std::max(0, maxFramesPerPacket_);
+    const int transferFrames = lowLatencyProfile_
+        ? nominalTransferFrames(format_.sampleRateHz,
+                                playbackPacketsPerTransfer_,
+                                microframesPerSec_)
+        : physicalTransferFrames;
+    // Six exact 0.5 ms reserve transfers at the default multiplier keep the
+    // steady 48 kHz host queue below 9 ms without sacrificing kernel runway.
     const int reserveTransfers =
-        clampPeriodMultiplier(periodMultiplier) + 1;
-    const int queuedTransferFrames =
-        (kNumTransfers + reserveTransfers) * transferFrames;
+        clampPeriodMultiplier(periodMultiplier) +
+        (lowLatencyProfile_ ? 3 : 1);
+    const int watermarkTransfers = playbackWatermarkTransferCount(
+        transferCount_, reserveTransfers, lowLatencyProfile_);
+    const int queuedTransferFrames = watermarkTransfers * transferFrames;
     const int target = std::min(
         effectivePlaybackTargetFrames(config.targetFrames,
                                       queuedTransferFrames),

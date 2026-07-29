@@ -102,6 +102,57 @@ TEST(UsbPacketSchedule, SupportedRatesAtFullSpeedUseMillisecondCadence) {
         expectExactSchedule(test.sampleRate, kFullSpeedPacketsPerSecond,
                             test.name);
 }
+TEST(UsbPacketSchedule, NominalTransferFramesUsesCeilingForTransferWindow) {
+    struct TransferCase {
+        int sampleRate;
+        int packetsPerTransfer;
+        int packetsPerSecond;
+        int expectedFrames;
+        const char* name;
+    };
+    const TransferCase cases[] = {
+        {48000, 8, 8000, 48, "48 kHz exact division"},
+        {44100, 8, 8000, 45, "44.1 kHz fractional ceiling"},
+        {std::numeric_limits<int>::max(), std::numeric_limits<int>::max(),
+         std::numeric_limits<int>::max(), std::numeric_limits<int>::max(),
+         "large exact division avoids intermediate overflow"},
+        {192000, 8, 8000, 192, "192 kHz upper supported rate"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::nominalTransferFrames(
+                      test.sampleRate, test.packetsPerTransfer,
+                      test.packetsPerSecond),
+                  test.expectedFrames);
+    }
+}
+
+TEST(UsbPacketSchedule, NominalTransferFramesRejectsNonPositiveInputs) {
+    struct InvalidCase {
+        int sampleRate;
+        int packetsPerTransfer;
+        int packetsPerSecond;
+        const char* name;
+    };
+    const InvalidCase cases[] = {
+        {0, 8, 8000, "zero sample rate"},
+        {-1, 8, 8000, "negative sample rate"},
+        {48000, 0, 8000, "zero packets per transfer"},
+        {48000, -1, 8000, "negative packets per transfer"},
+        {48000, 8, 0, "zero packets per second"},
+        {48000, 8, -1, "negative packets per second"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::nominalTransferFrames(
+                      test.sampleRate, test.packetsPerTransfer,
+                      test.packetsPerSecond),
+                  0);
+    }
+}
+
 
 
 
@@ -253,6 +304,65 @@ TEST(UsbPlaybackWatermark, EffectiveTargetIncludesQueuedTransferFloor) {
                   test.expectedTarget);
     }
 }
+TEST(UsbPlaybackWatermark, ProfileAccountingIncludesOnlyRequiredTransfers) {
+    struct AccountingCase {
+        int inflightTransfers;
+        int reserveTransfers;
+        bool exactInFlightAccounting;
+        int expected;
+        const char* name;
+    };
+    const AccountingCase cases[] = {
+        {4, 3, true, 3,
+         "calibrated iD4 profile excludes already-submitted USB transfers"},
+        {4, 3, false, 7,
+         "generic device includes already-submitted USB transfers"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::playbackWatermarkTransferCount(
+                      test.inflightTransfers, test.reserveTransfers,
+                      test.exactInFlightAccounting),
+                  test.expected);
+    }
+}
+
+TEST(UsbPlaybackWatermark, TransferAccountingClampsNegativeCountsToZero) {
+    struct ClampCase {
+        int inflightTransfers;
+        int reserveTransfers;
+        bool exactInFlightAccounting;
+        int expected;
+        const char* name;
+    };
+    const ClampCase cases[] = {
+        {0, 0, true, 0, "zero counts"},
+        {-4, 7, true, 7, "negative in-flight count"},
+        {4, -7, false, 4, "negative reserve count"},
+        {-4, -7, false, 0, "both counts negative"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::playbackWatermarkTransferCount(
+                      test.inflightTransfers, test.reserveTransfers,
+                      test.exactInFlightAccounting),
+                  test.expected);
+    }
+}
+
+TEST(UsbPlaybackWatermark, GenericTransferAccountingSaturatesIntegerOverflow) {
+    constexpr int kMax = std::numeric_limits<int>::max();
+
+    EXPECT_EQ(monotrypt::usb::playbackWatermarkTransferCount(kMax, 1, false),
+              kMax);
+    EXPECT_EQ(monotrypt::usb::playbackWatermarkTransferCount(1, kMax, false),
+              kMax);
+    EXPECT_EQ(monotrypt::usb::playbackWatermarkTransferCount(kMax, kMax, false),
+              kMax);
+}
+
 TEST(UsbPacketSchedule, PacketsPerTransferKeepsTransfersNearOneMillisecond) {
     struct RateCase {
         uint32_t packetsPerSecond;

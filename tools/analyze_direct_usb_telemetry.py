@@ -56,8 +56,8 @@ def records_from(streams, parse_diagnostics=None, audit_summaries=None):
                 missing.append("valid lifecycle-after-stop status")
             if missing:
                 errors.append("%s:%d malformed TELEMETRY missing=%s" % (name, lineno, ",".join(missing)))
-            elif not isinstance(schema, int) or isinstance(schema, bool) or schema != 3:
-                errors.append("%s:%d unsupported TELEMETRY schema=%r (expected 3)" % (name, lineno, schema))
+            elif not isinstance(schema, int) or isinstance(schema, bool) or schema not in (3, 4, 5):
+                errors.append("%s:%d unsupported TELEMETRY schema=%r (expected 3, 4, or 5)" % (name, lineno, schema))
             else:
                 records.append(fields)
     return records

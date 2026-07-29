@@ -42,6 +42,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.vibes.dsp.engine.AudioEngine
 import com.vibes.dsp.engine.EngineInitHelper
+import com.vibes.dsp.engine.NativeEngine
 import com.vibes.dsp.ui.loading.PluginExtractScreen
 import com.vibes.dsp.ui.navigation.AppNavigation
 import com.vibes.dsp.ui.theme.GuitarRackCraftTheme
@@ -95,6 +96,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        NativeEngine.getInstance().nativeApplyCurrentThreadUiAffinity()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val display = getSystemService(WindowManager::class.java).defaultDisplay

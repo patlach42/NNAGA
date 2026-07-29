@@ -65,6 +65,7 @@ public:
         uint64_t captureOverruns = 0;
         uint64_t captureUnderruns = 0;
         uint64_t playbackXruns = 0;
+        bool performanceHintActive = false;
     };
     DirectUsbRuntimeStats getDirectUsbRuntimeStats() const noexcept;
     AudioEngine();
@@ -205,6 +206,7 @@ private:
     std::atomic<uint64_t> directUsbDeadlineBudgetNs_{0};
     std::atomic<uint64_t> directUsbDeadlineMisses_{0};
     std::atomic<bool> directUsbRenderUrgentAudio_{false};
+    std::atomic<bool> directUsbPerformanceHintActive_{false};
     std::atomic<bool> cleanupStarted_{true};
     int32_t directUsbBits_ = 0;
     int32_t directUsbSubslotBytes_ = 0;

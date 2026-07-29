@@ -260,11 +260,14 @@ public:
     // Waits until [frames] fit inside the bounded playback watermark.
     // Uses the shared transport eventfd; no polling or spin sleeps.
     bool waitForWritableFrames(int frames, int timeoutMs) const;
-    // Cumulative producer/consumer discontinuities for the current stream.
-    // Adjacent short writes or silence packets form one xrun event.
+    // Silence padding reaches the DAC and is an audible playback xrun.
     uint64_t playbackXRunCount() const {
-        return playbackOverruns_.load(std::memory_order_acquire) +
-               playbackUnderruns_.load(std::memory_order_acquire);
+        return playbackUnderruns_.load(std::memory_order_acquire);
+    }
+    // Bounded-watermark short writes are retried by the producer without
+    // dropping PCM. Track them as scheduling pressure, not audible xruns.
+    uint64_t playbackBackpressureCount() const {
+        return playbackOverruns_.load(std::memory_order_acquire);
     }
 
     // Total PCM frames the iso pump has drained from the ring since
@@ -401,8 +404,11 @@ private:
     std::atomic<uint64_t> captureSequence_{0};
     std::atomic<int> captureInflight_{0};
     static constexpr size_t kImplicitFifoCapacity = 256;
+    static constexpr size_t kMaxTransferCount = 8;
     std::array<std::atomic<uint32_t>, kImplicitFifoCapacity> implicitFrames_{};
     std::atomic<size_t> implicitRead_{0};
+    bool lowLatencyProfile_ = false;
+    int transferCount_ = 4;
     int playbackPacketsPerTransfer_ = 1;
     int capturePacketsPerTransfer_ = 1;
     std::atomic<int> captureTransferFrames_{0};
@@ -422,7 +428,7 @@ private:
     std::vector<std::vector<uint8_t>> transferBuffers_;
     std::vector<libusb_transfer*> feedbackTransfers_;
     std::vector<std::vector<uint8_t>> feedbackBuffers_;
-    std::array<libusb_transfer*, 4> pendingImplicitTransfers_{};
+    std::array<libusb_transfer*, kMaxTransferCount> pendingImplicitTransfers_{};
     size_t pendingImplicitCount_ = 0;
     std::atomic<int> inflight_{0};     // active transfers (data + fb)
     // Cumulative frame counters used for honest position reporting
