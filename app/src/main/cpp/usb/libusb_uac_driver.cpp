@@ -1117,6 +1117,7 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
         captureTail_.store(0, std::memory_order_relaxed);
         captureSequence_.store(0, std::memory_order_relaxed);
         captureOverruns_.store(0, std::memory_order_relaxed);
+        metadataFifoOverruns_.store(0, std::memory_order_relaxed);
         captureUnderruns_.store(0, std::memory_order_relaxed);
         streaming_.store(false, std::memory_order_release);
     }
@@ -1424,6 +1425,7 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                     implicitRead_.store(0, std::memory_order_relaxed);
                     implicitWrite_.store(0, std::memory_order_relaxed);
                     implicitFallbackPackets_.store(0, std::memory_order_relaxed);
+                    metadataFifoOverruns_.store(0, std::memory_order_relaxed);
                     captureTransferErrors_.store(0, std::memory_order_relaxed);
                     playbackTransferErrors_.store(0, std::memory_order_relaxed);
                     lifecycleFailures_.store(0, std::memory_order_relaxed);
@@ -1642,7 +1644,7 @@ void LibusbUacDriver::onCapture(libusb_transfer* xfr) {
                 if (implicitRead_.compare_exchange_weak(
                         read, write, std::memory_order_acq_rel,
                         std::memory_order_acquire)) {
-                    captureOverruns_.fetch_add(1, std::memory_order_relaxed);
+                    metadataFifoOverruns_.fetch_add(1, std::memory_order_relaxed);
                     break;
                 }
             }
@@ -1851,7 +1853,7 @@ void LibusbUacDriver::stop() {
     captureHead_.store(0, std::memory_order_relaxed);
     captureTail_.store(0, std::memory_order_relaxed);
     captureSequence_.store(0, std::memory_order_relaxed);
-    captureOverruns_.store(0, std::memory_order_relaxed);
+    metadataFifoOverruns_.store(0, std::memory_order_relaxed);
     captureUnderruns_.store(0, std::memory_order_relaxed);
     LOGI("stopped streaming (full teardown)");
 }
@@ -1995,9 +1997,10 @@ bool LibusbUacDriver::startIsoPump(bool submit) {
     const int maxPrime = std::max(0, physicalFrames -
                                       graphQuantum_.load(std::memory_order_acquire));
     startupPrimeFrames_.store(
-        std::min(maxPrime, effectivePlaybackPrimeFrames(
-            playbackTargetFrames_.load(std::memory_order_acquire),
-            exactInitialPacketFrames_)), std::memory_order_release);
+        startupPlaybackPrimeFrames(maxPrime, exactInitialPacketFrames_,
+        playbackTargetFrames_.load(std::memory_order_acquire),
+        graphQuantum_.load(std::memory_order_acquire)),
+        std::memory_order_release);
 
     // Optional feedback EP. UAC2 §5.2.2.4.1: feedback IN, 4 bytes
     // (16.16 fixed) on high-speed, 3 bytes (10.14 fixed) on full-speed.
@@ -2454,8 +2457,7 @@ void LibusbUacDriver::setGraphQuantum(int frames, int periodMultiplier) {
         effectivePlaybackTargetFrames(config.targetFrames,
                                       queuedTransferFrames),
         maxTarget);
-    const int prime = std::min(
-        maxTarget, effectivePlaybackPrimeFrames(target, exactInitialPacketFrames_));
+    const int prime = startupPlaybackPrimeFrames(maxTarget, exactInitialPacketFrames_, target, config.graphQuantum);
     graphQuantum_.store(config.graphQuantum, std::memory_order_release);
     playbackTargetFrames_.store(target, std::memory_order_release);
     startupPrimeFrames_.store(prime, std::memory_order_release);

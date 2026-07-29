@@ -103,6 +103,17 @@ struct PluginInfo {
     std::string x11UiUri;
 };
 
+/** Immutable timing/transport state shared by every plugin in one audio block. */
+struct AudioProcessContext {
+    uint64_t samplePosition = 0;
+    uint64_t transportFrame = 0;
+    uint64_t loopEndFrame = 0;
+    double sampleRate = 0.0;
+    double beatsPerMinute = 120.0;
+    bool playing = false;
+    bool looping = false;
+};
+
 /**
  * Abstract interface for audio plugins.
  * All plugin formats (LV2, CLAP, VST3) must implement this interface.
@@ -128,8 +139,10 @@ public:
      * @param inputs Array of input audio buffers (one per input port)
      * @param outputs Array of output audio buffers (one per output port)
      * @param numFrames Number of audio frames to process
+     * @param context Immutable block timing and transport state
      */
-    virtual void process(const float* const* inputs, float* const* outputs, uint32_t numFrames) = 0;
+    virtual void process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                         const AudioProcessContext& context) = 0;
 
     /**
      * Get plugin metadata.

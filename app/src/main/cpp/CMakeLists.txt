@@ -22,13 +22,6 @@ project("guitarrackcraft")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Oboe library (3rd_party submodule only; 4 levels up from app/src/main/cpp to project root)
-set(OBOE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/oboe")
-if(EXISTS "${OBOE_ROOT}/CMakeLists.txt")
-    add_subdirectory(${OBOE_ROOT} oboe_build)
-else()
-    message(FATAL_ERROR "Oboe not found. Run: git submodule update --init --recursive 3rd_party/oboe")
-endif()
 
 # LV2 Libraries Configuration
 # Set LV2_LIBS_DIR to the directory containing compiled LV2 libraries
@@ -100,7 +93,6 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/engine
     ${CMAKE_CURRENT_SOURCE_DIR}/jni
     ${CMAKE_CURRENT_SOURCE_DIR}/x11
-    ${OBOE_ROOT}/include
 )
 # Direct USB Audio Class backend. `libusb` is pinned as a project submodule;
 # use the Android usbfs implementation with the app-granted device FD.
@@ -230,7 +222,6 @@ add_library(guitarrackcraft SHARED
 target_link_libraries(guitarrackcraft
     plugin_abstraction
     audio_engine
-    oboe
     lv2_backend
     x11_native_display
     xshm_stub

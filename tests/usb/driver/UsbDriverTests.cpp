@@ -228,43 +228,43 @@ TEST(UsbDriverRing, WriteAndDrainPreserveWholeFramesAcrossWrap) {
 TEST(UsbDriverRing, WatermarkRejectsPartialFrameAndCoalescesOverrun) {
     monotrypt::usb::LibusbUacDriver driver;
     monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
-    driver.setGraphQuantum(16, 2);  // explicit legacy 2x watermark admits 48 of 49
-    std::vector<uint8_t> input(49 * 4, 0xA5);
+    driver.setGraphQuantum(16, 2);  // startup high watermark admits 64 of 65
+    std::vector<uint8_t> input(65 * 4, 0xA5);
 
-    EXPECT_EQ(driver.writePcm(input.data(), 49), 48);
-    EXPECT_EQ(driver.bufferedFrames(), 48);
+    EXPECT_EQ(driver.writePcm(input.data(), 65), 64);
+    EXPECT_EQ(driver.bufferedFrames(), 64);
     EXPECT_EQ(driver.writableFrames(), 0);
     EXPECT_EQ(driver.playbackXRunCount(), 1u);
     EXPECT_EQ(driver.writePcm(input.data(), 1), 0);
     EXPECT_EQ(driver.playbackXRunCount(), 1u);
 }
-
-TEST(UsbDriverRing, DefaultWatermarkAdmits49FramesWithin64FrameLimit) {
+TEST(UsbDriverRing, DefaultWatermarkUsesHighWatermarkStartupLimit) {
     monotrypt::usb::LibusbUacDriver driver;
     monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
-    driver.setGraphQuantum(16);  // default 3x target: 48 + 16 = 64
+    driver.setGraphQuantum(16);  // startup prime 64 + graph quantum = 80
 
     constexpr int frameStride = 4;
-    std::vector<uint8_t> input(64 * frameStride, 0xA5);
+    std::vector<uint8_t> input(80 * frameStride, 0xA5);
 
     EXPECT_EQ(driver.writePcm(input.data(), 49), 49);
     EXPECT_EQ(driver.bufferedFrames(), 49);
-    EXPECT_EQ(driver.writableFrames(), 15);
+    EXPECT_EQ(driver.writableFrames(), 31);
     EXPECT_EQ(driver.playbackXRunCount(), 0u);
 
-    EXPECT_EQ(driver.writePcm(input.data() + 49 * frameStride, 15), 15);
-    EXPECT_EQ(driver.bufferedFrames(), 64);
+    EXPECT_EQ(driver.writePcm(input.data() + 49 * frameStride, 31), 31);
+    EXPECT_EQ(driver.bufferedFrames(), 80);
     EXPECT_EQ(driver.writableFrames(), 0);
     EXPECT_EQ(driver.playbackXRunCount(), 0u);
 }
 
+
 TEST(UsbDriverRing, PartialAdmissionReportsWholeFramesAndCallerCanSubmitTail) {
     monotrypt::usb::LibusbUacDriver driver;
     monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
-    driver.setGraphQuantum(16, 2);  // explicit legacy 2x watermark admits 48 of 49
+    driver.setGraphQuantum(16, 2);  // startup high watermark admits 64 of 65
 
     constexpr int frameStride = 4;
-    constexpr int requestedFrames = 49;
+    constexpr int requestedFrames = 65;
     std::vector<uint8_t> input(requestedFrames * frameStride);
     for (int frame = 0; frame < requestedFrames; ++frame) {
         for (int byte = 0; byte < frameStride; ++byte) {
@@ -274,7 +274,7 @@ TEST(UsbDriverRing, PartialAdmissionReportsWholeFramesAndCallerCanSubmitTail) {
     }
 
     const int submitted = driver.writePcm(input.data(), requestedFrames);
-    ASSERT_EQ(submitted, 48);
+    ASSERT_EQ(submitted, 64);
     EXPECT_EQ(driver.bufferedFrames(), submitted);
     EXPECT_EQ(driver.writableFrames(), 0);
 
@@ -434,7 +434,8 @@ TEST(UsbDriverCapture, ImplicitMetadataFifoResynchronizesAfterSaturation) {
     const auto stats = driver.implicitFeedbackStats();
     EXPECT_EQ(stats.fifoDepth, 1u);
     EXPECT_EQ(stats.fallbackPackets, 0u);
-    EXPECT_EQ(driver.captureStats().overruns, 1u);
+    EXPECT_EQ(stats.metadataFifoOverruns, 1u);
+    EXPECT_EQ(driver.captureStats().overruns, 0u);
     EXPECT_EQ(driver.captureAvailableFrames(), 64);
 
     std::vector<uint8_t> output(257 * 4, 0);
@@ -655,8 +656,10 @@ TEST(UsbDriverLifecycle, StopWakesBlockedWritableWait) {
     monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
     driver.setGraphQuantum(16, 1);
 
-    std::vector<uint8_t> full(32 * 4, 0x55);
-    ASSERT_EQ(driver.writePcm(full.data(), 32), 32);
+    // Startup prime is target + graph quantum (32), and the write limit adds
+    // one graph quantum. Fill the resulting 48-frame limit before waiting.
+    std::vector<uint8_t> full(48 * 4, 0x55);
+    ASSERT_EQ(driver.writePcm(full.data(), 48), 48);
     monotrypt::usb::UsbDriverTestAccess::streaming(driver, true);
 
     std::promise<void> entered;

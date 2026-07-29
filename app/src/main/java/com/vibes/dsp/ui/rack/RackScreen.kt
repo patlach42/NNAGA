@@ -268,7 +268,7 @@ fun RackScreen(
     val tracks by viewModel.tracks.collectAsState()
     val selectedPathId by viewModel.selectedPathId.collectAsState()
     val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
-    val wavTransport by viewModel.wavTransport.collectAsState()
+    val transport by viewModel.transport.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val presetMessage by viewModel.presetMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
@@ -348,12 +348,13 @@ fun RackScreen(
             topBar = {
             // Keep high-frequency meter/status invalidations inside the top bar
             // restart scope instead of recomposing the complete rack screen.
-            val inputLevel by viewModel.inputLevel.collectAsState()
-            val outputLevel by viewModel.outputLevel.collectAsState()
+            val meterState by viewModel.meterState.collectAsState()
+            val inputLevel = meterState.inputLevel
+            val outputLevel = meterState.outputLevel
+            val inputClipping = meterState.inputClipping
+            val outputClipping = meterState.outputClipping
             val cpuLoad by viewModel.cpuLoad.collectAsState()
             val xRunCount by viewModel.xRunCount.collectAsState()
-            val inputClipping by viewModel.inputClipping.collectAsState()
-            val outputClipping by viewModel.outputClipping.collectAsState()
             val directUsbState by viewModel.directUsbState.collectAsState()
             val directUsbStats by viewModel.directUsbStats.collectAsState()
             val statusText = when (directUsbState) {
@@ -361,7 +362,7 @@ fun RackScreen(
                 DirectUsbSessionState.Stopping -> "Starting USB"
                 DirectUsbSessionState.Failed -> "USB failed"
                 DirectUsbSessionState.Running -> {
-                    var s = "Running · Host ~%.1f ms · CPU %.0f%%".format(
+                    var s = "Running · Estimated host queue ~%.1f ms · CPU %.0f%%".format(
                         if (directUsbStats.sampleRateHz > 0)
                             directUsbStats.knownHostLatencyFrames.toDouble() /
                                 directUsbStats.sampleRateHz * 1000.0 else 0.0,
@@ -666,23 +667,53 @@ fun RackScreen(
             }
         }
     }
-    if (wavTransport.loadedTrackCount > 0) {
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             IconButton(
-                onClick = { if (wavTransport.playing) viewModel.wavTransportPause() else viewModel.wavTransportPlay() },
+                onClick = { if (transport.playing) viewModel.transportPause() else viewModel.transportPlay() },
                 modifier = Modifier.size(44.dp)
             ) {
-                Icon(if (wavTransport.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/Pause")
+                Icon(if (transport.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/Pause")
             }
-            IconButton(onClick = { viewModel.wavTransportRestart() }, modifier = Modifier.size(44.dp)) {
+            IconButton(onClick = { viewModel.transportRestart() }, modifier = Modifier.size(44.dp)) {
                 Icon(Icons.Default.SkipPrevious, "Restart")
             }
-            FilterChip(selected = wavTransport.looping, onClick = { viewModel.wavTransportToggleLoop() }, label = { Text("Loop") }, modifier = Modifier.heightIn(min = 44.dp))
-            Text("${formatWavTime(wavTransport.positionSec)} / ${formatWavTime(wavTransport.durationSec)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FilterChip(
+                selected = transport.looping,
+                onClick = { viewModel.transportToggleLoop() },
+                label = { Text("Loop") },
+                modifier = Modifier.heightIn(min = 44.dp)
+            )
+            Text(
+                "${formatWavTime(transport.positionSec)} / ${formatWavTime(transport.durationSec)}",
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            TextButton(
+                onClick = { viewModel.setTransportBpm(transport.beatsPerMinute - 1.0) },
+                modifier = Modifier.size(44.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) { Text("−") }
+            Text("${transport.beatsPerMinute.toInt()} BPM", modifier = Modifier.widthIn(min = 70.dp))
+            TextButton(
+                onClick = { viewModel.setTransportBpm(transport.beatsPerMinute + 1.0) },
+                modifier = Modifier.size(44.dp),
+                contentPadding = PaddingValues(0.dp)
+            ) { Text("+") }
         }
     }
         // Drag-reorder state — use scrollable Column so all plugin cards stay in composition (no re-render when scrolling)

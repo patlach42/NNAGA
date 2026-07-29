@@ -25,6 +25,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <math.h>
 #include <string.h>
 #include <setjmp.h>
 
@@ -235,6 +236,37 @@ static int g_pluginCount = 0;
  * whose params we publish to Android over the shared-memory ring.
  * Subsequent commits will extend the param ring to route per-plugin. */
 static volatile VstpocShared* g_shm = NULL;
+
+typedef struct {
+    uint64_t sample_position, transport_frame, loop_end_frame;
+    double sample_rate, tempo;
+    uint32_t flags, block_frames;
+    int valid;
+} HostTransport;
+static HostTransport g_transport = {0, 0, 0.0, 120.0, 0, 0, 0};
+static double g_configured_rate = 0.0;
+static int g_configured_block = 0;
+static int g_transport_pending = 0;
+
+static int read_transport(const VstpocShared* shm) {
+    if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
+        shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
+        shm->shared_layout_size != sizeof(VstpocShared)) { g_transport.valid = 0; return 0; }
+    uint64_t tail = __atomic_load_n(&shm->transport_queue_tail, __ATOMIC_RELAXED);
+    uint64_t head = __atomic_load_n(&shm->transport_queue_head, __ATOMIC_ACQUIRE);
+    if (tail == head) return 0;
+    VstpocTransportBlock b = shm->transport_queue[tail & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
+    __atomic_store_n((uint64_t*)&shm->transport_queue_tail, tail + 1u, __ATOMIC_RELEASE);
+    g_transport.sample_position = b.sample_position;
+    g_transport.transport_frame = b.transport_frame;
+    g_transport.loop_end_frame = b.loop_end_frame;
+    g_transport.sample_rate = b.sample_rate;
+    g_transport.tempo = b.beats_per_minute;
+    g_transport.flags = b.flags;
+    g_transport.block_frames = b.block_frames;
+    g_transport.valid = b.block_frames != 0 && b.block_frames <= VSTPOC_MAX_BLOCK_FRAMES;
+    return g_transport.valid;
+}
 static AEffect* g_eff = NULL;
 
 /* Set to 1 by the editor thread once effEditOpen has returned. The audio
@@ -553,7 +585,23 @@ static DWORD WINAPI per_plugin_editor_thread(LPVOID arg) {
         DestroyWindow(frame_hwnd);
     }
     return 0;
+
 }
+
+typedef struct {
+    double samplePos, sampleRate, nanoSeconds, ppqPos, tempo;
+    double barStartPos, cycleStartPos, cycleEndPos;
+    int32_t timeSigNumerator, timeSigDenominator;
+    int32_t smpteOffset, smpteFrameRate, samplesToNextClock;
+    int32_t flags;
+    char reserved[8];
+} VstTimeInfo;
+#define kVstTransportPlaying (1 << 1)
+#define kVstPpqPosValid      (1 << 9)
+#define kVstTempoValid       (1 << 10)
+#define kVstTimeSigValid     (1 << 13)
+#define kVstTransportCycleActive (1 << 2)
+#define kVstCyclePosValid     (1 << 12)
 
 /* Minimal host callback. Returns 0 for everything except a few opcodes the
  * plugin might check at construction time. */
@@ -573,9 +621,11 @@ static VST_CALL intptr_t host_callback(AEffect* eff, int32_t opcode,
         case audioMasterCurrentId:     return 0;       /* (2) shell plugins */
         case audioMasterIdle:          return 0;       /* (3) */
         case audioMasterWantMidi:      return 0;       /* (6) deprecated */
-        case audioMasterGetTime:       return 0;       /* (7) no time info */
-        case audioMasterGetSampleRate: return 48000;   /* (16) */
-        case audioMasterGetBlockSize:  return 512;     /* (17) */
+        case audioMasterGetSampleRate:
+            return g_transport.valid && g_transport.sample_rate > 0.0
+                ? (intptr_t)g_transport.sample_rate : 0;   /* (16) */
+        case audioMasterGetBlockSize:
+            return g_transport.block_frames ? (intptr_t)g_transport.block_frames : 0;
         case audioMasterGetVendorString: {             /* (32) */
             if (ptr) strncpy((char*)ptr, "vstpoc", 64);
             return 1;
@@ -584,8 +634,30 @@ static VST_CALL intptr_t host_callback(AEffect* eff, int32_t opcode,
             if (ptr) strncpy((char*)ptr, "vst_host", 64);
             return 1;
         }
-        default: return 0;
+        case audioMasterGetTime: {
+            static VstTimeInfo ti;
+            memset(&ti, 0, sizeof(ti));
+            if (!g_transport.valid) return 0;
+            ti.samplePos = (double)g_transport.transport_frame;
+            ti.sampleRate = g_transport.sample_rate;
+            ti.tempo = g_transport.tempo;
+            ti.ppqPos = ti.samplePos * ti.tempo / (ti.sampleRate * 60.0);
+            ti.timeSigNumerator = 4;
+            ti.timeSigDenominator = 4;
+            ti.flags = kVstPpqPosValid | kVstTempoValid | kVstTimeSigValid;
+            if (g_transport.flags & 1u) ti.flags |= kVstTransportPlaying;
+            if ((g_transport.flags & 2u) && g_transport.loop_end_frame > 0 &&
+                isfinite(ti.sampleRate) && ti.sampleRate > 0.0) {
+                ti.cycleStartPos = 0.0;
+                ti.cycleEndPos = (double)g_transport.loop_end_frame * ti.tempo /
+                    (ti.sampleRate * 60.0);
+                ti.flags |= kVstTransportCycleActive | kVstCyclePosValid;
+            }
+            if (ptr) *(VstTimeInfo**)ptr = &ti;
+            return (intptr_t)&ti;
+        }
     }
+    return 0;
 }
 
 /* Map the shared-memory file. The Android side has already created and
@@ -613,6 +685,16 @@ static VstpocShared* map_shared(const char* path) {
         LOG("MapViewOfFile failed: %lu\n", (unsigned long)GetLastError());
         CloseHandle(mh);
         CloseHandle(fh);
+        return NULL;
+    }
+    if (s->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
+        s->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
+        s->shared_layout_size < sizeof(VstpocShared)) {
+        LOG("incompatible shared layout: magic=%llx version=%u size=%u expected=%u\n",
+            (unsigned long long)s->shared_layout_magic,
+            (unsigned)s->shared_layout_version, (unsigned)s->shared_layout_size,
+            (unsigned)sizeof(VstpocShared));
+        UnmapViewOfFile(s);
         return NULL;
     }
     /* fh + mh leak intentionally — the mapping outlives this scope and the
@@ -1046,12 +1128,40 @@ static void handle_state_request(VstpocShared* shm, AEffect* eff) {
 
 /* Load one VST2 plugin DLL into g_plugins[slot]. Extracted from main()'s
  * load loop so VSTPOC_LOAD_ON_EDITOR_THREAD can run it on the editor thread
- * (JUCE MessageManager binding — see the option-2 comment at the globals).
- * Returns 1 on success. Crash recovery relies on the single global
+ * (JUCE MessageManager binding — see the option-2 comment at the globals). */
+static int configure_vst2_for_rate(double rate, int block_size) {
+    if (!(rate > 0.0) || !isfinite(rate) ||
+        block_size < 1 || block_size > (int)VSTPOC_MAX_BLOCK_FRAMES) return 0;
+    if (g_configured_rate == rate && g_configured_block == block_size) return 1;
+    if (g_configured_rate > 0.0) {
+        for (int i = 0; i < g_pluginCount; ++i) {
+            AEffect* e = g_plugins[i].eff;
+            if (!e) continue;
+            e->dispatcher(e, /*effStopProcess=*/72, 0, 0, NULL, 0.0f);
+            e->dispatcher(e, /*effMainsChanged=*/12, 0, 0, NULL, 0.0f);
+        }
+    }
+    for (int i = 0; i < g_pluginCount; ++i) {
+        AEffect* e = g_plugins[i].eff;
+        if (!e) continue;
+        e->dispatcher(e, /*effSetSampleRate=*/10, 0, 0, NULL, (float)rate);
+        e->dispatcher(e, /*effSetBlockSize=*/11, 0, block_size, NULL, 0.0f);
+    }
+    for (int i = 0; i < g_pluginCount; ++i) {
+        AEffect* e = g_plugins[i].eff;
+        if (!e) continue;
+        e->dispatcher(e, /*effMainsChanged=*/12, 0, 1, NULL, 0.0f);
+        e->dispatcher(e, /*effStartProcess=*/71, 0, 0, NULL, 0.0f);
+    }
+    g_configured_rate = rate;
+    g_configured_block = block_size;
+    LOG("configured VST2 sample rate %.3f Hz block=%d\n", rate, block_size);
+    return 1;
+}
+
+/* Returns 1 on success. Crash recovery relies on the single global
  * g_pluginmain_jmp, so callers must not run two loads concurrently. */
 static int load_one_plugin(int slot, const char* dll_path) {
-    const int kSampleRate = 48000;
-    const int kBlockSize  = 512;
 
     LOG("loading plugin[%d]: %s\n", slot, dll_path);
 
@@ -1118,11 +1228,8 @@ static int load_one_plugin(int slot, const char* dll_path) {
     LOG("  plugin[%d] loaded: numParams=%d numInputs=%d numOutputs=%d uniqueID=%08x\n",
         slot, eff->numParams, eff->numInputs, eff->numOutputs, (unsigned)eff->uniqueID);
 
-    /* Standard VST2 init dance. */
+    /* effOpen; sample rate/block size are configured on first valid block. */
     eff->dispatcher(eff, /*effOpen=*/0, 0, 0, NULL, 0.0f);
-    eff->dispatcher(eff, /*effSetSampleRate=*/10, 0, 0, NULL, (float)kSampleRate);
-    eff->dispatcher(eff, /*effSetBlockSize=*/11, 0, kBlockSize, NULL, 0.0f);
-
     g_plugins[slot].module = plugin;
     g_plugins[slot].eff    = eff;
     g_plugins[slot].path   = dll_path;
@@ -1214,8 +1321,7 @@ int main(int argc, char** argv) {
      * explicit so a stale reader sees the expected sentinel. */
     write_status(shm, 0, NULL);
 
-    /* Standard VST2 init params shared across all plugins. */
-    const int kBlockSize  = 512;
+    const int kMaxBlockSize = (int)VSTPOC_MAX_BLOCK_FRAMES;
 
     {
         const char* lt = getenv("VSTPOC_LOAD_ON_EDITOR_THREAD");
@@ -1287,13 +1393,6 @@ int main(int argc, char** argv) {
     LOG("flags=0x%x hasEditor=%d\n", (unsigned)eff->flags,
         (eff->flags & effFlagsHasEditor) ? 1 : 0);
 
-    /* effMainsChanged(1) + effStartProcess for ALL plugins in the chain. */
-    for (int i = 0; i < g_pluginCount; i++) {
-        AEffect* e = g_plugins[i].eff;
-        if (!e) continue;
-        e->dispatcher(e, /*effMainsChanged=*/12, 0, 1, NULL, 0.0f);
-        e->dispatcher(e, /*effStartProcess=*/71, 0, 0, NULL, 0.0f);
-    }
 
     /* publish_params calls eff->dispatcher (effGetParamName), which goes
      * into plugin code that may take the wine user32 global critical
@@ -1344,10 +1443,10 @@ int main(int argc, char** argv) {
      * on this flag; release them now that params/status are published. */
     InterlockedExchange(&g_editor_go, 1);
 
-    /* Audio buffers. Plugin gets de-interleaved float**; ring is interleaved
-     * stereo. Use kBlockSize-sized chunks. */
-    static float in_l [512], in_r [512];
-    static float out_l[512], out_r[512];
+    /* Audio buffers are preallocated to the ABI maximum; each queued block
+     * uses its exact transport.block_frames count. */
+    static float in_l[VSTPOC_MAX_BLOCK_FRAMES], in_r[VSTPOC_MAX_BLOCK_FRAMES];
+    static float out_l[VSTPOC_MAX_BLOCK_FRAMES], out_r[VSTPOC_MAX_BLOCK_FRAMES];
     float* inputs[2]  = { in_l,  in_r  };
     float* outputs[2] = { out_l, out_r };
 
@@ -1381,46 +1480,6 @@ int main(int argc, char** argv) {
             (int)g_editor_open_done, waited_ms);
     }
 
-    /* FEX JIT warm-up: call processReplacing a few times with silent input
-     * so FEX-Emu translates each plugin's hot DSP path BEFORE the audio
-     * thread starts feeding real samples. Without this, the first blocks
-     * after Play hit single-shot ARM64→x86_64 translation cost on the
-     * audio thread and starve the Oboe output ring.
-     *
-     * Defensive note: some VST2 plugins (WagnerSharp included) write back
-     * to their INPUT buffers despite the spec forbidding it. With a fixed
-     * warm-up input buffer, the plugin's own output residue then re-enters
-     * via the next iteration's input and the internal filters integrate
-     * the bleed until the plugin saturates at ~-8 dB. Re-zeroing the
-     * input every iteration AND keeping the count small mitigates this.
-     * 8 iters × 512 samples = ~85 ms of audio — still enough to exercise
-     * the steady-state DSP path for JIT translation. */
-    LOG("JIT warm-up: 8 silent processReplacing calls per plugin (%d plugins)\n",
-        g_pluginCount);
-    {
-        static float warm_in_l[512], warm_in_r[512];
-        static float warm_out_l[512], warm_out_r[512];
-        float* w_in[2]  = { warm_in_l,  warm_in_r  };
-        float* w_out[2] = { warm_out_l, warm_out_r };
-        for (int iter = 0; iter < 8; iter++) {
-            /* Defensive zero of input on every iter — see comment above. */
-            for (int i = 0; i < kBlockSize; i++) {
-                warm_in_l[i]  = 0.0f;
-                warm_in_r[i]  = 0.0f;
-            }
-            float* cur_in[2]  = { w_in[0],  w_in[1]  };
-            float* cur_out[2] = { w_out[0], w_out[1] };
-            for (int p = 0; p < g_pluginCount; p++) {
-                AEffect* pe = g_plugins[p].eff;
-                if (!pe) continue;
-                pe->processReplacing(pe, cur_in, cur_out, kBlockSize);
-                float* tmp;
-                tmp = cur_in[0]; cur_in[0] = cur_out[0]; cur_out[0] = tmp;
-                tmp = cur_in[1]; cur_in[1] = cur_out[1]; cur_out[1] = tmp;
-            }
-        }
-    }
-    LOG("JIT warm-up complete\n");
 
     LOG("entering process loop\n");
     while (!shm->stop_flag) {
@@ -1435,6 +1494,24 @@ int main(int argc, char** argv) {
             }
         }
         handle_state_request(shm, eff);
+        if (!g_transport_pending) {
+            g_transport_pending = read_transport(shm);
+            if (!g_transport_pending) { Sleep(1); continue; }
+        }
+        if (!g_transport.valid || !(g_transport.sample_rate > 0.0) ||
+            !isfinite(g_transport.sample_rate)) {
+            Sleep(1);
+            continue;
+        }
+        const int blockFrames = (int)g_transport.block_frames;
+        if (blockFrames < 1 || blockFrames > (int)VSTPOC_MAX_BLOCK_FRAMES) {
+            write_status(shm, 2, "invalid VST2 block size");
+            goto teardown;
+        }
+        if (!configure_vst2_for_rate(g_transport.sample_rate, blockFrames)) {
+            write_status(shm, 2, "invalid VST2 sample rate");
+            goto teardown;
+        }
         /* Param draining moved to the editor thread to avoid a user32-CS
          * deadlock: WagnerSharp's setParameter touches its GUI state and
          * acquires the wine user32 critical section, which the editor
@@ -1456,27 +1533,24 @@ int main(int argc, char** argv) {
                 inh   = __atomic_load_n(&shm->audio_in_head, __ATOMIC_ACQUIRE);
                 int_  = __atomic_load_n(&shm->audio_in_tail, __ATOMIC_RELAXED);
                 avail = inh - int_;
-                if (avail >= kBlockSize) break;
+                if (avail >= (uint64_t)blockFrames) break;
                 Sleep(1);
-                if (++waited_ms > 100) break;  /* mic stalled — emit silence */
+                if (++waited_ms > 100) waited_ms = 0; /* retain pending context; never process silence */
             }
-            if (avail >= kBlockSize) {
-                /* Cap latency: if backlog grew, drop oldest. */
-                if (avail > (uint64_t)kBlockSize * 4) {
-                    int_ = inh - (uint64_t)kBlockSize * 2;
-                }
-                for (int i = 0; i < kBlockSize; i++) {
+            if (avail >= (uint64_t)blockFrames) {
+                /* FIFO pairing: never skip input frames or transport records. */
+                for (int i = 0; i < blockFrames; i++) {
                     uint64_t idx = (int_ + (uint64_t)i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
                     in_l[i] = shm->audio_in[idx * 2 + 0];
                     in_r[i] = shm->audio_in[idx * 2 + 1];
                 }
                 __atomic_store_n(&shm->audio_in_tail,
-                                 int_ + (uint64_t)kBlockSize, __ATOMIC_RELEASE);
+                                 int_ + (uint64_t)blockFrames, __ATOMIC_RELEASE);
             } else {
-                for (int i = 0; i < kBlockSize; i++) { in_l[i] = 0; in_r[i] = 0; }
+                for (int i = 0; i < blockFrames; i++) { in_l[i] = 0; in_r[i] = 0; }
             }
         } else {
-            for (int i = 0; i < kBlockSize; i++) { in_l[i] = 0; in_r[i] = 0; }
+            for (int i = 0; i < blockFrames; i++) { in_l[i] = 0; in_r[i] = 0; }
         }
 
         /* Chained DSP: feed input through each plugin in sequence,
@@ -1498,7 +1572,7 @@ int main(int argc, char** argv) {
             for (int p = 0; p < g_pluginCount; p++) {
                 AEffect* pe = g_plugins[p].eff;
                 if (!pe) continue;
-                pe->processReplacing(pe, cur_in, cur_out, kBlockSize);
+                pe->processReplacing(pe, cur_in, cur_out, blockFrames);
                 /* Swap: this plugin's output becomes next plugin's input. */
                 float* tmp;
                 tmp = cur_in[0]; cur_in[0] = cur_out[0]; cur_out[0] = tmp;
@@ -1508,18 +1582,19 @@ int main(int argc, char** argv) {
              * swapped after the last processReplacing). If that's not
              * out_l/out_r already, copy. */
             if (cur_in[0] != out_l) {
-                for (int i = 0; i < kBlockSize; i++) {
+                for (int i = 0; i < blockFrames; i++) {
                     out_l[i] = cur_in[0][i];
                     out_r[i] = cur_in[1][i];
                 }
             }
         }
+        g_transport_pending = 0;
 
         /* push output, dropping samples if ring full */
         uint64_t ah = __atomic_load_n(&shm->audio_head, __ATOMIC_RELAXED);
         uint64_t at = __atomic_load_n(&shm->audio_tail, __ATOMIC_ACQUIRE);
         uint64_t space = VSTPOC_AUDIO_RING_FRAMES - (ah - at);
-        uint64_t push = space < kBlockSize ? space : kBlockSize;
+        uint64_t push = space < (uint64_t)blockFrames ? space : (uint64_t)blockFrames;
         for (uint64_t i = 0; i < push; i++) {
             uint64_t idx = (ah + i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
             shm->audio[idx * 2 + 0] = out_l[i];
@@ -1529,7 +1604,7 @@ int main(int argc, char** argv) {
         __atomic_add_fetch(&shm->guest_frames_produced, push, __ATOMIC_RELAXED);
 
         /* throttle: don't melt the CPU if the host isn't consuming */
-        if (space < kBlockSize) Sleep(1);
+        if (space < (uint64_t)blockFrames) Sleep(1);
     }
 
 teardown:

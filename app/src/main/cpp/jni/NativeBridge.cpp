@@ -77,10 +77,21 @@ struct NativeContext {
 
 static NativeContext* g_ctx = nullptr;
 
+// NativeContext is process-local and must be published exactly once.  The
+// context owns the live audio graph, so replacing it during Activity
+// recreation would tear down the running engine.
+static std::once_flag g_ctxOnce;
+
 static NativeContext* ensureCtx() {
-    if (!g_ctx) g_ctx = new NativeContext();
+    std::call_once(g_ctxOnce, [] {
+        g_ctx = new NativeContext();
+    });
     return g_ctx;
 }
+
+// Serialize initialization independently of the JNI caller threads.  This
+// also makes the initialized-engine fast path atomic with the first init.
+static std::mutex g_nativeInitMutex;
 
 // Cached JNI class/method references (initialized lazily)
 static struct {
@@ -280,6 +291,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetPluginLibDir(JNIEnv* env, jobjec
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
+
+    std::lock_guard<std::mutex> initLock(g_nativeInitMutex);
+    NativeContext* ctx = ensureCtx();
+    if (ctx->audioEngine && ctx->pluginRegistry && ctx->pluginUIManager) {
+        LOGI("Native engine already initialized; preserving live state");
+        return JNI_TRUE;
+    }
+
     LOGI("Initializing native engine");
 
     // Promote libc++_shared.so to RTLD_GLOBAL so that LV2 plugin .so files
@@ -297,7 +316,6 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
     // tracking assertions that have known bugs in the Xlib-XCB bridge.
 
     // Create plugin registry
-    ensureCtx();
     g_ctx->pluginRegistry = std::make_unique<PluginRegistry>();
 
     // Register LV2 factory (pass path from nativeSetLv2Path for extracted Guitarix/assets)
@@ -386,8 +404,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRefreshPluginRegistry(JNIEnv* env, 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeOpenDirectUsbOutput(
         JNIEnv* env, jobject thiz, jint fileDescriptor) {
-    if (!g_ctx || !g_ctx->directUsbOutput) return JNI_FALSE;
-    return g_ctx->directUsbOutput->open(static_cast<int>(fileDescriptor))
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    return g_ctx->audioEngine->openDirectUsbDevice(static_cast<int>(fileDescriptor))
         ? JNI_TRUE : JNI_FALSE;
 }
 JNIEXPORT jint JNICALL
@@ -439,8 +457,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbOutputFormats(
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStopDirectUsbOutput(
         JNIEnv* env, jobject thiz) {
-    if (g_ctx && g_ctx->directUsbOutput) {
-        g_ctx->directUsbOutput->stop();
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->stop();
     }
 }
 
@@ -454,7 +472,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 33;
+    constexpr jsize kStatCount = 37;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -482,7 +500,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 2;
+            values[18] = 3;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -502,6 +520,10 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
                 hostFrames + stats.playbackRingFrames + stats.queuedOutFrames);
             values[32] = static_cast<jlong>(
                 stats.playbackXruns + stats.captureOverruns + stats.captureUnderruns);
+            values[33] = static_cast<jlong>(stats.lastCycleNanoseconds);
+            values[34] = static_cast<jlong>(stats.peakCycleNanoseconds);
+            values[35] = static_cast<jlong>(stats.deadlineBudgetNanoseconds);
+            values[36] = static_cast<jlong>(stats.deadlineMisses);
         }
     }
     jlongArray out = env->NewLongArray(kStatCount);
@@ -520,7 +542,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbErrorDetail(
 
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStopEngine(JNIEnv* env, jobject thiz) {
-    LOGI("nativeStopEngine CALLED tid=%ld (Java requested stop; will call closeStreams from this thread)", getTid());
+    LOGI("nativeStopEngine CALLED tid=%ld (Java requested direct USB stop)", getTid());
     if (g_ctx && g_ctx->audioEngine) {
         g_ctx->audioEngine->stop();
     }
@@ -548,27 +570,6 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetBufferFrameCount(JNIEnv* env, jo
     return static_cast<jint>(g_ctx->audioEngine->getCallbackFrameCount());
 }
 
-JNIEXPORT jintArray JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeGetStreamInfo(JNIEnv* env, jobject thiz) {
-    // Returns [isAAudio, inputExclusive, outputExclusive, inputLowLatency, outputLowLatency, outputMMap, outputCallback, framesPerBurst]
-    jint arr[8] = {};
-    if (g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->isRunning()) {
-        auto info = g_ctx->audioEngine->getStreamInfo();
-        arr[0] = info.isAAudio ? 1 : 0;
-        arr[1] = info.inputExclusive ? 1 : 0;
-        arr[2] = info.outputExclusive ? 1 : 0;
-        arr[3] = info.inputLowLatency ? 1 : 0;
-        arr[4] = info.outputLowLatency ? 1 : 0;
-        arr[5] = info.outputMMap ? 1 : 0;
-        arr[6] = info.outputCallback ? 1 : 0;
-        arr[7] = info.framesPerBurst;
-    }
-    jintArray result = env->NewIntArray(8);
-    if (result) {
-        env->SetIntArrayRegion(result, 0, 8, arr);
-    }
-    return result;
-}
 
 JNIEXPORT jdouble JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetLatencyMs(JNIEnv* env, jobject thiz) {
@@ -864,19 +865,26 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeClearTrackWavs(JNIEnv*, jobject) {
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeSetWavTransportPlaying(JNIEnv*, jobject, jboolean playing) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTransportPlaying(JNIEnv*, jobject, jboolean playing) {
     return g_ctx && g_ctx->audioEngine &&
         g_ctx->audioEngine->getRackGraph().setTransportPlaying(playing == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeRestartWavTransport(JNIEnv*, jobject) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTransportBpm(JNIEnv*, jobject, jdouble bpm) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    g_ctx->audioEngine->getRackGraph().setBeatsPerMinute(bpm);
+    return JNI_TRUE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeRestartTransport(JNIEnv*, jobject) {
     return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->isRunning() &&
         g_ctx->audioEngine->getRackGraph().restartTransport() ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeSetWavTransportLooping(JNIEnv*, jobject, jboolean looping) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTransportLooping(JNIEnv*, jobject, jboolean looping) {
     if (g_ctx && g_ctx->audioEngine) g_ctx->audioEngine->getRackGraph().setTransportLooping(looping == JNI_TRUE);
 }
 
@@ -956,39 +964,54 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
 }
 
 JNIEXPORT jobject JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeGetWavTransportInfo(JNIEnv* env, jobject) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetTransportInfo(JNIEnv* env, jobject) {
     const TransportSnapshot state = g_ctx && g_ctx->audioEngine
         ? g_ctx->audioEngine->getRackGraph().getTransportSnapshot() : TransportSnapshot{};
-    jclass clazz = env->FindClass("com/vibes/dsp/engine/WavTransportInfo");
+    jclass clazz = env->FindClass("com/vibes/dsp/engine/TransportInfo");
     if (!clazz) return nullptr;
-    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZZDDI)V");
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZZDDIDJJ)V");
     return ctor ? env->NewObject(clazz, ctor, state.playing ? JNI_TRUE : JNI_FALSE,
                                  state.looping ? JNI_TRUE : JNI_FALSE, state.positionSec,
-                                 state.durationSec, static_cast<jint>(state.loadedTrackCount)) : nullptr;
+                                 state.durationSec, static_cast<jint>(state.loadedTrackCount),
+                                 state.beatsPerMinute, static_cast<jlong>(state.samplePosition),
+                                 static_cast<jlong>(state.transportFrame)) : nullptr;
 }
 
 JNIEXPORT void JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeBeginCreatePluginUI(JNIEnv* env, jobject thiz, jint displayNumber, jint pluginIndex) {
-    /* Set display state to Creating BEFORE the plugin UI creation starts.
-     * This ensures signalDetachSurfaceFromDisplay will defer if called during creation. */
+Java_com_vibes_dsp_engine_NativeEngine_nativeBeginCreatePluginUI(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jlong pluginInstanceId,
+    jlong uiInstanceId, jint displayNumber) {
+    (void)uiInstanceId;
+    auto chain = g_ctx && g_ctx->audioEngine
+        ? g_ctx->audioEngine->getRackGraph().getChain(pathId) : nullptr;
+    if (!chain || pluginIndex < 0 ||
+        static_cast<size_t>(pluginIndex) >= chain->getSize() ||
+        static_cast<jlong>(chain->getPluginInstanceId(pluginIndex)) != pluginInstanceId) return;
     {
         std::lock_guard<std::mutex> lock(displayStateMutex());
         displayStates()[displayNumber].phase = DisplayState::Phase::Creating;
         displayStates()[displayNumber].pluginIndex = pluginIndex;
         displayStates()[displayNumber].detachPending = false;
     }
-    /* Also set the global flag for LV2Plugin destructor safety check */
     setCreatingPluginUI(true);
-    LOGI("nativeBeginCreatePluginUI display=%d plugin=%d (signalDetach will defer)", displayNumber, pluginIndex);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeCreatePluginUI(JNIEnv* env, jobject thiz, jint pluginIndex, jint displayNumber, jlong parentWindowId) {
-    LOGI("nativeCreatePluginUI ENTER tid=%ld pluginIndex=%d displayNumber=%d parentWindowId=0x%lx", getTid(), pluginIndex, displayNumber, (unsigned long)parentWindowId);
-    
-    if (!g_ctx->audioEngine) {
-        LOGE("nativeCreatePluginUI: audio engine not initialized");
+Java_com_vibes_dsp_engine_NativeEngine_nativeCreatePluginUI(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jlong pluginInstanceId,
+    jlong uiInstanceId, jint displayNumber, jlong parentWindowId) {
+    (void)uiInstanceId;
+    LOGI("nativeCreatePluginUI ENTER tid=%ld path=%ld plugin=%d display=%d parent=0x%lx",
+         getTid(), static_cast<long>(pathId), pluginIndex, displayNumber,
+         (unsigned long)parentWindowId);
+    auto chain = g_ctx && g_ctx->audioEngine
+        ? g_ctx->audioEngine->getRackGraph().getChain(pathId) : nullptr;
+    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->pluginUIManager ||
+        !chain || pluginIndex < 0 ||
+        static_cast<size_t>(pluginIndex) >= chain->getSize() ||
+        static_cast<jlong>(chain->getPluginInstanceId(pluginIndex)) != pluginInstanceId) {
         setDisplayPhase(displayNumber, DisplayState::Phase::None);
+        setCreatingPluginUI(false);
         return JNI_FALSE;
     }
     
@@ -1031,12 +1054,20 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeCreatePluginUI(JNIEnv* env, jobject
 }
 
 JNIEXPORT void JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeDestroyPluginUI(JNIEnv* env, jobject thiz, jint pluginIndex) {
-    LOGI("nativeDestroyPluginUI CALLED tid=%ld pluginIndex=%d", getTid(), pluginIndex);
-    if (g_ctx->audioEngine) {
-        g_ctx->pluginUIManager->destroyPluginUI(pluginIndex);
-    }
-    LOGI("nativeDestroyPluginUI RETURNED tid=%ld", getTid());
+Java_com_vibes_dsp_engine_NativeEngine_nativeDestroyPluginUI(
+    JNIEnv*, jobject, jlong pathId, jlong pluginInstanceId, jlong uiInstanceId) {
+    (void)uiInstanceId;
+    auto chain = g_ctx && g_ctx->audioEngine
+        ? g_ctx->audioEngine->getRackGraph().getChain(pathId) : nullptr;
+    if (!chain) return;
+    const int pluginIndex = [&]() {
+        for (size_t i = 0; i < chain->getSize(); ++i)
+            if (static_cast<jlong>(chain->getPluginInstanceId(static_cast<int>(i))) == pluginInstanceId)
+                return static_cast<int>(i);
+        return -1;
+    }();
+    if (pluginIndex < 0) return;
+    g_ctx->pluginUIManager->destroyPluginUI(pluginIndex);
 }
 
 JNIEXPORT jboolean JNICALL
@@ -1255,9 +1286,13 @@ Java_com_vibes_dsp_engine_NativeEngine_nativePollFileRequest(JNIEnv* env, jobjec
 
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeDeliverFileToPluginUI(
-    JNIEnv* env, jobject thiz, jint pluginIndex, jstring propertyUri, jstring filePath)
+    JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jstring propertyUri, jstring filePath)
 {
     if (!g_ctx || !g_ctx->pluginUIManager) return;
+    auto chain = g_ctx->audioEngine
+        ? g_ctx->audioEngine->getRackGraph().getChain(pathId) : nullptr;
+    if (!chain || pluginIndex < 0 ||
+        static_cast<size_t>(pluginIndex) >= chain->getSize()) return;
 
     const char* propStr = env->GetStringUTFChars(propertyUri, nullptr);
     const char* pathStr = env->GetStringUTFChars(filePath, nullptr);

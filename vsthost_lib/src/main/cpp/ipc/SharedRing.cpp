@@ -30,6 +30,9 @@ SharedRing::SharedRing(const std::string& path) {
     }
     data_ = static_cast<VstpocShared*>(p);
     std::memset(data_, 0, sizeof(VstpocShared));
+    data_->shared_layout_magic = VSTPOC_SHARED_LAYOUT_MAGIC;
+    data_->shared_layout_version = VSTPOC_SHARED_LAYOUT_VERSION;
+    data_->shared_layout_size = static_cast<uint32_t>(sizeof(VstpocShared));
     LOGI("SharedRing: mapped %s (%zu bytes)", path.c_str(), sizeof(VstpocShared));
 }
 
@@ -52,27 +55,55 @@ int32_t SharedRing::pullAudio(float* outL, float* outR, int32_t maxFrames) {
         outL[i] = data_->audio[slot * VSTPOC_CHANNELS + 0];
         outR[i] = data_->audio[slot * VSTPOC_CHANNELS + 1];
     }
+
     __atomic_store_n(&data_->audio_tail, tail + take, __ATOMIC_RELEASE);
     return static_cast<int32_t>(take);
 }
 
-int32_t SharedRing::pushInput(const float* interleavedStereo, int32_t numFrames) {
-    if (!data_) return 0;
-
+bool SharedRing::inputWritable(uint32_t frames) const {
+    if (!data_) return false;
     const uint64_t head = __atomic_load_n(&data_->audio_in_head, __ATOMIC_RELAXED);
     const uint64_t tail = __atomic_load_n(&data_->audio_in_tail, __ATOMIC_ACQUIRE);
-    const uint64_t used = head - tail;
-    const uint64_t free_frames = (uint64_t)VSTPOC_AUDIO_RING_FRAMES - used;
-    const uint64_t want = (uint64_t)numFrames;
-    const uint64_t take = free_frames < want ? free_frames : want;
+    return head - tail + frames <= VSTPOC_AUDIO_RING_FRAMES;
+}
 
-    for (uint64_t i = 0; i < take; ++i) {
+bool SharedRing::publishTransport(uint64_t samplePosition, uint64_t transportFrame,
+                                   uint64_t loopEndFrame, double sampleRate,
+                                   double beatsPerMinute, bool playing, bool looping,
+                                   uint32_t blockFrames) {
+    if (!data_) return false;
+    uint64_t qh = __atomic_load_n(&data_->transport_queue_head, __ATOMIC_RELAXED);
+    uint64_t qt = __atomic_load_n(&data_->transport_queue_tail, __ATOMIC_ACQUIRE);
+    if (qh - qt >= VSTPOC_TRANSPORT_QUEUE_CAPACITY) {
+        __atomic_add_fetch(&data_->transport_queue_dropped, 1u, __ATOMIC_RELAXED);
+        return false;
+    }
+    VstpocTransportBlock& b = data_->transport_queue[qh & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
+    b.sample_position = samplePosition;
+    b.transport_frame = transportFrame;
+    b.loop_end_frame = loopEndFrame;
+    b.sample_rate = sampleRate;
+    b.beats_per_minute = beatsPerMinute;
+    b.flags = (playing ? 1u : 0u) | (looping ? 2u : 0u);
+    b.block_frames = blockFrames;
+    __atomic_store_n(&data_->transport_queue_head, qh + 1u, __ATOMIC_RELEASE);
+    __atomic_store_n(&data_->transport_seq, qh + 2u, __ATOMIC_RELEASE);
+    return true;
+}
+
+int32_t SharedRing::pushInput(const float* interleavedStereo, int32_t numFrames) {
+    if (!data_ || !interleavedStereo || numFrames < 0) return 0;
+    const uint64_t head = __atomic_load_n(&data_->audio_in_head, __ATOMIC_RELAXED);
+    const uint64_t tail = __atomic_load_n(&data_->audio_in_tail, __ATOMIC_ACQUIRE);
+    const uint64_t want = static_cast<uint64_t>(numFrames);
+    if (head - tail + want > VSTPOC_AUDIO_RING_FRAMES) return 0;
+    for (uint64_t i = 0; i < want; ++i) {
         const uint64_t slot = (head + i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
         data_->audio_in[slot * VSTPOC_CHANNELS + 0] = interleavedStereo[i * 2 + 0];
         data_->audio_in[slot * VSTPOC_CHANNELS + 1] = interleavedStereo[i * 2 + 1];
     }
-    __atomic_store_n(&data_->audio_in_head, head + take, __ATOMIC_RELEASE);
-    return static_cast<int32_t>(take);
+    __atomic_store_n(&data_->audio_in_head, head + want, __ATOMIC_RELEASE);
+    return numFrames;
 }
 
 void SharedRing::setMicActive(bool active) {

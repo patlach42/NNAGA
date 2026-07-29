@@ -36,6 +36,8 @@ extern "C" {
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <cmath>
+#include <algorithm>
 #include <atomic>
 #include <fstream>
 #include <string>
@@ -68,6 +70,35 @@ using namespace Steinberg::Vst;
 
 /* Shared-memory pointer for the VEH to use during crash logging. */
 static volatile VstpocShared* g_shm = NULL;
+
+struct HostTransport {
+    uint64 samplePosition = 0, transportFrame = 0, loopEndFrame = 0;
+    double sampleRate = 0.0, tempo = 120.0;
+    uint32 flags = 0;
+    uint32 blockFrames = 0;
+    bool valid = false;
+};
+static HostTransport g_transport;
+static bool g_transport_pending = false;
+static bool read_transport(const VstpocShared* shm) {
+    if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
+        shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
+        shm->shared_layout_size != sizeof(VstpocShared)) { g_transport.valid = false; return false; }
+    uint64 tail = __atomic_load_n(&shm->transport_queue_tail, __ATOMIC_RELAXED);
+    uint64 head = __atomic_load_n(&shm->transport_queue_head, __ATOMIC_ACQUIRE);
+    if (tail == head) return false;
+    VstpocTransportBlock b = shm->transport_queue[tail & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
+    __atomic_store_n((uint64*)&shm->transport_queue_tail, tail + 1u, __ATOMIC_RELEASE);
+    g_transport.samplePosition = b.sample_position;
+    g_transport.sampleRate = b.sample_rate;
+    g_transport.loopEndFrame = b.loop_end_frame;
+    g_transport.transportFrame = b.transport_frame;
+    g_transport.tempo = b.beats_per_minute;
+    g_transport.flags = b.flags;
+    g_transport.blockFrames = b.block_frames;
+    g_transport.valid = b.block_frames != 0 && b.block_frames <= VSTPOC_MAX_BLOCK_FRAMES;
+    return g_transport.valid;
+}
 
 /* libcef.dll guest base, captured by dump_guest_modules the moment libcef
  * appears in the PEB Ldr list. Used by the BREAKPOINT epoch probe to read
@@ -1032,6 +1063,16 @@ static VstpocShared* map_shared(const char* path)
                                                      sizeof(VstpocShared));
     CloseHandle(mh);
     CloseHandle(fh);
+    if (shm && (shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
+                shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
+                shm->shared_layout_size < sizeof(VstpocShared))) {
+        LOG("incompatible shared layout: magic=%llx version=%u size=%u expected=%u\n",
+            (unsigned long long)shm->shared_layout_magic,
+            (unsigned)shm->shared_layout_version,
+            (unsigned)shm->shared_layout_size, (unsigned)sizeof(VstpocShared));
+        UnmapViewOfFile(shm);
+        return NULL;
+    }
     return shm;
 }
 
@@ -1125,8 +1166,57 @@ static std::atomic<uint32_t> g_paramHead{0};  /* producer: performEdit (UI threa
 static std::atomic<uint32_t> g_paramTail{0};  /* consumer: process_block (audio thread) */
 static ParamID g_sharedParamIds[VSTPOC_MAX_PARAMS] = {};
 static int32_t g_sharedParamCount = 0;
+static ParameterChanges g_paramChanges;
+static std::vector<ParamID> g_prewarmedParamIds;
+static std::vector<ParamValue> g_pendingParamValues;
+static std::vector<uint8_t> g_pendingParamFlags;
+static std::vector<size_t> g_touchedParamIndices;
 static std::atomic<int> g_stateBlocksProcess{0};
 static std::atomic<int> g_processInFlight{0};
+static void prewarm_parameter_changes(IEditController* controller) {
+    g_prewarmedParamIds.clear();
+    g_pendingParamValues.clear();
+    g_pendingParamFlags.clear();
+    g_touchedParamIndices.clear();
+    if (!controller) {
+        g_paramChanges.setMaxParameters(0);
+        return;
+    }
+    int32 count = controller->getParameterCount();
+    if (count < 0) count = 0;
+    g_prewarmedParamIds.reserve(static_cast<size_t>(count));
+    for (int32 i = 0; i < count; ++i) {
+        ParameterInfo info{};
+        if (controller->getParameterInfo(i, info) == kResultOk) {
+            g_prewarmedParamIds.push_back(info.id);
+        }
+    }
+    std::sort(g_prewarmedParamIds.begin(), g_prewarmedParamIds.end());
+    g_prewarmedParamIds.erase(
+        std::unique(g_prewarmedParamIds.begin(), g_prewarmedParamIds.end()),
+        g_prewarmedParamIds.end());
+    g_paramChanges.setMaxParameters(
+        static_cast<int32>(g_prewarmedParamIds.size()));
+    for (const ParamID id : g_prewarmedParamIds) {
+        int32 index = 0;
+        IParamValueQueue* queue = g_paramChanges.addParameterData(id, index);
+        if (!queue) continue;
+        int32 point = 0;
+        queue->addPoint(
+            0, controller->getParamNormalized(id), point);
+    }
+    g_paramChanges.clearQueue();
+    g_pendingParamValues.assign(g_prewarmedParamIds.size(), 0.0);
+    g_pendingParamFlags.assign(g_prewarmedParamIds.size(), 0);
+    g_touchedParamIndices.reserve(g_prewarmedParamIds.size());
+}
+static size_t prewarmed_param_index(ParamID id) {
+    const auto it = std::lower_bound(
+        g_prewarmedParamIds.begin(), g_prewarmedParamIds.end(), id);
+    return it != g_prewarmedParamIds.end() && *it == id
+        ? static_cast<size_t>(it - g_prewarmedParamIds.begin())
+        : g_prewarmedParamIds.size();
+}
 static inline void push_param_edit(ParamID id, ParamValue v) {
     uint32_t h = g_paramHead.load(std::memory_order_relaxed);
     uint32_t t = g_paramTail.load(std::memory_order_acquire);
@@ -1975,25 +2065,39 @@ static void process_block(IAudioProcessor* processor,
     inBus.silenceFlags      = 0;
     inBus.channelBuffers32  = inChans;
 
-    outBus.numChannels      = g_pluginOutChannels;
-    outBus.silenceFlags     = 0;
     outBus.channelBuffers32 = outChans;
 
     /* Drain the controller's queued parameter edits (performEdit) into this
      * block's input changes so the processor actually applies the user's gain /
      * channel / drive changes. Persistent so the SDK reuses its per-parameter
-     * queues (no per-block allocation after warmup). */
-    static ParameterChanges paramChanges;
-    paramChanges.clearQueue();
+     * per-parameter queue storage across blocks. */
+    g_paramChanges.clearQueue();
+    g_touchedParamIndices.clear();
     {
         uint32_t t = g_paramTail.load(std::memory_order_relaxed);
-        uint32_t h = g_paramHead.load(std::memory_order_acquire);
+        const uint32_t h = g_paramHead.load(std::memory_order_acquire);
         for (; t != h; ++t) {
-            const ParamEdit& e = g_paramRing[t & 2047u];
-            int32 qi = 0; IParamValueQueue* q = paramChanges.addParameterData(e.id, qi);
-            if (q) { int32 pi = 0; q->addPoint(0, e.value, pi); }
+            const ParamEdit& edit = g_paramRing[t & 2047u];
+            const size_t index = prewarmed_param_index(edit.id);
+            if (index == g_prewarmedParamIds.size()) continue;
+            if (!g_pendingParamFlags[index]) {
+                g_pendingParamFlags[index] = 1;
+                g_touchedParamIndices.push_back(index);
+            }
+            g_pendingParamValues[index] = edit.value;
         }
         g_paramTail.store(t, std::memory_order_release);
+    }
+    for (const size_t index : g_touchedParamIndices) {
+        int32 queueIndex = 0;
+        IParamValueQueue* queue = g_paramChanges.addParameterData(
+            g_prewarmedParamIds[index], queueIndex);
+        if (queue) {
+            int32 pointIndex = 0;
+            queue->addPoint(
+                0, g_pendingParamValues[index], pointIndex);
+        }
+        g_pendingParamFlags[index] = 0;
     }
     EventList noEvents;
 
@@ -2002,14 +2106,39 @@ static void process_block(IAudioProcessor* processor,
     data.symbolicSampleSize   = kSample32;
     data.numSamples           = nFrames;
     data.numInputs            = 1;
+    ProcessContext processContext{};
+    if (g_transport.valid) {
+        processContext.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid |
+            ProcessContext::kContTimeValid | ProcessContext::kProjectTimeMusicValid |
+            ProcessContext::kBarPositionValid;
+        if (g_transport.flags & 1u) processContext.state |= ProcessContext::kPlaying;
+        processContext.sampleRate = g_transport.sampleRate;
+        processContext.projectTimeSamples = (TSamples)g_transport.transportFrame;
+        processContext.continousTimeSamples = (TSamples)g_transport.samplePosition;
+        processContext.tempo = g_transport.tempo;
+        processContext.projectTimeMusic = (TQuarterNotes)g_transport.transportFrame *
+            g_transport.tempo / (g_transport.sampleRate * 60.0);
+        processContext.barPositionMusic = (TQuarterNotes)(
+            std::floor(processContext.projectTimeMusic / 4.0) * 4.0);
+        processContext.timeSigNumerator = 4;
+        if ((g_transport.flags & 2u) && g_transport.loopEndFrame > 0 &&
+            std::isfinite(g_transport.sampleRate) && g_transport.sampleRate > 0.0) {
+            processContext.state |= ProcessContext::kCycleValid | ProcessContext::kCycleActive;
+            processContext.cycleStartMusic = 0.0;
+            processContext.cycleEndMusic = (TQuarterNotes)g_transport.loopEndFrame *
+                g_transport.tempo / (g_transport.sampleRate * 60.0);
+        }
+        processContext.timeSigDenominator = 4;
+    }
+
     data.numOutputs           = 1;
     data.inputs               = &inBus;
     data.outputs              = &outBus;
-    data.inputParameterChanges  = &paramChanges;
+    data.inputParameterChanges  = &g_paramChanges;
     data.outputParameterChanges = nullptr;
     data.inputEvents          = &noEvents;
     data.outputEvents         = nullptr;
-    data.processContext       = nullptr;
+    data.processContext       = g_transport.valid ? &processContext : nullptr;
 
     if (!enter_process_call()) {
         for (int32 i = 0; i < nFrames; ++i) {
@@ -2029,6 +2158,45 @@ static void process_block(IAudioProcessor* processor,
     }
 }
 
+static double g_configured_rate = 0.0;
+static uint32 g_configured_block = 0;
+static bool configure_vst3_for_rate(IAudioProcessor* processor, IComponent* component,
+                                    double rate, int32 block_frames)
+{
+    if (!(rate > 0.0) || !std::isfinite(rate) ||
+        block_frames < 1 || block_frames > (int32)VSTPOC_MAX_BLOCK_FRAMES) return false;
+    if (g_configured_rate == rate && g_configured_block == (uint32)block_frames) return true;
+    if (g_configured_rate > 0.0) {
+        tresult r = processor->setProcessing(false);
+        if (r != kResultOk) {
+            LOG("setProcessing(false) failed during rate change: 0x%x\n", (unsigned)r);
+            return false;
+        }
+    }
+    ProcessSetup setup{};
+    setup.processMode = kRealtime;
+    setup.maxSamplesPerBlock = VSTPOC_MAX_BLOCK_FRAMES;
+    setup.sampleRate = rate;
+    tresult r = processor->setupProcessing(setup);
+    if (r != kResultOk) {
+        LOG("setupProcessing(%.3f) failed: 0x%x\n", rate, (unsigned)r);
+        return false;
+    }
+    if (g_configured_rate == 0.0 && component->setActive(true) != kResultOk) {
+        LOG("setActive(true) failed after setup %.3f\n", rate);
+        return false;
+    }
+    r = processor->setProcessing(true);
+    if (r != kResultOk) {
+        LOG("setProcessing(true) failed after setup %.3f: 0x%x\n", rate, (unsigned)r);
+        return false;
+    }
+    g_configured_rate = rate;
+    g_configured_block = (uint32)block_frames;
+    LOG("configured VST3 sample rate %.3f Hz block=%d\n", rate, block_frames);
+    return true;
+}
+
 /* vstpoc 2026-06-11: dedicated real-time audio-producer thread. Runs ONLY the
  * shm-ring I/O + IAudioProcessor::process() and NEVER pumps the Windows message
  * queue. This restores the VST3 threading contract (process thread ≠ UI thread):
@@ -2040,9 +2208,8 @@ static void process_block(IAudioProcessor* processor,
 static DWORD WINAPI audio_thread_proc(LPVOID arg)
 {
     IAudioProcessor* processor = (IAudioProcessor*)arg;
-    const int blockFrames = 512;
-    float in_l[blockFrames], in_r[blockFrames];
-    float out_l[blockFrames], out_r[blockFrames];
+    static float in_l[VSTPOC_MAX_BLOCK_FRAMES], in_r[VSTPOC_MAX_BLOCK_FRAMES];
+    static float out_l[VSTPOC_MAX_BLOCK_FRAMES], out_r[VSTPOC_MAX_BLOCK_FRAMES];
 
     /* Per-block wall-clock (QPC, no syscall) to confirm the deadline is met now
      * that the pump is off this thread. A SPIKE here is process() itself
@@ -2050,7 +2217,7 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
     LARGE_INTEGER qpc_freq; QueryPerformanceFrequency(&qpc_freq);
     const double qpc_us_scale = 1000000.0 / (double)qpc_freq.QuadPart;
     auto qpc_us = [&]() -> uint64_t { LARGE_INTEGER c; QueryPerformanceCounter(&c); return (uint64_t)((double)c.QuadPart * qpc_us_scale); };
-    const uint64_t kBudgetUs = (uint64_t)blockFrames * 1000000ull / 48000ull; /* 512@48k ≈ 10667us */
+    const uint64_t kBudgetUs = (uint64_t)VSTPOC_MAX_BLOCK_FRAMES * 1000000ull / 48000ull;
 
     uint64_t stats_blocks = 0, stats_wait_loops = 0, stats_out_full = 0;
     uint64_t stats_partial_pushes = 0, stats_dropped_frames = 0;
@@ -2059,19 +2226,35 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
 
     while (g_shm && !g_shm->stop_flag) {
         /* Pull a block from the input ring (mic). Producer = launcher. */
+        if (!g_transport_pending) {
+            g_transport_pending = read_transport((const VstpocShared*)g_shm);
+            if (!g_transport_pending) { Sleep(1); continue; }
+        }
+        if (!g_transport.valid || !(g_transport.sampleRate > 0.0) ||
+            !std::isfinite(g_transport.sampleRate)) {
+            Sleep(1);
+            continue;
+        }
+        const int blockFrames = (int)g_transport.blockFrames;
+        if (blockFrames < 1 || blockFrames > (int)VSTPOC_MAX_BLOCK_FRAMES) {
+            write_status((VstpocShared*)g_shm, 2, "invalid VST3 block size");
+            g_shm->stop_flag = 1;
+            break;
+        }
+        if (!configure_vst3_for_rate(processor, (IComponent*)g_component,
+                                     g_transport.sampleRate, blockFrames)) {
+            write_status((VstpocShared*)g_shm, 2, "VST3 sample-rate setup failed");
+            g_shm->stop_flag = 1;
+            break;
+        }
         uint64_t ih = __atomic_load_n(&g_shm->audio_in_head, __ATOMIC_ACQUIRE);
         uint64_t it = __atomic_load_n(&g_shm->audio_in_tail, __ATOMIC_RELAXED);
         uint64_t available = ih - it;
         if (available < (uint64_t)blockFrames) {
-            ++stats_wait_loops;
             Sleep(1);
             continue;
         }
-        /* Cap latency: if the launcher produced >4 blocks we haven't consumed,
-         * fast-forward to leave 2 blocks of headroom (see vst_host.c). */
-        if (available > (uint64_t)blockFrames * 4) {
-            it = ih - (uint64_t)blockFrames * 2;
-        }
+        /* FIFO pairing: never skip input frames or transport records. */
         for (int i = 0; i < blockFrames; i++) {
             uint64_t idx = (it + i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
             in_l[i] = g_shm->audio_in[idx * VSTPOC_CHANNELS + 0];
@@ -2086,6 +2269,7 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
             update_channel_layout(processor);
         uint64_t pw0 = qpc_us();
         process_block(processor, in_l, in_r, out_l, out_r, blockFrames);
+        g_transport_pending = false;
         uint64_t proc_us = qpc_us() - pw0;
         stats_process_us_total += proc_us;
         if (proc_us > stats_process_us_max) stats_process_us_max = proc_us;
@@ -2359,26 +2543,9 @@ int main(int argc, char** argv)
     }
     update_channel_layout(processor);
 
-    /* Audio setup. Use the same 48k/512 the launcher uses by default. */
-    ProcessSetup setup;
-    setup.processMode        = kRealtime;
-    setup.symbolicSampleSize = kSample32;
-    setup.maxSamplesPerBlock = 512;
-    setup.sampleRate         = 48000.0;
-    if (processor->setupProcessing(setup) != kResultOk) {
-        LOG("setupProcessing failed\n");
-    }
 
     activate_main_buses(component);
 
-    /* Set component active = preparation for real-time. */
-    if (component->setActive(true) != kResultOk) {
-        LOG("setActive(true) failed\n");
-    }
-    {
-        tresult procRes = processor->setProcessing(true);
-        LOG("setProcessing(true) returned 0x%x (kResultOk=0)\n", (unsigned)procRes);
-    }
 
     /* Spawn editor thread if we have a controller. */
     HANDLE editorThread = NULL;
@@ -2463,6 +2630,7 @@ int main(int argc, char** argv)
         LOG("no edit controller; running headless (audio only)\n");
     }
 
+    prewarm_parameter_changes(editController);
     /* Signal ready to launcher. */
     write_status((VstpocShared*)g_shm, 1, "ready");
     if (g_shm) {
@@ -2474,10 +2642,9 @@ int main(int argc, char** argv)
 
     /* Spawn the dedicated real-time audio-producer thread (ring I/O + process()
      * only — it NEVER pumps messages). The MAIN thread below becomes the message
-     * pump (JUCE MessageManager / editor support / COM), so a slow GUI callback
-     * can no longer stall audio. setupProcessing/setActive(true)/setProcessing(true)
-     * already ran above on this (main) thread per the VST3 lifecycle; we only call
-     * process() from the new thread, and join it before setProcessing(false). */
+     * pump (JUCE MessageManager / editor support / COM); setupProcessing,
+     * setActive(true), and setProcessing(true) now occur on the audio thread
+     * after the first valid transport block, while process() remains there. */
     HANDLE audioThread = CreateThread(NULL, 0, audio_thread_proc, processor, 0, NULL);
     if (audioThread) {
         /* Audio wins on core contention with the GUI/message work. */

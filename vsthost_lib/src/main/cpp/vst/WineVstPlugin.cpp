@@ -133,7 +133,9 @@ void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     if (active_.load()) return;
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize ? bufferSize : 1024;
-    interleaved_.assign(static_cast<size_t>(bufferSize_) * 2, 0.0f);
+    // The audio callback is RT-only: reserve the ABI maximum during activation
+    // so process() never grows or reallocates its interleave scratch buffer.
+    interleaved_.assign(static_cast<size_t>(VSTPOC_MAX_BLOCK_FRAMES) * 2, 0.0f);
 
     // Per-plugin shm + picker files. Naming matches vstpoc convention so
     // wine-side env vars + tmpfs lookups behave the same. The "_v" + uuid
@@ -303,7 +305,8 @@ void WineVstPlugin::deactivate() {
 
 void WineVstPlugin::process(const float* const* inputs,
                             float* const* outputs,
-                            uint32_t numFrames) {
+                            uint32_t numFrames,
+                            const guitarrackcraft::AudioProcessContext& context) {
     if (!ring_ || !inputs || !outputs) {
         // Not active or no ring: silence outputs. Don't pass-through —
         // that would mask the underlying failure to the audio chain.
@@ -314,11 +317,37 @@ void WineVstPlugin::process(const float* const* inputs,
         }
         return;
     }
-
-    // 1) push input into wine — interleave stereo into the reusable buffer.
-    if (interleaved_.size() < static_cast<size_t>(numFrames) * 2) {
-        interleaved_.assign(static_cast<size_t>(numFrames) * 2, 0.0f);
+    if (numFrames > VSTPOC_MAX_BLOCK_FRAMES) {
+        // Oversize callbacks cannot be represented by the guest ABI. Preserve
+        // continuity with an allocation-free dry pass-through and count drop.
+        for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch) {
+            if (!outputs[ch]) continue;
+            const float* src = (inputs && inputs[ch]) ? inputs[ch] :
+                               ((inputs && inputs[0]) ? inputs[0] : nullptr);
+            if (src) std::memcpy(outputs[ch], src, numFrames * sizeof(float));
+            else std::memset(outputs[ch], 0, numFrames * sizeof(float));
+        }
+        underruns_.fetch_add(1, std::memory_order_relaxed);
+        return;
     }
+
+    if (!ring_->inputWritable(numFrames)) {
+        for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch)
+            if (outputs[ch]) std::memset(outputs[ch], 0, numFrames * sizeof(float));
+        underruns_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (!ring_->publishTransport(context.samplePosition, context.transportFrame,
+                                 context.loopEndFrame, context.sampleRate,
+                                 context.beatsPerMinute, context.playing,
+                                 context.looping, numFrames)) {
+        for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch)
+            if (outputs[ch]) std::memset(outputs[ch], 0, numFrames * sizeof(float));
+
+        underruns_.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    // 1) push input into wine — interleave stereo into the reusable buffer.
     const float* inL = inputs[0];
     const float* inR = inputs[1] ? inputs[1] : inputs[0];   // mono → dup
     for (uint32_t i = 0; i < numFrames; ++i) {

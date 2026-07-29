@@ -297,9 +297,8 @@ fun PluginX11UiView(
                     attached = false
                     isReady = false
                     isSurfaceDestroyed = true  // Mark that surface destruction is in progress
-                    // NOTE: Do NOT stop audio engine here. The audio engine shares mutexes
-                    // with HWUI threads through the AAudio/Oboe driver. Stopping it destroys
-                    // those mutexes and crashes HWUI. The audio engine should keep running.
+                    // Keep the Direct USB audio session independent from X11 surface
+                    // teardown; hiding a plug-in editor must not interrupt live audio.
                     // CRITICAL: Stop render thread BEFORE releasing surface to prevent
                     // "pthread_mutex_lock on destroyed mutex" crash. The render thread
                     // must exit before we release the ANativeWindow to avoid eglSwapBuffers

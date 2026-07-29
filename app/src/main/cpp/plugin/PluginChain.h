@@ -46,7 +46,8 @@ public:
     bool removePlugin(int index);
     bool reorderPlugins(int fromIndex, int toIndex);
 
-    void process(const float* const* inputs, float* const* outputs, uint32_t numFrames);
+    void process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                 const AudioProcessContext& context);
 
     void setSampleRate(float sampleRate, uint32_t bufferSize = 0);
     void activate();
@@ -83,13 +84,9 @@ private:
     // Render-owned scratch buffers are sized only during lifecycle setup. Structural
     // control mutations never resize or otherwise touch these buffers.
     std::vector<std::vector<float>> intermediateBuffers_;
-    std::vector<std::vector<float>> continuityBuffers_;
     uint32_t renderBufferSize_ = 0;
-    uint32_t continuityFrames_ = 0;
-    bool continuityValid_ = false;
 
     void ensureBuffers(uint32_t numFrames, uint32_t numChannels);
-    void copyContinuity(float* const* outputs, uint32_t numFrames) const noexcept;
     void clearOutputs(float* const* outputs, uint32_t numFrames) const noexcept;
 
     std::deque<std::unique_ptr<IPlugin>> teardownQueue_;

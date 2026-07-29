@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <cstddef>
+#include <limits>
 
 namespace monotrypt::usb {
 
@@ -60,8 +61,34 @@ inline int effectivePlaybackTargetFrames(int configured,
                                          int queuedTransferFrames) noexcept {
     return std::max(0, std::max(configured, queuedTransferFrames));
 }
-inline int effectivePlaybackPrimeFrames(int configured, int exact) noexcept {
-    return std::max(0, std::max(configured, exact));
+constexpr uint64_t playbackRunwayNanoseconds(
+        uint64_t queuedFrames, uint32_t sampleRate) noexcept {
+    if (queuedFrames == 0 || sampleRate == 0) return 0;
+    constexpr uint64_t kNanosecondsPerSecond = 1'000'000'000ULL;
+    const uint64_t wholeSeconds = queuedFrames / sampleRate;
+    const uint64_t remainderFrames = queuedFrames % sampleRate;
+    if (wholeSeconds > std::numeric_limits<uint64_t>::max() /
+                           kNanosecondsPerSecond) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    uint64_t runway = wholeSeconds * kNanosecondsPerSecond;
+    const uint64_t remainderNs =
+        (remainderFrames * kNanosecondsPerSecond) / sampleRate;
+    if (runway > std::numeric_limits<uint64_t>::max() - remainderNs) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return runway + remainderNs;
+}
+constexpr int startupPlaybackPrimeFrames(
+        int maxTarget, int exactInitialPacketFrames,
+        int playbackTargetFrames, int graphQuantum) noexcept {
+    if (maxTarget <= 0) return 0;
+    const int target = std::max(0, playbackTargetFrames);
+    const int quantum = std::max(0, graphQuantum);
+    const int reserve = target > std::numeric_limits<int>::max() - quantum
+        ? std::numeric_limits<int>::max() : target + quantum;
+    return std::min(maxTarget,
+                    std::max(0, std::max(exactInitialPacketFrames, reserve)));
 }
 
 // Exact rational packet scheduler. Each next() returns floor((rate + remainder)/period)

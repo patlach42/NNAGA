@@ -40,10 +40,11 @@ object RackManager {
     fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = native.loadTrackWav(trackId, path, displayName)
     fun unloadTrackWav(trackId: RackPathId): Boolean = native.unloadTrackWav(trackId)
     fun clearTrackWavs(): Boolean = native.clearTrackWavs()
-    fun setWavTransportPlaying(playing: Boolean): Boolean = native.setWavTransportPlaying(playing)
-    fun restartWavTransport(): Boolean = native.restartWavTransport()
-    fun setWavTransportLooping(looping: Boolean) = native.setWavTransportLooping(looping)
-    fun getWavTransportInfo(): WavTransportInfo = native.getWavTransportInfo()
+    fun setTransportBpm(bpm: Double): Boolean = native.setTransportBpm(bpm)
+    fun setTransportPlaying(playing: Boolean): Boolean = native.setTransportPlaying(playing)
+    fun restartTransport(): Boolean = native.restartTransport()
+    fun setTransportLooping(looping: Boolean) = native.setTransportLooping(looping)
+    fun getTransportInfo(): TransportInfo = native.getTransportInfo()
 
     fun saveRackState(): String? = native.saveRackState()
     fun restorePluginState(pathId: RackPathId, pluginIndex: Int, portValues: FloatArray, portIndices: IntArray, propertyKeys: Array<String>, propertyTypes: Array<String>, propertyValues: Array<ByteArray>, propertyFlags: IntArray): Boolean =

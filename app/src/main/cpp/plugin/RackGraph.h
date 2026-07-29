@@ -39,6 +39,9 @@ struct TransportSnapshot {
     double positionSec;
     double durationSec;
     uint32_t loadedTrackCount;
+    double beatsPerMinute;
+    uint64_t samplePosition;
+    uint64_t transportFrame;
 };
 
 class RackGraph {
@@ -66,10 +69,10 @@ public:
     bool attachTrackWav(RackPathId trackId, std::shared_ptr<const WavClip> clip);
     bool unloadTrackWav(RackPathId trackId);
     bool clearTrackWavs();
-
     bool setTransportPlaying(bool playing);
     bool restartTransport();
     void setTransportLooping(bool looping);
+    void setBeatsPerMinute(double bpm);
     TransportSnapshot getTransportSnapshot() const;
 
     std::shared_ptr<PluginChain> getChain(RackPathId pathId) const;
@@ -78,6 +81,8 @@ public:
     void deactivate();
     void pauseAndResetTransport();
     void process(const float* const* liveInputs, float* const* outputs, uint32_t numFrames) noexcept;
+    /** Advance clocks/mailbox without rendering plugins (audio bypass path). */
+    void advanceTransport(uint32_t numFrames) noexcept;
     State saveState();
 
 private:
@@ -111,8 +116,10 @@ private:
         std::atomic<uint64_t> playSerial{0};
         std::atomic<uint64_t> loopSerial{0};
         std::atomic<uint64_t> resetSerial{0};
+        std::atomic<uint64_t> bpmSerial{0};
         std::atomic<bool> desiredPlaying{false};
         std::atomic<bool> desiredLooping{false};
+        std::atomic<double> desiredBpm{120.0};
     };
 
     std::unique_ptr<GraphSnapshot> activeOwner_;
@@ -137,17 +144,32 @@ private:
     std::atomic<bool> statusLooping_{false};
     std::atomic<double> statusPositionSec_{0.0};
     std::atomic<double> statusDurationSec_{0.0};
+    std::atomic<uint64_t> statusSamplePosition_{0};
+    std::atomic<uint64_t> statusTransportFrame_{0};
+    std::atomic<uint64_t> statusSequence_{0};
+    std::atomic<double> statusBpm_{120.0};
     std::atomic<uint32_t> statusLoadedTrackCount_{0};
+    std::atomic<uint64_t> staticStatusSequence_{0};
+    uint64_t audioSamplePosition_ = 0;
+    uint64_t audioTransportFrame_ = 0;
+    uint64_t appliedPlaySerial_ = 0;
+    uint64_t appliedLoopSerial_ = 0;
+    uint64_t appliedResetSerial_ = 0;
+    uint64_t appliedBpmSerial_ = 0;
+    bool audioPlaying_ = false;
+    bool audioLooping_ = false;
+    double audioBpm_ = 120.0;
 
     std::unique_ptr<GraphSnapshot> buildSnapshotLocked(
         const std::vector<std::shared_ptr<TrackNode>>& nodes,
         const std::vector<std::shared_ptr<const WavClip>>& clips) const;
     bool publishSnapshotLocked(std::unique_ptr<GraphSnapshot> next, bool resetTransport);
+    static double clipDuration(const WavClip& clip);
     void reclaimerLoop();
     void reclaimRetired();
-    void writeMailboxLocked(bool changePlay, bool playing, bool changeLoop, bool looping, bool reset);
     void publishStaticTransportLocked();
-    static double clipDuration(const WavClip& clip);
+    void writeMailboxLocked(bool changePlay, bool playing, bool changeLoop, bool looping,
+                            bool reset, bool changeBpm = false, double bpm = 120.0);
 };
 
 } // namespace guitarrackcraft

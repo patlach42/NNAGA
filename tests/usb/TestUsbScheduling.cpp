@@ -8,6 +8,8 @@
 #include <cstddef>
 #include <vector>
 
+#include <limits>
+
 namespace {
 
 std::vector<int> schedulerFrames(uint32_t sampleRate, uint32_t packetsPerSecond) {
@@ -321,5 +323,82 @@ TEST(UsbPacketSchedule, EndpointIntervalProducesNonzeroOutTransferBatch) {
         EXPECT_EQ(packetsPerSecond, test.expectedPacketsPerSecond);
         EXPECT_EQ(packetsPerTransfer, test.expectedPacketsPerTransfer);
         EXPECT_GT(packetsPerTransfer, 0);
+    }
+}
+TEST(UsbPlaybackRunway, ConvertsQueuedFramesAtCommonSampleRates) {
+    struct RunwayCase {
+        uint64_t queuedFrames;
+        uint32_t sampleRate;
+        uint64_t expectedNanoseconds;
+        const char* name;
+    };
+    const RunwayCase cases[] = {
+        {441, 44100, 10'000'000, "10 ms at 44.1 kHz"},
+        {480, 48000, 10'000'000, "10 ms at 48 kHz"},
+        {1, 44100, 22'675, "one frame at 44.1 kHz rounds down"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::playbackRunwayNanoseconds(
+                      test.queuedFrames, test.sampleRate),
+                  test.expectedNanoseconds);
+    }
+}
+
+TEST(UsbPlaybackRunway, RejectsInvalidInputs) {
+    EXPECT_EQ(monotrypt::usb::playbackRunwayNanoseconds(0, 44100), 0u);
+    EXPECT_EQ(monotrypt::usb::playbackRunwayNanoseconds(480, 0), 0u);
+    EXPECT_EQ(monotrypt::usb::playbackRunwayNanoseconds(0, 0), 0u);
+}
+
+TEST(UsbPlaybackRunway, PreservesRepresentableResultAndSaturatesOverflow) {
+    constexpr uint64_t kMax = std::numeric_limits<uint64_t>::max();
+    constexpr uint64_t kNanosecondsPerSecond = 1'000'000'000ULL;
+    constexpr uint32_t kLargestSampleRate =
+        std::numeric_limits<uint32_t>::max();
+
+    // The intermediate product overflows uint64_t, while the final quotient
+    // is representable. This must not be treated as saturation.
+    const uint64_t quotient = kMax / kLargestSampleRate;
+    const uint64_t remainder = kMax % kLargestSampleRate;
+    const uint64_t expected =
+        quotient * kNanosecondsPerSecond +
+        (remainder * kNanosecondsPerSecond) / kLargestSampleRate;
+    EXPECT_LT(expected, kMax);
+    EXPECT_EQ(monotrypt::usb::playbackRunwayNanoseconds(
+                  kMax, kLargestSampleRate),
+              expected);
+
+    // At one frame per second, the exact duration exceeds uint64_t.
+    EXPECT_EQ(monotrypt::usb::playbackRunwayNanoseconds(kMax, 1), kMax);
+}
+
+TEST(UsbPlaybackPrime, FillsHighWatermarkAndClampsPhysicalCapacity) {
+    struct PrimeCase {
+        int maxTarget;
+        int exactInitialPacketFrames;
+        int playbackTargetFrames;
+        int graphQuantum;
+        int expectedPrimeFrames;
+        const char* name;
+    };
+    const PrimeCase cases[] = {
+        {2048, 192, 256, 16, 272,
+         "target plus one graph quantum leaves jitter reserve"},
+        {2048, 512, 256, 64, 512,
+         "exact initial packet coverage wins when larger"},
+        {2048, 2000, 2040, 64, 2048,
+         "high watermark is clamped to physical capacity"},
+        {100, 1, 90, 16, 100,
+         "small physical ring clamps high-watermark prime"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::startupPlaybackPrimeFrames(
+                      test.maxTarget, test.exactInitialPacketFrames,
+                      test.playbackTargetFrames, test.graphQuantum),
+                  test.expectedPrimeFrames);
     }
 }

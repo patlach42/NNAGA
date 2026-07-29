@@ -20,7 +20,6 @@
 #ifndef GUITARRACKCRAFT_AUDIO_ENGINE_H
 #define GUITARRACKCRAFT_AUDIO_ENGINE_H
 
-#include <oboe/Oboe.h>
 #include <cstdint>
 #include <condition_variable>
 #include <mutex>
@@ -36,11 +35,10 @@
 namespace guitarrackcraft {
 
 /**
- * Audio engine using Oboe for low-latency audio I/O.
- * Processes audio through the plugin chain in real-time.
-
+ * Audio engine using the direct USB UAC transport for audio I/O.
+ * Processes audio through the plugin graph in real-time.
  */
-class AudioEngine : public oboe::AudioStreamCallback {
+class AudioEngine {
 public:
 
     enum class DirectUsbState : uint8_t { Stopped, Starting, Running, Failed, Stopping };
@@ -58,6 +56,10 @@ public:
         uint32_t captureTransferFrames = 0;
         uint64_t lastDspNanoseconds = 0;
         uint64_t peakDspNanoseconds = 0;
+        uint64_t lastCycleNanoseconds = 0;
+        uint64_t peakCycleNanoseconds = 0;
+        uint64_t deadlineBudgetNanoseconds = 0;
+        uint64_t deadlineMisses = 0;
         uint64_t captureWaitTimeouts = 0;
         uint64_t writeWaitTimeouts = 0;
         uint64_t captureOverruns = 0;
@@ -68,13 +70,6 @@ public:
     AudioEngine();
     ~AudioEngine();
 
-    /**
-     * Start audio processing.
-     * @param sampleRate Desired sample rate (will use device default if not supported)
-     * @return true if started successfully
-     */
-    bool start(float sampleRate = 48000.0f, int32_t inputDeviceId = 0,
-               int32_t outputDeviceId = 0, int32_t bufferFrames = 0);
 
     /**
      * Stop audio processing.
@@ -90,6 +85,7 @@ public:
                                int32_t bufferFrames, int32_t periodMultiplier);
 
     void stop();
+    bool openDirectUsbDevice(int fd);
 
     /**
      * Check if engine is running.
@@ -112,21 +108,6 @@ public:
         return publishedCallbackFrameCount_.load(std::memory_order_acquire);
     }
 
-    struct StreamInfo {
-        bool isAAudio = false;         // AAudio vs OpenSL ES
-        bool inputExclusive = false;   // Exclusive sharing mode granted
-        bool outputExclusive = false;
-        bool inputLowLatency = false;  // LowLatency performance mode granted
-        bool outputLowLatency = false;
-        bool outputMMap = false;       // MMAP used (lowest path)
-        bool outputCallback = true;    // Using data callback
-        int32_t framesPerBurst = 0;    // Hardware burst size
-    };
-
-    /**
-     * Get stream configuration info for the low-latency checklist.
-     */
-    StreamInfo getStreamInfo() const;
 
     /**
      * Get current latency in milliseconds.
@@ -149,8 +130,8 @@ public:
     float getCpuLoad() const;
 
     /**
-     * Get cumulative actual render discontinuities: Oboe XRuns plus direct-USB
-     * playback/capture ring overruns and underruns.
+     * Get cumulative actual render discontinuities from the direct-USB
+     * playback/capture transport.
      */
     int32_t getXRunCount() const;
 
@@ -219,6 +200,10 @@ private:
     std::atomic<uint32_t> directUsbSteadyTargetFrames_{0};
     std::atomic<uint64_t> directUsbLastDspNs_{0};
     std::atomic<uint64_t> directUsbPeakDspNs_{0};
+    std::atomic<uint64_t> directUsbLastCycleNs_{0};
+    std::atomic<uint64_t> directUsbPeakCycleNs_{0};
+    std::atomic<uint64_t> directUsbDeadlineBudgetNs_{0};
+    std::atomic<uint64_t> directUsbDeadlineMisses_{0};
     std::atomic<bool> directUsbRenderUrgentAudio_{false};
     std::atomic<bool> cleanupStarted_{true};
     int32_t directUsbBits_ = 0;
@@ -233,29 +218,13 @@ private:
     std::atomic<uint64_t> directUsbWriteWaitTimeouts_{0};
     std::vector<float> directUsbOutputRight_;
 
-    std::unique_ptr<oboe::AudioStream> inputStream_;
-    oboe::DataCallbackResult onAudioReady(
-        oboe::AudioStream* audioStream,
-        void* audioData,
-        int32_t numFrames) override;
 
-    void onErrorBeforeClose(oboe::AudioStream* oboeStream, oboe::Result error) override;
-    void onErrorAfterClose(oboe::AudioStream* oboeStream, oboe::Result error) override;
-
-    std::unique_ptr<oboe::AudioStream> outputStream_;
     RackGraph rackGraph_;
     float sampleRate_;
-    int32_t inputDeviceId_ = 0;
-    int32_t outputDeviceId_ = 0;
-    int32_t requestedBufferFrames_ = 0;
     uint32_t callbackFrameCount_ = 0;  // Power-of-2 frames per audio callback
     std::atomic<bool> isRunning_;
     std::atomic<bool> rackBypass_{false};
 
-    // Audio buffers for processing
-    std::vector<float> inputBuffer_;
-    std::vector<float> outputBufferLeft_;
-    std::vector<float> outputBufferRight_;
     
     // Temporary buffers for plugin chain
     const float* inputPtrs_[2];
@@ -272,13 +241,6 @@ private:
     std::atomic<uint32_t> publishedCallbackFrameCount_{0};
     std::atomic<double> publishedLatencyMs_{0.0};
     std::atomic<int32_t> publishedXRunCount_{0};
-    std::atomic<bool> streamIsAAudio_{false};
-    std::atomic<bool> streamInputExclusive_{false};
-    std::atomic<bool> streamOutputExclusive_{false};
-    std::atomic<bool> streamInputLowLatency_{false};
-    std::atomic<bool> streamOutputLowLatency_{false};
-    std::atomic<bool> streamOutputMMap_{false};
-    std::atomic<int32_t> streamFramesPerBurst_{0};
     std::atomic<uint32_t> directCaptureRingFrames_{0};
     std::atomic<uint32_t> directPlaybackRingFrames_{0};
     std::atomic<uint32_t> directQueuedOutFrames_{0};
@@ -295,10 +257,8 @@ private:
 
     AudioRecorder recorder_;
 
-    bool createAudioStreams(float sampleRate);
 
     DirectUsbOutput* directUsbOutput_ = nullptr; // non-owning, NativeContext-owned
-    void closeStreams();
     void processRackBlock(const float* const* liveInputs, float* const* outputs,
                           uint32_t numFrames) noexcept;
     void cleanupEngineState();

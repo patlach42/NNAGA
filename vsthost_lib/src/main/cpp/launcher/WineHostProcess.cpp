@@ -1243,7 +1243,7 @@ bool WineHostProcess::start() {
         // …) were essential for diagnosing wine-launch + CS-deadlock
         // bugs earlier in this branch, but they fire on every syscall
         // and module load — convolution plugins like LeCab call-out
-        // a lot and starved the Oboe audio thread (~hundreds of
+        // a lot and starved the native audio render thread (hundreds of
         // underruns/sec). Keep "err+all" so SIGSEGV / SIGSYS / etc
         // still surface in vst_host_pN.log; set WINEDEBUG explicitly
         // back to the trace cocktail when debugging.
@@ -1263,7 +1263,6 @@ bool WineHostProcess::start() {
         } else {
             /* Build-time toggle for submenu / X11 driver tracing. Enable
              * temporarily when diagnosing menu-related bugs; flip back to
-             * 0 for shipping builds since these channels can cause Oboe
              * underruns during heavy interaction. */
             /* vstpoc 2026-05-24: verbose tracing DISABLED.
              *

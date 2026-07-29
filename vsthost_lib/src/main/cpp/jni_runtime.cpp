@@ -36,7 +36,7 @@ namespace {
 // Singleton for the running installer wine subprocess. Only one installer
 // at a time — the lock prevents concurrent start/wait/kill from racing,
 // not the installer itself from ANR'ing the audio path (it runs in its
-// own wine child process and never touches Oboe).
+// own wine child process and never touches the native audio engine).
 std::mutex installer_mutex;
 std::unique_ptr<WineHostProcess> g_installer;
 }  // namespace

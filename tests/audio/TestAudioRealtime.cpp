@@ -4,7 +4,14 @@
 #include "plugin/PluginChain.h"
 
 #include "utils/WavIO.h"
+#include "utils/BoundedSPSCQueue.h"
+#include "utils/ThreadUtils.h"
+
+#if defined(__linux__)
+#include <sched.h>
+#endif
 #include <array>
+#include <initializer_list>
 #include <atomic>
 #include <cstddef>
 #include <thread>
@@ -134,7 +141,8 @@ public:
     void deactivate() override {}
 
     void process(const float* const* inputs, float* const* outputs,
-                 uint32_t numFrames) override {
+                 uint32_t numFrames,
+                 const guitarrackcraft::AudioProcessContext&) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame] * 2.0f;
             outputs[1][frame] = inputs[1][frame] * 2.0f;
@@ -154,7 +162,8 @@ public:
     void deactivate() override {}
 
     void process(const float* const* inputs, float* const* outputs,
-                 uint32_t numFrames) override {
+                 uint32_t numFrames,
+                 const guitarrackcraft::AudioProcessContext&) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             const bool hasInput = inputs[0][frame] != 0.0f ||
                                   inputs[1][frame] != 0.0f;
@@ -212,7 +221,7 @@ TEST_F(PluginChainRealtimeTest, SupportedFrameQuantaProcessWithoutAllocations) {
         std::size_t allocations = 0;
         {
             allocation_probe::NoAllocScope noAlloc;
-            chain_.process(inputs, outputs, frames);
+            chain_.process(inputs, outputs, frames, guitarrackcraft::AudioProcessContext{});
             allocations = noAlloc.count();
         }
 
@@ -234,7 +243,7 @@ TEST_F(PluginChainRealtimeTest, OversizedCallbackPassthroughsWithoutAllocating) 
     std::size_t allocations = 0;
     {
         allocation_probe::NoAllocScope noAlloc;
-        chain_.process(inputs, outputs, frames);
+        chain_.process(inputs, outputs, frames, guitarrackcraft::AudioProcessContext{});
         allocations = noAlloc.count();
     }
 
@@ -246,7 +255,7 @@ TEST_F(PluginChainRealtimeTest, OversizedCallbackPassthroughsWithoutAllocating) 
 }
 
 TEST(PluginChainContentionTest,
-     ExclusiveControlContentionRepeatsLastCompleteWetBlockWithoutBlocking) {
+     ExclusiveControlContentionPassesDryInputWithoutBlocking) {
     constexpr uint32_t frames = 64;
     PluginChain chain;
     ASSERT_EQ(chain.addPlugin(std::make_unique<TailOutputPlugin>()), 0);
@@ -260,14 +269,17 @@ TEST(PluginChainContentionTest,
     primeRight.fill(-0.5f);
     const float* primeInputs[] = {primeLeft.data(), primeRight.data()};
     float* primeOutputs[] = {primeOutputLeft.data(), primeOutputRight.data()};
-    chain.process(primeInputs, primeOutputs, frames);
+    chain.process(primeInputs, primeOutputs, frames, guitarrackcraft::AudioProcessContext{});
     EXPECT_FLOAT_EQ(primeOutputLeft[0], 0.5f);
     EXPECT_FLOAT_EQ(primeOutputRight[0], -1.0f);
 
-    std::array<float, frames> silentInput{};
+    std::array<float, frames> contendedInputLeft{};
+    std::array<float, frames> contendedInputRight{};
+    contendedInputLeft.fill(3.0f);
+    contendedInputRight.fill(-4.0f);
     std::array<float, frames> tailOutputLeft{};
     std::array<float, frames> tailOutputRight{};
-    const float* silentInputs[] = {silentInput.data(), silentInput.data()};
+    const float* contendedInputs[] = {contendedInputLeft.data(), contendedInputRight.data()};
     float* tailOutputs[] = {tailOutputLeft.data(), tailOutputRight.data()};
 
     // This is the same control-plane exclusion used by add/remove/reorder.
@@ -275,7 +287,7 @@ TEST(PluginChainContentionTest,
     std::promise<void> processFinished;
     std::future<void> completion = processFinished.get_future();
     std::thread callback([&] {
-        chain.process(silentInputs, tailOutputs, frames);
+        chain.process(contendedInputs, tailOutputs, frames, guitarrackcraft::AudioProcessContext{});
         processFinished.set_value();
     });
 
@@ -287,15 +299,12 @@ TEST(PluginChainContentionTest,
 
     ASSERT_TRUE(completedWhileContended);
     for (uint32_t frame = 0; frame < frames; ++frame) {
-        SCOPED_TRACE(frame);
-        ASSERT_FLOAT_EQ(tailOutputLeft[frame], 0.5f);
-        ASSERT_FLOAT_EQ(tailOutputRight[frame], -1.0f);
-        EXPECT_NE(tailOutputLeft[frame], silentInput[frame]);
-        EXPECT_NE(tailOutputRight[frame], silentInput[frame]);
+        EXPECT_FLOAT_EQ(tailOutputLeft[frame], contendedInputLeft[frame]);
+        EXPECT_FLOAT_EQ(tailOutputRight[frame], contendedInputRight[frame]);
     }
 }
 template <std::size_t PrimeFrames, std::size_t ContendedFrames>
-void assertVariableFrameContentionRepeatsWetHistory() {
+void assertVariableFrameContentionPassesDryInput() {
     PluginChain chain;
     ASSERT_EQ(chain.addPlugin(std::make_unique<TailOutputPlugin>()), 0);
     // Allocate lifecycle-sized buffers for the larger callback while allowing
@@ -315,7 +324,8 @@ void assertVariableFrameContentionRepeatsWetHistory() {
     }
     const float* primeInputs[] = {primeLeft.data(), primeRight.data()};
     float* primeOutputs[] = {primeOutputLeft.data(), primeOutputRight.data()};
-    chain.process(primeInputs, primeOutputs, static_cast<uint32_t>(PrimeFrames));
+    chain.process(primeInputs, primeOutputs, static_cast<uint32_t>(PrimeFrames),
+                  guitarrackcraft::AudioProcessContext{});
 
     std::array<float, ContendedFrames> contendedInputLeft{};
     std::array<float, ContendedFrames> contendedInputRight{};
@@ -337,7 +347,8 @@ void assertVariableFrameContentionRepeatsWetHistory() {
     std::thread callback([&] {
         allocation_probe::NoAllocScope noAlloc;
         chain.process(contendedInputs, contendedOutputs,
-                      static_cast<uint32_t>(ContendedFrames));
+                      static_cast<uint32_t>(ContendedFrames),
+                      guitarrackcraft::AudioProcessContext{});
         callbackAllocations.store(noAlloc.count(), std::memory_order_release);
         processFinished.set_value();
     });
@@ -351,25 +362,76 @@ void assertVariableFrameContentionRepeatsWetHistory() {
     ASSERT_TRUE(completedWhileContended);
     EXPECT_EQ(callbackAllocations.load(std::memory_order_acquire), 0u);
     for (std::size_t frame = 0; frame < ContendedFrames; ++frame) {
-        SCOPED_TRACE(frame);
-        const std::size_t historyFrame = frame % PrimeFrames;
-        EXPECT_FLOAT_EQ(contendedOutputLeft[frame], primeOutputLeft[historyFrame]);
-        EXPECT_FLOAT_EQ(contendedOutputRight[frame], primeOutputRight[historyFrame]);
-        EXPECT_NE(contendedOutputLeft[frame], contendedInputLeft[frame]);
-        EXPECT_NE(contendedOutputRight[frame], contendedInputRight[frame]);
-        EXPECT_NE(contendedOutputLeft[frame], 0.0f);
-        EXPECT_NE(contendedOutputRight[frame], 0.0f);
+        EXPECT_FLOAT_EQ(contendedOutputLeft[frame], contendedInputLeft[frame]);
+        EXPECT_FLOAT_EQ(contendedOutputRight[frame], contendedInputRight[frame]);
     }
 }
 
 TEST(PluginChainContentionTest,
-     DifferentLargerCallbackRepeatsShortWetHistoryWithoutAllocating) {
-    assertVariableFrameContentionRepeatsWetHistory<64, 128>();
+     DifferentLargerCallbackPassesDryInputWithoutAllocating) {
+    assertVariableFrameContentionPassesDryInput<64, 128>();
 }
 
 TEST(PluginChainContentionTest,
-     DifferentSmallerCallbackUsesWetHistoryPrefixWithoutAllocating) {
-    assertVariableFrameContentionRepeatsWetHistory<128, 64>();
+     DifferentSmallerCallbackPassesDryInputWithoutAllocating) {
+    assertVariableFrameContentionPassesDryInput<128, 64>();
+}
+
+TEST(PluginChainContentionTest,
+     ConcurrentSetSampleRateKeepsCallbackDryOrWetAndAllocationFree) {
+    PluginChain chain;
+    ASSERT_EQ(chain.addPlugin(std::make_unique<GainPlugin>()), 0);
+    chain.setSampleRate(48000.0f, 1024);
+
+    constexpr std::array<uint32_t, 4> capacities = {16, 64, 512, 1024};
+    constexpr std::array<uint32_t, 4> quanta = {16, 64, 512, 1024};
+    std::array<float, 1024> inputLeft{};
+    std::array<float, 1024> inputRight{};
+    std::array<float, 1024> outputLeft{};
+    std::array<float, 1024> outputRight{};
+    for (uint32_t frame = 0; frame < inputLeft.size(); ++frame) {
+        inputLeft[frame] = 0.1f + static_cast<float>(frame) * 0.001f;
+        inputRight[frame] = -0.3f - static_cast<float>(frame) * 0.002f;
+    }
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    std::atomic<bool> start{false};
+    std::atomic<bool> invalidOutput{false};
+    std::atomic<std::size_t> callbackAllocations{0};
+
+    std::thread setter([&] {
+        while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+        for (uint32_t iteration = 0; iteration < 200; ++iteration) {
+            chain.setSampleRate(48000.0f, capacities[iteration % capacities.size()]);
+            if ((iteration & 7u) == 0u) std::this_thread::yield();
+        }
+    });
+
+    std::thread callback([&] {
+        while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+        allocation_probe::NoAllocScope noAlloc;
+        for (uint32_t iteration = 0; iteration < 2000; ++iteration) {
+            const uint32_t frames = quanta[iteration % quanta.size()];
+            chain.process(inputs, outputs, frames,
+                          guitarrackcraft::AudioProcessContext{});
+            bool dry = true;
+            bool wet = true;
+            for (uint32_t frame = 0; frame < frames; ++frame) {
+                dry = dry && outputLeft[frame] == inputLeft[frame] &&
+                      outputRight[frame] == inputRight[frame];
+                wet = wet && outputLeft[frame] == inputLeft[frame] * 2.0f &&
+                      outputRight[frame] == inputRight[frame] * 2.0f;
+            }
+            if (!dry && !wet) invalidOutput.store(true, std::memory_order_release);
+        }
+        callbackAllocations.store(noAlloc.count(), std::memory_order_release);
+    });
+
+    start.store(true, std::memory_order_release);
+    callback.join();
+    setter.join();
+    EXPECT_FALSE(invalidOutput.load(std::memory_order_acquire));
+    EXPECT_EQ(callbackAllocations.load(std::memory_order_acquire), 0u);
 }
 
 constexpr const char* kRawPath = "/tmp/guitarrackcraft-audio-recorder-test-raw.wav";
@@ -553,4 +615,116 @@ TEST(AudioRecorderConcurrentTest, FeedAndStopProducesValidHeaders) {
 }
 
 
+TEST(BoundedSPSCQueueTest, CapacityLeavesOneSlotAndPreservesFifoAcrossWrap) {
+    guitarrackcraft::BoundedSPSCQueue<uint32_t, 8> queue;
+
+    for (uint32_t value = 0; value < 7; ++value) {
+        ASSERT_TRUE(queue.push(value));
+    }
+    EXPECT_FALSE(queue.push(7u));
+
+    uint32_t value = 0;
+    for (uint32_t expected = 0; expected < 7; ++expected) {
+        ASSERT_TRUE(queue.pop(value));
+        EXPECT_EQ(value, expected);
+    }
+    EXPECT_FALSE(queue.pop(value));
+
+    for (uint32_t valueToPush = 100; valueToPush < 107; ++valueToPush) {
+        ASSERT_TRUE(queue.push(valueToPush));
+    }
+    EXPECT_FALSE(queue.push(107u));
+    for (uint32_t expected = 100; expected < 107; ++expected) {
+        ASSERT_TRUE(queue.pop(value));
+        EXPECT_EQ(value, expected);
+    }
+    EXPECT_FALSE(queue.pop(value));
+}
+
+TEST(BoundedSPSCQueueTest, SingleProducerConsumerStressRemainsFifo) {
+    guitarrackcraft::BoundedSPSCQueue<uint64_t, 64> queue;
+    constexpr uint64_t count = 100000;
+    std::atomic<bool> producerDone{false};
+    std::atomic<bool> orderError{false};
+    std::thread producer([&] {
+        for (uint64_t value = 0; value < count; ++value) {
+            while (!queue.push(value)) std::this_thread::yield();
+        }
+        producerDone.store(true, std::memory_order_release);
+    });
+
+    uint64_t expected = 0;
+    uint64_t value = 0;
+    while (expected < count) {
+        if (queue.pop(value)) {
+            if (value != expected) orderError.store(true, std::memory_order_release);
+            ++expected;
+        } else if (!producerDone.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+    }
+    producer.join();
+    EXPECT_FALSE(orderError.load(std::memory_order_acquire));
+    EXPECT_FALSE(queue.pop(value));
+}
+
+#if defined(__linux__)
+namespace {
+
+cpu_set_t makeCpuSet(std::initializer_list<int> cpus) {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (const int cpu : cpus)
+        CPU_SET(cpu, &set);
+    return set;
+}
+
+TEST(ThreadUtilsAffinityTest, SelectsRankedPerformanceSubsetWithoutChangingAffinity) {
+    struct AffinityCase {
+        const char* name;
+        cpu_set_t allowed;
+        cpu_set_t expected;
+    };
+    const AffinityCase cases[] = {
+        {"8 allowed CPUs reserve highest for UI", makeCpuSet({0, 1, 2, 3, 4, 5, 6, 7}),
+         makeCpuSet({4, 5, 6})},
+        {"6 allowed CPUs reserve highest for UI", makeCpuSet({0, 1, 2, 3, 4, 5}),
+         makeCpuSet({3, 4})},
+        {"4 allowed CPUs keep upper half", makeCpuSet({0, 1, 2, 3}),
+         makeCpuSet({2, 3})},
+        {"2 allowed CPUs keep upper half", makeCpuSet({0, 1}),
+         makeCpuSet({1})},
+        {"singleton remains available", makeCpuSet({7}), makeCpuSet({7})},
+        {"sparse 8 CPU mask preserves rank ordering",
+         makeCpuSet({1, 4, 9, 16, 25, 36, 49, 64}),
+         makeCpuSet({25, 36, 49})},
+        {"sparse 4 CPU mask keeps upper half",
+         makeCpuSet({2, 7, 19, 31}), makeCpuSet({19, 31})},
+    };
+
+    cpu_set_t processBefore;
+    ASSERT_EQ(sched_getaffinity(0, sizeof(processBefore), &processBefore), 0);
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        const cpu_set_t inputBefore = test.allowed;
+        const cpu_set_t selected =
+            guitarrackcraft::deriveAudioCpuMask(test.allowed);
+
+        EXPECT_TRUE(CPU_EQUAL(&selected, &test.expected));
+        EXPECT_GT(CPU_COUNT(&selected), 0);
+        for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu)
+            EXPECT_TRUE(!CPU_ISSET(cpu, &selected) ||
+                        CPU_ISSET(cpu, &test.allowed))
+                << "selected CPU " << cpu << " was not allowed";
+        EXPECT_TRUE(CPU_EQUAL(&test.allowed, &inputBefore));
+    }
+
+    cpu_set_t processAfter;
+    ASSERT_EQ(sched_getaffinity(0, sizeof(processAfter), &processAfter), 0);
+    EXPECT_TRUE(CPU_EQUAL(&processBefore, &processAfter));
+}
+
+} // namespace
+#endif
 } // namespace

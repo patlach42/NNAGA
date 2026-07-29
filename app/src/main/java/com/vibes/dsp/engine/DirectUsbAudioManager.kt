@@ -55,7 +55,7 @@ data class DirectUsbFormat(
 /**
  * Owns the app-permitted USB connection used by the direct USB audio session.
  * Native code captures one selected mono channel and sends the processed stereo
- * signal through libusb; Android AudioManager/Oboe routing is not involved.
+ * signal through libusb; Android AudioManager routing is not involved.
  */
 object DirectUsbAudioManager {
     private const val TAG = "DirectUsbAudio"
@@ -132,8 +132,9 @@ object DirectUsbAudioManager {
                 .filter { it.size == 4 && it[0] > 0 && it[1] > 0 && it[2] > 0 && it[3] > 0 }
                 .map { DirectUsbFormat(it[0], it[1], it[2], it[3]) }
                 .toList()
-            // Keep the known iD4 UAC2 alternate available when descriptor probing is incomplete.
-            Result.success((nativeFormats + fallbackFormats).distinct())
+            // Descriptor formats are authoritative; use iD4 fallbacks only when
+            // probing returned no usable native descriptors.
+            Result.success(if (nativeFormats.isNotEmpty()) nativeFormats else fallbackFormats)
         }
 
     suspend fun startConfigured(context: Context): Result<Unit> {

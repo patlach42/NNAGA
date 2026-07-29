@@ -55,7 +55,7 @@ object X11Bridge {
         pluginInstanceId: Long,
         uiInstanceId: Long,
         displayNumber: Int
-    ) = native.nativeBeginCreatePluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId)
+    ) = native.nativeBeginCreatePluginUI(pathId, pluginIndex, pluginInstanceId, uiInstanceId, displayNumber)
 
     fun createPluginUI(
         pathId: Long,

@@ -97,6 +97,16 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        val display = getSystemService(WindowManager::class.java).defaultDisplay
+        val sixtyHertzMode = display.supportedModes.firstOrNull {
+            kotlin.math.abs(it.refreshRate - 60f) < 0.5f
+        }
+        window.attributes = window.attributes.apply {
+            preferredRefreshRate = 60f
+            if (sixtyHertzMode != null) {
+                preferredDisplayModeId = sixtyHertzMode.modeId
+            }
+        }
 
         // Handle auth callback if activity started via deep link
         handleAuthIntent(intent)
@@ -313,6 +323,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun prepareLv2AndInitEngine() {
+        if (EngineInitHelper.isInitialized) {
+            android.util.Log.d("MainActivity", "Native engine already initialized; skipping LV2 extraction")
+            return
+        }
         EngineInitHelper.preloadLilv(applicationInfo.nativeLibraryDir)
         extractLV2Assets()
         EngineInitHelper.initEngine(this) { extracted, total ->

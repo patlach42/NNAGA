@@ -68,6 +68,10 @@ data class DirectUsbStats(
     val peakDspNs: Long = 0,
     val knownHostLatencyFrames: Long = 0,
     val actualXruns: Long = 0,
+    val lastCycleNs: Long = 0,
+    val peakCycleNs: Long = 0,
+    val deadlineBudgetNs: Long = 0,
+    val deadlineMisses: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -91,6 +95,10 @@ data class DirectUsbStats(
         private const val TARGET = 26
         private const val QUEUED = 27
         private const val TRANSFER_FRAMES = 28
+        private const val LAST_CYCLE = 33
+        private const val PEAK_CYCLE = 34
+        private const val DEADLINE_BUDGET = 35
+        private const val DEADLINE_MISSES = 36
         private const val LAST_DSP = 29
         private const val PEAK_DSP = 30
         private const val HOST_LATENCY = 31
@@ -124,21 +132,15 @@ data class DirectUsbStats(
                 peakDspNs = at(PEAK_DSP),
                 knownHostLatencyFrames = at(HOST_LATENCY),
                 actualXruns = at(ACTUAL_XRUNS),
+                lastCycleNs = at(LAST_CYCLE),
+                peakCycleNs = at(PEAK_CYCLE),
+                deadlineBudgetNs = at(DEADLINE_BUDGET),
+                deadlineMisses = at(DEADLINE_MISSES),
             )
         }
     }
 }
 
-data class AudioStreamInfo(
-    val isAAudio: Boolean = false,
-    val inputExclusive: Boolean = false,
-    val outputExclusive: Boolean = false,
-    val inputLowLatency: Boolean = false,
-    val outputLowLatency: Boolean = false,
-    val outputMMap: Boolean = false,
-    val outputCallback: Boolean = false,
-    val framesPerBurst: Int = 0
-)
 
 typealias RackPathId = Long
 const val MASTER_PATH_ID: RackPathId = 0L
@@ -152,12 +154,15 @@ data class RackTrackInfo(
     val wavDurationSec: Double
 )
 
-data class WavTransportInfo(
+data class TransportInfo(
     val playing: Boolean,
     val looping: Boolean,
     val positionSec: Double,
     val durationSec: Double,
-    val loadedTrackCount: Int
+    val loadedTrackCount: Int,
+    val beatsPerMinute: Double = 120.0,
+    val samplePosition: Long = 0L,
+    val transportFrame: Long = 0L
 )
 
 data class RackPluginEntry(
@@ -302,11 +307,6 @@ class NativeEngine private constructor() {
      */
     external fun nativeGetBufferFrameCount(): Int
 
-    /**
-     * Get stream info for low-latency checklist.
-     * Returns [isAAudio, inputExclusive, outputExclusive, inputLowLatency, outputLowLatency, outputMMap, outputCallback, framesPerBurst]
-     */
-    external fun nativeGetStreamInfo(): IntArray
 
     /**
      * Get current audio latency in milliseconds.
@@ -415,7 +415,7 @@ class NativeEngine private constructor() {
     /** Get the UI scale factor for the given display (1.0 = no scaling). */
     external fun nativeGetX11UIScale(displayNumber: Int): Float
 
-    external fun nativeBeginCreatePluginUI(pathId: Long, pluginIndex: Int, pluginInstanceId: Long, uiInstanceId: Long)
+    external fun nativeBeginCreatePluginUI(pathId: Long, pluginIndex: Int, pluginInstanceId: Long, uiInstanceId: Long, displayNumber: Int)
     external fun nativeCreatePluginUI(pathId: Long, pluginIndex: Int, pluginInstanceId: Long, uiInstanceId: Long, displayNumber: Int, parentWindowId: Long): Boolean
     external fun nativeDestroyPluginUI(pathId: Long, pluginInstanceId: Long, uiInstanceId: Long)
     external fun nativeIdlePluginUIs(): Boolean
@@ -479,10 +479,11 @@ class NativeEngine private constructor() {
     external fun nativeLoadTrackWav(trackId: Long, path: String, displayName: String): Boolean
     external fun nativeUnloadTrackWav(trackId: Long): Boolean
     external fun nativeClearTrackWavs(): Boolean
-    external fun nativeSetWavTransportPlaying(playing: Boolean): Boolean
-    external fun nativeRestartWavTransport(): Boolean
-    external fun nativeSetWavTransportLooping(looping: Boolean)
-    external fun nativeGetWavTransportInfo(): WavTransportInfo
+    external fun nativeSetTransportPlaying(playing: Boolean): Boolean
+    external fun nativeSetTransportBpm(bpm: Double): Boolean
+    external fun nativeRestartTransport(): Boolean
+    external fun nativeSetTransportLooping(looping: Boolean)
+    external fun nativeGetTransportInfo(): TransportInfo
     external fun nativeSetRackBypass(bypass: Boolean)
     fun setRackBypass(bypass: Boolean) = nativeSetRackBypass(bypass)
 
@@ -497,19 +498,6 @@ class NativeEngine private constructor() {
 
     fun getSampleRate(): Float = nativeGetSampleRate()
     fun getBufferFrameCount(): Int = nativeGetBufferFrameCount()
-    fun getStreamInfo(): AudioStreamInfo {
-        val arr = nativeGetStreamInfo()
-        return AudioStreamInfo(
-            isAAudio = arr[0] != 0,
-            inputExclusive = arr[1] != 0,
-            outputExclusive = arr[2] != 0,
-            inputLowLatency = arr[3] != 0,
-            outputLowLatency = arr[4] != 0,
-            outputMMap = arr[5] != 0,
-            outputCallback = arr[6] != 0,
-            framesPerBurst = arr[7]
-        )
-    }
 
     fun getLatencyMs(): Double {
         return nativeGetLatencyMs()
@@ -550,10 +538,11 @@ class NativeEngine private constructor() {
     fun loadTrackWav(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackWav(trackId, path, displayName)
     fun unloadTrackWav(trackId: Long): Boolean = nativeUnloadTrackWav(trackId)
     fun clearTrackWavs(): Boolean = nativeClearTrackWavs()
-    fun setWavTransportPlaying(playing: Boolean): Boolean = nativeSetWavTransportPlaying(playing)
-    fun restartWavTransport(): Boolean = nativeRestartWavTransport()
-    fun setWavTransportLooping(looping: Boolean) = nativeSetWavTransportLooping(looping)
-    fun getWavTransportInfo(): WavTransportInfo = nativeGetWavTransportInfo()
+    fun setTransportBpm(bpm: Double): Boolean = nativeSetTransportBpm(bpm.coerceIn(20.0, 400.0))
+    fun setTransportPlaying(playing: Boolean): Boolean = nativeSetTransportPlaying(playing)
+    fun restartTransport(): Boolean = nativeRestartTransport()
+    fun setTransportLooping(looping: Boolean) = nativeSetTransportLooping(looping)
+    fun getTransportInfo(): TransportInfo = nativeGetTransportInfo()
 
     fun startRecording(rawPath: String, processedPath: String): Boolean = nativeStartRecording(rawPath, processedPath)
     fun stopRecording() = nativeStopRecording()

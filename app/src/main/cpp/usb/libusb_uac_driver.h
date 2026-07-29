@@ -131,6 +131,7 @@ struct CaptureStats {
 struct ImplicitFeedbackStats {
     uint64_t fifoDepth = 0;
     uint64_t fallbackPackets = 0;
+    uint64_t metadataFifoOverruns = 0;
     uint64_t captureTransferErrors = 0;
     uint64_t playbackTransferErrors = 0;
     uint64_t ringFrames = 0;
@@ -190,6 +191,7 @@ public:
         const int stride = std::max(1, format_.channels * format_.bytesPerSample);
         return {depth,
                 implicitFallbackPackets_.load(std::memory_order_acquire),
+                metadataFifoOverruns_.load(std::memory_order_acquire),
                 captureTransferErrors_.load(std::memory_order_acquire),
                 playbackTransferErrors_.load(std::memory_order_acquire),
                 (ringHead_.load(std::memory_order_acquire) -
@@ -406,6 +408,7 @@ private:
     std::atomic<int> captureTransferFrames_{0};
     std::atomic<size_t> implicitWrite_{0};
     std::atomic<uint64_t> implicitFallbackPackets_{0};
+    std::atomic<uint64_t> metadataFifoOverruns_{0};
     std::atomic<uint64_t> captureTransferErrors_{0};
     std::atomic<uint64_t> playbackTransferErrors_{0};
     std::atomic<uint64_t> lifecycleFailures_{0};

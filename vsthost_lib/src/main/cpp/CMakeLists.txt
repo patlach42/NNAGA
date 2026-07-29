@@ -5,14 +5,6 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# Oboe — shared with :app via GuitarRackCraft's 3rd_party/oboe submodule.
-set(OBOE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/oboe")
-if(NOT EXISTS "${OBOE_DIR}/CMakeLists.txt")
-    message(FATAL_ERROR
-        "Oboe sources not found at ${OBOE_DIR}. "
-        "Run: git submodule update --init --recursive 3rd_party/oboe")
-endif()
-add_subdirectory("${OBOE_DIR}" "${CMAKE_BINARY_DIR}/oboe-build" EXCLUDE_FROM_ALL)
 
 add_library(vsthost SHARED
     # JNI surface (PE inspection + wineboot one-shot)
@@ -48,7 +40,6 @@ target_include_directories(vsthost PRIVATE
 )
 
 target_link_libraries(vsthost
-    oboe
     android
     log
     EGL

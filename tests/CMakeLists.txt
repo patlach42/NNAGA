@@ -58,6 +58,7 @@ enable_testing()
 # Allocation-free direct audio callback tests.
 add_subdirectory(audio)
 
+add_subdirectory(vst)
 
 # Direct USB duplex lifecycle tests. Keep the host suite usable on machines
 # without development libusb headers/libraries.

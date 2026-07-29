@@ -27,11 +27,17 @@ public:
     // underrun). Non-blocking, lock-free, RT-safe.
     int32_t pullAudio(float* outL, float* outR, int32_t maxFrames);
 
+    bool publishTransport(uint64_t samplePosition, uint64_t transportFrame,
+                          uint64_t loopEndFrame, double sampleRate,
+                          double beatsPerMinute, bool playing, bool looping,
+                          uint32_t blockFrames);
+
     // Host (UI thread): enqueue a parameter change for the guest.
     // Drops the message silently if the param ring is full.
     void pushParam(int32_t index, float value);
 
     // Host (RT input thread): push `numFrames` interleaved-stereo float
+    bool inputWritable(uint32_t frames) const;
     // samples into the mic input ring. Returns frames actually pushed
     // (may be less than numFrames if the ring is near-full).
     // RT-safe, lock-free.

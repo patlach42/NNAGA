@@ -24,7 +24,7 @@ namespace guitarrackcraft {
 /** True while createPluginUI is running (plugin UI executor thread).
  *  Used to defer X11 signalDetach: if surfaceDestroyed runs while the plugin is blocked in
  *  XGetWindowAttributes, we must not close the X client fd yet, or Xlib's default XIOErrorHandler
- *  will call exit(1) and kill the process (~AAudioLoader then runs during unload). */
+ *  will call exit(1) and kill the process during unload. */
 bool isCreatingPluginUI();
 void setCreatingPluginUI(bool value);
 

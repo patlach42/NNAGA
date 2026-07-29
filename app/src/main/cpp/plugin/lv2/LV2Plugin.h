@@ -21,10 +21,12 @@
 #define GUITARRACKCRAFT_LV2_PLUGIN_H
 
 #include "../IPlugin.h"
+#include "../../utils/BoundedSPSCQueue.h"
 #include <string>
 #include <vector>
 #include <memory>
 #include <atomic>
+
 
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
 #include <lilv/lilv.h>
@@ -33,12 +35,11 @@
 #include <lv2/atom/atom.h>
 #include <lv2/atom/forge.h>
 #include <lv2/patch/patch.h>
+#include <lv2/time/time.h>
 #include <lv2/buf-size/buf-size.h>
 #include <lv2/state/state.h>
 #include <thread>
-#include <mutex>
 #include <condition_variable>
-#include <queue>
 #else
 struct LilvInstance_;
 struct LilvPlugin_;
@@ -65,7 +66,8 @@ public:
     // IPlugin interface
     void activate(float sampleRate, uint32_t bufferSize = 0) override;
     void deactivate() override;
-    void process(const float* const* inputs, float* const* outputs, uint32_t numFrames) override;
+    void process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                 const AudioProcessContext& context) override;
     PluginInfo getInfo() const override;
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
@@ -131,10 +133,18 @@ private:
     std::thread workerThread_;
     std::mutex workerMutex_;
     std::condition_variable workerCond_;
-    std::queue<std::vector<uint8_t>> workRequests_;
-    std::mutex responseMutex_;
-    std::queue<std::vector<uint8_t>> workResponses_;
+    static constexpr size_t kWorkerQueueCapacity = 64;
+    static constexpr size_t kWorkerPayloadSize = 8192;
+    struct WorkerMessage {
+        uint32_t size;
+        uint8_t data[kWorkerPayloadSize];
+    };
+    BoundedSPSCQueue<WorkerMessage, kWorkerQueueCapacity> workRequests_;
+    BoundedSPSCQueue<WorkerMessage, kWorkerQueueCapacity> workResponses_;
+    std::atomic<uint32_t> workRequestDrops_{0};
+    std::atomic<uint32_t> workResponseDrops_{0};
     std::atomic<bool> workerRunning_{false};
+    std::atomic<bool> workerWake_{false};
 
     // Atom port buffers
     static constexpr size_t kAtomBufferSize = 8192;
@@ -154,19 +164,42 @@ private:
     LV2_URID patch_Get_ = 0;
     LV2_URID patch_property_ = 0;
     LV2_URID patch_value_ = 0;
+    LV2_URID time_Position_ = 0;
+    LV2_URID time_frame_ = 0;
+    LV2_URID time_speed_ = 0;
+    LV2_URID time_beatsPerMinute_ = 0;
+    LV2_URID time_bar_ = 0;
+    LV2_URID time_barBeat_ = 0;
+    LV2_URID atom_Long_ = 0;
+    LV2_URID atom_Double_ = 0;
+    LV2_URID atom_Sequence_ = 0;
+    LV2_URID atom_Chunk_ = 0;
 
-    // Pending file path for patch:Set delivery
-    std::string pendingFilePath_;
-    std::string pendingFilePropertyUri_;
-    std::mutex filePathMutex_;
-
-    // Pending raw atom messages from UI (DPF state sync, etc.)
-    std::mutex pendingAtomMutex_;
-    std::vector<std::vector<uint8_t>> pendingAtoms_;
-
-    // Queued atom output events for UI forwarding (written by process, read by UI thread)
-    std::mutex outputAtomMutex_;
-    std::vector<OutputAtomEvent> pendingOutputAtoms_;
+    static constexpr size_t kUiQueueCapacity = 64;
+    static constexpr size_t kUiPayloadSize = 8192;
+    struct AtomMessage {
+        uint32_t size;
+        uint8_t data[kUiPayloadSize];
+    };
+    struct FilePathMessage {
+        LV2_URID propertyUrid;
+        uint32_t propertySize;
+        uint32_t pathSize;
+        char property[512];
+        char path[4096];
+    };
+    struct OutputMessage {
+        uint32_t portIndex;
+        uint32_t size;
+        uint8_t data[kUiPayloadSize];
+    };
+    BoundedSPSCQueue<AtomMessage, kUiQueueCapacity> pendingAtoms_;
+    BoundedSPSCQueue<FilePathMessage, 8> pendingFilePaths_;
+    BoundedSPSCQueue<OutputMessage, kUiQueueCapacity> pendingOutputAtoms_;
+    std::atomic<uint32_t> pendingAtomDrops_{0};
+    std::atomic<uint32_t> timeEventDrops_{0};
+    std::atomic<uint32_t> filePathDrops_{0};
+    std::atomic<uint32_t> outputAtomDrops_{0};
 
     // State extension (save/restore)
     const LV2_State_Interface* stateInterface_ = nullptr;

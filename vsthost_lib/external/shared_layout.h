@@ -23,6 +23,11 @@
 #define VSTPOC_MAX_PARAMS          128    /* bumped from 8 — Lecto and other deeper plugins expose 20+ params */
 #define VSTPOC_PARAM_NAME_LEN      32     /* per-name buffer including NUL */
 
+#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435332) /* "VSTPOCS2" */
+#define VSTPOC_SHARED_LAYOUT_VERSION 3u
+#define VSTPOC_TRANSPORT_QUEUE_CAPACITY 1024u
+#define VSTPOC_MAX_BLOCK_FRAMES 2048u
+
 /* Native file-picker channel sizes. Wine-side GetOpenFileNameA hook writes
  * the request, Android-side SAF listener writes the response. */
 #define VSTPOC_PICKER_TITLE_LEN     128
@@ -48,6 +53,16 @@ typedef struct {
     int32_t index;
     float   value;
 } VstpocParamMsg;
+
+typedef struct {
+    uint64_t sample_position;
+    uint64_t transport_frame;
+    uint64_t loop_end_frame;
+    double sample_rate;
+    double beats_per_minute;
+    uint32_t flags;
+    uint32_t block_frames;
+} VstpocTransportBlock;
 
 /* Single mmap region. Atomics laid out one-per-cacheline so producer and
  * consumer never share a line (avoids false sharing during heavy churn). */
@@ -188,6 +203,22 @@ typedef struct {
     uint64_t state_size;
     char     state_path[VSTPOC_STATE_PATH_LEN];
     char     state_message[VSTPOC_STATE_MESSAGE_LEN];
+    /* Transport ABI metadata and one seqlock snapshot. Appended only:
+     * fields above retain their offsets for older mappings. */
+    uint64_t shared_layout_magic;
+    uint32_t shared_layout_version;
+    uint32_t shared_layout_size;
+    _Alignas(VSTPOC_CACHELINE) uint64_t transport_seq;
+    _Alignas(VSTPOC_CACHELINE) uint64_t transport_sample_position;
+    _Alignas(VSTPOC_CACHELINE) uint64_t transport_frame;
+    _Alignas(VSTPOC_CACHELINE) double   transport_sample_rate;
+    _Alignas(VSTPOC_CACHELINE) double   transport_beats_per_minute;
+    _Alignas(VSTPOC_CACHELINE) uint32_t transport_flags; /* bit0 playing, bit1 looping */
+    /* v3 bounded transport queue; appended after all v2 fields. */
+    _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_head;
+    _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_tail;
+    _Alignas(VSTPOC_CACHELINE) VstpocTransportBlock transport_queue[VSTPOC_TRANSPORT_QUEUE_CAPACITY];
+    _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_dropped;
 } VstpocShared;
 
 /* Native file-picker channel — lives in its OWN mmap file

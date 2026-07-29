@@ -210,27 +210,18 @@ bool PluginChain::reorderPlugins(int fromIndex, int toIndex) {
     return true;
 }
 
-void PluginChain::process(const float* const* inputs, float* const* outputs, uint32_t numFrames) {
-    // The callback must never wait for structural control. A failed try-lock
-    // repeats the last complete wet block rather than exposing dry input.
+void PluginChain::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                          const AudioProcessContext& context) {
+    // Structural control must never block the callback. On contention, keep
+    // live audio flowing directly; do not touch buffers owned by the writer.
     std::shared_lock lock(chainMutex_, std::try_to_lock);
     if (!lock.owns_lock()) {
-        if (numFrames > renderBufferSize_) {
-            // Keep unsupported oversized callbacks on the established dry
-            // passthrough path. They cannot be represented by the lifecycle
-            // sized wet history.
-            copyInputChannels(inputs, outputs, numFrames);
-        } else if (continuityValid_ && continuityFrames_ > 0) {
-            copyContinuity(outputs, numFrames);
-        } else {
-            clearOutputs(outputs, numFrames);
-        }
+        copyInputChannels(inputs, outputs, numFrames);
         return;
     }
 
     // An oversized callback cannot be processed by lifecycle-sized buffers.
-    // Preserve the prior allocation-free passthrough behavior, without
-    // publishing this block as continuity state.
+    // Preserve the allocation-free dry passthrough behavior.
     if (numFrames == 0) {
         return;
     }
@@ -238,10 +229,7 @@ void PluginChain::process(const float* const* inputs, float* const* outputs, uin
         copyInputChannels(inputs, outputs, numFrames);
         return;
     }
-    if (!outputs || !outputs[0] || !outputs[1] ||
-        continuityBuffers_.size() < 2 ||
-        continuityBuffers_[0].size() < numFrames ||
-        continuityBuffers_[1].size() < numFrames) {
+    if (!outputs || !outputs[0] || !outputs[1]) {
         clearOutputs(outputs, numFrames);
         return;
     }
@@ -275,8 +263,7 @@ void PluginChain::process(const float* const* inputs, float* const* outputs, uin
                 currentOutputs[0] = intermediateBuffers_[0].data();
                 currentOutputs[1] = intermediateBuffers_[1].data();
             }
-            const float* const inputPtrs[2] = {currentInputs[0], currentInputs[1]};
-            plugin->process(inputPtrs, currentOutputs, numFrames);
+            plugin->process(currentInputs, currentOutputs, numFrames, context);
             if (i < plugins_.size() - 1) {
                 currentInputs[0] = intermediateBuffers_[0].data();
                 currentInputs[1] = intermediateBuffers_[1].data();
@@ -284,11 +271,6 @@ void PluginChain::process(const float* const* inputs, float* const* outputs, uin
         }
     }
 
-    // Publish only complete, supported wet blocks.
-    std::memcpy(continuityBuffers_[0].data(), outputs[0], numFrames * sizeof(float));
-    std::memcpy(continuityBuffers_[1].data(), outputs[1], numFrames * sizeof(float));
-    continuityFrames_ = numFrames;
-    continuityValid_ = true;
 }
 
 void PluginChain::setSampleRate(float sampleRate, uint32_t bufferSize) {
@@ -297,14 +279,6 @@ void PluginChain::setSampleRate(float sampleRate, uint32_t bufferSize) {
     bufferSize_ = bufferSize;
     renderBufferSize_ = bufferSize_;
     ensureBuffers(renderBufferSize_, 2);
-    if (continuityBuffers_.size() < 2) {
-        continuityBuffers_.resize(2);
-    }
-    for (auto& buffer : continuityBuffers_) {
-        buffer.resize(renderBufferSize_);
-    }
-    continuityFrames_ = 0;
-    continuityValid_ = false;
     for (auto& slot : plugins_) {
         slot.plugin->activate(sampleRate, bufferSize);
     }
@@ -425,33 +399,6 @@ void PluginChain::ensureBuffers(uint32_t numFrames, uint32_t numChannels) {
     for (auto& buffer : intermediateBuffers_) {
         if (buffer.size() < numFrames) {
             buffer.resize(numFrames);
-        }
-    }
-}
-void PluginChain::copyContinuity(float* const* outputs, uint32_t numFrames) const noexcept {
-    if (!outputs || numFrames == 0 || !continuityValid_ || continuityFrames_ == 0 ||
-        continuityBuffers_.size() < 2 ||
-        continuityBuffers_[0].size() < continuityFrames_ ||
-        continuityBuffers_[1].size() < continuityFrames_) {
-        clearOutputs(outputs, numFrames);
-        return;
-    }
-
-    // Repeat complete wet history blocks until the requested supported
-    // callback is filled. The first block is therefore an exact prefix for
-    // shorter callbacks, with no allocation or locking on the RT path.
-    for (uint32_t channel = 0; channel < 2; ++channel) {
-        if (!outputs[channel]) {
-            continue;
-        }
-        uint32_t copied = 0;
-        while (copied < numFrames) {
-            const uint32_t chunk =
-                std::min(continuityFrames_, numFrames - copied);
-            std::memcpy(outputs[channel] + copied,
-                        continuityBuffers_[channel].data(),
-                        chunk * sizeof(float));
-            copied += chunk;
         }
     }
 }

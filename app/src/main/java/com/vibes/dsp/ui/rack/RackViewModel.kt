@@ -20,16 +20,20 @@ import java.io.File
 
 data class RackPlugin(val index: Int, val name: String, val pluginId: String, val instanceId: Long)
 
+data class MeterState(
+    val inputLevel: Float = 0f,
+    val outputLevel: Float = 0f,
+    val inputClipping: Boolean = false,
+    val outputClipping: Boolean = false
+)
+
 class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val native = NativeEngine.getInstance()
     private val _isEngineRunning = MutableStateFlow(false); val isEngineRunning = _isEngineRunning.asStateFlow()
     private val _latencyMs = MutableStateFlow(0.0); val latencyMs = _latencyMs.asStateFlow()
-    private val _inputLevel = MutableStateFlow(0f); val inputLevel = _inputLevel.asStateFlow()
-    private val _outputLevel = MutableStateFlow(0f); val outputLevel = _outputLevel.asStateFlow()
+    private val _meterState = MutableStateFlow(MeterState()); val meterState = _meterState.asStateFlow()
     private val _cpuLoad = MutableStateFlow(0f); val cpuLoad = _cpuLoad.asStateFlow()
     private val _xRunCount = MutableStateFlow(0); val xRunCount = _xRunCount.asStateFlow()
-    private val _inputClipping = MutableStateFlow(false); val inputClipping = _inputClipping.asStateFlow()
-    private val _outputClipping = MutableStateFlow(false); val outputClipping = _outputClipping.asStateFlow()
     private val _tracks = MutableStateFlow<List<RackTrackInfo>>(emptyList()); val tracks: StateFlow<List<RackTrackInfo>> = _tracks.asStateFlow()
     private val _selectedPathId = MutableStateFlow<RackPathId>(1L); val selectedPathId = _selectedPathId.asStateFlow()
     private val _directUsbStats = MutableStateFlow(DirectUsbStats())
@@ -37,7 +41,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val _directUsbState = MutableStateFlow(DirectUsbSessionState.Stopped)
     val directUsbState: StateFlow<DirectUsbSessionState> = _directUsbState.asStateFlow()
     private val _selectedPathPlugins = MutableStateFlow<List<RackPlugin>>(emptyList()); val selectedPathPlugins = _selectedPathPlugins.asStateFlow()
-    private val _wavTransport = MutableStateFlow(WavTransportInfo(false, false, 0.0, 0.0, 0)); val wavTransport = _wavTransport.asStateFlow()
+    private val _transport = MutableStateFlow(TransportInfo(false, false, 0.0, 0.0, 0, 120.0, 0L, 0L)); val transport = _transport.asStateFlow()
     private val _errorMessage = MutableStateFlow<String?>(null); val errorMessage = _errorMessage.asStateFlow()
     private val _blockingOperation = MutableStateFlow<String?>(null); val blockingOperation = _blockingOperation.asStateFlow()
     private val _presetList = MutableStateFlow<List<String>>(emptyList()); val presetList = _presetList.asStateFlow()
@@ -57,22 +61,22 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     @Volatile private var rackVisible = false
 
     init {
-        // Meter values are lock-free native atomics. Sample them off Main at
-        // display cadence; the 200 ms control poll made the VU bars visibly step.
+        // Native meters are sampled once and published as one conflated immutable state.
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
                 if (nativeReady && rackVisible && _isEngineRunning.value) {
                     runCatching {
-                        _inputLevel.value = AudioEngine.getInputLevel()
-                        _outputLevel.value = AudioEngine.getOutputLevel()
-                        _inputClipping.value = AudioEngine.isInputClipping()
-                        _outputClipping.value = AudioEngine.isOutputClipping()
+                        _meterState.value = MeterState(
+                            AudioEngine.getInputLevel(),
+                            AudioEngine.getOutputLevel(),
+                            AudioEngine.isInputClipping(),
+                            AudioEngine.isOutputClipping()
+                        )
                     }
-                } else if (_inputLevel.value != 0f || _outputLevel.value != 0f) {
-                    _inputLevel.value = 0f
-                    _outputLevel.value = 0f
+                } else if (_meterState.value != MeterState()) {
+                    _meterState.value = MeterState()
                 }
-                delay(16)
+                delay(17)
             }
         }
         // Control/status JNI may allocate or wait behind control locks. Keep it
@@ -95,7 +99,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                             }
                         }
                     }
-                    refreshWavTransport()
+                    refreshTransport()
                 }
                 delay(200)
             }
@@ -119,7 +123,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             stats.captureTransferErrors, stats.playbackTransferErrors,
             stats.captureWaitPressure, stats.writeWaitPressure,
             stats.effectiveQuantum, stats.periodMultiplier, stats.startupPrime,
-            stats.steadyTarget,
+            stats.steadyTarget, stats.deadlineMisses,
         )
         if (signature != lastUsbSignature) {
             lastUsbSignature = signature
@@ -130,7 +134,9 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                 "ring(capture=${stats.captureRingFrames},playback=${stats.playbackRingFrames}) " +
                 "queued/prime/target=${stats.queuedOut}/${stats.startupPrime}/${stats.steadyTarget} " +
                 "Q=${stats.effectiveQuantum} multiplier=${stats.periodMultiplier} " +
-                "DSP(last=${stats.lastDspNs},peak=${stats.peakDspNs})")
+                "estimatedHostQueue=${stats.knownHostLatencyFrames}f " +
+                "DSP(last=${stats.lastDspNs},peak=${stats.peakDspNs}) " +
+                "cycle(last=${stats.lastCycleNs},peak=${stats.peakCycleNs},budget=${stats.deadlineBudgetNs},misses=${stats.deadlineMisses})")
         }
     }
 
@@ -153,7 +159,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             val all = RackManager.getTracks().toList(); _tracks.value = all
             if (_selectedPathId.value != MASTER_PATH_ID && all.none { it.id == _selectedPathId.value }) _selectedPathId.value = all.firstOrNull()?.id ?: MASTER_PATH_ID
             refreshSelectedPath(force)
-            refreshWavTransport()
+            refreshTransport()
             if (_directUsbState.value != DirectUsbSessionState.Failed) _errorMessage.value = null
         }.onFailure {
             android.util.Log.e("RackViewModel", "Failed to refresh rack", it)
@@ -215,12 +221,13 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun loadTrackWavAsync(trackId: RackPathId, path: String, displayName: String) { viewModelScope.launch { loadTrackWav(trackId, path, displayName) } }
     fun unloadTrackWav(trackId: RackPathId) { viewModelScope.launch { val ok = withBlockingOperation("Unloading WAV") { withContext(Dispatchers.IO) { RackManager.unloadTrackWav(trackId) } }; if (!ok) _errorMessage.value = "Failed to unload WAV"; refreshRack() } }
     fun clearTrackWavs() { viewModelScope.launch(Dispatchers.IO) { RackManager.clearTrackWavs(); refreshRackNow() } }
-    fun wavTransportPlay() { transportPlaying(true) }
-    fun wavTransportPause() { transportPlaying(false) }
-    fun wavTransportRestart() { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.restartWavTransport()) _errorMessage.value = if (!_isEngineRunning.value) "Start engine to play WAV" else "No WAV clips loaded"; refreshWavTransport() } }
-    fun wavTransportToggleLoop() { viewModelScope.launch(Dispatchers.IO) { RackManager.setWavTransportLooping(!_wavTransport.value.looping); refreshWavTransport() } }
-    private fun refreshWavTransport() { if (nativeReady) runCatching { _wavTransport.value = RackManager.getWavTransportInfo() } }
-    private fun transportPlaying(value: Boolean) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.setWavTransportPlaying(value) && value) _errorMessage.value = if (!_isEngineRunning.value) "Start engine to play WAV" else "No WAV clips loaded"; refreshWavTransport() } }
+    fun transportPlay() { setTransportPlaying(true) }
+    fun transportPause() { setTransportPlaying(false) }
+    fun transportRestart() { viewModelScope.launch(Dispatchers.IO) { RackManager.restartTransport(); refreshTransport() } }
+    fun transportToggleLoop() { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportLooping(!_transport.value.looping); refreshTransport() } }
+    fun setTransportBpm(bpm: Double) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportBpm(bpm); refreshTransport() } }
+    private fun refreshTransport() { if (nativeReady) runCatching { _transport.value = RackManager.getTransportInfo() } }
+    private fun setTransportPlaying(value: Boolean) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportPlaying(value); refreshTransport() } }
 
     fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.addPlugin(pathId, pluginId, position) < 0) _errorMessage.value = "Failed to add plugin"; refreshSelectedPath() } }
     fun removePlugin(pathId: RackPathId, position: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.removePlugin(pathId, position)) _errorMessage.value = "Failed to remove plugin"; refreshSelectedPath() } }
@@ -303,7 +310,10 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun resetClipping() { AudioEngine.resetClipping(); _inputClipping.value = false; _outputClipping.value = false }
+    fun resetClipping() {
+        AudioEngine.resetClipping()
+        _meterState.value = _meterState.value.copy(inputClipping = false, outputClipping = false)
+    }
     fun toggleRecording(context: Context) {
         if (_isRecording.value) {
             stopRecording()

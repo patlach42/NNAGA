@@ -68,7 +68,8 @@ std::unique_ptr<RackGraph::GraphSnapshot> RackGraph::buildSnapshotLocked(
     return snapshot;
 }
 
-void RackGraph::writeMailboxLocked(bool changePlay, bool playing, bool changeLoop, bool looping, bool reset) {
+void RackGraph::writeMailboxLocked(bool changePlay, bool playing, bool changeLoop, bool looping,
+                                    bool reset, bool changeBpm, double bpm) {
     mailbox_.sequence.fetch_add(1, std::memory_order_acq_rel);
     if (changePlay) {
         mailbox_.desiredPlaying.store(playing, std::memory_order_relaxed);
@@ -77,6 +78,11 @@ void RackGraph::writeMailboxLocked(bool changePlay, bool playing, bool changeLoo
     if (changeLoop) {
         mailbox_.desiredLooping.store(looping, std::memory_order_relaxed);
         mailbox_.loopSerial.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (changeBpm) {
+        mailbox_.desiredBpm.store(std::clamp(std::isfinite(bpm) ? bpm : 120.0, 20.0, 400.0),
+                                  std::memory_order_relaxed);
+        mailbox_.bpmSerial.fetch_add(1, std::memory_order_relaxed);
     }
     if (reset) mailbox_.resetSerial.fetch_add(1, std::memory_order_relaxed);
     mailbox_.sequence.fetch_add(1, std::memory_order_release);
@@ -93,12 +99,10 @@ void RackGraph::publishStaticTransportLocked() {
             }
         }
     }
-    statusDurationSec_.store(duration, std::memory_order_release);
-    statusLoadedTrackCount_.store(count, std::memory_order_release);
-    if (count == 0) {
-        statusPlaying_.store(false, std::memory_order_release);
-        statusPositionSec_.store(0.0, std::memory_order_release);
-    }
+    staticStatusSequence_.fetch_add(1, std::memory_order_acq_rel);
+    statusDurationSec_.store(duration, std::memory_order_relaxed);
+    statusLoadedTrackCount_.store(count, std::memory_order_relaxed);
+    staticStatusSequence_.fetch_add(1, std::memory_order_release);
 }
 
 bool RackGraph::publishSnapshotLocked(std::unique_ptr<GraphSnapshot> next, bool resetTransport) {
@@ -254,14 +258,12 @@ bool RackGraph::clearTrackWavs() {
 
 bool RackGraph::setTransportPlaying(bool playing) {
     std::lock_guard lock(controlMutex_);
-    if (playing && statusLoadedTrackCount_.load(std::memory_order_acquire) == 0) return false;
     writeMailboxLocked(true, playing, false, false, false);
     return true;
 }
 
 bool RackGraph::restartTransport() {
     std::lock_guard lock(controlMutex_);
-    if (statusLoadedTrackCount_.load(std::memory_order_acquire) == 0) return false;
     writeMailboxLocked(true, true, false, false, true);
     return true;
 }
@@ -271,10 +273,32 @@ void RackGraph::setTransportLooping(bool looping) {
     writeMailboxLocked(false, false, true, looping, false);
 }
 
+void RackGraph::setBeatsPerMinute(double bpm) {
+    std::lock_guard lock(controlMutex_);
+    writeMailboxLocked(false, false, false, false, false, true, bpm);
+}
+
 TransportSnapshot RackGraph::getTransportSnapshot() const {
-    return {statusPlaying_.load(std::memory_order_acquire), statusLooping_.load(std::memory_order_acquire),
-        statusPositionSec_.load(std::memory_order_acquire), statusDurationSec_.load(std::memory_order_acquire),
-        statusLoadedTrackCount_.load(std::memory_order_acquire)};
+    TransportSnapshot result{};
+    for (;;) {
+        const uint64_t before = statusSequence_.load(std::memory_order_acquire);
+        if (before & 1U) continue;
+        result.playing = statusPlaying_.load(std::memory_order_relaxed);
+        result.looping = statusLooping_.load(std::memory_order_relaxed);
+        result.positionSec = statusPositionSec_.load(std::memory_order_relaxed);
+        result.beatsPerMinute = statusBpm_.load(std::memory_order_relaxed);
+        result.samplePosition = statusSamplePosition_.load(std::memory_order_relaxed);
+        result.transportFrame = statusTransportFrame_.load(std::memory_order_relaxed);
+        if (before == statusSequence_.load(std::memory_order_acquire)) break;
+    }
+    for (;;) {
+        const uint64_t before = staticStatusSequence_.load(std::memory_order_acquire);
+        if (before & 1U) continue;
+        result.durationSec = statusDurationSec_.load(std::memory_order_relaxed);
+        result.loadedTrackCount = statusLoadedTrackCount_.load(std::memory_order_relaxed);
+        if (before == staticStatusSequence_.load(std::memory_order_acquire)) break;
+    }
+    return result;
 }
 
 std::shared_ptr<PluginChain> RackGraph::getChain(RackPathId pathId) const {
@@ -314,6 +338,53 @@ RackGraph::State RackGraph::saveState() {
     state.master = master_->saveChainState();
     return state;
 }
+void RackGraph::advanceTransport(uint32_t frames) noexcept {
+    const uint64_t sequence = mailbox_.sequence.load(std::memory_order_acquire);
+    if ((sequence & 1U) == 0) {
+        const uint64_t playSerial = mailbox_.playSerial.load(std::memory_order_relaxed);
+        const uint64_t loopSerial = mailbox_.loopSerial.load(std::memory_order_relaxed);
+        const uint64_t resetSerial = mailbox_.resetSerial.load(std::memory_order_relaxed);
+        const uint64_t bpmSerial = mailbox_.bpmSerial.load(std::memory_order_relaxed);
+        const bool desiredPlaying = mailbox_.desiredPlaying.load(std::memory_order_relaxed);
+        const bool desiredLooping = mailbox_.desiredLooping.load(std::memory_order_relaxed);
+        const double desiredBpm = mailbox_.desiredBpm.load(std::memory_order_relaxed);
+        if (mailbox_.sequence.load(std::memory_order_acquire) == sequence) {
+            if (playSerial != appliedPlaySerial_) { audioPlaying_ = desiredPlaying; appliedPlaySerial_ = playSerial; }
+            if (loopSerial != appliedLoopSerial_) { audioLooping_ = desiredLooping; appliedLoopSerial_ = loopSerial; }
+            if (bpmSerial != appliedBpmSerial_) { audioBpm_ = desiredBpm; appliedBpmSerial_ = bpmSerial; }
+            if (resetSerial != appliedResetSerial_) { audioTransportFrame_ = 0; appliedResetSerial_ = resetSerial; }
+        }
+    }
+    const double rate = sampleRate_.load(std::memory_order_relaxed) > 0.0f
+        ? sampleRate_.load(std::memory_order_relaxed) : 48000.0;
+    const double duration = statusDurationSec_.load(std::memory_order_acquire);
+    const double exact = duration * rate;
+    const uint64_t boundary =
+        exact >= static_cast<double>(std::numeric_limits<uint64_t>::max())
+            ? std::numeric_limits<uint64_t>::max()
+            : static_cast<uint64_t>(std::ceil(exact));
+    if (audioLooping_ && boundary > 0) {
+        audioTransportFrame_ %= boundary;
+    }
+    audioSamplePosition_ += frames;
+    if (audioPlaying_) {
+        audioTransportFrame_ += frames;
+        if (boundary > 0 && audioLooping_) {
+            audioTransportFrame_ %= boundary;
+        } else if (boundary > 0 && audioTransportFrame_ >= boundary) {
+            audioTransportFrame_ = boundary;
+            audioPlaying_ = false;
+        }
+    }
+    statusSequence_.fetch_add(1, std::memory_order_acq_rel);
+    statusSamplePosition_.store(audioSamplePosition_, std::memory_order_relaxed);
+    statusTransportFrame_.store(audioTransportFrame_, std::memory_order_relaxed);
+    statusPlaying_.store(audioPlaying_, std::memory_order_relaxed);
+    statusLooping_.store(audioLooping_, std::memory_order_relaxed);
+    statusBpm_.store(audioBpm_, std::memory_order_relaxed);
+    statusPositionSec_.store(static_cast<double>(audioTransportFrame_) / rate, std::memory_order_relaxed);
+    statusSequence_.fetch_add(1, std::memory_order_release);
+}
 
 void RackGraph::process(const float* const* liveInputs, float* const* outputs, uint32_t frames) noexcept {
     GraphSnapshot* snapshot = activeSnapshot_.load(std::memory_order_acquire);
@@ -322,65 +393,73 @@ void RackGraph::process(const float* const* liveInputs, float* const* outputs, u
         if (snapshot == activeSnapshot_.load(std::memory_order_acquire)) break;
         snapshot = activeSnapshot_.load(std::memory_order_acquire);
     } while (true);
-    if (!snapshot || frames > snapshot->capacity || !outputs || !outputs[0] || !outputs[1]) { silence(outputs, frames); hazardSnapshot_.store(nullptr, std::memory_order_seq_cst); return; }
-
-    uint64_t sequence = mailbox_.sequence.load(std::memory_order_acquire);
-    uint64_t playSerial = 0, loopSerial = 0, resetSerial = 0;
-    bool desiredPlaying = false, desiredLooping = false;
-    if ((sequence & 1U) == 0) {
-        playSerial = mailbox_.playSerial.load(std::memory_order_relaxed);
-        loopSerial = mailbox_.loopSerial.load(std::memory_order_relaxed);
-        resetSerial = mailbox_.resetSerial.load(std::memory_order_relaxed);
-        desiredPlaying = mailbox_.desiredPlaying.load(std::memory_order_relaxed);
-        desiredLooping = mailbox_.desiredLooping.load(std::memory_order_relaxed);
-        if (sequence != mailbox_.sequence.load(std::memory_order_acquire)) sequence = 1;
+    if (!snapshot || frames > snapshot->capacity || !outputs || !outputs[0] || !outputs[1]) {
+        silence(outputs, frames);
+        hazardSnapshot_.store(nullptr, std::memory_order_seq_cst);
+        return;
     }
-    static thread_local uint64_t appliedPlay = 0, appliedLoop = 0, appliedReset = 0;
-    static thread_local bool playing = false, looping = false;
-    static thread_local double position = 0.0;
+    const uint64_t sequence = mailbox_.sequence.load(std::memory_order_acquire);
     if ((sequence & 1U) == 0) {
-        if (playSerial != appliedPlay) { playing = desiredPlaying; appliedPlay = playSerial; }
-        if (loopSerial != appliedLoop) { looping = desiredLooping; appliedLoop = loopSerial; }
-        if (resetSerial != appliedReset) { position = 0.0; appliedReset = resetSerial; }
+        const uint64_t playSerial = mailbox_.playSerial.load(std::memory_order_relaxed);
+        const uint64_t loopSerial = mailbox_.loopSerial.load(std::memory_order_relaxed);
+        const uint64_t resetSerial = mailbox_.resetSerial.load(std::memory_order_relaxed);
+        const uint64_t bpmSerial = mailbox_.bpmSerial.load(std::memory_order_relaxed);
+        const bool desiredPlaying = mailbox_.desiredPlaying.load(std::memory_order_relaxed);
+        const bool desiredLooping = mailbox_.desiredLooping.load(std::memory_order_relaxed);
+        const double desiredBpm = mailbox_.desiredBpm.load(std::memory_order_relaxed);
+        const uint64_t confirm = mailbox_.sequence.load(std::memory_order_acquire);
+        if (confirm == sequence) {
+            if (playSerial != appliedPlaySerial_) { audioPlaying_ = desiredPlaying; appliedPlaySerial_ = playSerial; }
+            if (loopSerial != appliedLoopSerial_) { audioLooping_ = desiredLooping; appliedLoopSerial_ = loopSerial; }
+            if (bpmSerial != appliedBpmSerial_) { audioBpm_ = desiredBpm; appliedBpmSerial_ = bpmSerial; }
+            if (resetSerial != appliedResetSerial_) { audioTransportFrame_ = 0; appliedResetSerial_ = resetSerial; }
+        }
     }
     const double duration = statusDurationSec_.load(std::memory_order_acquire);
+    const double rate = sampleRate_.load(std::memory_order_acquire) > 0.0f
+        ? sampleRate_.load(std::memory_order_relaxed) : 48000.0;
+    const double durationFramesExact = duration * rate;
+    const uint64_t durationFrames =
+        durationFramesExact >= static_cast<double>(std::numeric_limits<uint64_t>::max())
+            ? std::numeric_limits<uint64_t>::max()
+            : static_cast<uint64_t>(std::ceil(durationFramesExact));
+    if (audioLooping_ && durationFrames > 0) {
+        audioTransportFrame_ %= durationFrames;
+    }
+    const AudioProcessContext context{
+        audioSamplePosition_, audioTransportFrame_,
+        audioLooping_ ? durationFrames : 0, rate, audioBpm_,
+        audioPlaying_, audioLooping_};
     std::fill(snapshot->mixLeft.begin(), snapshot->mixLeft.begin() + frames, 0.0f);
     std::fill(snapshot->mixRight.begin(), snapshot->mixRight.begin() + frames, 0.0f);
-    const float configuredRate = sampleRate_.load(std::memory_order_acquire);
-    const double rate = configuredRate > 0.0f ? configuredRate : 48000.0;
     for (const auto& view : snapshot->tracks) {
         auto& node = *view.node;
         float* source[2] = {node.sourceLeft.data(), node.sourceRight.data()};
         if (view.clip) {
             const auto& clip = *view.clip;
+            const double step = static_cast<double>(clip.sampleRate) / rate;
+            const double clipFrames = static_cast<double>(clip.left.size());
+            const double exactBoundary = (clipFrames / static_cast<double>(clip.sampleRate)) * rate;
+            const uint64_t hostBoundary = exactBoundary >= static_cast<double>(std::numeric_limits<uint64_t>::max())
+                ? std::numeric_limits<uint64_t>::max() : static_cast<uint64_t>(std::ceil(exactBoundary));
             for (uint32_t frame = 0; frame < frames; ++frame) {
-                double p = position + static_cast<double>(frame) / rate;
-                if (!playing) {
+                if (!audioPlaying_) { source[0][frame] = source[1][frame] = 0.0f; continue; }
+                const uint64_t hostFrame = audioTransportFrame_ + frame;
+                if (hostBoundary == 0 || (!audioLooping_ && hostFrame >= hostBoundary)) {
+                    source[0][frame] = source[1][frame] = 0.0f; continue;
+                }
+                const double sampleFrame = static_cast<double>(audioLooping_ ? (hostFrame % hostBoundary) : hostFrame) * step;
+                if (sampleFrame >= clipFrames) {
                     source[0][frame] = source[1][frame] = 0.0f;
                     continue;
                 }
-                if (p >= clipDuration(clip)) {
-                    if (looping && duration > 0.0) {
-                        p = std::fmod(p, duration);
-                    } else {
-                        source[0][frame] = source[1][frame] = 0.0f;
-                        continue;
-                    }
-                }
-                const double clipFrame = p * clip.sampleRate;
-                const size_t first = static_cast<size_t>(clipFrame);
-                if (first >= clip.left.size()) {
-                    source[0][frame] = source[1][frame] = 0.0f;
-                    continue;
-                }
+                const size_t first = static_cast<size_t>(sampleFrame);
                 const size_t second = std::min(first + 1, clip.left.size() - 1);
-                const float fraction = static_cast<float>(clipFrame - first);
+                const float fraction = static_cast<float>(sampleFrame - first);
                 source[0][frame] = clip.left[first] + (clip.left[second] - clip.left[first]) * fraction;
-                source[1][frame] = clip.right.empty() ? source[0][frame] :
-                    clip.right[first] + (clip.right[second] - clip.right[first]) * fraction;
+                source[1][frame] = clip.right.empty() ? source[0][frame] : clip.right[first] + (clip.right[second] - clip.right[first]) * fraction;
             }
-        } else if (node.inputArmed.load(std::memory_order_acquire) && liveInputs &&
-                   liveInputs[0] && liveInputs[1]) {
+        } else if (node.inputArmed.load(std::memory_order_acquire) && liveInputs && liveInputs[0] && liveInputs[1]) {
             std::memcpy(source[0], liveInputs[0], frames * sizeof(float));
             std::memcpy(source[1], liveInputs[1], frames * sizeof(float));
         } else {
@@ -388,16 +467,33 @@ void RackGraph::process(const float* const* liveInputs, float* const* outputs, u
             std::memset(source[1], 0, frames * sizeof(float));
         }
         float* trackOutput[2] = {node.outputLeft.data(), node.outputRight.data()};
-        node.chain->process(source, trackOutput, frames);
+        node.chain->process(source, trackOutput, frames, context);
         const float volume = node.volume.load(std::memory_order_acquire);
-        for (uint32_t frame = 0; frame < frames; ++frame) { snapshot->mixLeft[frame] += trackOutput[0][frame] * volume; snapshot->mixRight[frame] += trackOutput[1][frame] * volume; }
+        for (uint32_t frame = 0; frame < frames; ++frame) {
+            snapshot->mixLeft[frame] += trackOutput[0][frame] * volume;
+            snapshot->mixRight[frame] += trackOutput[1][frame] * volume;
+        }
     }
     const float* mix[2] = {snapshot->mixLeft.data(), snapshot->mixRight.data()};
-    snapshot->master->process(mix, outputs, frames);
-    if (playing && duration > 0.0) { position += static_cast<double>(frames) / rate; if (position >= duration) { if (looping) position = std::fmod(position, duration); else { position = duration; playing = false; } } }
-    statusPlaying_.store(playing, std::memory_order_release);
-    statusLooping_.store(looping, std::memory_order_release);
-    statusPositionSec_.store(position, std::memory_order_release);
+    snapshot->master->process(mix, outputs, frames, context);
+    audioSamplePosition_ += frames;
+    if (audioPlaying_) {
+        audioTransportFrame_ += frames;
+        if (durationFrames > 0 && !audioLooping_ && audioTransportFrame_ >= durationFrames) {
+            audioTransportFrame_ = durationFrames;
+            audioPlaying_ = false;
+        } else if (durationFrames > 0 && audioLooping_) {
+            audioTransportFrame_ %= durationFrames;
+        }
+    }
+    statusSequence_.fetch_add(1, std::memory_order_acq_rel);
+    statusSamplePosition_.store(audioSamplePosition_, std::memory_order_relaxed);
+    statusTransportFrame_.store(audioTransportFrame_, std::memory_order_relaxed);
+    statusPlaying_.store(audioPlaying_, std::memory_order_relaxed);
+    statusLooping_.store(audioLooping_, std::memory_order_relaxed);
+    statusBpm_.store(audioBpm_, std::memory_order_relaxed);
+    statusPositionSec_.store(static_cast<double>(audioTransportFrame_) / rate, std::memory_order_relaxed);
+    statusSequence_.fetch_add(1, std::memory_order_release);
     hazardSnapshot_.store(nullptr, std::memory_order_seq_cst);
 }
 

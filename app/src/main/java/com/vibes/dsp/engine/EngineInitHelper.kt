@@ -31,6 +31,11 @@ object EngineInitHelper {
 
     private const val TAG = "EngineInitHelper"
 
+    /** Process-local publication of a successfully initialized native engine. */
+    @Volatile
+    var isInitialized: Boolean = false
+        private set
+
     /**
      * Preload lilv shared library by absolute path so that when libguitarrackcraft.so
      * is loaded the linker finds it (DT_NEEDED liblilv-0.so.0).
@@ -56,10 +61,13 @@ object EngineInitHelper {
      * For playstore flavor, extracts plugin .so from PAD packs first.
      * Returns true if initialization succeeded.
      */
+    @Synchronized
     fun initEngine(
         context: Context,
         onExtractionProgress: ((extracted: Int, total: Int) -> Unit)? = null
     ): Boolean {
+        if (isInitialized) return true
+
         val engine = NativeEngine.getInstance()
         val lv2Dir = File(context.applicationContext.filesDir, "lv2")
         val lv2Path = lv2Dir.canonicalPath
@@ -86,6 +94,7 @@ object EngineInitHelper {
         } else {
             val count = engine.getAvailablePlugins().size
             Log.d(TAG, "Native engine init OK, plugin count=$count")
+            isInitialized = true
         }
         return ok
     }
