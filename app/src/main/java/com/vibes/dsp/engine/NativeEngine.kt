@@ -163,21 +163,29 @@ data class DirectUsbStats(
 typealias RackPathId = Long
 const val MASTER_PATH_ID: RackPathId = 0L
 
+enum class TrackLaunchQuantization {
+    Bar,
+    Quarter,
+    Eighth,
+    Sixteenth
+}
+
 data class RackTrackInfo(
     val id: RackPathId,
     val volume: Float,
     val inputArmed: Boolean,
     val wavLoaded: Boolean,
     val wavDisplayName: String,
-    val wavDurationSec: Double
+    val wavDurationSec: Double,
+    val playing: Boolean,
+    val looping: Boolean,
+    val positionSec: Double,
+    val transportFrame: Long
 )
 
 data class TransportInfo(
     val playing: Boolean,
-    val looping: Boolean,
     val positionSec: Double,
-    val durationSec: Double,
-    val loadedTrackCount: Int,
     val beatsPerMinute: Double = 120.0,
     val samplePosition: Long = 0L,
     val transportFrame: Long = 0L
@@ -498,7 +506,12 @@ class NativeEngine private constructor() {
     external fun nativeSetTransportPlaying(playing: Boolean): Boolean
     external fun nativeSetTransportBpm(bpm: Double): Boolean
     external fun nativeRestartTransport(): Boolean
-    external fun nativeSetTransportLooping(looping: Boolean)
+    external fun nativeSetTrackTransportPlaying(
+        trackId: Long,
+        playing: Boolean,
+        quantization: Int
+    ): Boolean
+    external fun nativeSetTrackTransportLooping(trackId: Long, looping: Boolean): Boolean
     external fun nativeGetTransportInfo(): TransportInfo
 
 
@@ -555,7 +568,13 @@ class NativeEngine private constructor() {
     fun setTransportBpm(bpm: Double): Boolean = nativeSetTransportBpm(bpm.coerceIn(20.0, 400.0))
     fun setTransportPlaying(playing: Boolean): Boolean = nativeSetTransportPlaying(playing)
     fun restartTransport(): Boolean = nativeRestartTransport()
-    fun setTransportLooping(looping: Boolean) = nativeSetTransportLooping(looping)
+    fun setTrackTransportPlaying(
+        trackId: Long,
+        playing: Boolean,
+        quantization: TrackLaunchQuantization
+    ): Boolean = nativeSetTrackTransportPlaying(trackId, playing, quantization.ordinal)
+    fun setTrackTransportLooping(trackId: Long, looping: Boolean): Boolean =
+        nativeSetTrackTransportLooping(trackId, looping)
     fun getTransportInfo(): TransportInfo = nativeGetTransportInfo()
 
 }

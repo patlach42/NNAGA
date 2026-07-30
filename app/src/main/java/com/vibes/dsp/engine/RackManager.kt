@@ -40,10 +40,16 @@ object RackManager {
     fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = native.loadTrackWav(trackId, path, displayName)
     fun unloadTrackWav(trackId: RackPathId): Boolean = native.unloadTrackWav(trackId)
     fun clearTrackWavs(): Boolean = native.clearTrackWavs()
+    fun setTrackTransportPlaying(
+        trackId: RackPathId,
+        playing: Boolean,
+        quantization: TrackLaunchQuantization
+    ): Boolean = native.setTrackTransportPlaying(trackId, playing, quantization)
+    fun setTrackTransportLooping(trackId: RackPathId, looping: Boolean): Boolean =
+        native.setTrackTransportLooping(trackId, looping)
     fun setTransportBpm(bpm: Double): Boolean = native.setTransportBpm(bpm)
     fun setTransportPlaying(playing: Boolean): Boolean = native.setTransportPlaying(playing)
     fun restartTransport(): Boolean = native.restartTransport()
-    fun setTransportLooping(looping: Boolean) = native.setTransportLooping(looping)
     fun getTransportInfo(): TransportInfo = native.getTransportInfo()
 
 }

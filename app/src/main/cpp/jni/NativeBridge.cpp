@@ -911,10 +911,24 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRestartTransport(JNIEnv*, jobject) 
         g_ctx->audioEngine->getRackGraph().restartTransport() ? JNI_TRUE : JNI_FALSE;
 }
 
-JNIEXPORT void JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeSetTransportLooping(JNIEnv*, jobject, jboolean looping) {
-    if (g_ctx && g_ctx->audioEngine) g_ctx->audioEngine->getRackGraph().setTransportLooping(looping == JNI_TRUE);
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackTransportPlaying(
+    JNIEnv*, jobject, jlong trackId, jboolean playing, jint quantization) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    const auto value = static_cast<uint8_t>(std::clamp(quantization, 0, 3));
+    return g_ctx->audioEngine->getRackGraph().setTrackTransportPlaying(
+        static_cast<RackPathId>(trackId), playing == JNI_TRUE,
+        static_cast<LaunchQuantization>(value)) ? JNI_TRUE : JNI_FALSE;
 }
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackTransportLooping(
+    JNIEnv*, jobject, jlong trackId, jboolean looping) {
+    return g_ctx && g_ctx->audioEngine &&
+        g_ctx->audioEngine->getRackGraph().setTrackTransportLooping(
+            static_cast<RackPathId>(trackId), looping == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
 
 JNIEXPORT jint JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackSize(JNIEnv*, jobject, jlong pathId) {
@@ -974,16 +988,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     const auto tracks = g_ctx->audioEngine->getRackGraph().getTracks();
     jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
     if (!clazz) return nullptr;
-    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;D)V");
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;DZZDJ)V");
     if (!ctor) return nullptr;
     jobjectArray result = env->NewObjectArray(static_cast<jsize>(tracks.size()), clazz, nullptr);
     for (size_t index = 0; index < tracks.size(); ++index) {
         const auto& track = tracks[index];
         jstring name = env->NewStringUTF(track.wavDisplayName.c_str());
-        jobject item = env->NewObject(clazz, ctor, static_cast<jlong>(track.id), track.volume,
-                                      track.inputArmed ? JNI_TRUE : JNI_FALSE,
-                                      track.wavLoaded ? JNI_TRUE : JNI_FALSE, name,
-                                      track.wavDurationSec);
+        jobject item = env->NewObject(
+            clazz, ctor, static_cast<jlong>(track.id), track.volume,
+            track.inputArmed ? JNI_TRUE : JNI_FALSE,
+            track.wavLoaded ? JNI_TRUE : JNI_FALSE, name, track.wavDurationSec,
+            track.playing ? JNI_TRUE : JNI_FALSE, track.looping ? JNI_TRUE : JNI_FALSE,
+            track.positionSec, static_cast<jlong>(track.transportFrame));
         env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         env->DeleteLocalRef(name);
         env->DeleteLocalRef(item);
@@ -997,11 +1013,10 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTransportInfo(JNIEnv* env, jobje
         ? g_ctx->audioEngine->getRackGraph().getTransportSnapshot() : TransportSnapshot{};
     jclass clazz = env->FindClass("com/vibes/dsp/engine/TransportInfo");
     if (!clazz) return nullptr;
-    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZZDDIDJJ)V");
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZDDJJ)V");
     return ctor ? env->NewObject(clazz, ctor, state.playing ? JNI_TRUE : JNI_FALSE,
-                                 state.looping ? JNI_TRUE : JNI_FALSE, state.positionSec,
-                                 state.durationSec, static_cast<jint>(state.loadedTrackCount),
-                                 state.beatsPerMinute, static_cast<jlong>(state.samplePosition),
+                                 state.positionSec, state.beatsPerMinute,
+                                 static_cast<jlong>(state.samplePosition),
                                  static_cast<jlong>(state.transportFrame)) : nullptr;
 }
 

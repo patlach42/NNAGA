@@ -111,6 +111,7 @@ import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.UiType
 import com.vibes.dsp.engine.DirectUsbSessionState
 import com.vibes.dsp.engine.MASTER_PATH_ID
+import com.vibes.dsp.engine.TrackLaunchQuantization
 import com.vibes.dsp.ui.modgui.InlineModguiView
 import com.vibes.dsp.ui.x11.PluginX11UiView
 import com.vibes.dsp.ui.x11.X11DisplayManager
@@ -264,6 +265,8 @@ fun RackScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
     val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
+    var launchQuantizationOrdinal by rememberSaveable(selectedTrack?.id) { mutableIntStateOf(0) }
+    val launchQuantization = TrackLaunchQuantization.entries[launchQuantizationOrdinal]
 
 
 
@@ -554,6 +557,89 @@ fun RackScreen(
                     TextButton(onClick = { viewModel.unloadTrackWav(track.id) }, modifier = Modifier.heightIn(min = 44.dp)) { Text("Unload") }
                 }
             }
+            Column(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Selected track transport",
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "${formatMusicalPosition(track.positionSec, transport.beatsPerMinute)} · " +
+                            formatElapsedTime(track.positionSec),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    IconButton(
+                        onClick = {
+                            viewModel.setTrackTransportPlaying(
+                                track.id,
+                                !track.playing,
+                                launchQuantization
+                            )
+                        },
+                        enabled = track.playing || transport.playing,
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            if (track.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            if (track.playing) "Pause selected track" else "Start selected track"
+                        )
+                    }
+                    Text("Loop", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Switch(
+                        checked = track.looping,
+                        onCheckedChange = { viewModel.setTrackTransportLooping(track.id, it) },
+                        modifier = Modifier.semantics {
+                            contentDescription = "Loop selected track"
+                        }
+                    )
+                }
+                if (!transport.playing) {
+                    Text(
+                        "Start global transport to launch this track",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        "Launch",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    TrackLaunchQuantization.entries.forEach { quantization ->
+                        val label = when (quantization) {
+                            TrackLaunchQuantization.Bar -> "Bar"
+                            TrackLaunchQuantization.Quarter -> "1/4"
+                            TrackLaunchQuantization.Eighth -> "1/8"
+                            TrackLaunchQuantization.Sixteenth -> "1/16"
+                        }
+                        FilterChip(
+                            selected = launchQuantization == quantization,
+                            onClick = { launchQuantizationOrdinal = quantization.ordinal },
+                            label = { Text(label) },
+                            modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                        )
+                    }
+                }
+            }
         }
     } else {
         Row(
@@ -581,6 +667,22 @@ fun RackScreen(
     ) {
         Row(
             Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "Global transport",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "${formatMusicalPosition(transport.positionSec, transport.beatsPerMinute)} · " +
+                    formatElapsedTime(transport.positionSec),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -588,38 +690,31 @@ fun RackScreen(
                 onClick = { if (transport.playing) viewModel.transportPause() else viewModel.transportPlay() },
                 modifier = Modifier.size(44.dp)
             ) {
-                Icon(if (transport.playing) Icons.Default.Pause else Icons.Default.PlayArrow, "Play/Pause")
+                Icon(
+                    if (transport.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (transport.playing) "Pause global transport" else "Start global transport"
+                )
             }
             IconButton(onClick = { viewModel.transportRestart() }, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.Default.SkipPrevious, "Restart")
+                Icon(Icons.Default.SkipPrevious, "Restart global transport")
             }
-            FilterChip(
-                selected = transport.looping,
-                onClick = { viewModel.transportToggleLoop() },
-                label = { Text("Loop") },
-                modifier = Modifier.heightIn(min = 44.dp)
-            )
-            Text(
-                "${formatWavTime(transport.positionSec)} / ${formatWavTime(transport.durationSec)}",
-                modifier = Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-        }
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+            Spacer(Modifier.weight(1f))
             TextButton(
                 onClick = { viewModel.setTransportBpm(transport.beatsPerMinute - 1.0) },
-                modifier = Modifier.size(44.dp),
+                modifier = Modifier.size(44.dp).semantics {
+                    contentDescription = "Decrease global tempo"
+                },
                 contentPadding = PaddingValues(0.dp)
             ) { Text("−") }
-            Text("${transport.beatsPerMinute.toInt()} BPM", modifier = Modifier.widthIn(min = 70.dp))
+            Text(
+                "${transport.beatsPerMinute.toInt()} BPM",
+                modifier = Modifier.widthIn(min = 70.dp)
+            )
             TextButton(
                 onClick = { viewModel.setTransportBpm(transport.beatsPerMinute + 1.0) },
-                modifier = Modifier.size(44.dp),
+                modifier = Modifier.size(44.dp).semantics {
+                    contentDescription = "Increase global tempo"
+                },
                 contentPadding = PaddingValues(0.dp)
             ) { Text("+") }
         }
@@ -2811,11 +2906,23 @@ private fun ModelPicker(
 
 
 
-private fun formatWavTime(sec: Double): String {
-    val totalSec = sec.coerceAtLeast(0.0).toInt()
-    val m = totalSec / 60
-    val s = totalSec % 60
-    return "%d:%02d".format(m, s)
+private fun formatElapsedTime(sec: Double): String {
+    val totalSec = sec.coerceAtLeast(0.0).toLong()
+    val hours = totalSec / 3_600
+    val minutes = totalSec % 3_600 / 60
+    val seconds = totalSec % 60
+    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
+    else "%d:%02d".format(minutes, seconds)
+}
+
+private fun formatMusicalPosition(positionSec: Double, beatsPerMinute: Double): String {
+    val totalSixteenths = (
+        positionSec.coerceAtLeast(0.0) * beatsPerMinute.coerceAtLeast(1.0) / 60.0 * 4.0
+    ).toLong()
+    val bar = totalSixteenths / 16 + 1
+    val beat = totalSixteenths % 16 / 4 + 1
+    val sixteenth = totalSixteenths % 4 + 1
+    return "$bar:$beat:$sixteenth"
 }
 private fun queryDisplayName(context: android.content.Context, uri: Uri): String? {
     return context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)

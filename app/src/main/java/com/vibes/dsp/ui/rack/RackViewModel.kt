@@ -42,7 +42,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val _directUsbState = MutableStateFlow(DirectUsbSessionState.Stopped)
     val directUsbState: StateFlow<DirectUsbSessionState> = _directUsbState.asStateFlow()
     private val _selectedPathPlugins = MutableStateFlow<List<RackPlugin>>(emptyList()); val selectedPathPlugins = _selectedPathPlugins.asStateFlow()
-    private val _transport = MutableStateFlow(TransportInfo(false, false, 0.0, 0.0, 0, 120.0, 0L, 0L)); val transport = _transport.asStateFlow()
+    private val _transport = MutableStateFlow(TransportInfo(false, 0.0, 120.0, 0L, 0L)); val transport = _transport.asStateFlow()
     private val _errorMessage = MutableStateFlow<String?>(null); val errorMessage = _errorMessage.asStateFlow()
     private val _blockingOperation = MutableStateFlow<String?>(null); val blockingOperation = _blockingOperation.asStateFlow()
     private var lastUsbSignature: List<Long>? = null
@@ -90,6 +90,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                     refreshTransport()
+                    refreshTrackTransport()
                 }
                 delay(200)
             }
@@ -228,6 +229,22 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun transportPlay() { setTransportPlaying(true) }
     fun transportPause() { setTransportPlaying(false) }
     fun transportRestart() { viewModelScope.launch(Dispatchers.IO) { RackManager.restartTransport(); refreshTransport() } }
+    fun setTrackTransportPlaying(
+        trackId: RackPathId,
+        playing: Boolean,
+        quantization: TrackLaunchQuantization
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            RackManager.setTrackTransportPlaying(trackId, playing, quantization)
+            refreshTrackTransport()
+        }
+    }
+    fun setTrackTransportLooping(trackId: RackPathId, looping: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            RackManager.setTrackTransportLooping(trackId, looping)
+            refreshTrackTransport()
+        }
+    }
     suspend fun importTrackAudio(trackId: RackPathId, uri: Uri, displayName: String): Boolean {
         val result = runCatching {
             withBlockingOperation("Importing audio") {
@@ -250,10 +267,12 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         refreshRack()
         return result
     }
-    fun transportToggleLoop() { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportLooping(!_transport.value.looping); refreshTransport() } }
     fun setTransportBpm(bpm: Double) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportBpm(bpm); refreshTransport() } }
     private fun refreshTransport() { if (nativeReady) runCatching { _transport.value = RackManager.getTransportInfo() } }
-    private fun setTransportPlaying(value: Boolean) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportPlaying(value); refreshTransport() } }
+    private fun refreshTrackTransport() {
+        if (nativeReady) runCatching { _tracks.value = RackManager.getTracks().toList() }
+    }
+    private fun setTransportPlaying(value: Boolean) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportPlaying(value); refreshTransport(); refreshTrackTransport() } }
 
     fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.addPlugin(pathId, pluginId, position) < 0) _errorMessage.value = "Failed to add plugin"; refreshSelectedPath() } }
     fun removePlugin(pathId: RackPathId, position: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.removePlugin(pathId, position)) _errorMessage.value = "Failed to remove plugin"; refreshSelectedPath() } }
