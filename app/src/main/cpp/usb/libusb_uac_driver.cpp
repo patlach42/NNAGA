@@ -2486,11 +2486,12 @@ void LibusbUacDriver::setGraphQuantum(int frames, int periodMultiplier) {
                                 playbackPacketsPerTransfer_,
                                 microframesPerSec_)
         : physicalTransferFrames;
-    // Six exact 0.5 ms reserve transfers at the default multiplier keep the
-    // steady 48 kHz host queue below 9 ms without sacrificing kernel runway.
+    // The measured iD4 minimum is six milliseconds of userspace runway at
+    // multiplier 3. Shorter queues met the latency target but produced real
+    // playback underruns during Android lifecycle and display scheduling.
     const int reserveTransfers =
         clampPeriodMultiplier(periodMultiplier) +
-        (lowLatencyProfile_ ? 3 : 1);
+        (lowLatencyProfile_ ? 9 : 1);
     const int watermarkTransfers = playbackWatermarkTransferCount(
         transferCount_, reserveTransfers, lowLatencyProfile_);
     const int queuedTransferFrames = watermarkTransfers * transferFrames;

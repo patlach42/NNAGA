@@ -192,6 +192,17 @@ target_link_libraries(audio_engine
     direct_usb_output
 )
 
+# Audio runs in production even from developer APKs. Keep the RT/native path
+# optimized while retaining debug symbols and unoptimized UI/JNI code.
+foreach(rt_target
+        libusb_static
+        direct_usb_output
+        plugin_abstraction
+        lv2_backend
+        audio_engine)
+    target_compile_options(${rt_target} PRIVATE -O2)
+endforeach()
+
 # XShm stub - used when plugin UI .so references MIT-SHM (fallback to XPutImage)
 add_library(xshm_stub STATIC
     xshm_stub.c
