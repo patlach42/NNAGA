@@ -267,6 +267,8 @@ fun RackScreen(
     val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
     var launchQuantizationOrdinal by rememberSaveable(selectedTrack?.id) { mutableIntStateOf(0) }
     val launchQuantization = TrackLaunchQuantization.entries[launchQuantizationOrdinal]
+    var showTempoDialog by rememberSaveable { mutableStateOf(false) }
+    var tempoInput by rememberSaveable { mutableStateOf("") }
 
 
 
@@ -498,6 +500,109 @@ fun RackScreen(
                     .fillMaxSize()
                     .padding(if (isFullscreenActive) PaddingValues(0.dp) else padding)
             ) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        IconButton(
+            onClick = { if (transport.playing) viewModel.transportPause() else viewModel.transportPlay() },
+            modifier = Modifier.size(40.dp)
+        ) {
+            Icon(
+                if (transport.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                if (transport.playing) "Pause global transport" else "Start global transport"
+            )
+        }
+        IconButton(
+            onClick = { viewModel.transportRestart() },
+            modifier = Modifier.size(40.dp)
+        ) {
+            Icon(Icons.Default.SkipPrevious, "Restart global transport")
+        }
+        Text(
+            "${formatMusicalPosition(transport.positionSec, transport.beatsPerMinute)} · " +
+                formatElapsedTime(transport.positionSec),
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+        TextButton(
+            onClick = {
+                tempoInput = transport.beatsPerMinute.toString()
+                showTempoDialog = true
+            },
+            modifier = Modifier.heightIn(min = 40.dp),
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+        ) {
+            Text(
+                "${transport.beatsPerMinute.toInt()} BPM",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+    if (showTempoDialog) {
+        val enteredTempo = tempoInput.toDoubleOrNull()
+        val validTempo = enteredTempo?.takeIf { it in 20.0..400.0 }
+        AlertDialog(
+            onDismissRequest = { showTempoDialog = false },
+            title = { Text("Global tempo") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = tempoInput,
+                        onValueChange = { tempoInput = it },
+                        label = { Text("BPM") },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
+                        ),
+                        isError = tempoInput.isNotBlank() && validTempo == null,
+                        supportingText = {
+                            if (tempoInput.isNotBlank() && validTempo == null) {
+                                Text("Enter a value from 20 to 400 BPM")
+                            }
+                        }
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(
+                            onClick = {
+                                tempoInput = ((enteredTempo ?: transport.beatsPerMinute) - 1.0)
+                                    .coerceIn(20.0, 400.0).toString()
+                            }
+                        ) { Text("−") }
+                        Text(
+                            validTempo?.let { "${it.toInt()} BPM" } ?: "—",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        TextButton(
+                            onClick = {
+                                tempoInput = ((enteredTempo ?: transport.beatsPerMinute) + 1.0)
+                                    .coerceIn(20.0, 400.0).toString()
+                            }
+                        ) { Text("+") }
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTempoDialog = false }) { Text("Cancel") }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = validTempo != null,
+                    onClick = {
+                        viewModel.setTransportBpm(validTempo ?: return@TextButton)
+                        showTempoDialog = false
+                    }
+                ) { Text("Apply") }
+            }
+        )
+    }
     if (selectedPathId != MASTER_PATH_ID) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp),
@@ -659,64 +764,6 @@ fun RackScreen(
             IconButton(onClick = { viewModel.addTrack() }, modifier = Modifier.size(44.dp)) {
                 Icon(Icons.Default.Add, "Add track")
             }
-        }
-    }
-    Column(
-        Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "Global transport",
-                style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                "${formatMusicalPosition(transport.positionSec, transport.beatsPerMinute)} · " +
-                    formatElapsedTime(transport.positionSec),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Row(
-            Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            IconButton(
-                onClick = { if (transport.playing) viewModel.transportPause() else viewModel.transportPlay() },
-                modifier = Modifier.size(44.dp)
-            ) {
-                Icon(
-                    if (transport.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    if (transport.playing) "Pause global transport" else "Start global transport"
-                )
-            }
-            IconButton(onClick = { viewModel.transportRestart() }, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.Default.SkipPrevious, "Restart global transport")
-            }
-            Spacer(Modifier.weight(1f))
-            TextButton(
-                onClick = { viewModel.setTransportBpm(transport.beatsPerMinute - 1.0) },
-                modifier = Modifier.size(44.dp).semantics {
-                    contentDescription = "Decrease global tempo"
-                },
-                contentPadding = PaddingValues(0.dp)
-            ) { Text("−") }
-            Text(
-                "${transport.beatsPerMinute.toInt()} BPM",
-                modifier = Modifier.widthIn(min = 70.dp)
-            )
-            TextButton(
-                onClick = { viewModel.setTransportBpm(transport.beatsPerMinute + 1.0) },
-                modifier = Modifier.size(44.dp).semantics {
-                    contentDescription = "Increase global tempo"
-                },
-                contentPadding = PaddingValues(0.dp)
-            ) { Text("+") }
         }
     }
         // Drag-reorder state — use scrollable Column so all plugin cards stay in composition (no re-render when scrolling)
