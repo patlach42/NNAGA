@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import android.net.Uri
 import java.io.File
 
 data class RackPlugin(val index: Int, val name: String, val pluginId: String, val instanceId: Long)
@@ -44,19 +45,12 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val _transport = MutableStateFlow(TransportInfo(false, false, 0.0, 0.0, 0, 120.0, 0L, 0L)); val transport = _transport.asStateFlow()
     private val _errorMessage = MutableStateFlow<String?>(null); val errorMessage = _errorMessage.asStateFlow()
     private val _blockingOperation = MutableStateFlow<String?>(null); val blockingOperation = _blockingOperation.asStateFlow()
-    private val _presetList = MutableStateFlow<List<String>>(emptyList()); val presetList = _presetList.asStateFlow()
-    private val _recentPresets = MutableStateFlow<List<String>>(emptyList()); val recentPresets = _recentPresets.asStateFlow()
-    private val _presetMessage = MutableStateFlow<String?>(null); val presetMessage = _presetMessage.asStateFlow()
-    private val _isRecording = MutableStateFlow(false); val isRecording = _isRecording.asStateFlow()
-    private val _recordingDurationSec = MutableStateFlow(0.0); val recordingDurationSec = _recordingDurationSec.asStateFlow()
-    private val presetManager = PresetManager(native)
-    private var recentPresetsManager: RecentPresetsManager? = null
     private var lastUsbSignature: List<Long>? = null
     private var failedUsbSessionId: Long = 0
     private val lifecycleMutex = Mutex()
-    private val recordingMutex = Mutex()
     private val rackControlMutex = Mutex()
     private var restartJob: Job? = null
+    private var autoStartAttempted = false
     @Volatile private var nativeReady = false
     @Volatile private var rackVisible = false
 
@@ -93,10 +87,6 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                                 AudioEngine.getXRunCount(),
                                 _directUsbStats.value.actualXruns.toInt()
                             )
-                            if (_isRecording.value) {
-                                _recordingDurationSec.value =
-                                    RecordingManager.getRecordingDurationSec()
-                            }
                         }
                     }
                     refreshTransport()
@@ -144,6 +134,20 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun onNativeEngineReady() {
         nativeReady = true
         refreshRack(forceNewInstanceIds = true)
+        if (autoStartAttempted) return
+        autoStartAttempted = true
+        val context = getApplication<Application>()
+        if (!AudioSettingsManager.getEngineRunAtStart(context) ||
+            AudioSettingsManager.getDirectUsbDeviceName(context).isBlank()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val configuredVendorId = AudioSettingsManager.getDirectUsbVendorId(context)
+            val configuredProductId = AudioSettingsManager.getDirectUsbProductId(context)
+            if (DirectUsbAudioManager.getAudioDevices(context).any {
+                    it.vendorId == configuredVendorId && it.productId == configuredProductId
+                }) {
+                startEngine()
+            }
+        }
     }
     fun setRackVisible(visible: Boolean) {
         rackVisible = visible
@@ -224,6 +228,28 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun transportPlay() { setTransportPlaying(true) }
     fun transportPause() { setTransportPlaying(false) }
     fun transportRestart() { viewModelScope.launch(Dispatchers.IO) { RackManager.restartTransport(); refreshTransport() } }
+    suspend fun importTrackAudio(trackId: RackPathId, uri: Uri, displayName: String): Boolean {
+        val result = runCatching {
+            withBlockingOperation("Importing audio") {
+                withContext(Dispatchers.IO) {
+                    val cacheFile = File.createTempFile("track_import_", ".wav", getApplication<Application>().cacheDir)
+                    try {
+                        AudioImportDecoder.copyOrDecode(getApplication(), uri, cacheFile)
+                        RackManager.loadTrackWav(trackId, cacheFile.absolutePath, displayName)
+                    } finally {
+                        cacheFile.delete()
+                    }
+                }
+            }
+        }.getOrElse { error ->
+            _errorMessage.value = error.message?.takeIf { it.isNotBlank() }
+                ?: "Unable to import audio; choose a supported audio file"
+            false
+        }
+        if (!result) _errorMessage.value = _errorMessage.value ?: "Unable to load imported audio"
+        refreshRack()
+        return result
+    }
     fun transportToggleLoop() { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportLooping(!_transport.value.looping); refreshTransport() } }
     fun setTransportBpm(bpm: Double) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportBpm(bpm); refreshTransport() } }
     private fun refreshTransport() { if (nativeReady) runCatching { _transport.value = RackManager.getTransportInfo() } }
@@ -289,7 +315,6 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         _isEngineRunning.value = false
         viewModelScope.launch {
             lifecycleMutex.withLock {
-                stopRecordingNow()
                 withContext(Dispatchers.IO) { DirectUsbAudioManager.disable(getApplication()) }
             }
         }
@@ -299,7 +324,6 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         _directUsbState.value = DirectUsbSessionState.Starting
         restartJob = viewModelScope.launch {
             lifecycleMutex.withLock {
-                stopRecordingNow()
                 withContext(Dispatchers.IO) { DirectUsbAudioManager.disable(getApplication()) }
                 delay(100)
                 withContext(Dispatchers.IO) {
@@ -314,52 +338,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         AudioEngine.resetClipping()
         _meterState.value = _meterState.value.copy(inputClipping = false, outputClipping = false)
     }
-    fun toggleRecording(context: Context) {
-        if (_isRecording.value) {
-            stopRecording()
-        } else if (!_isEngineRunning.value) {
-            _errorMessage.value = "Start the engine first to record"
-        } else {
-            viewModelScope.launch {
-                recordingMutex.withLock {
-                    if (_isRecording.value || !_isEngineRunning.value) return@withLock
-                    val started = withContext(Dispatchers.IO) {
-                        RecordingManager.startRecording(context)
-                    }
-                    _isRecording.value = started
-                    if (!started) _errorMessage.value = "Failed to start recording"
-                }
-            }
-        }
-    }
-    fun stopRecording() {
-        viewModelScope.launch { stopRecordingNow() }
-    }
-    private suspend fun stopRecordingNow() {
-        recordingMutex.withLock {
-            if (!_isRecording.value) return
-            _isRecording.value = false
-            withContext(Dispatchers.IO) { RecordingManager.stopRecording() }
-            _recordingDurationSec.value = 0.0
-        }
-    }
 
     private suspend fun <T> withBlockingOperation(label: String, block: suspend () -> T): T { _blockingOperation.value = label; return try { block() } finally { _blockingOperation.value = null } }
-    private var recentManager: RecentPresetsManager? get() = recentPresetsManager; set(v) { recentPresetsManager = v }
-    fun refreshPresets(ctx: Context) {
-        viewModelScope.launch(Dispatchers.IO) { refreshPresetsNow(ctx) }
-    }
-    private fun refreshPresetsNow(ctx: Context) {
-        _presetList.value = presetManager.listPresets(ctx)
-        _recentPresets.value =
-            (recentManager ?: RecentPresetsManager(ctx).also { recentManager = it }).getRecents()
-    }
-    fun savePreset(ctx: Context, name: String) { viewModelScope.launch { val ok = withBlockingOperation("Saving preset") { withContext(Dispatchers.IO) { presetManager.savePreset(ctx, name) } }; if (ok) { withContext(Dispatchers.IO) { (recentManager ?: RecentPresetsManager(ctx).also { recentManager = it }).addRecent(name); refreshPresetsNow(ctx) }; _presetMessage.value = "Preset '$name' saved" } else _presetMessage.value = "Failed to save preset" } }
-    fun loadPreset(ctx: Context, name: String) { viewModelScope.launch { val ok = withBlockingOperation("Loading preset") { withContext(Dispatchers.IO) { native.setRackBypass(true); try { presetManager.loadPreset(ctx, name) } finally { native.setRackBypass(false) } } }; if (ok) { refreshRackNow(true); _presetMessage.value = "Preset '$name' loaded" } else _presetMessage.value = "Failed to load preset" } }
-    fun loadRecordingPreset(json: String) { viewModelScope.launch { val ok = withBlockingOperation("Loading preset") { withContext(Dispatchers.IO) { native.setRackBypass(true); try { presetManager.loadPresetFromJson(json) } finally { native.setRackBypass(false) } } }; if (ok) refreshRackNow(true); _presetMessage.value = if (ok) "Recording preset loaded" else "Failed to load recording preset" } }
-    fun deletePreset(ctx: Context, name: String) { viewModelScope.launch(Dispatchers.IO) { presetManager.deletePreset(ctx, name); recentManager?.removeRecent(name); refreshPresetsNow(ctx); _presetMessage.value = "Preset '$name' deleted" } }
-    suspend fun getPresetJson(ctx: Context, name: String): String? = withContext(Dispatchers.IO) { presetManager.getPresetJson(ctx, name) }
-    fun clearRecentPresets() { viewModelScope.launch(Dispatchers.IO) { recentManager?.clearRecents(); _recentPresets.value = emptyList() } }
     fun clearError() { _errorMessage.value = null }
-    fun clearPresetMessage() { _presetMessage.value = null }
 }

@@ -145,7 +145,6 @@ add_library(plugin_abstraction STATIC
     plugin/PluginRegistry.cpp
     plugin/PluginUIGuard.cpp
     plugin/PluginUIManager.cpp
-    plugin/StateSerializer.cpp
 )
 
 # LV2 backend (conditional compilation)
@@ -185,7 +184,6 @@ add_library(utils STATIC
 # Audio engine
 add_library(audio_engine STATIC
     engine/AudioEngine.cpp
-    engine/AudioRecorder.cpp
 )
 target_link_libraries(audio_engine
     utils

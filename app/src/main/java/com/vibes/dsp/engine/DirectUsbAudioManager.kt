@@ -179,6 +179,9 @@ object DirectUsbAudioManager {
                 connection = opened
                 activeDeviceId = option.id
                 AudioSettingsManager.setDirectUsbDeviceId(context, option.id)
+                AudioSettingsManager.setDirectUsbIdentity(
+                    context, option.vendorId, option.productId, option.name
+                )
                 registerDetachReceiver(context.applicationContext)
             }
             availableInputChannels = engine.nativeGetDirectUsbInputChannelCount()
@@ -196,18 +199,20 @@ object DirectUsbAudioManager {
                 .filter { it.size == 4 && it[0] > 0 && it[1] > 0 && it[2] > 0 && it[3] > 0 }
                 .map { DirectUsbFormat(it[0], it[1], it[2], it[3]) }
                 .toList()
-            // Descriptor formats are authoritative; use iD4 fallbacks only when
-            // probing returned no usable native descriptors.
-            Result.success(if (nativeFormats.isNotEmpty()) nativeFormats else fallbackFormats)
+            val formats = if (nativeFormats.isNotEmpty()) nativeFormats else fallbackFormats
+            AudioSettingsManager.setDirectUsbCachedFormats(context, formats)
+            Result.success(formats)
         }
 
     suspend fun startConfigured(context: Context): Result<Unit> =
         lifecycleMutex.withLock {
-            val deviceId = AudioSettingsManager.getDirectUsbDeviceId(context)
-            val device = getAudioDevices(context).firstOrNull { it.id == deviceId }
-                ?: return@withLock Result.failure(
-                    IllegalStateException("No configured USB audio device")
-                )
+            val vendorId = AudioSettingsManager.getDirectUsbVendorId(context)
+            val productId = AudioSettingsManager.getDirectUsbProductId(context)
+            val device = getAudioDevices(context).firstOrNull {
+                it.vendorId == vendorId && it.productId == productId
+            } ?: return@withLock Result.failure(
+                IllegalStateException("No configured USB audio device")
+            )
             val selected = DirectUsbFormat(
                 AudioSettingsManager.getDirectUsbRate(context),
                 AudioSettingsManager.getDirectUsbBits(context),

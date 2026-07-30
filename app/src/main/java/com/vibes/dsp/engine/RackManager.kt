@@ -46,7 +46,4 @@ object RackManager {
     fun setTransportLooping(looping: Boolean) = native.setTransportLooping(looping)
     fun getTransportInfo(): TransportInfo = native.getTransportInfo()
 
-    fun saveRackState(): String? = native.saveRackState()
-    fun restorePluginState(pathId: RackPathId, pluginIndex: Int, portValues: FloatArray, portIndices: IntArray, propertyKeys: Array<String>, propertyTypes: Array<String>, propertyValues: Array<ByteArray>, propertyFlags: IntArray): Boolean =
-        native.restorePluginState(pathId, pluginIndex, portValues, portIndices, propertyKeys, propertyTypes, propertyValues, propertyFlags)
 }

@@ -29,6 +29,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
@@ -91,6 +92,7 @@ private fun AudioSettingsContent(
     val context = LocalContext.current
     var selectedBufferSize by remember { mutableIntStateOf(AudioSettingsManager.getBufferSize(context)) }
     var isCalibrationRunning by remember { mutableStateOf(false) }
+    val isEngineRunning by viewModel.isEngineRunning.collectAsState()
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -100,11 +102,12 @@ private fun AudioSettingsContent(
     ) {
         DirectUsbSessionSettings(
             selectedBufferFrames = selectedBufferSize,
+            inputsEnabled = !isEngineRunning,
             onCalibrationStateChange = { isCalibrationRunning = it }
         )
         BufferSizeDropdown(
             selectedSize = selectedBufferSize,
-            enabled = !isCalibrationRunning,
+            enabled = !isCalibrationRunning && !isEngineRunning,
             onSelected = { size ->
                 selectedBufferSize = size
                 AudioSettingsManager.setBufferSize(context, size)
@@ -116,14 +119,19 @@ private fun AudioSettingsContent(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        val isRunning by viewModel.isEngineRunning.collectAsState()
-        if (isRunning) {
+        if (isEngineRunning) {
             Divider()
             Text("Current USB Session", style = MaterialTheme.typography.labelLarge)
             InfoRow("Sample Rate", "%.0f Hz".format(AudioEngine.getSampleRate()))
             InfoRow("Buffer Size", "${AudioEngine.getBufferFrameCount()} frames")
             InfoRow("Input", "USB capture input ${AudioSettingsManager.getDirectUsbInputChannel(context) + 1}")
             InfoRow("Output", "USB outputs ${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 1}–${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 2}")
+            OutlinedButton(
+                onClick = viewModel::stopEngine,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Stop engine")
+            }
         }
     }
 }
@@ -132,13 +140,16 @@ private fun AudioSettingsContent(
 @Composable
 private fun DirectUsbSessionSettings(
     selectedBufferFrames: Int,
+    inputsEnabled: Boolean,
     onCalibrationStateChange: (Boolean) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var devices by remember { mutableStateOf<List<DirectUsbDeviceOption>>(emptyList()) }
     var selectedDevice by remember { mutableStateOf<DirectUsbDeviceOption?>(null) }
-    var formats by remember { mutableStateOf<List<DirectUsbFormat>>(emptyList()) }
+    var formats by remember {
+        mutableStateOf(AudioSettingsManager.getDirectUsbCachedFormats(context))
+    }
     var selectedRate by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRate(context)) }
     var selectedBits by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbBits(context)) }
     var selectedSubslot by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbSubslot(context)) }
@@ -157,27 +168,40 @@ private fun DirectUsbSessionSettings(
     var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
     var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
     var isCalibrating by remember { mutableStateOf(false) }
+    val controlsEnabled = inputsEnabled && !isCalibrating
     var message by remember { mutableStateOf<String?>(null) }
+    var runAtStart by remember { mutableStateOf(AudioSettingsManager.getEngineRunAtStart(context)) }
     var devicesExpanded by remember { mutableStateOf(false) }
 
     suspend fun refreshDevices() {
-        val previousDeviceId = selectedDevice?.id
-        val preferredDeviceId = previousDeviceId
-            ?: AudioSettingsManager.getDirectUsbDeviceId(context)
+        val preferredVendor = AudioSettingsManager.getDirectUsbVendorId(context)
+        val preferredProduct = AudioSettingsManager.getDirectUsbProductId(context)
         val refreshedDevices = withContext(Dispatchers.IO) {
             DirectUsbAudioManager.getAudioDevices(context)
         }
         devices = refreshedDevices
-        selectedDevice = refreshedDevices.firstOrNull { it.id == preferredDeviceId }
-            ?: refreshedDevices.firstOrNull()
-        if (selectedDevice?.id != previousDeviceId) {
-            formats = emptyList()
-            inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
+        selectedDevice = refreshedDevices.firstOrNull {
+            it.vendorId == preferredVendor && it.productId == preferredProduct
         }
+        formats = AudioSettingsManager.getDirectUsbCachedFormats(context)
+        inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
         message = null
-    }
 
-    LaunchedEffect(context) {
+        val device = selectedDevice
+        if (device != null && inputsEnabled) {
+            DirectUsbAudioManager.probeFormats(context, device)
+                .onSuccess { available ->
+                    formats = available.sortedWith(
+                        compareBy<DirectUsbFormat> { it.sampleRate }.thenBy { it.bits }
+                    )
+                    inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
+                }
+                .onFailure { error ->
+                    if (formats.isEmpty()) message = error.message
+                }
+        }
+    }
+    LaunchedEffect(context, inputsEnabled) {
         refreshDevices()
     }
 
@@ -221,16 +245,57 @@ private fun DirectUsbSessionSettings(
         it.sampleRate == selectedRate && it.bits == selectedBits
     }?.channels?.div(2) ?: 0
 
-    Text("USB Interface", style = MaterialTheme.typography.labelLarge)
+    fun loadDevice(device: DirectUsbDeviceOption) {
+        selectedDevice = device
+        AudioSettingsManager.setDirectUsbIdentity(context, device.vendorId, device.productId, device.name)
+        devicesExpanded = false
+        scope.launch {
+            DirectUsbAudioManager.probeFormats(context, device).onSuccess { available ->
+                formats = available.sortedWith(compareBy<DirectUsbFormat> { it.sampleRate }.thenBy { it.bits })
+                val saved = formats.firstOrNull {
+                    it.sampleRate == selectedRate && it.bits == selectedBits
+                } ?: formats.firstOrNull()
+                if (saved != null) {
+                    selectedRate = saved.sampleRate
+                    selectedBits = saved.bits
+                    selectedSubslot = saved.subslotBytes
+                    selectedChannels = saved.channels
+                    AudioSettingsManager.setDirectUsbFormat(
+                        context, saved.sampleRate, saved.bits, saved.subslotBytes, saved.channels
+                    )
+                    DirectUsbAudioManager.startSelected(context, saved)
+                }
+                inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
+                message = "USB interface configured"
+            }.onFailure { message = it.message }
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text("USB Interface", style = MaterialTheme.typography.labelLarge)
+        IconButton(
+            onClick = { scope.launch { refreshDevices() } },
+            enabled = controlsEnabled
+        ) { Icon(Icons.Default.Refresh, contentDescription = "Refresh USB interfaces") }
+    }
     ExposedDropdownMenuBox(
         expanded = devicesExpanded,
-        onExpandedChange = { if (!isCalibrating) devicesExpanded = it }
+        onExpandedChange = { if (controlsEnabled) devicesExpanded = it }
     ) {
         OutlinedTextField(
-            value = selectedDevice?.name ?: "No USB audio interface found",
+            value = selectedDevice?.name
+                ?: AudioSettingsManager.getDirectUsbDeviceName(context)
+                    .ifEmpty { "No USB audio interface found" } +
+                if (selectedDevice == null &&
+                    AudioSettingsManager.getDirectUsbDeviceName(context).isNotEmpty()
+                ) " (disconnected)" else "",
             onValueChange = {},
             readOnly = true,
-            enabled = !isCalibrating,
+            enabled = controlsEnabled,
             modifier = Modifier.fillMaxWidth().menuAnchor(),
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(devicesExpanded) }
         )
@@ -241,71 +306,21 @@ private fun DirectUsbSessionSettings(
             devices.forEach { device ->
                 DropdownMenuItem(
                     text = { Text(device.name) },
-                    enabled = !isCalibrating,
-                    onClick = {
-                        selectedDevice = device
-                        formats = emptyList()
-                        devicesExpanded = false
-                    }
+                    enabled = controlsEnabled,
+                    onClick = { loadDevice(device) }
                 )
             }
         }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(
-            onClick = { scope.launch { refreshDevices() } },
-            modifier = Modifier.weight(1f),
-            enabled = !isCalibrating,
-        ) { Text("Refresh") }
-        Button(
-            onClick = {
-                val device = selectedDevice
-                if (device == null) {
-                    message = "Connect a USB Audio Class interface first"
-                } else {
-                    scope.launch {
-                        val result = DirectUsbAudioManager.probeFormats(context, device)
-                        result.onSuccess { available ->
-                            formats = available.sortedWith(
-                                compareBy<DirectUsbFormat> { it.sampleRate }.thenBy { it.bits }
-                            )
-                            val saved = formats.firstOrNull {
-                                it.sampleRate == selectedRate && it.bits == selectedBits
-                            } ?: formats.firstOrNull()
-                            if (saved != null) {
-                                selectedRate = saved.sampleRate
-                                selectedBits = saved.bits
-                                DirectUsbAudioManager.startSelected(context, saved)
-                                selectedSubslot = saved.subslotBytes
-                                selectedChannels = saved.channels
-                            }
-                            inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
-                            if (selectedInputChannel >= inputChannelCount) {
-                                selectedInputChannel = 0
-                                AudioSettingsManager.setDirectUsbInputChannel(context, 0)
-                            }
-                            if (selectedOutputPair >= selectedOutputPairCount()) {
-                                selectedOutputPair = 0
-                                AudioSettingsManager.setDirectUsbOutputPair(context, 0)
-                            }
-                            message = "USB interface configured"
-                        }.onFailure { message = it.message }
-                    }
-                }
-            },
-            modifier = Modifier.weight(1f),
-            enabled = !isCalibrating,
-        ) { Text("Probe formats") }
     }
 
     val rates = formats.map { it.sampleRate }.distinct()
     val bits = formats.filter { it.sampleRate == selectedRate }.map { it.bits }.distinct()
     if (formats.isNotEmpty()) {
-        IntSelector("Sample rate", selectedRate, rates, enabled = !isCalibrating) {
+        IntSelector("Sample rate", selectedRate, rates, enabled = controlsEnabled) {
             selectedRate = it
             selectCompatibleFormat()
         }
-        IntSelector("Bit depth", selectedBits, bits, enabled = !isCalibrating) {
+        IntSelector("Bit depth", selectedBits, bits, enabled = controlsEnabled) {
             selectedBits = it
             selectCompatibleFormat()
         }
@@ -314,7 +329,7 @@ private fun DirectUsbSessionSettings(
                 label = "Input",
                 selected = selectedInputChannel + 1,
                 options = (1..inputChannelCount).toList(),
-                enabled = !isCalibrating,
+                enabled = controlsEnabled,
             ) { channel ->
                 selectedInputChannel = channel - 1
                 AudioSettingsManager.setDirectUsbInputChannel(context, selectedInputChannel)
@@ -326,7 +341,7 @@ private fun DirectUsbSessionSettings(
                 label = "Output",
                 selected = selectedOutputPair + 1,
                 options = (1..outputPairCount).toList(),
-                enabled = !isCalibrating,
+                enabled = controlsEnabled,
             ) { pair ->
                 selectedOutputPair = pair - 1
                 AudioSettingsManager.setDirectUsbOutputPair(context, selectedOutputPair)
@@ -362,7 +377,7 @@ private fun DirectUsbSessionSettings(
             label = "Userspace watermark",
             selected = selectedWatermark,
             options = watermarkOptions,
-            enabled = !isCalibrating,
+            enabled = controlsEnabled,
         ) { frames ->
             selectedWatermark = frames
             val device = selectedDevice
@@ -410,7 +425,7 @@ private fun DirectUsbSessionSettings(
                         }
                     }
                 },
-                enabled = device != null && !isCalibrating
+                enabled = device != null && controlsEnabled
             ) {
                 Text(if (isCalibrating) "Calibrating…" else "Calibrate this interface")
             }
@@ -443,7 +458,7 @@ private fun DirectUsbSessionSettings(
         label = "Period multiplier",
         selected = selectedPeriodMultiplier,
         options = (1..8).toList(),
-        enabled = !isCalibrating,
+        enabled = controlsEnabled,
     ) { multiplier ->
         selectedPeriodMultiplier = multiplier
         AudioSettingsManager.setDirectUsbPeriodMultiplier(context, multiplier)
@@ -454,6 +469,32 @@ private fun DirectUsbSessionSettings(
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text("Engine run at app start")
+        Switch(
+            checked = runAtStart,
+            onCheckedChange = {
+                runAtStart = it
+                AudioSettingsManager.setEngineRunAtStart(context, it)
+            },
+            enabled = controlsEnabled
+        )
+    }
+    OutlinedButton(
+        onClick = {
+            DirectUsbAudioManager.disable(context)
+            AudioSettingsManager.forgetDirectUsbInterface(context)
+            selectedDevice = null
+            formats = emptyList()
+            runAtStart = false
+            message = "Forgot USB interface settings"
+        },
+        enabled = controlsEnabled
+    ) { Text("Forget USB interface") }
     message?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

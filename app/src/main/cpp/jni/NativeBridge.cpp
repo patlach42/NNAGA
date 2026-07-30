@@ -47,7 +47,6 @@
 // Prefab adds vsthost_lib/src/main/cpp to the include path as -isystem.
 #include <vst/VstFactory.h>
 #endif
-#include "../plugin/StateSerializer.h"
 #include "../plugin/PluginUIManager.h"
 #include "../x11/X11NativeDisplay.h"
 #include "../x11/X11Worker.h"
@@ -1385,137 +1384,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRespondVstFilePicker(
         path);
 }
 
-// --- Real-time recording ---
 
-JNIEXPORT jboolean JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeStartRecording(JNIEnv* env, jobject thiz, jstring rawPath, jstring processedPath) {
-    if (!g_ctx || !g_ctx->audioEngine) {
-        return JNI_FALSE;
-    }
-    if (!rawPath || !processedPath) {
-        return JNI_FALSE;
-    }
-    const char* rawStr = env->GetStringUTFChars(rawPath, nullptr);
-    const char* procStr = env->GetStringUTFChars(processedPath, nullptr);
-    if (!rawStr || !procStr) {
-        if (rawStr) env->ReleaseStringUTFChars(rawPath, rawStr);
-        if (procStr) env->ReleaseStringUTFChars(processedPath, procStr);
-        return JNI_FALSE;
-    }
-    bool result = g_ctx->audioEngine->getRecorder().startRecording(
-        std::string(rawStr), std::string(procStr), g_ctx->audioEngine->getSampleRate());
-    env->ReleaseStringUTFChars(rawPath, rawStr);
-    env->ReleaseStringUTFChars(processedPath, procStr);
-    return result ? JNI_TRUE : JNI_FALSE;
-}
 
-JNIEXPORT void JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeStopRecording(JNIEnv* env, jobject thiz) {
-    if (g_ctx && g_ctx->audioEngine) {
-        g_ctx->audioEngine->getRecorder().stopRecording();
-    }
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeIsRecording(JNIEnv* env, jobject thiz) {
-    if (!g_ctx || !g_ctx->audioEngine) {
-        return JNI_FALSE;
-    }
-    return g_ctx->audioEngine->getRecorder().isRecording() ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT jdouble JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeGetRecordingDurationSec(JNIEnv* env, jobject thiz) {
-    if (!g_ctx || !g_ctx->audioEngine) {
-        return 0.0;
-    }
-    return g_ctx->audioEngine->getRecorder().getDurationSec();
-}
-
-// --- State save/restore (presets) ---
-
-JNIEXPORT jstring JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeSaveRackState(JNIEnv* env, jobject) {
-    if (!g_ctx || !g_ctx->audioEngine) return nullptr;
-    std::lock_guard lock(g_ctx->rackControlMutex);
-    const std::string json = serializeRackStateToJson(g_ctx->audioEngine->getRackGraph().saveState());
-    return env->NewStringUTF(json.c_str());
-}
-
-JNIEXPORT jboolean JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeRestorePluginState(
-    JNIEnv* env, jobject, jlong pathId, jint pluginIndex,
-    jfloatArray portValues, jintArray portIndices,
-    jobjectArray propKeys, jobjectArray propTypes,
-    jobjectArray propValues, jintArray propFlags)
-{
-    if (!g_ctx || !g_ctx->audioEngine) {
-        return JNI_FALSE;
-    }
-
-    PluginState state;
-
-    // Unpack control port values
-    if (portValues && portIndices) {
-        jsize portCount = env->GetArrayLength(portValues);
-        jfloat* vals = env->GetFloatArrayElements(portValues, nullptr);
-        jint* idxs = env->GetIntArrayElements(portIndices, nullptr);
-        if (vals && idxs) {
-            for (jsize i = 0; i < portCount; ++i) {
-                state.controlPortValues.emplace_back(
-                    static_cast<uint32_t>(idxs[i]), static_cast<float>(vals[i]));
-            }
-        }
-        if (vals) env->ReleaseFloatArrayElements(portValues, vals, JNI_ABORT);
-        if (idxs) env->ReleaseIntArrayElements(portIndices, idxs, JNI_ABORT);
-    }
-
-    // Unpack state properties
-    if (propKeys && propTypes && propValues && propFlags) {
-        jsize propCount = env->GetArrayLength(propKeys);
-        jint* flags = env->GetIntArrayElements(propFlags, nullptr);
-        for (jsize i = 0; i < propCount; ++i) {
-            StateProperty prop;
-
-            auto keyStr = static_cast<jstring>(env->GetObjectArrayElement(propKeys, i));
-            auto typeStr = static_cast<jstring>(env->GetObjectArrayElement(propTypes, i));
-            auto valArr = static_cast<jbyteArray>(env->GetObjectArrayElement(propValues, i));
-
-            if (keyStr) {
-                const char* k = env->GetStringUTFChars(keyStr, nullptr);
-                if (k) { prop.keyUri = k; env->ReleaseStringUTFChars(keyStr, k); }
-                env->DeleteLocalRef(keyStr);
-            }
-            if (typeStr) {
-                const char* t = env->GetStringUTFChars(typeStr, nullptr);
-                if (t) { prop.typeUri = t; env->ReleaseStringUTFChars(typeStr, t); }
-                env->DeleteLocalRef(typeStr);
-            }
-            if (valArr) {
-                jsize len = env->GetArrayLength(valArr);
-                prop.value.resize(len);
-                env->GetByteArrayRegion(valArr, 0, len, reinterpret_cast<jbyte*>(prop.value.data()));
-                env->DeleteLocalRef(valArr);
-            }
-            if (flags) prop.flags = static_cast<uint32_t>(flags[i]);
-
-            state.properties.push_back(std::move(prop));
-        }
-        if (flags) env->ReleaseIntArrayElements(propFlags, flags, JNI_ABORT);
-    }
-
-    std::lock_guard lock(g_ctx->rackControlMutex);
-    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
-    const bool ok = chain && chain->restorePluginState(pluginIndex, state);
-    return ok ? JNI_TRUE : JNI_FALSE;
-}
-
-JNIEXPORT void JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeSetRackBypass(
-    JNIEnv*, jobject, jboolean bypass) {
-    if (g_ctx && g_ctx->audioEngine) {
-        g_ctx->audioEngine->setRackBypass(bypass == JNI_TRUE);
-    }
-}
 
 } // extern "C"

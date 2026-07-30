@@ -447,7 +447,6 @@ void AudioEngine::finishDirectUsbCleanup() {
 
 void AudioEngine::cleanupEngineState() {
     if (cleanupStarted_.exchange(true, std::memory_order_acq_rel)) return;
-    if (recorder_.isRecording()) recorder_.stopRecording();
     rackGraph_.pauseAndResetTransport();
     rackGraph_.deactivate();
 }
@@ -584,15 +583,6 @@ bool AudioEngine::unloadTrackWav(RackPathId trackId) {
 
 void AudioEngine::processRackBlock(const float* const* liveInputs, float* const* outputs,
                                    uint32_t numFrames) noexcept {
-    if (rackBypass_.load(std::memory_order_relaxed)) {
-        rackGraph_.advanceTransport(numFrames);
-        for (uint32_t channel = 0; channel < 2; ++channel) {
-            if (outputs && outputs[channel]) {
-                std::memset(outputs[channel], 0, sizeof(float) * numFrames);
-            }
-        }
-        return;
-    }
     rackGraph_.process(liveInputs, outputs, numFrames);
 }
 
@@ -702,10 +692,6 @@ void AudioEngine::directUsbRenderLoop() {
         outputPeakLevel_.store(outputPeakHold_, std::memory_order_relaxed);
         if (inputPeak >= kClippingThreshold) inputClipping_.store(true, std::memory_order_relaxed);
         if (outputPeak >= kClippingThreshold) outputClipping_.store(true, std::memory_order_relaxed);
-        if (recorder_.isRecording()) {
-            recorder_.feedAudio(directUsbInputBuffer_.data(), directUsbOutputLeft_.data(),
-                                directUsbOutputRight_.data(), frames);
-        }
     };
     const auto submitBlock = [this, frames, writeTimeoutMs, &canContinue](
                                  const float* left, const float* right) noexcept {

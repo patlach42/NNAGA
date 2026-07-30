@@ -43,9 +43,9 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
     // Destroy any existing UI at this index before creating a new one.
     // Without this, the unique_ptr move-assignment below would destroy the
     // old UI inline via its destructor, bypassing gracefulShutdown and the
-    // display-thread fallback in destroyPluginUI.  If the old UI's X11
-    // display is already gone (surface destroyed during preset reload),
-    // that inline cleanup crashes with a NULL-pointer deref in libX11.
+    // display-thread fallback in destroyPluginUI. If the old UI's X11
+    // display is already gone during a graph reload, inline cleanup crashes
+    // with a NULL-pointer dereference in libX11.
     destroyPluginUI(pluginIndex);
 
     IPlugin* plugin = chain_->getPlugin(pluginIndex);

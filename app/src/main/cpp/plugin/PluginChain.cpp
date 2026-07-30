@@ -373,17 +373,14 @@ PluginChain::ChainState PluginChain::saveChainState() {
     cs.plugins.reserve(plugins_.size());
     for (auto& slot : plugins_) {
         auto ps = slot.plugin->saveState();
-        // Tag format from getInfo() so the preset can pick the right factory
-        // on reload. Plugins that don't override saveState() return an empty
-        // PluginState; we still want their format so PresetManager can at
-        // least re-instantiate them (e.g. VST plugins that don't yet sync
-        // params back from wine).
+        // Retain the factory format for a complete plugin-state snapshot.
+        // Plugins that do not override saveState() return an empty
+        // PluginState, so identify them from the current factory metadata.
         if (ps.format.empty()) {
             ps.format = slot.plugin->getInfo().format;
         }
         if (ps.pluginUri.empty()) {
-            // Default to getInfo().id with any "FORMAT:" prefix stripped so
-            // PresetManager can rebuild fullId = "$format:$uri" cleanly.
+            // Strip any "FORMAT:" prefix from the factory identifier.
             auto id = slot.plugin->getInfo().id;
             auto colon = id.find(':');
             if (colon != std::string::npos && id.substr(0, colon) == ps.format) {

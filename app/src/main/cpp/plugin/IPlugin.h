@@ -44,12 +44,10 @@ struct StateProperty {
 /** Complete snapshot of a plugin's state (control ports + extension properties). */
 struct PluginState {
     /** Bare plugin identifier — for LV2 the full LV2 URI, for VST2/VST3 the
-     *  factory-assigned UUID. NOT prefixed with the format; PresetManager
-     *  combines this with the `format` field below to build "FORMAT:id". */
+     *  factory-assigned UUID. It is not prefixed with the format. */
     std::string pluginUri;
-    /** Plugin format ("LV2", "VST2", "VST3", …). Populated by PluginChain
-     *  from getInfo().format after each saveState() so the preset writer
-     *  can persist it alongside the URI. */
+    /** Plugin format ("LV2", "VST2", "VST3", …), populated by PluginChain
+     *  from getInfo() after saveState(). */
     std::string format;
     std::vector<std::pair<uint32_t, float>> controlPortValues;
     std::vector<StateProperty> properties;

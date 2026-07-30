@@ -441,8 +441,6 @@ class NativeEngine private constructor() {
     external fun nativeDeliverFileToPluginUI(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String)
     external fun nativePollVstFilePickerRequest(pathId: Long, pluginIndex: Int): Array<String>?
     external fun nativeRespondVstFilePicker(pathId: Long, pluginIndex: Int, sequence: Int, cancelled: Boolean, windowsPath: String)
-    external fun nativeSaveRackState(): String?
-    external fun nativeRestorePluginState(pathId: Long, pluginIndex: Int, portValues: FloatArray, portIndices: IntArray, propertyKeys: Array<String>, propertyTypes: Array<String>, propertyValues: Array<ByteArray>, propertyFlags: IntArray): Boolean
 
 
     // Kotlin wrappers
@@ -482,12 +480,6 @@ class NativeEngine private constructor() {
 
     fun idlePluginUIs(): Boolean = nativeIdlePluginUIs()
 
-    // --- Real-time recording ---
-
-    external fun nativeStartRecording(rawPath: String, processedPath: String): Boolean
-    external fun nativeStopRecording()
-    external fun nativeIsRecording(): Boolean
-    external fun nativeGetRecordingDurationSec(): Double
 
     external fun nativeAddTrack(): Long
     external fun nativeRemoveTrack(trackId: Long): Boolean
@@ -502,8 +494,6 @@ class NativeEngine private constructor() {
     external fun nativeRestartTransport(): Boolean
     external fun nativeSetTransportLooping(looping: Boolean)
     external fun nativeGetTransportInfo(): TransportInfo
-    external fun nativeSetRackBypass(bypass: Boolean)
-    fun setRackBypass(bypass: Boolean) = nativeSetRackBypass(bypass)
 
 
     fun stopEngine() {
@@ -562,14 +552,4 @@ class NativeEngine private constructor() {
     fun setTransportLooping(looping: Boolean) = nativeSetTransportLooping(looping)
     fun getTransportInfo(): TransportInfo = nativeGetTransportInfo()
 
-    fun startRecording(rawPath: String, processedPath: String): Boolean = nativeStartRecording(rawPath, processedPath)
-    fun stopRecording() = nativeStopRecording()
-    fun isRecording(): Boolean = nativeIsRecording()
-    fun getRecordingDurationSec(): Double = nativeGetRecordingDurationSec()
-    fun saveRackState(): String? = nativeSaveRackState()
-    fun restorePluginState(
-        pathId: Long, pluginIndex: Int, portValues: FloatArray, portIndices: IntArray,
-        propertyKeys: Array<String>, propertyTypes: Array<String>,
-        propertyValues: Array<ByteArray>, propertyFlags: IntArray
-    ): Boolean = nativeRestorePluginState(pathId, pluginIndex, portValues, portIndices, propertyKeys, propertyTypes, propertyValues, propertyFlags)
 }

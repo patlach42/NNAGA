@@ -32,13 +32,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
@@ -47,13 +45,11 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Keyboard
-import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -100,7 +96,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.app.Activity
-import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.provider.OpenableColumns
 import android.util.Log
@@ -115,16 +110,14 @@ import com.vibes.dsp.engine.X11Bridge
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.UiType
 import com.vibes.dsp.engine.DirectUsbSessionState
+import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.ui.modgui.InlineModguiView
 import com.vibes.dsp.ui.x11.PluginX11UiView
 import com.vibes.dsp.ui.x11.X11DisplayManager
 import com.vibes.dsp.BuildConfig
-import android.net.Uri
-import com.vibes.dsp.engine.MASTER_PATH_ID
-import com.vibes.dsp.engine.RecordingEntry
-import com.vibes.dsp.engine.RecordingManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.net.Uri
 import androidx.compose.runtime.key
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -235,7 +228,6 @@ fun RackScreen(
     isVisible: Boolean = true,
     onNavigateToBrowser: (Long) -> Unit,
     onNavigateToSettings: () -> Unit = {},
-    onNavigateToRecordings: (Long) -> Unit = {},
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit = { _, _, _, _, _ -> },
     onReplacePlugin: (Long, Int) -> Unit = { _, _ -> },
     viewModel: RackViewModel = viewModel()
@@ -270,11 +262,8 @@ fun RackScreen(
     val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
     val transport by viewModel.transport.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
-    val presetMessage by viewModel.presetMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
     val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
-    val isRecording by viewModel.isRecording.collectAsState()
-    val recordingDurationSec by viewModel.recordingDurationSec.collectAsState()
 
 
 
@@ -305,41 +294,21 @@ fun RackScreen(
     BackHandler(enabled = blockingOperation != null) { }
 
     val scope = rememberCoroutineScope()
-    var pendingWavTargetId by remember { mutableStateOf<Long?>(null) }
-    val wavFilePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetContent()
+    var pendingAudioTargetId by remember { mutableStateOf<Long?>(null) }
+    val audioFilePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        val target = pendingWavTargetId
-        pendingWavTargetId = null
+        val target = pendingAudioTargetId
+        pendingAudioTargetId = null
         if (uri != null && target != null) {
             scope.launch {
-                val cacheFile = File(context.cacheDir, "track_wav_${System.currentTimeMillis()}.wav")
-                try {
-                    withContext(Dispatchers.IO) {
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            cacheFile.outputStream().use { output -> input.copyTo(output) }
-                        } ?: error("Unable to open selected WAV")
-                    }
-                    val name = queryDisplayName(context, uri) ?: uri.lastPathSegment ?: cacheFile.name
-                    viewModel.loadTrackWav(target, cacheFile.absolutePath, name)
-                } catch (e: Exception) {
-                    viewModel.clearError()
-                } finally {
-                    withContext(Dispatchers.IO) { cacheFile.delete() }
-                }
+                val name = queryDisplayName(context, uri) ?: uri.lastPathSegment ?: "Imported audio"
+                viewModel.importTrackAudio(target, uri, name)
             }
         }
     }
-
-    var showPresetSheet by rememberSaveable { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
 
-    LaunchedEffect(presetMessage) {
-        presetMessage?.let {
-            snackbarHostState.showSnackbar(it)
-            viewModel.clearPresetMessage()
-        }
-    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
@@ -488,17 +457,6 @@ fun RackScreen(
                                 onDismissRequest = { showOverflowMenu = false }
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Presets") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.refreshPresets(context)
-                                        showPresetSheet = true
-                                    },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.LibraryMusic, contentDescription = null)
-                                    }
-                                )
-                                DropdownMenuItem(
                                     text = { Text("Add plugin") },
                                     onClick = {
                                         showOverflowMenu = false
@@ -508,47 +466,6 @@ fun RackScreen(
                                         Icon(Icons.Default.Add, contentDescription = null)
                                     },
                                     modifier = Modifier.testTag("rack_add_plugin")
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            if (isRecording) {
-                                                "Stop recording (${formatRecordingDuration(recordingDurationSec)})"
-                                            } else {
-                                                "Start recording"
-                                            }
-                                        )
-                                    },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        viewModel.toggleRecording(context)
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            if (isRecording) Icons.Default.Stop else Icons.Default.FiberManualRecord,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text(if (isEngineRunning) "Stop engine" else "Start engine") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        if (isEngineRunning) viewModel.stopEngine() else viewModel.startEngine()
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            if (isEngineRunning) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                            contentDescription = null,
-                                            tint = if (isEngineRunning) {
-                                                MaterialTheme.colorScheme.primary
-                                            } else {
-                                                MaterialTheme.colorScheme.onSurface
-                                            }
-                                        )
-                                    },
-                                    modifier = Modifier.testTag("rack_engine_fab")
                                 )
                                 Divider()
                                 DropdownMenuItem(
@@ -560,20 +477,6 @@ fun RackScreen(
                                     leadingIcon = {
                                         Icon(
                                             Icons.Default.Settings,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Recordings") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        onNavigateToRecordings(if (selectedPathId == MASTER_PATH_ID) -1L else selectedPathId)
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Default.Album,
                                             contentDescription = null,
                                             modifier = Modifier.size(20.dp)
                                         )
@@ -637,9 +540,14 @@ fun RackScreen(
             ) {
                 if (!track.wavLoaded) {
                     Button(
-                        onClick = { pendingWavTargetId = track.id; wavFilePickerLauncher.launch("audio/*") },
+                        onClick = {
+                            pendingAudioTargetId = track.id
+                            audioFilePickerLauncher.launch(
+                                arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a")
+                            )
+                        },
                         modifier = Modifier.heightIn(min = 44.dp)
-                    ) { Text("Load WAV") }
+                    ) { Text("Load Audio") }
                 } else {
                     Text(track.wavDisplayName, Modifier.weight(1f), maxLines = 1)
                     Text("WAV → FX", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2900,13 +2808,6 @@ private fun ModelPicker(
 }
 
 
-private fun formatRecordingDuration(seconds: Double): String {
-    val totalSec = seconds.toInt()
-    val min = totalSec / 60
-    val sec = totalSec % 60
-    return "%d:%02d".format(min, sec)
-}
-
 
 
 
@@ -2921,268 +2822,4 @@ private fun queryDisplayName(context: android.content.Context, uri: Uri): String
         ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PresetBottomSheet(
-    viewModel: RackViewModel,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    val presetList by viewModel.presetList.collectAsState()
-    val recentPresets by viewModel.recentPresets.collectAsState()
-    var showSaveDialog by remember { mutableStateOf(false) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp)
-                .padding(bottom = 24.dp)
-        ) {
-            // Recently used section
-            if (recentPresets.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("Recently Used", style = MaterialTheme.typography.titleSmall)
-                    TextButton(onClick = {
-                        viewModel.clearRecentPresets()
-                    }) {
-                        Text("Clear")
-                    }
-                }
-                recentPresets.forEach { name ->
-                    PresetListItem(
-                        name = name,
-                        onLoad = {
-                            viewModel.loadPreset(context, name)
-                            onDismiss()
-                        },
-                        onShare = {
-                            scope.launch {
-                                val json = viewModel.getPresetJson(context, name)
-                                if (json != null) {
-                                    val intent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(Intent.EXTRA_TEXT, json)
-                                        putExtra(Intent.EXTRA_SUBJECT, "$name.json")
-                                    }
-                                    context.startActivity(Intent.createChooser(intent, "Share preset"))
-                                }
-                            }
-                        },
-                        showDelete = false
-                    )
-                }
-                Divider(modifier = Modifier.padding(vertical = 8.dp))
-            }
-
-            // All presets section
-            Text("All Presets", style = MaterialTheme.typography.titleSmall)
-            if (presetList.isEmpty()) {
-                Text(
-                    "No saved presets",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(vertical = 12.dp)
-                )
-            } else {
-                presetList.forEach { name ->
-                    PresetListItem(
-                        name = name,
-                        onLoad = {
-                            viewModel.loadPreset(context, name)
-                            onDismiss()
-                        },
-                        onShare = {
-                            scope.launch {
-                                val json = viewModel.getPresetJson(context, name)
-                                if (json != null) {
-                                    val intent = Intent(Intent.ACTION_SEND).apply {
-                                        type = "text/plain"
-                                        putExtra(Intent.EXTRA_TEXT, json)
-                                        putExtra(Intent.EXTRA_SUBJECT, "$name.json")
-                                    }
-                                    context.startActivity(Intent.createChooser(intent, "Share preset"))
-                                }
-                            }
-                        },
-                        onDelete = {
-                            viewModel.deletePreset(context, name)
-                        },
-                        showDelete = true
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-            Button(
-                onClick = { showSaveDialog = true },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Save Current Preset")
-            }
-        }
-    }
-
-    if (showSaveDialog) {
-        PresetSaveDialog(
-            existingNames = presetList,
-            onSave = { name ->
-                showSaveDialog = false
-                viewModel.savePreset(context, name)
-            },
-            onDismiss = { showSaveDialog = false }
-        )
-    }
-}
-
-@Composable
-private fun PresetListItem(
-    name: String,
-    onLoad: () -> Unit,
-    onShare: () -> Unit,
-    onDelete: (() -> Unit)? = null,
-    showDelete: Boolean = false
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onLoad)
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = name,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f)
-        )
-        IconButton(onClick = onShare, modifier = Modifier.size(32.dp)) {
-            Icon(Icons.Default.Share, contentDescription = "Share", modifier = Modifier.size(18.dp))
-        }
-        if (showDelete && onDelete != null) {
-            IconButton(onClick = onDelete, modifier = Modifier.size(32.dp)) {
-                Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(18.dp))
-            }
-        }
-    }
-}
-
-@Composable
-private fun PresetSaveDialog(
-    existingNames: List<String>,
-    onSave: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var name by remember { mutableStateOf("") }
-    val nameExists = name.isNotBlank() && existingNames.any { it.equals(name.trim(), ignoreCase = true) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Save Preset") },
-        text = {
-            Column {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("Preset name") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                if (nameExists) {
-                    Text(
-                        text = "A preset with this name exists and will be overwritten",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = { onSave(name.trim()) },
-                enabled = name.isNotBlank()
-            ) {
-                Text(if (nameExists) "Overwrite" else "Save")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
-    )
-}
-
-@Composable
-private fun RecordingPickerDialog(
-    onPickRecording: (path: String, isRaw: Boolean) -> Unit,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val recordings by produceState<List<RecordingEntry>>(emptyList(), context) {
-        value = withContext(Dispatchers.IO) {
-            RecordingManager.listRecordings(context)
-        }
-    }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Select Recording") },
-        text = {
-            if (recordings.isEmpty()) {
-                Text(
-                    "No recordings available.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            } else {
-                LazyColumn(
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.heightIn(max = 400.dp)
-                ) {
-                    items(recordings, key = { it.timestamp }) { entry ->
-                        Card(modifier = Modifier.fillMaxWidth()) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(
-                                    text = entry.displayName,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Text(
-                                    text = formatWavTime(entry.durationSec),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Spacer(modifier = Modifier.height(4.dp))
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    OutlinedButton(
-                                        onClick = { onPickRecording(entry.rawFile.absolutePath, true) },
-                                        modifier = Modifier.weight(1f),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                    ) {
-                                        Text("Raw", style = MaterialTheme.typography.labelSmall)
-                                    }
-                                    OutlinedButton(
-                                        onClick = { onPickRecording(entry.processedFile.absolutePath, false) },
-                                        modifier = Modifier.weight(1f),
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
-                                    ) {
-                                        Text("Processed", style = MaterialTheme.typography.labelSmall)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Close") }
-        }
-    )
-}

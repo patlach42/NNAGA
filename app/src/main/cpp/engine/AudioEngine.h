@@ -28,7 +28,6 @@
 #include <string>
 #include <vector>
 #include "plugin/PluginChain.h"
-#include "AudioRecorder.h"
 #include "DirectUsbOutput.h"
 
 #include "../plugin/RackGraph.h"
@@ -152,13 +151,6 @@ public:
      */
     void resetClipping();
 
-    /** Silence graph output during destructive preset replacement. */
-    void setRackBypass(bool bypass) { rackBypass_.store(bypass); }
-
-    /**
-     * Get the audio recorder for real-time recording of raw input and processed output.
-     */
-    AudioRecorder& getRecorder() { return recorder_; }
 
     // Attach the duplex direct USB transport. Lifetime is owned by NativeContext.
     void setDirectUsbOutput(DirectUsbOutput* output) { directUsbOutput_ = output; }
@@ -237,7 +229,6 @@ private:
     float sampleRate_;
     uint32_t callbackFrameCount_ = 0;  // Power-of-2 frames per audio callback
     std::atomic<bool> isRunning_;
-    std::atomic<bool> rackBypass_{false};
 
     
     // Temporary buffers for plugin chain
@@ -269,7 +260,6 @@ private:
     static constexpr float kClippingThreshold = 0.99f;
 
 
-    AudioRecorder recorder_;
 
 
     DirectUsbOutput* directUsbOutput_ = nullptr; // non-owning, NativeContext-owned

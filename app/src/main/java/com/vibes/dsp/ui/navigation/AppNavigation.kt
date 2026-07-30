@@ -24,7 +24,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -34,14 +33,12 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import androidx.lifecycle.viewmodel.compose.viewModel
-import kotlinx.coroutines.launch
 import com.vibes.dsp.ui.browser.PluginBrowserScreen
 import com.vibes.dsp.ui.modgui.ModguiScreen
 import com.vibes.dsp.ui.rack.RackScreen
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.settings.SettingsScreen
 import com.vibes.dsp.ui.settings.SettingsTab
-import com.vibes.dsp.ui.recordings.RecordingsScreen
 import com.vibes.dsp.ui.tone3000.ToneDetailScreen
 import com.vibes.dsp.ui.tone3000.Tone
 
@@ -71,9 +68,6 @@ sealed class Screen(val route: String) {
             return "settings?${parts.joinToString("&")}"
         }
     }
-    object Recordings : Screen("recordings?targetPathId={targetPathId}") {
-        fun route(targetPathId: Long) = "recordings?targetPathId=$targetPathId"
-    }
     object ToneDetail : Screen("tone_detail/{toneId}?sourcePlugin={sourcePlugin}&sourceSlot={sourceSlot}&architecture={architecture}") {
         fun route(
             toneId: String,
@@ -102,7 +96,6 @@ fun AppNavigation(
         if (engineReady) rackViewModel.onNativeEngineReady()
     }
     val currentRoute = backStackEntry?.destination?.route
-    val recordingScope = rememberCoroutineScope()
 
     Box(modifier = Modifier.fillMaxSize()) {
         // RackScreen is ALWAYS composed — kept alive so X11/modgui UIs don't re-render.
@@ -111,7 +104,6 @@ fun AppNavigation(
             isVisible = isRackVisible,
             onNavigateToBrowser = { pathId -> navController.navigate(Screen.Browser.route(pathId)) },
             onNavigateToSettings = { navController.navigate(Screen.Settings.route()) },
-            onNavigateToRecordings = { pathId -> navController.navigate(Screen.Recordings.route(pathId)) },
             onNavigateToTone3000 = { tag, gear, platform, sourcePluginIndex, sourceSlot ->
                 navController.navigate(
                     Screen.Settings.route(
@@ -213,30 +205,6 @@ fun AppNavigation(
                     pathId = pathId,
                     replaceIndex = replaceIndex,
                     onNavigateBack = { navController.popBackStack() }
-                )
-            }
-            composable(
-                route = Screen.Recordings.route,
-                arguments = listOf(navArgument("targetPathId") { type = NavType.LongType })
-            ) { entry ->
-                val targetPathId = entry.arguments?.getLong("targetPathId") ?: -1L
-                RecordingsScreen(
-                    targetPathId = targetPathId,
-                    onNavigateBack = { navController.popBackStack() },
-                    onPlayRecording = { path ->
-                        if (targetPathId > 0L) {
-                            val fileName = java.io.File(path).name
-                            recordingScope.launch {
-                                if (rackViewModel.loadTrackWav(targetPathId, path, fileName)) {
-                                    navController.popBackStack()
-                                }
-                            }
-                        }
-                    },
-                    onLoadRecordingPreset = { json ->
-                        rackViewModel.loadRecordingPreset(json)
-                        navController.popBackStack()
-                    }
                 )
             }
             composable(

@@ -198,6 +198,72 @@ android {
         }
     }
 
+    // Debug APKs are intentionally small: retain only NAM and AIDA LV2
+    // bundles/libraries. Release variants continue to receive the complete
+    // payload staged by build.sh.
+    val debugLv2Bundles = setOf("aidadsp.lv2", "AIDA-X.lv2", "neural_amp_modeler.lv2")
+    val debugNativeLibraries = setOf("libneural_amp_modeler.so", "librt-neural-generic.so")
+
+    fun isDebugPluginLibrary(name: String): Boolean {
+        if (name in debugNativeLibraries || name.startsWith("libAIDA-X")) return false
+        return name.startsWith("libgx") ||
+            name.startsWith("libGx") ||
+            name.startsWith("libNeural") ||
+            name.startsWith("libneural") ||
+            name.startsWith("libAIDA") ||
+            name.startsWith("librt-neural") ||
+            name.startsWith("libCollisionDrive") ||
+            name.startsWith("libFatFrog") ||
+            name.startsWith("libMetalTone") ||
+            name.startsWith("libXDarkTerror") ||
+            name.startsWith("libXTinyTerror") ||
+            name.startsWith("libImpulseLoader") ||
+            name.startsWith("libPowerAmp") ||
+            name.startsWith("libpoweramps") ||
+            name.startsWith("libPreAmp") ||
+            name.startsWith("libGxCabSim") ||
+            name.startsWith("libdoubletracker")
+    }
+
+    fun filterDebugAssets(taskName: String, variant: String) {
+        tasks.matching { it.name == taskName }.configureEach {
+            val task = this
+            task.outputs.upToDateWhen { false }
+            task.doLast {
+                val mergedAssets = file("build/intermediates/assets/$variant/merge${variant.replaceFirstChar { it.uppercase() }}Assets")
+                val lv2Dir = file("$mergedAssets/lv2")
+                if (!lv2Dir.isDirectory) return@doLast
+                lv2Dir.listFiles()?.filter { it.isDirectory && it.name !in debugLv2Bundles }
+                    ?.forEach { it.deleteRecursively() }
+                mergedAssets.resolve("lv2_bundles.txt").writeText(
+                    debugLv2Bundles.filter { file("$lv2Dir/$it").isDirectory }.sorted().joinToString("\n") + "\n"
+                )
+                val files = lv2Dir.walkTopDown().filter { it.isFile }
+                    .map { it.relativeTo(lv2Dir).invariantSeparatorsPath }
+                    .sorted().toList()
+                mergedAssets.resolve("lv2_files.txt").writeText(files.joinToString("\n") + "\n")
+            }
+        }
+    }
+
+    fun filterDebugJni(taskName: String, variant: String) {
+        tasks.matching { it.name == taskName }.configureEach {
+            val task = this
+            task.outputs.upToDateWhen { false }
+            task.doLast {
+                val mergedJni = file("build/intermediates/merged_jni_libs/$variant/merge${variant.replaceFirstChar { it.uppercase() }}JniLibFolders/out")
+                if (!mergedJni.isDirectory) return@doLast
+                mergedJni.walkTopDown().filter { it.isFile && isDebugPluginLibrary(it.name) }
+                    .forEach { it.delete() }
+            }
+        }
+    }
+
+    for (variant in listOf("fullDebug", "playstoreDebug")) {
+        filterDebugAssets("merge${variant.replaceFirstChar { it.uppercase() }}Assets", variant)
+        filterDebugJni("merge${variant.replaceFirstChar { it.uppercase() }}JniLibFolders", variant)
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
