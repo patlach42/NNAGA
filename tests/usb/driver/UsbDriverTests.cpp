@@ -699,6 +699,47 @@ TEST(UsbDriverImplicit, PrepareDefersUntilWholeTransferPcmAndPreservesPendingOrd
     libusb_free_transfer(first);
     libusb_free_transfer(second);
 }
+TEST(UsbDriverImplicit, VariablePacketLengthsPreserveSubmittedPcmAcrossBoundaries) {
+    resetMock();
+
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
+    monotrypt::usb::UsbDriverTestAccess::feedbackState(driver, 1, 8);
+    monotrypt::usb::UsbDriverTestAccess::implicitFrameMetadata(driver, 0, 3);
+    monotrypt::usb::UsbDriverTestAccess::implicitFrameMetadata(driver, 1, 2);
+    monotrypt::usb::UsbDriverTestAccess::implicitFrameMetadata(driver, 2, 2);
+    monotrypt::usb::UsbDriverTestAccess::implicitCursors(driver, 3, 0);
+    monotrypt::usb::UsbDriverTestAccess::playbackStarted(driver, true);
+
+    std::vector<uint8_t> pcm(7 * 4);
+    for (size_t i = 0; i < pcm.size(); ++i)
+        pcm[i] = static_cast<uint8_t>(i + 1);
+    ASSERT_EQ(driver.writePcm(pcm.data(), 7), 7);
+
+    // Keep three equal-capacity packet slots in the transfer buffer. The
+    // implicit frame counts then shorten packets 1 and 2 to 8 bytes each.
+    std::vector<uint8_t> transferBuffer(3 * 12, 0xEE);
+    auto* transfer = makeTransfer(transferBuffer, 3);
+    ASSERT_NE(transfer, nullptr);
+    monotrypt::usb::UsbDriverTestAccess::pending(driver, transfer);
+    monotrypt::usb::UsbDriverTestAccess::submitPending(driver);
+
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::pendingCount(driver), 0u);
+    EXPECT_EQ(usb_driver_mock_submitted_transfer_count(), 1);
+    ASSERT_EQ(usb_driver_mock_submitted_payload_size(0),
+              static_cast<int>(pcm.size()));
+    EXPECT_EQ(transfer->iso_packet_desc[0].length, 12u);
+    EXPECT_EQ(transfer->iso_packet_desc[1].length, 8u);
+    EXPECT_EQ(transfer->iso_packet_desc[2].length, 8u);
+    for (size_t offset = 0; offset < pcm.size(); ++offset) {
+        SCOPED_TRACE(offset);
+        EXPECT_EQ(usb_driver_mock_submitted_payload_byte(
+                      0, static_cast<int>(offset)),
+                  pcm[offset]);
+    }
+
+    libusb_free_transfer(transfer);
+}
 
 TEST(UsbDriverLifecycle, PendingImplicitSubmitFailureRetainsOwnershipAndStops) {
     resetMock();

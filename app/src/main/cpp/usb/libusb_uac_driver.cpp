@@ -2323,9 +2323,8 @@ bool LibusbUacDriver::prepareImplicitTransfer(libusb_transfer* xfr) {
         const int bytes = frameCounts[packet] * stride;
         xfr->iso_packet_desc[packet].length = bytes;
         if (bytes > 0) {
-            uint8_t* packetBuffer =
-                libusb_get_iso_packet_buffer_simple(
-                    xfr, static_cast<unsigned int>(packet));
+            uint8_t* packetBuffer = libusb_get_iso_packet_buffer(
+                xfr, static_cast<unsigned int>(packet));
             drainRing(packetBuffer, bytes);
         }
     }
@@ -2424,7 +2423,7 @@ void LibusbUacDriver::onIso(libusb_transfer* xfr) {
             xfr->iso_packet_desc[packet].length = bytes;
             if (bytes > 0) {
                 uint8_t* packetBuffer =
-                    libusb_get_iso_packet_buffer_simple(xfr, packet);
+                    libusb_get_iso_packet_buffer(xfr, packet);
                 drainRing(packetBuffer, bytes);
             }
         }
