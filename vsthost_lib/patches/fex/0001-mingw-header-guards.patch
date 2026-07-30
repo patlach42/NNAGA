@@ -1,0 +1,35 @@
+diff --git a/FEXCore/Source/Utils/Threads.cpp b/FEXCore/Source/Utils/Threads.cpp
+index cceb3d95c..808ec6815 100644
+--- a/FEXCore/Source/Utils/Threads.cpp
++++ b/FEXCore/Source/Utils/Threads.cpp
+@@ -3,8 +3,6 @@
+ #include <FEXCore/Utils/Threads.h>
+ #include <FEXCore/fextl/memory.h>
+ 
+-#include <pthread.h>
+-#include <unistd.h>
+ 
+ namespace FEXCore::Threads {
+ static fextl::unique_ptr<FEXCore::Threads::Thread> CreateThread_Default(ThreadFunc Func, void* Arg) {
+diff --git a/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h b/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
+index e5c2824f4..46186a671 100644
+--- a/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
++++ b/FEXHeaderUtils/FEXHeaderUtils/Syscalls.h
+@@ -4,14 +4,14 @@
+ #include <FEXCore/Utils/LogManager.h>
+ 
+ #include <cstdint>
+-#include <sched.h>
+-#include <signal.h>
+-#include <stdio.h>
+ #ifndef _WIN32
++#include <sched.h>
+ #include <syscall.h>
+ #else
+ #include <processthreadsapi.h>
+ #endif
++#include <signal.h>
++#include <stdio.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
+ 

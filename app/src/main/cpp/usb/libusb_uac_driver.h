@@ -188,23 +188,35 @@ public:
                 captureSequence_.load(std::memory_order_acquire)};
     }
     int discardCaptureFrames(int maxFrames) noexcept;
-    ImplicitFeedbackStats implicitFeedbackStats() const {
-        std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
-        const size_t depth = implicitWrite_.load(std::memory_order_acquire) -
-                             implicitRead_.load(std::memory_order_acquire);
-        const int stride = std::max(1, format_.channels * format_.bytesPerSample);
-        return {depth,
-                implicitFallbackPackets_.load(std::memory_order_acquire),
-                metadataFifoOverruns_.load(std::memory_order_acquire),
-                captureTransferErrors_.load(std::memory_order_acquire),
-                playbackTransferErrors_.load(std::memory_order_acquire),
-                (ringHead_.load(std::memory_order_acquire) -
-                 ringTail_.load(std::memory_order_acquire)) /
-                    static_cast<size_t>(stride),
-                static_cast<uint64_t>(captureAvailableFrames()),
-                lifecycleFailures_.load(std::memory_order_acquire),
-                transportFailed_.load(std::memory_order_acquire),
-                eventThreadUrgentAudio_.load(std::memory_order_acquire)};
+    ImplicitFeedbackStats implicitFeedbackStats() const noexcept {
+        const size_t implicitWrite =
+            implicitWrite_.load(std::memory_order_acquire);
+        const size_t implicitRead =
+            implicitRead_.load(std::memory_order_acquire);
+        const size_t ringHead = ringHead_.load(std::memory_order_acquire);
+        const size_t ringTail = ringTail_.load(std::memory_order_acquire);
+        const size_t captureHead =
+            captureHead_.load(std::memory_order_acquire);
+        const size_t captureTail =
+            captureTail_.load(std::memory_order_acquire);
+        const int playbackStride =
+            std::max(1, playbackFrameStride_.load(std::memory_order_acquire));
+        const int captureStride =
+            std::max(1, captureFrameStride_.load(std::memory_order_acquire));
+        return {
+            implicitWrite >= implicitRead ? implicitWrite - implicitRead : 0,
+            implicitFallbackPackets_.load(std::memory_order_acquire),
+            metadataFifoOverruns_.load(std::memory_order_acquire),
+            captureTransferErrors_.load(std::memory_order_acquire),
+            playbackTransferErrors_.load(std::memory_order_acquire),
+            (ringHead >= ringTail ? ringHead - ringTail : 0) /
+                static_cast<size_t>(playbackStride),
+            (captureHead >= captureTail ? captureHead - captureTail : 0) /
+                static_cast<size_t>(captureStride),
+            lifecycleFailures_.load(std::memory_order_acquire),
+            transportFailed_.load(std::memory_order_acquire),
+            eventThreadUrgentAudio_.load(std::memory_order_acquire)
+        };
     }
     int32_t eventThreadTid() const noexcept {
         return eventThreadTid_.load(std::memory_order_acquire);
@@ -279,6 +291,14 @@ public:
     // dropping PCM. Track them as scheduling pressure, not audible xruns.
     uint64_t playbackBackpressureCount() const {
         return playbackOverruns_.load(std::memory_order_acquire);
+    }
+    // Exact silence inserted into submitted ISO packets. Unlike the xrun
+    // transition count, these counters reveal sustained starvation.
+    uint64_t playbackSilentPacketCount() const noexcept {
+        return playbackSilentPackets_.load(std::memory_order_acquire);
+    }
+    uint64_t playbackSilentFrameCount() const noexcept {
+        return playbackSilentFrames_.load(std::memory_order_acquire);
     }
 
     // Total PCM frames the iso pump has drained from the ring since
@@ -412,6 +432,7 @@ private:
     std::atomic<bool> contextReady_{false};
 
     StreamFormat format_;
+    std::atomic<int> playbackFrameStride_{1};
     std::atomic<bool> streaming_{false};
     std::atomic<bool> stopRequested_{false};
     // True iff we currently hold libusb_claim_interface on
@@ -435,6 +456,7 @@ private:
     std::atomic<size_t> captureHead_{0};
     std::atomic<size_t> captureTail_{0};
     CaptureFormat captureFormat_{};
+    std::atomic<int> captureFrameStride_{1};
     std::atomic<bool> captureActive_{false};
     int captureWakeFd_ = -1;
     std::vector<libusb_transfer*> captureTransfers_;
@@ -484,6 +506,8 @@ private:
     std::atomic<uint64_t> playbackUnderruns_{0};
     std::atomic<bool> playbackOverrunActive_{false};
     std::atomic<bool> playbackUnderrunActive_{false};
+    std::atomic<uint64_t> playbackSilentPackets_{0};
+    std::atomic<uint64_t> playbackSilentFrames_{0};
     std::atomic<bool> playbackStarted_{false};
     std::thread eventThread_;
     std::atomic<bool> deferOutputStart_{false};

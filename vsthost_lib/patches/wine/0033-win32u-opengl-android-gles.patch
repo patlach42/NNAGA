@@ -20,23 +20,18 @@ wine_dbg_log/snprintf + write 15% on the message thread; 3939/4000 log lines
 were this one ERR). See project_zink_layer3_state / feedback_xserver_gpu_glx_egl.
 
 diff --git a/dlls/win32u/opengl.c b/dlls/win32u/opengl.c
-index 3b8db3ca291..236021111b6 100644
+index 02f85c4fe34..a23542c6a07 100644
 --- a/dlls/win32u/opengl.c
 +++ b/dlls/win32u/opengl.c
-@@ -158,7 +158,11 @@ void opengl_drawable_release( struct opengl_drawable *drawable )
- 
- static void opengl_drawable_set_context( struct opengl_drawable *drawable, struct opengl_context *context )
- {
--    if (!drawable->funcs->set_context) return;
-+    /* vstpoc: NULL-harden. A context whose initial sync faulted (e.g. the GLES
-+     * DSA fault) ends up with draw/read == NULL; context_sync_drawables then
-+     * passes NULL here every frame, turning a one-time failure into a permanent
-+     * make-current loop (AmpliTube white screen). */
-+    if (!drawable || !drawable->funcs->set_context) return;
-     drawable->funcs->set_context( drawable, context ? context->driver_private : NULL );
+@@ -172,6 +172,7 @@ void opengl_drawable_release( struct opengl_drawable *drawable )
+     }
  }
  
-@@ -178,6 +182,11 @@ static void opengl_drawable_flush( struct opengl_drawable *drawable, int interva
++
+ static void opengl_drawable_flush( struct opengl_drawable *drawable, int interval, UINT flags )
+ {
+     if (!is_client_surface_window( drawable->client, 0 )) return;
+@@ -188,6 +189,11 @@ static void opengl_drawable_flush( struct opengl_drawable *drawable, int interva
  
  static BOOL opengl_drawable_swap( struct opengl_drawable *drawable )
  {
@@ -48,7 +43,7 @@ index 3b8db3ca291..236021111b6 100644
      if (!is_client_surface_window( drawable->client, 0 )) return FALSE;
      client_surface_update( drawable->client );
      return drawable->funcs->swap( drawable );
-@@ -185,6 +194,25 @@ static BOOL opengl_drawable_swap( struct opengl_drawable *drawable )
+@@ -239,6 +245,25 @@ static void make_client_context_current(void)
  
  #ifdef SONAME_LIBEGL
  
@@ -74,7 +69,7 @@ index 3b8db3ca291..236021111b6 100644
  struct framebuffer_surface
  {
      struct opengl_drawable base;
-@@ -252,35 +280,55 @@ static GLenum depth_format_from_pfd( const struct wgl_pixel_format *desc )
+@@ -306,35 +331,55 @@ static GLenum depth_format_from_pfd( const struct wgl_pixel_format *desc )
      return 0;
  }
  
@@ -138,7 +133,7 @@ index 3b8db3ca291..236021111b6 100644
      return fbo;
  }
  
-@@ -290,51 +338,69 @@ static void resize_framebuffer( struct opengl_drawable *drawable, const struct w
+@@ -344,51 +389,69 @@ static void resize_framebuffer( struct opengl_drawable *drawable, const struct w
      const struct opengl_funcs *funcs = &display_funcs;
      GLuint count = 1, name;
      GLenum ret;
@@ -216,7 +211,7 @@ index 3b8db3ca291..236021111b6 100644
      funcs->p_glDeleteFramebuffers( 1, &fbo );
      TRACE( "drawable %p destroyed framebuffer %u\n", drawable, fbo );
  }
-@@ -397,13 +463,96 @@ static void framebuffer_surface_set_context( struct opengl_drawable *drawable, v
+@@ -436,13 +499,96 @@ static void framebuffer_surface_resize( struct opengl_drawable *drawable )
  
  static void framebuffer_surface_flush( struct opengl_drawable *drawable, UINT flags )
  {
@@ -313,7 +308,7 @@ index 3b8db3ca291..236021111b6 100644
      return TRUE;
  }
  
-@@ -450,7 +599,22 @@ static EGLConfig egl_config_for_format( const struct egl_platform *egl, int form
+@@ -503,7 +649,22 @@ static EGLConfig egl_config_for_format( const struct egl_platform *egl, int form
  
  static void egldrv_init_egl_platform( struct egl_platform *platform )
  {
@@ -337,7 +332,7 @@ index 3b8db3ca291..236021111b6 100644
      platform->native_display = 0;
  }
  
-@@ -486,7 +650,10 @@ static UINT egldrv_init_pixel_formats( UINT *onscreen_count )
+@@ -539,7 +700,10 @@ static UINT egldrv_init_pixel_formats( UINT *onscreen_count )
      for (i = 0, j = 0; i < count; i++)
      {
          funcs->p_eglGetConfigAttrib( egl->display, configs[i], EGL_RENDERABLE_TYPE, &render );
@@ -349,7 +344,7 @@ index 3b8db3ca291..236021111b6 100644
      }
      count = j;
  
-@@ -778,18 +945,18 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
+@@ -826,18 +990,18 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
              name = EGL_CONTEXT_MINOR_VERSION_KHR;
              break;
          case WGL_CONTEXT_FLAGS_ARB:
@@ -375,7 +370,7 @@ index 3b8db3ca291..236021111b6 100644
              break;
          default:
              name = EGL_NONE;
-@@ -811,6 +978,54 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
+@@ -859,6 +1023,54 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
      }
      *attribs_end = EGL_NONE;
  
@@ -430,7 +425,7 @@ index 3b8db3ca291..236021111b6 100644
      /* For now only OpenGL is supported. It's enough to set the API only for
       * context creation, since:
       * 1. the default API is EGL_OPENGL_ES_API
-@@ -818,10 +1033,24 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
+@@ -866,10 +1078,24 @@ static BOOL egldrv_context_create( int format, void *share, const int *attribs,
       *    > EGL_OPENGL_API and EGL_OPENGL_ES_API are interchangeable for all
       *    > purposes except eglCreateContext.
       */
@@ -459,23 +454,12 @@ index 3b8db3ca291..236021111b6 100644
      {
          WARN( "Context creation failed (error %#x).\n", err );
          return FALSE;
-@@ -847,7 +1076,8 @@ static BOOL egldrv_make_current( struct opengl_drawable *draw, struct opengl_dra
- 
-     TRACE( "draw %s, read %s, context %p\n", debugstr_opengl_drawable( draw ), debugstr_opengl_drawable( read ), context );
- 
--    return funcs->p_eglMakeCurrent( egl->display, context ? draw->surface : EGL_NO_SURFACE, context ? read->surface : EGL_NO_SURFACE, context );
-+    return funcs->p_eglMakeCurrent( egl->display, context ? draw->surface : EGL_NO_SURFACE,
-+                                    context ? read->surface : EGL_NO_SURFACE, context );
- }
- 
- static void egldrv_pbuffer_destroy( struct opengl_drawable *drawable )
-@@ -880,8 +1110,22 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
+@@ -929,8 +1155,22 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
  {
      struct opengl_funcs *funcs = &display_funcs;
      const char *extensions;
 +    const char *egl_lib = getenv( "VSTPOC_EGL_LIBRARY" );
- 
--    if (!(funcs->egl_handle = dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )))
++
 +    /* RTLD_LOCAL (NOT GLOBAL): our standalone Mesa libEGL exports eglDestroySyncKHR
 +     * etc.; with RTLD_GLOBAL those shadow the system libEGL and break later
 +     * dlopens of system libs that need the REAL system EGL (e.g. libgui.so via
@@ -488,12 +472,13 @@ index 3b8db3ca291..236021111b6 100644
 +    }
 +    else if (egl_lib && *egl_lib)
 +        ERR( "vstpoc: VSTPOC_EGL_LIBRARY=%s dlopen failed: %s — falling back to system EGL\n", egl_lib, dlerror() );
-+
+ 
+-    if (!(funcs->egl_handle = dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )))
 +    if (!funcs->egl_handle && !(funcs->egl_handle = dlopen( SONAME_LIBEGL, RTLD_NOW | RTLD_GLOBAL )))
      {
          ERR( "Failed to load %s: %s\n", SONAME_LIBEGL, dlerror() );
          return FALSE;
-@@ -911,8 +1155,19 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
+@@ -960,8 +1200,19 @@ static BOOL egl_init( const struct opengl_driver_funcs **driver_funcs )
          ERR( "Failed to find required extension %s\n", #ext );  \
          goto failed;                                            \
      }
@@ -515,7 +500,7 @@ index 3b8db3ca291..236021111b6 100644
  #undef CHECK_EXTENSION
  
  #define USE_GL_FUNC( func )                                                                     \
-@@ -959,7 +1214,10 @@ static BOOL init_egl_platform( struct egl_platform *egl, const struct opengl_fun
+@@ -1008,7 +1259,10 @@ static BOOL init_egl_platform( struct egl_platform *egl, const struct opengl_fun
          return FALSE;                                                                              \
      }
      CHECK_EXTENSION( EGL_KHR_create_context );
@@ -527,7 +512,7 @@ index 3b8db3ca291..236021111b6 100644
      CHECK_EXTENSION( EGL_KHR_no_config_context );
  #undef CHECK_EXTENSION
  
-@@ -1034,7 +1292,25 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
+@@ -1083,7 +1337,25 @@ static void init_egl_platforms( struct opengl_funcs *funcs, const struct opengl_
      driver_funcs->p_init_egl_platform( &display_egl );
      if (!display_egl.type) display_egl.display = funcs->p_eglGetDisplay( EGL_DEFAULT_DISPLAY );
  
@@ -554,7 +539,7 @@ index 3b8db3ca291..236021111b6 100644
      init_egl_devices( funcs );
  }
  
-@@ -1802,6 +2078,15 @@ static struct opengl_drawable *get_updated_drawable( HDC hdc, int format, struct
+@@ -1851,6 +2123,15 @@ static struct opengl_drawable *get_updated_drawable( HDC hdc, int format, struct
          opengl_drawable_add_ref( drawable );
          return drawable;
      }
@@ -570,9 +555,9 @@ index 3b8db3ca291..236021111b6 100644
  
      /* retrieve D3D internal drawables from the DCs if they have any */
      if (!hdc && drawable) hdc = drawable->owner_hdc;
-@@ -1838,6 +2123,13 @@ static BOOL context_sync_drawables( struct opengl_context *context, HDC draw_hdc
-         if (old_read != old_draw) opengl_drawable_set_context( old_draw, NULL );
-     }
+@@ -1882,6 +2163,13 @@ static BOOL context_sync_drawables( struct opengl_context *context, HDC draw_hdc
+     if (previous == context && new_draw == context->draw && new_read == context->read) ret = TRUE;
+     else if (previous) context_exchange_drawables( previous, &old_draw, &old_read ); /* take ownership of the previous context drawables */
  
 +    /* vstpoc-gl TEMP diag: trace the sync decision (previous/ret/driver result). */
 +    {
@@ -584,7 +569,7 @@ index 3b8db3ca291..236021111b6 100644
      if (!ret && (ret = driver_funcs->p_make_current( new_draw, new_read, context->driver_private )))
      {
          NtCurrentTeb()->glContext = context;
-@@ -1858,6 +2150,12 @@ static BOOL context_sync_drawables( struct opengl_context *context, HDC draw_hdc
+@@ -1899,6 +2187,12 @@ static BOOL context_sync_drawables( struct opengl_context *context, HDC draw_hdc
          opengl_drawable_flush( new_draw, new_draw->interval, 0 );
      }
  

@@ -221,6 +221,7 @@ class DirectUsbDeviceStressTest {
         var temporaryTrackId = 0L
         var wav: File? = null
         var warmupStats: DirectUsbStats? = null
+        var warmupRaw: LongArray? = null
         var finalStats = runCatching { engine.getDirectUsbStats() }.getOrDefault(DirectUsbStats())
         var finalRaw = LongArray(0)
         var finalTransport: TransportInfo? = null
@@ -317,9 +318,9 @@ class DirectUsbDeviceStressTest {
                     if (reason == null && abs(current.beatsPerMinute - requestedBpm) > 0.01) reason = "transport-bpm-incoherent"
                     previousSamplePosition = current.samplePosition
                     previousTransportFrame = current.transportFrame
-                    transport = current
                     if (warmupStats == null && SystemClock.elapsedRealtime() >= warmupDeadline) {
                         warmupStats = stats
+                        warmupRaw = raw.copyOf()
                         if (raw.getOrZero(EVENT_THREAD_URGENT_AUDIO) != 1L || raw.getOrZero(RENDER_THREAD_URGENT_AUDIO) != 1L) {
                             reason = "urgent-audio-thread-not-enabled"
                         }
@@ -332,10 +333,15 @@ class DirectUsbDeviceStressTest {
                 val baseline = warmupStats ?: finalStats
                 val actualXrunGrowth = (finalStats.actualXruns - baseline.actualXruns).coerceAtLeast(0L)
                 val deadlineMissGrowth = (finalStats.deadlineMisses - baseline.deadlineMisses).coerceAtLeast(0L)
+                val silentPacketGrowth = (finalStats.playbackSilentPackets - baseline.playbackSilentPackets).coerceAtLeast(0L)
+                val silentFrameGrowth = (finalStats.playbackSilentFrames - baseline.playbackSilentFrames).coerceAtLeast(0L)
                 if (reason == null && !samplePositionProgressed) reason = "sample-position-did-not-advance"
                 if (reason == null && !transportFrameProgressed) reason = "transport-frame-did-not-advance"
                 if (reason == null && actualXrunGrowth > 0L) reason = "actual-xrun-growth-exceeded"
                 if (reason == null && deadlineMissGrowth > 0L) reason = "deadline-miss-growth-exceeded"
+                if (reason == null && (silentPacketGrowth > 0L || silentFrameGrowth > 0L)) {
+                    reason = "playback-silence-padding-growth-exceeded-packets=$silentPacketGrowth-frames=$silentFrameGrowth"
+                }
                 if (reason == null) reason = validateRunningStats(finalStats, finalRaw, format, buffer, multiplier)
             }
         } catch (t: Throwable) {
@@ -357,7 +363,7 @@ class DirectUsbDeviceStressTest {
         val transport = finalTransport ?: runCatching { engine.getTransportInfo() }.getOrNull()
         Log.i(
             tag,
-            telemetry(reason ?: "pass", cycle, format, buffer, multiplier, finalStats, finalRaw, lifecycleOk, transport, warmupStats)
+            telemetry(reason ?: "pass", cycle, format, buffer, multiplier, finalStats, finalRaw, lifecycleOk, transport, warmupStats, warmupRaw)
         )
         Log.i(
             tag,
@@ -371,14 +377,15 @@ class DirectUsbDeviceStressTest {
                 lifecycleRaw,
                 lifecycleOk,
                 transport,
-                warmupStats
+                warmupStats,
+                warmupRaw
             )
         )
         return CaseResult(reason == null, reason)
     }
 
     private fun validateConfiguration(stats: DirectUsbStats, format: DirectUsbFormat, buffer: Int, multiplier: Int): String? {
-        if (stats.schemaVersion < 3L) return "unsupported-stats-schema-${stats.schemaVersion}"
+        if (stats.schemaVersion < 6L) return "unsupported-stats-schema-${stats.schemaVersion}"
         if (stats.periodMultiplier != multiplier.toLong()) return "period-multiplier-mismatch-${stats.periodMultiplier}"
         if (stats.effectiveQuantum != buffer.toLong()) return "effective-quantum-mismatch-${stats.effectiveQuantum}"
         val configuredTarget = minOf(1024L, buffer.toLong() * multiplier)
@@ -408,21 +415,51 @@ class DirectUsbDeviceStressTest {
         return null
     }
 
-    private fun telemetry(reason: String, cycle: Int, format: DirectUsbFormat, buffer: Int, multiplier: Int, stats: DirectUsbStats, rawStats: LongArray, lifecycleOk: Boolean, transport: TransportInfo?, warmup: DirectUsbStats?): String {
-        val queueLatencyMs = if (stats.sampleRateHz > 0L) stats.knownHostLatencyFrames * 1_000.0 / stats.sampleRateHz else 0.0
-        val actualXrunGrowth = (stats.actualXruns - (warmup?.actualXruns ?: stats.actualXruns)).coerceAtLeast(0L)
-        val deadlineMissGrowth = (stats.deadlineMisses - (warmup?.deadlineMisses ?: stats.deadlineMisses)).coerceAtLeast(0L)
+    private fun telemetry(
+        reason: String,
+        cycle: Int,
+        format: DirectUsbFormat,
+        buffer: Int,
+        multiplier: Int,
+        stats: DirectUsbStats,
+        rawStats: LongArray,
+        lifecycleOk: Boolean,
+        transport: TransportInfo?,
+        warmup: DirectUsbStats?,
+        warmupRaw: LongArray?,
+    ): String {
+        val queueLatencyMs =
+            if (stats.sampleRateHz > 0L) stats.knownHostLatencyFrames * 1_000.0 / stats.sampleRateHz else 0.0
+        val actualXrunGrowth =
+            (stats.actualXruns - (warmup?.actualXruns ?: stats.actualXruns)).coerceAtLeast(0L)
+        val deadlineMissGrowth =
+            (stats.deadlineMisses - (warmup?.deadlineMisses ?: stats.deadlineMisses)).coerceAtLeast(0L)
+        val silentPacketGrowth =
+            (stats.playbackSilentPackets - (warmup?.playbackSilentPackets ?: stats.playbackSilentPackets))
+                .coerceAtLeast(0L)
+        val silentFrameGrowth =
+            (stats.playbackSilentFrames - (warmup?.playbackSilentFrames ?: stats.playbackSilentFrames))
+                .coerceAtLeast(0L)
+        val rawPlaybackXrunGrowth =
+            (rawStats.getOrZero(RAW_PLAYBACK_XRUNS) -
+                (warmupRaw?.getOrZero(RAW_PLAYBACK_XRUNS) ?: rawStats.getOrZero(RAW_PLAYBACK_XRUNS)))
+                .coerceAtLeast(0L)
         return "TELEMETRY reason=$reason cycle=$cycle rate=${format.sampleRate} bits=${format.bits} bytes=${format.subslotBytes} channels=${format.channels} " +
             "buffer=$buffer multiplier=$multiplier schema=${stats.schemaVersion} state=${stats.state} failure=${stats.failure} period_multiplier=${stats.periodMultiplier} " +
             "effective_quantum=${stats.effectiveQuantum} steady_target_frames=${stats.steadyTarget} startup_prime_frames=${stats.startupPrime} queued_out_frames=${stats.queuedOut} " +
             "known_host_latency_frames=${stats.knownHostLatencyFrames} estimated_host_queue_latency_ms=$queueLatencyMs sequence=${stats.sequence} " +
             "capture_overruns=${rawStats.getOrZero(CAPTURE_OVERRUNS)} capture_underruns=${rawStats.getOrZero(CAPTURE_UNDERRUNS)} " +
             "capture_transfer_errors=${stats.captureTransferErrors} playback_transfer_errors=${stats.playbackTransferErrors} capture_wait_pressure=${stats.captureWaitPressure} " +
-            "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${stats.playbackXruns} playback_backpressure=${stats.playbackBackpressure} performance_hint_active=${if (stats.performanceHintActive) 1 else 0} lifecycle_failures=${rawStats.getOrZero(LIFECYCLE_FAILURES)} " +
-            "transport_failed=${rawStats.getOrZero(TRANSPORT_FAILED)} capture_ring_frames=${rawStats.getOrZero(CAPTURE_RING_FRAMES)} playback_ring_frames=${rawStats.getOrZero(PLAYBACK_RING_FRAMES)} " +
+            "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} aggregate_xruns=${stats.actualXruns} " +
+            "playback_backpressure=${stats.playbackBackpressure} playback_silent_packets=${stats.playbackSilentPackets} " +
+            "playback_silent_frames=${stats.playbackSilentFrames} playback_silent_packets_growth=$silentPacketGrowth " +
+            "playback_silent_frames_growth=$silentFrameGrowth performance_hint_active=${if (stats.performanceHintActive) 1 else 0} " +
+            "lifecycle_failures=${rawStats.getOrZero(LIFECYCLE_FAILURES)} transport_failed=${rawStats.getOrZero(TRANSPORT_FAILED)} " +
+            "capture_ring_frames=${rawStats.getOrZero(CAPTURE_RING_FRAMES)} playback_ring_frames=${rawStats.getOrZero(PLAYBACK_RING_FRAMES)} " +
             "implicit_fifo_depth=${rawStats.getOrZero(IMPLICIT_FIFO_DEPTH)} last_dsp_ns=${stats.lastDspNs} peak_dsp_ns=${stats.peakDspNs} " +
-
             "last_cycle_ns=${stats.lastCycleNs} peak_cycle_ns=${stats.peakCycleNs} deadline_budget_ns=${stats.deadlineBudgetNs} deadline_misses=${stats.deadlineMisses} " +
+            "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
+            "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
             "transport_playing=${transport?.playing == true} transport_looping=${transport?.looping == true} transport_bpm=${transport?.beatsPerMinute ?: 0.0} " +
             "sample_position=${transport?.samplePosition ?: 0L} transport_frame=${transport?.transportFrame ?: 0L} lifecycle_after_stop=${if (lifecycleOk) 1 else 0}"
@@ -488,5 +525,8 @@ class DirectUsbDeviceStressTest {
         const val TRANSPORT_FAILED = 10
         const val EVENT_THREAD_URGENT_AUDIO = 11
         const val RENDER_THREAD_URGENT_AUDIO = 12
+        const val RAW_WRITTEN_FRAMES = 13
+        const val RAW_PLAYED_FRAMES = 14
+        const val RAW_PLAYBACK_XRUNS = 15
     }
 }

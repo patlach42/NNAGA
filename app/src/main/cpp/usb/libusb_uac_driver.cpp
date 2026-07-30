@@ -1233,6 +1233,9 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
     }
 
     // Reset the ring before priming the pump.
+    playbackFrameStride_.store(
+        std::max(1, format_.channels * format_.bytesPerSample),
+        std::memory_order_release);
     ringHead_.store(0, std::memory_order_relaxed);
     ringTail_.store(0, std::memory_order_relaxed);
     writtenFrames_.store(0, std::memory_order_relaxed);
@@ -1241,6 +1244,8 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
     playbackUnderruns_.store(0, std::memory_order_relaxed);
     playbackOverrunActive_.store(false, std::memory_order_relaxed);
     playbackUnderrunActive_.store(false, std::memory_order_relaxed);
+    playbackSilentPackets_.store(0, std::memory_order_relaxed);
+    playbackSilentFrames_.store(0, std::memory_order_relaxed);
     playbackStarted_.store(false, std::memory_order_relaxed);
     stopRequested_.store(false, std::memory_order_relaxed);
     transportFailed_.store(false, std::memory_order_relaxed);
@@ -1529,6 +1534,7 @@ bool LibusbUacDriver::startCapturePump() {
             "capture format has no usable PCM frame stride");
         return false;
     }
+    captureFrameStride_.store(captureStride, std::memory_order_release);
     const int capturePacketsPerSecond = packetsPerSecondForInterval(
         captureFormat_.isHighSpeed, captureFormat_.bInterval);
     capturePacketsPerTransfer_ =
@@ -2291,14 +2297,20 @@ bool LibusbUacDriver::prepareImplicitTransfer(libusb_transfer* xfr) {
     size_t read = implicitRead_.load(std::memory_order_acquire);
     for (;;) {
         const size_t write = implicitWrite_.load(std::memory_order_acquire);
-        if (write - read < count) return false;
+        if (write < read || write - read < count) return false;
+        int transferFrames = 0;
         for (size_t packet = 0; packet < count; ++packet) {
             frameCounts[packet] = std::min<int>(
                 implicitFrames_[(read + packet) &
                                 (kImplicitFifoCapacity - 1)]
                     .load(std::memory_order_relaxed),
                 maxFramesPerPacket_);
+            transferFrames += frameCounts[packet];
         }
+        // A completed OUT transfer still has the other in-flight URBs in
+        // front of it. Defer resubmission until rendered PCM is ready instead
+        // of committing audible silence several milliseconds early.
+        if (bufferedFrames() < transferFrames) return false;
         if (implicitRead_.compare_exchange_weak(
                 read, read + count, std::memory_order_acq_rel,
                 std::memory_order_acquire)) {
@@ -2382,7 +2394,10 @@ void LibusbUacDriver::onIso(libusb_transfer* xfr) {
             playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
     }
     if (implicit) {
-        if (!prepareImplicitTransfer(xfr)) {
+        // Once one transfer is deferred, preserve completion order: every
+        // later completion joins the same FIFO instead of consuming newer
+        // capture metadata and overtaking the older transfer.
+        if (pendingImplicitCount_ > 0 || !prepareImplicitTransfer(xfr)) {
             if (pendingImplicitCount_ < pendingImplicitTransfers_.size()) {
                 inflight_.fetch_sub(1, std::memory_order_acq_rel);
                 pendingImplicitTransfers_[pendingImplicitCount_++] = xfr;
@@ -2454,6 +2469,13 @@ int LibusbUacDriver::drainRing(uint8_t* dst, int bytes) {
         if (playbackStarted_.load(std::memory_order_acquire) &&
             !playbackUnderrunActive_.exchange(true, std::memory_order_acq_rel)) {
             playbackUnderruns_.fetch_add(1, std::memory_order_relaxed);
+        }
+        const int frameStride = format_.channels * format_.bytesPerSample;
+        if (frameStride > 0) {
+            playbackSilentPackets_.fetch_add(1, std::memory_order_relaxed);
+            playbackSilentFrames_.fetch_add(
+                static_cast<uint64_t>((bytes - n) / frameStride),
+                std::memory_order_relaxed);
         }
     } else {
         playbackUnderrunActive_.store(false, std::memory_order_release);
@@ -2573,12 +2595,13 @@ void LibusbUacDriver::setGraphQuantum(
                                 playbackPacketsPerTransfer_,
                                 microframesPerSec_)
         : physicalTransferFrames;
-    // The measured iD4 minimum is six milliseconds of userspace runway at
-    // multiplier 3. Shorter queues met the latency target but produced real
-    // playback underruns during Android lifecycle and display scheduling.
+    // Reserve roughly eight to nine milliseconds of userspace runway on the
+    // measured iD4 path. Six milliseconds still admitted rare 7-8 ms Android
+    // display/lifecycle stalls; the extra five USB transfers keep those
+    // outliers off the audible path.
     const int reserveTransfers =
         clampPeriodMultiplier(periodMultiplier) +
-        (lowLatencyProfile_ ? 9 : 1);
+        (lowLatencyProfile_ ? 14 : 1);
     const int watermarkTransfers = playbackWatermarkTransferCount(
         transferCount_, reserveTransfers, lowLatencyProfile_);
     const int queuedTransferFrames = watermarkTransfers * transferFrames;

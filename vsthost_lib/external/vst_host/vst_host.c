@@ -21,8 +21,9 @@
  * actual .exe path comes via Z:\ drive mapping for Linux file paths.
  */
 
+#include <winsock2.h>
+#include <afunix.h>
 #include <windows.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
@@ -236,6 +237,31 @@ static int g_pluginCount = 0;
  * whose params we publish to Android over the shared-memory ring.
  * Subsequent commits will extend the param ring to route per-plugin. */
 static volatile VstpocShared* g_shm = NULL;
+static SOCKET g_wake_socket = INVALID_SOCKET;
+static void connect_wake_socket(const char* shm_path) {
+    WSADATA w; if (WSAStartup(MAKEWORD(2,2), &w) != 0) return;
+    SOCKET s = socket(AF_UNIX, SOCK_STREAM, 0); if (s == INVALID_SOCKET) return;
+    struct sockaddr_un a; memset(&a, 0, sizeof(a)); a.sun_family = AF_UNIX;
+    _snprintf(a.sun_path, sizeof(a.sun_path), "%s.wake", shm_path);
+    if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) { closesocket(s); return; }
+    DWORD timeout_ms = 10;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+    g_wake_socket = s;
+}
+static void wait_wake_or_sleep(void) {
+    if (g_wake_socket == INVALID_SOCKET) { Sleep(1); return; }
+    char b[32];
+    int n = recv(g_wake_socket, b, sizeof(b), 0);
+    if (n == SOCKET_ERROR) {
+        const int err = WSAGetLastError();
+        if (err == WSAETIMEDOUT || err == WSAEWOULDBLOCK) return;
+    } else if (n > 0) {
+        return;
+    }
+    closesocket(g_wake_socket);
+    g_wake_socket = INVALID_SOCKET;
+    Sleep(1);
+}
 
 typedef struct {
     uint64_t sample_position, transport_frame, loop_end_frame;
@@ -243,7 +269,7 @@ typedef struct {
     uint32_t flags, block_frames;
     int valid;
 } HostTransport;
-static HostTransport g_transport = {0, 0, 0.0, 120.0, 0, 0, 0};
+static HostTransport g_transport = {0, 0, 0, 0.0, 120.0, 0, 0, 0};
 static double g_configured_rate = 0.0;
 static int g_configured_block = 0;
 static int g_transport_pending = 0;
@@ -268,6 +294,7 @@ static int read_transport(const VstpocShared* shm) {
     return g_transport.valid;
 }
 static AEffect* g_eff = NULL;
+static int g_primary_plugin_index = -1;
 
 /* Set to 1 by the editor thread once effEditOpen has returned. The audio
  * thread blocks on this before starting to call processReplacing, so the
@@ -301,6 +328,7 @@ static volatile LONG g_editor_open_index = 0;
 static int g_load_on_editor_thread = 0;
 static const char* g_paths[VSTHOST_MAX_PLUGINS];
 static volatile LONG g_load_result[VSTHOST_MAX_PLUGINS]; /* 0=pending 1=ok 2=failed */
+static HANDLE g_editor_threads[VSTHOST_MAX_PLUGINS];
 static volatile LONG g_editor_go = 0;  /* main: "editors may open now" */
 static char g_failure_msg[256];
 static int  g_failure_set = 0;
@@ -386,6 +414,50 @@ static void ensure_host_frame_class_registered(void) {
     }
 }
 
+static void complete_editor_open_turn(int plugin_index) {
+    while (g_editor_open_index < plugin_index &&
+           !(g_shm && g_shm->stop_flag)) {
+        Sleep(1);
+    }
+    if (g_shm && g_shm->stop_flag) return;
+    InterlockedCompareExchange(&g_editor_open_index,
+                               plugin_index + 1,
+                               plugin_index);
+    if (plugin_index == g_primary_plugin_index) {
+        InterlockedExchange(&g_editor_open_done, 1);
+    }
+}
+static void drain_primary_param_ring(int plugin_index, AEffect* eff) {
+    if (plugin_index != g_primary_plugin_index || !g_shm || !eff) return;
+    uint64_t head = __atomic_load_n(&g_shm->param_head, __ATOMIC_ACQUIRE);
+    uint64_t tail = __atomic_load_n(&g_shm->param_tail, __ATOMIC_RELAXED);
+    while (tail != head) {
+        VstpocParamMsg msg = g_shm->params[tail & (VSTPOC_PARAM_RING_MSGS - 1)];
+        if (msg.index >= 0 && msg.index < eff->numParams) {
+            eff->setParameter(eff, msg.index, msg.value);
+        }
+        ++tail;
+    }
+    __atomic_store_n(&g_shm->param_tail, tail, __ATOMIC_RELEASE);
+}
+
+static void run_headless_control_loop(int plugin_index, AEffect* eff) {
+    complete_editor_open_turn(plugin_index);
+    if (plugin_index != g_primary_plugin_index) return;
+    DWORD last_param_publish = 0;
+    while (!(g_shm && g_shm->stop_flag)) {
+        drain_primary_param_ring(plugin_index, eff);
+        DWORD now = GetTickCount();
+        if (plugin_index == g_primary_plugin_index && g_shm &&
+            now - last_param_publish >= 100) {
+            publish_param_values((VstpocShared*)g_shm, eff);
+            last_param_publish = now;
+        }
+        Sleep(5);
+    }
+}
+
+
 /* Per-plugin editor thread. Each plugin gets its own thread so they
  * don't share a single message loop: a plugin that blocks inside
  * CreateWindowExA can't stall the others.
@@ -403,25 +475,28 @@ static DWORD WINAPI per_plugin_editor_thread(LPVOID arg) {
         int ok = load_one_plugin(p, g_paths[p]);
         InterlockedExchange(&g_load_result[p], ok ? 1 : 2);
         if (!ok || !g_plugins[p].eff) {
-            /* Bump the open-turn counter so later editors don't wait 60s
-             * for a plugin that never loaded. */
-            InterlockedExchange(&g_editor_open_index, p + 1);
+            complete_editor_open_turn(p);
             return 0;
         }
         while (!g_editor_go && !(g_shm && g_shm->stop_flag)) Sleep(5);
         if (g_shm && g_shm->stop_flag) return 0;
     }
     AEffect* eff = g_plugins[p].eff;
-    if (!eff) return 0;
+    if (!eff) {
+        complete_editor_open_turn(p);
+        return 0;
+    }
 
     if (!(eff->flags & effFlagsHasEditor)) {
         LOG("editor[%d]: plugin has no editor\n", p);
+        run_headless_control_loop(p, eff);
         return 0;
     }
     ERect* rect = NULL;
     eff->dispatcher(eff, /*effEditGetRect=*/13, 0, 0, &rect, 0.0f);
     if (!rect) {
         LOG("editor[%d]: effEditGetRect returned NULL\n", p);
+        run_headless_control_loop(p, eff);
         return 0;
     }
     int w = rect->right - rect->left;
@@ -429,7 +504,7 @@ static DWORD WINAPI per_plugin_editor_thread(LPVOID arg) {
     /* Publish the editor's native size so the Android side can size its
      * SurfaceView to match. Only the primary plugin is exposed today.
      * Written under the same memory barrier as guest_ready. */
-    if (p == 0 && g_shm) {
+    if (p == g_primary_plugin_index && g_shm) {
         g_shm->editor_width  = w;
         g_shm->editor_height = h;
         __sync_synchronize();
@@ -446,6 +521,7 @@ static DWORD WINAPI per_plugin_editor_thread(LPVOID arg) {
             if (waited_ms > 60000) {
                 LOG("editor[%d]: timed out waiting for editor[%ld]\n",
                     p, (long)g_editor_open_index);
+                complete_editor_open_turn(p);
                 return 0;
             }
         }
@@ -533,13 +609,10 @@ static DWORD WINAPI per_plugin_editor_thread(LPVOID arg) {
     LOG("editor[%d]: post-effEditOpen ret=%lld; entering message loop\n",
         p, (long long)openRet);
 
-    /* Signal that this editor is done opening so editor[p+1] can start. */
-    InterlockedExchange(&g_editor_open_index, p + 1);
-
-    /* The audio thread gates on the FIRST plugin's editor being open.
-     * Once any plugin's effEditOpen returns, the wine user32 CS is no
-     * longer held, so processReplacing can run. */
-    if (p == 0) InterlockedExchange(&g_editor_open_done, 1);
+    /* Signal that this editor is done opening so editor[p+1] can start.
+     * The audio thread gates on the primary plugin's turn completing,
+     * including the valid no-editor and null-rectangle cases above. */
+    complete_editor_open_turn(p);
 
     DWORD last_idle = GetTickCount();
     DWORD last_param_publish = 0;
@@ -549,22 +622,11 @@ static DWORD WINAPI per_plugin_editor_thread(LPVOID arg) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
-        /* Param drain: routes to the PRIMARY plugin only for now.
-         * (Per-plugin param routing lands with the shared-layout change.) */
-        if (p == 0 && g_shm) {
-            uint64_t ph = __atomic_load_n(&g_shm->param_head, __ATOMIC_ACQUIRE);
-            uint64_t pt = __atomic_load_n(&g_shm->param_tail, __ATOMIC_RELAXED);
-            while (pt != ph) {
-                VstpocParamMsg pmsg = g_shm->params[pt & (VSTPOC_PARAM_RING_MSGS - 1)];
-                if (pmsg.index >= 0 && pmsg.index < eff->numParams) {
-                    eff->setParameter(eff, pmsg.index, pmsg.value);
-                }
-                pt++;
-            }
-            __atomic_store_n(&g_shm->param_tail, pt, __ATOMIC_RELEASE);
-        }
+        /* Param drain routes to the primary plugin only for now.
+         * Per-plugin parameter routing requires a separate ABI change. */
+        drain_primary_param_ring(p, eff);
         DWORD now = GetTickCount();
-        if (p == 0 && g_shm && now - last_param_publish >= 100) {
+        if (p == g_primary_plugin_index && g_shm && now - last_param_publish >= 100) {
             publish_param_values((VstpocShared*)g_shm, eff);
             last_param_publish = now;
         }
@@ -670,8 +732,9 @@ static VstpocShared* map_shared(const char* path) {
         LOG("CreateFileA(%s) failed: %lu\n", path, (unsigned long)GetLastError());
         return NULL;
     }
-    DWORD size_lo = (DWORD)(sizeof(VstpocShared) & 0xffffffff);
-    DWORD size_hi = (DWORD)((sizeof(VstpocShared) >> 32) & 0xffffffff);
+    const uint64_t shared_size = (uint64_t)sizeof(VstpocShared);
+    DWORD size_lo = (DWORD)(shared_size & UINT64_C(0xffffffff));
+    DWORD size_hi = (DWORD)(shared_size >> 32);
     HANDLE mh = CreateFileMappingA(fh, NULL, PAGE_READWRITE,
                                    size_hi, size_lo, NULL);
     if (!mh) {
@@ -689,11 +752,13 @@ static VstpocShared* map_shared(const char* path) {
     }
     if (s->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         s->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        s->shared_layout_size < sizeof(VstpocShared)) {
-        LOG("incompatible shared layout: magic=%llx version=%u size=%u expected=%u\n",
+        s->shared_layout_size < sizeof(VstpocShared) ||
+        (s->shared_feature_bits & (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET)) !=
+            (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET)) {
+        LOG("incompatible shared layout/features: magic=%llx version=%u size=%u features=%llx expected=%u\n",
             (unsigned long long)s->shared_layout_magic,
             (unsigned)s->shared_layout_version, (unsigned)s->shared_layout_size,
-            (unsigned)sizeof(VstpocShared));
+            (unsigned long long)s->shared_feature_bits, (unsigned)sizeof(VstpocShared));
         UnmapViewOfFile(s);
         return NULL;
     }
@@ -1317,11 +1382,10 @@ int main(int argc, char** argv) {
 
     VstpocShared* shm = map_shared(shm_path);
     if (!shm) return 3;
+    connect_wake_socket(shm_path);
     /* Make sure status starts pending — map_shared zeroes the region but be
      * explicit so a stale reader sees the expected sentinel. */
     write_status(shm, 0, NULL);
-
-    const int kMaxBlockSize = (int)VSTPOC_MAX_BLOCK_FRAMES;
 
     {
         const char* lt = getenv("VSTPOC_LOAD_ON_EDITOR_THREAD");
@@ -1356,7 +1420,7 @@ int main(int argc, char** argv) {
                 InterlockedExchange(&g_load_result[i], 2);
                 continue;
             }
-            CloseHandle(th);
+            g_editor_threads[i] = th;
             LOG("editor[%d] loader thread spawned\n", i);
             while (g_load_result[i] == 0) Sleep(5);
         }
@@ -1379,7 +1443,11 @@ int main(int argc, char** argv) {
      * NULL holes for failed plugins.) */
     AEffect* eff = NULL;
     for (int i = 0; i < g_pluginCount; i++) {
-        if (g_plugins[i].eff) { eff = g_plugins[i].eff; break; }
+        if (g_plugins[i].eff) {
+            eff = g_plugins[i].eff;
+            g_primary_plugin_index = i;
+            break;
+        }
     }
 
     /* Probe: does this plugin advertise an editor? Don't call effEditGetRect
@@ -1431,7 +1499,7 @@ int main(int argc, char** argv) {
                                      (LPVOID)(intptr_t)p,
                                      STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
             if (th) {
-                CloseHandle(th);
+                g_editor_threads[p] = th;
                 LOG("editor[%d] thread spawned\n", p);
             } else {
                 LOG("editor[%d] CreateThread failed: %lu\n",
@@ -1447,8 +1515,6 @@ int main(int argc, char** argv) {
      * uses its exact transport.block_frames count. */
     static float in_l[VSTPOC_MAX_BLOCK_FRAMES], in_r[VSTPOC_MAX_BLOCK_FRAMES];
     static float out_l[VSTPOC_MAX_BLOCK_FRAMES], out_r[VSTPOC_MAX_BLOCK_FRAMES];
-    float* inputs[2]  = { in_l,  in_r  };
-    float* outputs[2] = { out_l, out_r };
 
     /* Wait for the editor thread to finish effEditOpen before we start
      * calling processReplacing on the audio thread. processReplacing
@@ -1496,11 +1562,11 @@ int main(int argc, char** argv) {
         handle_state_request(shm, eff);
         if (!g_transport_pending) {
             g_transport_pending = read_transport(shm);
-            if (!g_transport_pending) { Sleep(1); continue; }
+            if (!g_transport_pending) { wait_wake_or_sleep(); continue; }
         }
         if (!g_transport.valid || !(g_transport.sample_rate > 0.0) ||
             !isfinite(g_transport.sample_rate)) {
-            Sleep(1);
+            wait_wake_or_sleep();
             continue;
         }
         const int blockFrames = (int)g_transport.block_frames;
@@ -1534,15 +1600,15 @@ int main(int argc, char** argv) {
                 int_  = __atomic_load_n(&shm->audio_in_tail, __ATOMIC_RELAXED);
                 avail = inh - int_;
                 if (avail >= (uint64_t)blockFrames) break;
-                Sleep(1);
+                wait_wake_or_sleep();
                 if (++waited_ms > 100) waited_ms = 0; /* retain pending context; never process silence */
             }
             if (avail >= (uint64_t)blockFrames) {
                 /* FIFO pairing: never skip input frames or transport records. */
                 for (int i = 0; i < blockFrames; i++) {
                     uint64_t idx = (int_ + (uint64_t)i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
-                    in_l[i] = shm->audio_in[idx * 2 + 0];
-                    in_r[i] = shm->audio_in[idx * 2 + 1];
+                    in_l[i] = shm->audio_in[0][idx];
+                    in_r[i] = shm->audio_in[1][idx];
                 }
                 __atomic_store_n(&shm->audio_in_tail,
                                  int_ + (uint64_t)blockFrames, __ATOMIC_RELEASE);
@@ -1597,8 +1663,8 @@ int main(int argc, char** argv) {
         uint64_t push = space < (uint64_t)blockFrames ? space : (uint64_t)blockFrames;
         for (uint64_t i = 0; i < push; i++) {
             uint64_t idx = (ah + i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
-            shm->audio[idx * 2 + 0] = out_l[i];
-            shm->audio[idx * 2 + 1] = out_r[i];
+            shm->audio[0][idx] = out_l[i];
+            shm->audio[1][idx] = out_r[i];
         }
         __atomic_store_n(&shm->audio_head, ah + push, __ATOMIC_RELEASE);
         __atomic_add_fetch(&shm->guest_frames_produced, push, __ATOMIC_RELAXED);
@@ -1610,14 +1676,33 @@ int main(int argc, char** argv) {
 teardown:
     LOG("stop_flag set; shutting down (frames_produced=%llu)\n",
         (unsigned long long)shm->guest_frames_produced);
-    /* Tear down each plugin in reverse order. */
-    for (int i = g_pluginCount - 1; i >= 0; i--) {
-        AEffect* e = g_plugins[i].eff;
-        if (!e) continue;
-        e->dispatcher(e, /*effStopProcess=*/72, 0, 0, NULL, 0.0f);
-        e->dispatcher(e, /*effMainsChanged=*/12, 0, 0, NULL, 0.0f);
-        e->dispatcher(e, /*effClose=*/1, 0, 0, NULL, 0.0f);
-        FreeLibrary(g_plugins[i].module);
+    /* Editor threads own every editor dispatcher call. Join them before
+     * effClose/FreeLibrary so teardown cannot execute code from an unloaded
+     * plugin. A stuck editor is left for process termination rather than
+     * risking a use-after-free on the live UI thread. */
+    HANDLE editorHandles[VSTHOST_MAX_PLUGINS];
+    DWORD editorHandleCount = 0;
+    for (int i = 0; i < g_pluginCount; ++i) {
+        if (g_editor_threads[i]) editorHandles[editorHandleCount++] = g_editor_threads[i];
+    }
+    int editorThreadsStopped = 1;
+    if (editorHandleCount != 0 &&
+        WaitForMultipleObjects(editorHandleCount, editorHandles, TRUE, 5000) != WAIT_OBJECT_0) {
+        LOG("editor shutdown timed out; skipping plugin teardown\n");
+        editorThreadsStopped = 0;
+    }
+    for (DWORD i = 0; i < editorHandleCount; ++i) CloseHandle(editorHandles[i]);
+
+    if (editorThreadsStopped) {
+        /* Tear down each plugin in reverse order. */
+        for (int i = g_pluginCount - 1; i >= 0; i--) {
+            AEffect* e = g_plugins[i].eff;
+            if (!e) continue;
+            e->dispatcher(e, /*effStopProcess=*/72, 0, 0, NULL, 0.0f);
+            e->dispatcher(e, /*effMainsChanged=*/12, 0, 0, NULL, 0.0f);
+            e->dispatcher(e, /*effClose=*/1, 0, 0, NULL, 0.0f);
+            FreeLibrary(g_plugins[i].module);
+        }
     }
     return 0;
 }

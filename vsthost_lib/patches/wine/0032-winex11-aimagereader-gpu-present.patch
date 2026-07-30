@@ -1,6 +1,8 @@
+diff --git a/dlls/winex11.drv/vulkan.c b/dlls/winex11.drv/vulkan.c
+index 4243e509747..1ec58ea587b 100644
 --- a/dlls/winex11.drv/vulkan.c
 +++ b/dlls/winex11.drv/vulkan.c
-@@ -46,6 +46,138 @@
+@@ -46,6 +46,137 @@ WINE_DEFAULT_DEBUG_CHANNEL(vulkan);
  
  static const struct vulkan_driver_funcs x11drv_vulkan_driver_funcs;
  
@@ -135,27 +137,22 @@
 +    }
 +    return VK_SUCCESS;
 +}
-+
- static VkResult X11DRV_vulkan_surface_create( HWND hwnd, const struct vulkan_instance *instance, VkSurfaceKHR *handle,
-                                               struct client_surface **client )
+ static VkResult X11DRV_vulkan_surface_create( struct client_surface *client, const struct vulkan_instance *instance, VkSurfaceKHR *handle )
  {
-@@ -71,8 +203,14 @@
-      * archived patch 008-winex11-vulkan-android (the 10.10 stub). */
+     struct x11drv_client_surface *surface = impl_from_client_surface( client );
+@@ -63,8 +194,10 @@ static VkResult X11DRV_vulkan_surface_create( struct client_surface *client, con
+      * Presentation is handled by the offscreen X-server blit path. */
      if (!instance->p_vkCreateXlibSurfaceKHR)
      {
-+        /* vstpoc: create a REAL android_surface backed by an AImageReader so the
-+         * plugin's D3D11 editor swapchain succeeds and we can present frames back
-+         * to info.window (the editor's X11 window). Fall back to the stub only if
-+         * that fails. */
 +        if (vstpoc_create_android_surface( instance, info.window, handle ) == VK_SUCCESS)
 +            return VK_SUCCESS;
-         *handle = (VkSurfaceKHR)(uintptr_t)*client;
--        WARN("Android-Vulkan: returning stub VkSurfaceKHR (no host xlib/android surface entry point)\n");
-+        WARN("Android-Vulkan: real surface failed; returning stub VkSurfaceKHR\n");
+         *handle = (VkSurfaceKHR)(uintptr_t)client;
+-        WARN( "Android-Vulkan: returning stub VkSurfaceKHR (no host Xlib surface entry point)\n" );
++        WARN( "Android-Vulkan: real surface failed; returning stub VkSurfaceKHR\n" );
          return VK_SUCCESS;
      }
  
-@@ -152,6 +290,8 @@
+@@ -139,6 +272,8 @@ UINT X11DRV_VulkanInit( UINT version, void *vulkan_handle, const struct vulkan_d
       * Vulkan bridge) is the one actually loaded, not a stale cached copy. */
      ERR( "vstpoc: winex11 Android Vulkan bridge ACTIVE (android_surface + stub)\n" );
  

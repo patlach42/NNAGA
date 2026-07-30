@@ -54,6 +54,8 @@ data class DirectUsbStats(
     val writeWaitPressure: Long = 0,
     val playbackXruns: Long = 0,
     val playbackBackpressure: Long = 0,
+    val playbackSilentPackets: Long = 0,
+    val playbackSilentFrames: Long = 0,
     val lifecycleFailures: Long = 0,
     val transportFailed: Boolean = false,
     val performanceHintActive: Boolean = false,
@@ -111,6 +113,8 @@ data class DirectUsbStats(
         private const val ACTUAL_XRUNS = 32
         private const val PLAYBACK_BACKPRESSURE = 37
         private const val PERFORMANCE_HINT_ACTIVE = 38
+        private const val PLAYBACK_SILENT_PACKETS = 39
+        private const val PLAYBACK_SILENT_FRAMES = 40
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -126,6 +130,8 @@ data class DirectUsbStats(
                 writeWaitPressure = at(WRITE_WAIT_PRESSURE),
                 playbackXruns = at(PLAYBACK_XRUNS),
                 playbackBackpressure = at(PLAYBACK_BACKPRESSURE),
+                playbackSilentPackets = at(PLAYBACK_SILENT_PACKETS),
+                playbackSilentFrames = at(PLAYBACK_SILENT_FRAMES),
                 lifecycleFailures = at(LIFECYCLE_FAILURES),
                 transportFailed = at(TRANSPORT_FAILED) != 0L,
                 performanceHintActive = at(PERFORMANCE_HINT_ACTIVE) != 0L,

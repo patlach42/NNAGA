@@ -54,13 +54,15 @@ From the GuitarRackCraft root:
 ```bash
 git submodule update --init --recursive vsthost_lib/external/wine-upstream \
                                         vsthost_lib/external/fex-upstream \
+                                        vsthost_lib/external/vst3sdk \
                                         vsthost_lib/external/llvm-mingw
 ```
 
 This pulls:
-- **wine** at tag `wine-10.10` (~150 MB)
-- **FEX-Emu** at commit `07f7aa3c8` (~50 MB)
-- **llvm-mingw** at tag `20250730` (~13 MB)
+- **Wine** at tag `wine-11.14` (~150 MB)
+- **FEX-Emu** at release `FEX-2607` (`1cc4b93e7`, ~50 MB)
+- **VST 3 SDK** at tag `v3.8.0_build_66`
+- **llvm-mingw** at stable tag `20260616` (LLVM 22.1.8)
 
 ### Build everything
 
@@ -80,24 +82,25 @@ output in `src/main/{jniLibs,assets}/`.
 
 | Output | Source | Step |
 |---|---|---|
-| `external/llvm-mingw/install/bin/*` | mstorsjo/llvm-mingw @ 20250730 | setup-fex-pivot |
+| `external/llvm-mingw/install/bin/*` | llvm-mingw 20260616 / LLVM 22.1.8 | setup-fex-pivot |
 | `toolchain/x11-{headers,libs}/` | Termux .deb packages | fetch-x11-libs |
 | `toolchain/x11-libs/libpng16.so` | libpng upstream | build-android-libs |
 | `toolchain/x11-libs/libfreetype.so` | freetype upstream | build-android-libs |
 | `toolchain/gnutls-android-arm64/lib/libgnutls.so` | gnutls upstream | build-gnutls-android |
-| `external/wine-upstream/build-arm64ec/dlls/**/*.dll` | wine 10.10 + patches | build-wine-pe |
-| `external/wine-upstream/build-android-arm64/{loader,server}/*` | wine 10.10 + patches | build-wine-android |
-| `external/fex-upstream/build-{arm64ec,wow64}/Bin/lib*.dll` | FEX-Emu | build-fex-pe |
+| `external/wine-upstream/build-arm64ec/dlls/**/*.dll` | Wine 11.14 + patches | build-wine-pe |
+| `external/wine-upstream/build-android-arm64/{loader,server}/*` | Wine 11.14 + patches | build-wine-android |
+| `external/fex-upstream/build-{arm64ec,wow64}/Bin/lib*.dll` | FEX-Emu FEX-2607 | build-fex-pe |
 | `src/main/assets/vst_host.exe` | external/vst_host/vst_host.c | build-vst-host |
 | `src/main/assets/vst_host_x86.exe` | same | build-vst-host |
+| `src/main/assets/vst3_host.exe` | VST 3 SDK 3.8.0 + `external/vst_host_vst3/vst3_host.cpp` | build-vst3-host |
 | `src/main/assets/uihost_stub_x{64,86}.dll` | external/uihost_stub/ | build-uihost-stub |
 | `src/main/jniLibs/arm64-v8a/lib*.so` (~1500 files) | all of above, packed | pack-wine-fex |
 | `src/main/assets/wine-fex-manifest.json` | manifest | pack-wine-fex |
 
 ## Wine patch workflow
 
-`patches/wine/0001..0007*.patch` apply on top of the clean
-`wine-10.10` tag. They're applied by `scripts/apply-wine-patches.sh`
+Numbered patches in `patches/wine/` apply on top of the clean
+`wine-11.14` tag. They're applied by `scripts/apply-wine-patches.sh`
 (called by both `build-wine-android.sh` and `build-wine-pe.sh` before
 configure). The helper resets the wine submodule, runs `git apply` for
 each numbered patch in order, and aborts on first conflict.

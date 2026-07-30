@@ -32,7 +32,7 @@ build_one() {
         -o "$out" \
         "$REPO/external/vst_host/vst_host.c" \
         -Wl,--stack,16777216 \
-        -lkernel32 -static
+        -lkernel32 -lws2_32 -static
     "${cc%-gcc}-strip" "$out" 2>/dev/null || true
     file "$out"
     echo "Built $out ($(du -h "$out" | cut -f1))"

@@ -2,9 +2,9 @@
 # Bootstraps the vsthost_lib FEX-pivot build tree.
 #
 # Sources are managed as git submodules in the parent GuitarRackCraft repo:
-#   - wine          external/wine-upstream      (github.com/wine-mirror/wine @ wine-10.10)
-#   - FEX-Emu       external/fex-upstream       (github.com/FEX-Emu/FEX     @ 07f7aa3c8)
-#   - llvm-mingw    external/llvm-mingw         (github.com/mstorsjo/llvm-mingw @ 20250730)
+#   - Wine          external/wine-upstream      (github.com/wine-mirror/wine @ wine-11.14)
+#   - FEX-Emu       external/fex-upstream       (github.com/FEX-Emu/FEX @ FEX-2607)
+#   - llvm-mingw    external/llvm-mingw         (github.com/mstorsjo/llvm-mingw @ 20260616)
 #
 # Android Bionic adaptations live in patches/wine/ and are applied at build
 # time by scripts/build-wine-android.sh / scripts/build-wine-pe.sh — NOT by
@@ -42,10 +42,18 @@ require_submodule "fex"         "$FEX_DIR"
 require_submodule "llvm-mingw"  "$LLVM_MINGW_DIR"
 
 # --- build llvm-mingw locally (one-shot, ~30-60 min first run) --------------
-# Output goes to external/llvm-mingw/install/. Subsequent setup-fex-pivot.sh
-# runs detect the install/ tree and skip the build entirely.
+# Output goes to external/llvm-mingw/install/. The source-revision marker
+# prevents a compiler built from an older submodule pin from being reused.
 LLVM_MINGW_INSTALL="$LLVM_MINGW_DIR/install"
-if [ ! -x "$LLVM_MINGW_INSTALL/bin/clang" ]; then
+LLVM_MINGW_SOURCE_REV=$(git -C "$LLVM_MINGW_DIR" rev-parse HEAD)
+LLVM_MINGW_REVISION_FILE="$LLVM_MINGW_INSTALL/.source-revision"
+LLVM_MINGW_INSTALLED_REV=""
+if [ -f "$LLVM_MINGW_REVISION_FILE" ]; then
+    LLVM_MINGW_INSTALLED_REV=$(cat "$LLVM_MINGW_REVISION_FILE")
+fi
+
+if [ ! -x "$LLVM_MINGW_INSTALL/bin/clang" ] ||
+   [ "$LLVM_MINGW_INSTALLED_REV" != "$LLVM_MINGW_SOURCE_REV" ]; then
     echo "[+] building llvm-mingw locally — first run takes ~30-60 min and ~6-8 GB intermediates"
     echo "    output: $LLVM_MINGW_INSTALL"
     (
@@ -59,8 +67,9 @@ if [ ! -x "$LLVM_MINGW_INSTALL/bin/clang" ]; then
             --disable-clang-tools-extra \
             "$(pwd)/install"
     )
+    printf '%s\n' "$LLVM_MINGW_SOURCE_REV" > "$LLVM_MINGW_REVISION_FILE"
 else
-    echo "[=] llvm-mingw: $LLVM_MINGW_INSTALL/bin/clang already built"
+    echo "[=] llvm-mingw: $LLVM_MINGW_INSTALL/bin/clang already built for $LLVM_MINGW_SOURCE_REV"
 fi
 
 echo

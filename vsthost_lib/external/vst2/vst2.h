@@ -3,13 +3,11 @@
 // The official Steinberg VST2 SDK was withdrawn in 2022. The struct layout
 // and opcode constants below are the de-facto interface shared by every
 // open host (LinVst, vestige, JUCE's stub, etc.). All function pointers are
-// Microsoft x64 ABI — plugins built with mingw-w64 use this convention,
-// and we annotate every call site so GCC marshals args correctly when the
-// caller is System V (e.g. our host running on Linux x86_64 under Box64).
+// Microsoft x64 ABI — plug-ins built with mingw-w64 use this convention,
+// and the explicit annotation keeps 32/64-bit guest call sites consistent
+// when Wine executes them through FEX-Emu.
 //
-// Used by:
-//   - external/vst2/test_plugin.c   (mingw-w64 PE32+ DLL)
-//   - external/vst_guest/vst_guest.c (no-libc x86_64 Linux ELF host)
+// Used by the VST2 Wine guest host and its plug-in fixtures.
 
 #ifndef VSTPOC_VST2_H
 #define VSTPOC_VST2_H

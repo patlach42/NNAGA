@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds wine's PE side (591 ARM64X DLLs) on x86_64 Linux host.
+# Builds Wine's ARM64X PE-side DLL set on an x86_64 Linux host.
 # This pass is what produces the .dll files that ship inside the APK
 # alongside the Android-cross-compiled Unix-side wine binary.
 #
@@ -25,7 +25,6 @@ build_dir="external/wine-upstream/build-arm64ec"
 mkdir -p "$build_dir"
 cd "$build_dir"
 
-if [ ! -f Makefile ]; then
   echo "=== configure wine PE-side (arm64ec + aarch64) ==="
   # --disable-win16: avoid wine's 16-bit emulation layer. Two reasons:
   # (1) FEX-Emu doesn't translate 16-bit code, so even if we built it the
@@ -41,10 +40,10 @@ if [ ! -f Makefile ]; then
     --without-alsa \
     --without-pulse \
     --without-vulkan \
+    --without-opencl \
     --without-opengl \
     --without-fontconfig \
     --disable-tests
-fi
 
 echo "=== make (~10 min on 12 cores) ==="
 make -j"$(nproc)"

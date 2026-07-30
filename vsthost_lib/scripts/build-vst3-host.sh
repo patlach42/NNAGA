@@ -38,6 +38,7 @@ SDK_SRCS=(
     "$SDK/public.sdk/source/vst/hosting/processdata.cpp"
     "$SDK/public.sdk/source/vst/vstinitiids.cpp"
     "$SDK/public.sdk/source/common/commoniids.cpp"
+    "$SDK/public.sdk/source/common/commonstringconvert.cpp"
     "$SDK/public.sdk/source/vst/utility/stringconvert.cpp"
     "$SDK/pluginterfaces/base/funknown.cpp"
     "$SDK/pluginterfaces/base/conststringtable.cpp"
@@ -68,7 +69,7 @@ echo "Building $OUT ..."
     "$HOST_SRC" \
     "${SDK_SRCS[@]}" \
     -Wl,--stack,16777216 \
-    -lole32 -loleaut32 -luuid -static -static-libgcc -static-libstdc++
+    -lole32 -loleaut32 -luuid -lws2_32 -static -static-libgcc -static-libstdc++
     # PE stack reserve = 16MB (default). A 64MB experiment (2026-05-31) to mask
     # AmpliTube's deep-recursion AV REGRESSED the working plugins: the oversized
     # main-thread reserve confused FEX's guest-stack mapping, producing

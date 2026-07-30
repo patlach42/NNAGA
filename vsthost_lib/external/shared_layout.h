@@ -1,9 +1,9 @@
-// Cross-process shared-memory layout for the M4 IPC channel between the
-// ARM-native host (Oboe RT thread) and the x86_64 guest running under Box64.
+// Cross-process shared-memory layout for the Android native VST IPC channel
+// and the x86/x64 Wine guest running through FEX-Emu.
 //
 // Included by BOTH:
-//   - app/src/main/cpp/ipc/SharedRing.{h,cpp}      (ARM aarch64, C++)
-//   - external/guest/guest.c                        (x86_64, freestanding C)
+//   - vsthost_lib/src/main/cpp/ipc/SharedRing.{h,cpp} (ARM64 C++)
+//   - external/vst_host{,_vst3} guest hosts          (x86/x64 C/C++)
 //
 // Keep this file pure C / stdint so both sides see the same layout.
 // All atomics are 64-bit on a 64-byte cache line; offsets are stable across
@@ -23,9 +23,11 @@
 #define VSTPOC_MAX_PARAMS          128    /* bumped from 8 — Lecto and other deeper plugins expose 20+ params */
 #define VSTPOC_PARAM_NAME_LEN      32     /* per-name buffer including NUL */
 
-#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435332) /* "VSTPOCS2" */
-#define VSTPOC_SHARED_LAYOUT_VERSION 3u
+#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435334) /* "VSTPOCS4" */
+#define VSTPOC_SHARED_LAYOUT_VERSION 4u
 #define VSTPOC_TRANSPORT_QUEUE_CAPACITY 1024u
+#define VSTPOC_FEATURE_PLANAR_AUDIO (UINT64_C(1) << 0)
+#define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1)
 #define VSTPOC_MAX_BLOCK_FRAMES 2048u
 
 /* Native file-picker channel sizes. Wine-side GetOpenFileNameA hook writes
@@ -86,8 +88,8 @@ typedef struct {
     _Alignas(VSTPOC_CACHELINE) uint64_t param_tail;
 
     /* payload arrays, cache-line aligned so they don't share with the above */
-    _Alignas(VSTPOC_CACHELINE) float          audio[VSTPOC_AUDIO_RING_FRAMES * VSTPOC_CHANNELS];
-    _Alignas(VSTPOC_CACHELINE) float          audio_in[VSTPOC_AUDIO_RING_FRAMES * VSTPOC_CHANNELS];
+    _Alignas(VSTPOC_CACHELINE) float          audio[VSTPOC_CHANNELS][VSTPOC_AUDIO_RING_FRAMES];
+    _Alignas(VSTPOC_CACHELINE) float          audio_in[VSTPOC_CHANNELS][VSTPOC_AUDIO_RING_FRAMES];
     _Alignas(VSTPOC_CACHELINE) VstpocParamMsg params[VSTPOC_PARAM_RING_MSGS];
 
     /* metadata: written once by the guest at startup, BEFORE setting
@@ -208,6 +210,7 @@ typedef struct {
     uint64_t shared_layout_magic;
     uint32_t shared_layout_version;
     uint32_t shared_layout_size;
+    uint64_t shared_feature_bits;
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_seq;
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_sample_position;
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_frame;

@@ -2,6 +2,8 @@
 
 #include <cstdint>
 #include <string>
+#include <thread>
+#include <atomic>
 
 extern "C" {
 #include "../../../../external/shared_layout.h"
@@ -36,12 +38,10 @@ public:
     // Drops the message silently if the param ring is full.
     void pushParam(int32_t index, float value);
 
-    // Host (RT input thread): push `numFrames` interleaved-stereo float
+    // Host (RT input thread): push planar stereo samples.
     bool inputWritable(uint32_t frames) const;
-    // samples into the mic input ring. Returns frames actually pushed
-    // (may be less than numFrames if the ring is near-full).
-    // RT-safe, lock-free.
-    int32_t pushInput(const float* interleavedStereo, int32_t numFrames);
+    // Returns frames actually pushed; RT-safe and lock-free.
+    int32_t pushInput(const float* left, const float* right, int32_t numFrames);
 
     // Host: declare that the input ring is being fed by a live mic stream.
     // Guest checks this flag — if set, it reads from audio_in; otherwise
@@ -53,8 +53,15 @@ public:
 
     bool guestReady() const;
     uint64_t guestFramesProduced() const;
-
+    void notifyGuest();
 private:
+    void notifyWake() const;
+    void acceptLoop();
     int fd_ = -1;
     VstpocShared* data_ = nullptr;
+    int wakeListener_ = -1;
+    mutable std::atomic<int> wakeClient_{-1};
+    std::atomic<bool> wakeStop_{false};
+    std::thread wakeThread_;
+    std::string wakePath_;
 };

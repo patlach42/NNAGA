@@ -14,7 +14,7 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 # --- apply Bionic adaptation patches to clean upstream wine -----------------
-# wine-upstream is a submodule pinned at the wine-10.10 tag (clean upstream).
+# wine-upstream is pinned to the validated Wine 11.14 release.
 # Our Bionic / FEX-pivot adaptations live as files in patches/wine/ and are
 # applied here before configure. Re-running this script resets wine and
 # re-applies — see apply-wine-patches.sh for details.
@@ -43,9 +43,8 @@ build_dir="external/wine-upstream/build-android-arm64"
 mkdir -p "$build_dir"
 cd "$build_dir"
 
-if [ ! -f Makefile ]; then
   echo "=== configure wine for Android Bionic arm64 ==="
-  # wine 11.9 hard-requires gradle in linux-android* case even when
+  # Wine's Android target requires Gradle even when wineandroid_drv is disabled.
   # wineandroid_drv is disabled. Spoof with /bin/true since we don't
   # invoke gradle (wineandroid.drv build is disabled below).
   export GRADLE=/bin/true
@@ -107,6 +106,7 @@ if [ ! -f Makefile ]; then
     --without-alsa \
     --without-pulse \
     --without-fontconfig \
+    --without-opencl \
     --without-gstreamer \
     --without-cups \
     --without-dbus \
@@ -127,7 +127,6 @@ if [ ! -f Makefile ]; then
   # allocate a shared-memory pixmap (observed during plugin effEditOpen on
   # WagnerSharp.dll). Wine's bitblt.c falls back to XPutImage without SHM
   # when HAVE_LIBXXSHM is undefined.
-fi
 
 echo "=== make (this will take a while) ==="
 make -j"$(nproc)"

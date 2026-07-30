@@ -8,6 +8,9 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -21,6 +24,7 @@ static_assert(offsetof(VstpocShared, state_response_seq) < offsetof(VstpocShared
 static_assert(offsetof(VstpocShared, state_command) < offsetof(VstpocShared, shared_layout_magic));
 static_assert(offsetof(VstpocShared, state_path) < offsetof(VstpocShared, shared_layout_magic));
 static_assert(offsetof(VstpocShared, state_message) < offsetof(VstpocShared, shared_layout_magic));
+static_assert(offsetof(VstpocShared, shared_feature_bits) == 269992);
 static_assert(offsetof(VstpocShared, shared_layout_magic) == 269976);
 static_assert(offsetof(VstpocShared, shared_layout_version) == 269984);
 static_assert(offsetof(VstpocShared, shared_layout_size) == 269988);
@@ -69,7 +73,41 @@ uint64_t LoadAcquire(const uint64_t* value) {
     return __atomic_load_n(value, __ATOMIC_ACQUIRE);
 }
 
-TEST(VstSharedLayoutTest, MetadataAndV3AppendOrderingAreStable) {
+constexpr uint64_t AudioSlot(uint64_t frame) {
+    return frame & (VSTPOC_AUDIO_RING_FRAMES - 1u);
+}
+
+int ConnectWakeSocket(const std::string& shmPath) {
+    const int fd = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return -1;
+
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    const std::string socketPath = shmPath + ".wake";
+    if (socketPath.size() >= sizeof(addr.sun_path)) {
+        ::close(fd);
+        return -1;
+    }
+    std::memcpy(addr.sun_path, socketPath.c_str(), socketPath.size() + 1);
+    if (::connect(fd, reinterpret_cast<const sockaddr*>(&addr),
+                  static_cast<socklen_t>(offsetof(sockaddr_un, sun_path) + socketPath.size() + 1)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+bool WakeReadable(int fd, int timeoutMs = 250) {
+    pollfd pfd{fd, POLLIN, 0};
+    return ::poll(&pfd, 1, timeoutMs) == 1 && (pfd.revents & POLLIN) != 0;
+}
+
+void DrainWake(int fd) {
+    char token[32];
+    while (::recv(fd, token, sizeof(token), MSG_DONTWAIT) > 0) {}
+}
+
+TEST(VstSharedLayoutTest, MetadataAndV4FeatureEnvelopeAreStable) {
     TempBackingFile backing;
     SharedRing ring(backing.path());
 
@@ -78,6 +116,10 @@ TEST(VstSharedLayoutTest, MetadataAndV3AppendOrderingAreStable) {
     EXPECT_EQ(shared->shared_layout_magic, VSTPOC_SHARED_LAYOUT_MAGIC);
     EXPECT_EQ(shared->shared_layout_version, VSTPOC_SHARED_LAYOUT_VERSION);
     EXPECT_EQ(shared->shared_layout_size, sizeof(VstpocShared));
+    EXPECT_EQ(shared->shared_feature_bits,
+              static_cast<uint64_t>(VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET));
+    EXPECT_NE(shared->shared_feature_bits & VSTPOC_FEATURE_PLANAR_AUDIO, 0u);
+    EXPECT_NE(shared->shared_feature_bits & VSTPOC_FEATURE_WAKE_SOCKET, 0u);
 
     EXPECT_LT(offsetof(VstpocShared, state_message),
               offsetof(VstpocShared, shared_layout_magic));
@@ -183,34 +225,137 @@ TEST_F(SharedRingFixture, InputPreflightAndPushAreAllOrNothingNearWrap) {
     EXPECT_TRUE(ring.inputWritable(VSTPOC_AUDIO_RING_FRAMES));
     EXPECT_FALSE(ring.inputWritable(VSTPOC_AUDIO_RING_FRAMES + 1u));
 
-    const float wrappedFrames[] = {
-        1.0f, -1.0f,
-        2.0f, -2.0f,
-        3.0f, -3.0f,
-        4.0f, -4.0f,
-    };
+    const float wrappedLeft[] = {1.0f, 2.0f, 3.0f, 4.0f};
+    const float wrappedRight[] = {-1.0f, -2.0f, -3.0f, -4.0f};
     ASSERT_TRUE(ring.inputWritable(4));
-    ASSERT_EQ(ring.pushInput(wrappedFrames, 4), 4);
+    ASSERT_EQ(ring.pushInput(wrappedLeft, wrappedRight, 4), 4);
     EXPECT_EQ(LoadAcquire(&shared->audio_in_head), start + 4u);
     for (uint32_t i = 0; i < 4; ++i) {
-        const uint64_t slot = (start + i) & (VSTPOC_AUDIO_RING_FRAMES - 1u);
-        EXPECT_FLOAT_EQ(shared->audio_in[slot * VSTPOC_CHANNELS], wrappedFrames[i * 2]);
-        EXPECT_FLOAT_EQ(shared->audio_in[slot * VSTPOC_CHANNELS + 1], wrappedFrames[i * 2 + 1]);
+        const uint64_t slot = AudioSlot(start + i);
+        EXPECT_FLOAT_EQ(shared->audio_in[0][slot], wrappedLeft[i]);
+        EXPECT_FLOAT_EQ(shared->audio_in[1][slot], wrappedRight[i]);
     }
 
     const uint64_t nearlyFullHead = start + 4u + VSTPOC_AUDIO_RING_FRAMES - 2u;
     StoreRelaxed(&shared->audio_in_head, nearlyFullHead);
     StoreRelease(&shared->audio_in_tail, start + 4u);
-    const uint64_t occupiedSlot = nearlyFullHead & (VSTPOC_AUDIO_RING_FRAMES - 1u);
-    shared->audio_in[occupiedSlot * VSTPOC_CHANNELS] = 55.0f;
-    shared->audio_in[occupiedSlot * VSTPOC_CHANNELS + 1] = -55.0f;
-    const float rejectedFrames[] = {9.0f, -9.0f, 10.0f, -10.0f, 11.0f, -11.0f};
-
+    const uint64_t occupiedSlot = AudioSlot(nearlyFullHead);
+    for (uint32_t slot = 0; slot < VSTPOC_AUDIO_RING_FRAMES; ++slot) {
+        shared->audio_in[0][slot] = 77.0f;
+        shared->audio_in[1][slot] = -77.0f;
+    }
+    shared->audio_in[0][occupiedSlot] = 55.0f;
+    shared->audio_in[1][occupiedSlot] = -55.0f;
+    const float rejectedLeft[] = {9.0f, 10.0f, 11.0f};
+    const float rejectedRight[] = {-9.0f, -10.0f, -11.0f};
     EXPECT_FALSE(ring.inputWritable(3));
-    EXPECT_EQ(ring.pushInput(rejectedFrames, 3), 0);
+    EXPECT_EQ(ring.pushInput(rejectedLeft, rejectedRight, 3), 0);
     EXPECT_EQ(LoadAcquire(&shared->audio_in_head), nearlyFullHead);
-    EXPECT_FLOAT_EQ(shared->audio_in[occupiedSlot * VSTPOC_CHANNELS], 55.0f);
-    EXPECT_FLOAT_EQ(shared->audio_in[occupiedSlot * VSTPOC_CHANNELS + 1], -55.0f);
+    for (uint32_t slot = 0; slot < VSTPOC_AUDIO_RING_FRAMES; ++slot) {
+        const float expectedL = slot == occupiedSlot ? 55.0f : 77.0f;
+        const float expectedR = slot == occupiedSlot ? -55.0f : -77.0f;
+        EXPECT_FLOAT_EQ(shared->audio_in[0][slot], expectedL);
+        EXPECT_FLOAT_EQ(shared->audio_in[1][slot], expectedR);
+    }
+}
+
+TEST_F(SharedRingFixture, PullAudioReadsPlanarChannelsAcrossWrap) {
+    VstpocShared* shared = ring.raw();
+    const uint64_t start = VSTPOC_AUDIO_RING_FRAMES - 3u;
+    StoreRelaxed(&shared->audio_tail, start);
+    StoreRelease(&shared->audio_head, start + 7u);
+
+    for (uint32_t i = 0; i < 7; ++i) {
+        const uint64_t slot = AudioSlot(start + i);
+        shared->audio[0][slot] = 100.0f + static_cast<float>(i);
+        shared->audio[1][slot] = -200.0f - static_cast<float>(i);
+    }
+
+    float left[7] = {};
+    float right[7] = {};
+    ASSERT_EQ(ring.pullAudio(left, right, 7), 7);
+    for (uint32_t i = 0; i < 7; ++i) {
+        EXPECT_FLOAT_EQ(left[i], 100.0f + static_cast<float>(i));
+        EXPECT_FLOAT_EQ(right[i], -200.0f - static_cast<float>(i));
+    }
+    EXPECT_EQ(LoadAcquire(&shared->audio_tail), start + 7u);
+}
+
+TEST_F(SharedRingFixture, WakeSocketNotifiesOnlyEmptyToNonemptyTransitions) {
+    const int wakeFd = ConnectWakeSocket(backing.path());
+    ASSERT_GE(wakeFd, 0);
+
+    VstpocShared* shared = ring.raw();
+    StoreRelaxed(&shared->audio_in_tail, 0);
+    StoreRelaxed(&shared->audio_in_head, 0);
+    StoreRelaxed(&shared->param_tail, 0);
+    StoreRelaxed(&shared->param_head, 0);
+    StoreRelaxed(&shared->stop_flag, 0);
+
+    const float firstLeft[] = {1.0f};
+    const float firstRight[] = {-1.0f};
+    bool firstWakeObserved = false;
+    for (int attempt = 0; attempt < 64 && !firstWakeObserved; ++attempt) {
+        StoreRelease(&shared->audio_in_tail, LoadAcquire(&shared->audio_in_head));
+        ASSERT_EQ(ring.pushInput(firstLeft, firstRight, 1), 1);
+        firstWakeObserved = WakeReadable(wakeFd, 10);
+    }
+    ASSERT_TRUE(firstWakeObserved);
+    char token = 0;
+    ASSERT_EQ(::recv(wakeFd, &token, sizeof(token), 0), 1);
+    DrainWake(wakeFd);
+    const float secondLeft[] = {2.0f};
+    const float secondRight[] = {-2.0f};
+    ASSERT_EQ(ring.pushInput(secondLeft, secondRight, 1), 1);
+    pollfd quiet{wakeFd, POLLIN, 0};
+    EXPECT_EQ(::poll(&quiet, 1, 20), 0);
+
+    StoreRelease(&shared->audio_in_tail, LoadAcquire(&shared->audio_in_head));
+    ASSERT_EQ(ring.pushInput(secondLeft, secondRight, 1), 1);
+    ASSERT_TRUE(WakeReadable(wakeFd));
+    DrainWake(wakeFd);
+
+    ring.pushParam(7, 0.25f);
+    ASSERT_TRUE(WakeReadable(wakeFd));
+    DrainWake(wakeFd);
+
+    ring.signalStop();
+    ASSERT_TRUE(WakeReadable(wakeFd));
+    DrainWake(wakeFd);
+    ::close(wakeFd);
+}
+
+TEST_F(SharedRingFixture, WakeSocketNotifiesTransportQueueTransitions) {
+    const int wakeFd = ConnectWakeSocket(backing.path());
+    ASSERT_GE(wakeFd, 0);
+
+    VstpocShared* shared = ring.raw();
+    StoreRelaxed(&shared->transport_queue_head, 0);
+    StoreRelaxed(&shared->transport_queue_tail, 0);
+
+    bool firstWakeObserved = false;
+    for (int attempt = 0; attempt < 64 && !firstWakeObserved; ++attempt) {
+        StoreRelease(&shared->transport_queue_tail,
+                     LoadAcquire(&shared->transport_queue_head));
+        ASSERT_TRUE(ring.publishTransport(100, 200, 300, 48000.0, 120.0,
+                                          true, false, 64));
+        firstWakeObserved = WakeReadable(wakeFd, 10);
+    }
+    ASSERT_TRUE(firstWakeObserved);
+    DrainWake(wakeFd);
+
+    ASSERT_TRUE(ring.publishTransport(101, 201, 301, 48000.0, 120.0,
+                                      true, false, 64));
+    pollfd quiet{wakeFd, POLLIN, 0};
+    EXPECT_EQ(::poll(&quiet, 1, 20), 0);
+
+    StoreRelease(&shared->transport_queue_tail,
+                 LoadAcquire(&shared->transport_queue_head));
+    ASSERT_TRUE(ring.publishTransport(102, 202, 302, 48000.0, 120.0,
+                                      true, false, 64));
+    ASSERT_TRUE(WakeReadable(wakeFd));
+    DrainWake(wakeFd);
+    ::close(wakeFd);
 }
 
 TEST_F(SharedRingFixture, InputSpscStressPreservesEveryFrameAfterSuccessfulPreflight) {
@@ -234,8 +379,8 @@ TEST_F(SharedRingFixture, InputSpscStressPreservesEveryFrameAfterSuccessfulPrefl
                 continue;
             }
             const uint64_t slot = tail & (VSTPOC_AUDIO_RING_FRAMES - 1u);
-            const float left = shared->audio_in[slot * VSTPOC_CHANNELS];
-            const float right = shared->audio_in[slot * VSTPOC_CHANNELS + 1];
+            const float left = shared->audio_in[0][slot];
+            const float right = shared->audio_in[1][slot];
             if (left != -right || left < 0.0f || left >= static_cast<float>(kFrames)) {
                 producerFailed.store(true, std::memory_order_relaxed);
                 break;
@@ -255,8 +400,9 @@ TEST_F(SharedRingFixture, InputSpscStressPreservesEveryFrameAfterSuccessfulPrefl
                 std::this_thread::yield();
                 continue;
             }
-            const float frame[] = {static_cast<float>(next), -static_cast<float>(next)};
-            if (ring.pushInput(frame, 1) != 1) {
+            const float left = static_cast<float>(next);
+            const float right = -static_cast<float>(next);
+            if (ring.pushInput(&left, &right, 1) != 1) {
                 producerFailed.store(true, std::memory_order_relaxed);
                 break;
             }

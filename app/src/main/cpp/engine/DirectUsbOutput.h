@@ -256,6 +256,12 @@ public:
     uint64_t xrunCount() const noexcept {
         return driver_.playbackXRunCount();
     }
+    uint64_t playbackSilentPacketCount() const noexcept {
+        return driver_.playbackSilentPacketCount();
+    }
+    uint64_t playbackSilentFrameCount() const noexcept {
+        return driver_.playbackSilentFrameCount();
+    }
     uint64_t playbackBackpressureCount() const noexcept {
         return driver_.playbackBackpressureCount();
     }

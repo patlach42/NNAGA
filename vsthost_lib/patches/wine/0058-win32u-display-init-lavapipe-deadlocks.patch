@@ -11,79 +11,48 @@ unblocks the init thread. Harmless on Turnip (init is fast/self-contained).
 See project_lavapipe_gl_fallback.
 
 diff --git a/dlls/win32u/opengl.c b/dlls/win32u/opengl.c
-index 6d874960cd0..4c0a6279e69 100644
+index 0b678beb96d..6810bf296d9 100644
 --- a/dlls/win32u/opengl.c
 +++ b/dlls/win32u/opengl.c
-@@ -3351,11 +3351,28 @@ void win32u_glImportSemaphoreWin32NameEXT( GLuint semaphore, GLenum type, const
+@@ -3345,10 +3345,17 @@ void win32u_glImportSemaphoreWin32NameEXT( GLuint semaphore, GLenum type, const
      }
  }
  
-+/* vstpoc: set on the thread running display_funcs_init() so a re-entrant
-+ * __wine_get_opengl_driver() (the EGL/GL driver init on software lavapipe
-+ * re-enters here, e.g. while creating its desktop context) skips the
-+ * pthread_once and returns the in-progress display_funcs instead of
-+ * self-deadlocking in pthread_once. */
++/* Avoid re-entering or waiting on display initialization from a thread that
++ * display initialization itself needs to service. */
 +static __thread BOOL opengl_driver_initializing;
-+
-+/* vstpoc: global init state — 0=not started, 1=in progress (some thread is
-+ * inside display_funcs_init), 2=done. Lets get_opengl_gpus() avoid BLOCKING on
-+ * another thread's in-progress init, which deadlocks on software lavapipe (the
-+ * init's init_device_info → eglCreateContext does a cross-thread window op
-+ * serviced by the desktop thread — the very thread that calls get_opengl_gpus
-+ * from SetDesktopWindow). See get_opengl_gpus() for the full cycle. */
 +static volatile LONG opengl_driver_init_state;
 +
  static void display_funcs_init(void)
  {
      struct egl_platform *egl, *next;
      UINT status;
- 
 +    opengl_driver_initializing = TRUE;
-+    opengl_driver_init_state = 1; /* vstpoc: publish "in progress" before any work */
++    opengl_driver_init_state = 1;
+ 
      if (egl_init( &driver_funcs )) TRACE( "Initialized EGL library\n" );
  
-     if ((status = user_driver->pOpenGLInit( WINE_OPENGL_DRIVER_VERSION, &display_funcs, &driver_funcs )))
-@@ -3467,6 +3484,9 @@ static void display_funcs_init(void)
-         LIST_FOR_EACH_ENTRY_SAFE( egl, next, &devices_egl, struct egl_platform, entry )
-             init_device_info( egl, &display_funcs );
+@@ -3462,6 +3469,8 @@ static void display_funcs_init(void)
      }
-+
+ 
+     if (!global_context) global_context = internal_context_create( NULL, NULL );
 +    opengl_driver_initializing = FALSE;
-+    opengl_driver_init_state = 2; /* vstpoc: driver fully initialized */
++    opengl_driver_init_state = 2;
  }
  
  /***********************************************************************
-@@ -3483,6 +3503,10 @@ const struct opengl_funcs *__wine_get_opengl_driver( UINT version )
+@@ -3478,6 +3487,7 @@ const struct opengl_funcs *__wine_get_opengl_driver( UINT version )
          return NULL;
      }
  
-+    /* vstpoc: re-entrant call from within display_funcs_init() (the EGL/GL driver
-+     * init re-enters here on software lavapipe) — pthread_once on the same control
-+     * would self-deadlock. Return the in-progress display_funcs directly. */
 +    if (opengl_driver_initializing) return &display_funcs;
      pthread_once( &init_once, display_funcs_init );
      return &display_funcs;
  }
-@@ -3491,6 +3515,24 @@ BOOL get_opengl_gpus( struct list *gpus )
+@@ -3486,6 +3496,8 @@ BOOL get_opengl_gpus( struct list *gpus )
  {
      struct egl_platform *egl;
  
-+    /* vstpoc: never BLOCK on an in-progress display_funcs_init from ANOTHER
-+     * thread. This runs on the display-device enumeration path
-+     * (SetDesktopWindow → get_virtual_screen_rect → lock_display_devices →
-+     * here). On software lavapipe the GL driver init
-+     * (display_funcs_init → init_device_info → eglCreateContext) performs a
-+     * cross-thread window operation (COM apartment / dummy GL window) that is
-+     * serviced by the desktop thread — i.e. the very thread blocked here. So:
-+     *   desktop thread:  get_opengl_gpus → pthread_once(WAIT for init thread)
-+     *   init thread:     eglCreateContext → cross-thread send to desktop (WAIT)
-+     * = deadlock (confirmed: editor stuck at init_device_info "vendor_id",
-+     * desktop thread parked in pthread_once). If init is in progress elsewhere,
-+     * skip GL GPU enumeration this round (it is reported on a later enum once
-+     * the driver is ready); the desktop setup then completes and unblocks the
-+     * init thread's cross-thread send. Harmless on Turnip (init is fast and
-+     * self-contained, so this branch is rarely taken and only drops the
-+     * supplementary GL device-list entry for one enum). */
 +    if (opengl_driver_init_state == 1 && !opengl_driver_initializing) return FALSE;
 +
      if (!__wine_get_opengl_driver( WINE_OPENGL_DRIVER_VERSION )) return FALSE;

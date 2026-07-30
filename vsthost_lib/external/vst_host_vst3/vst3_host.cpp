@@ -31,6 +31,8 @@ extern "C" {
 #endif
 
 /* Wine + Windows headers (we're a Windows PE running under wine). */
+#include <winsock2.h>
+#include <afunix.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include <stdio.h>
@@ -70,6 +72,21 @@ using namespace Steinberg::Vst;
 
 /* Shared-memory pointer for the VEH to use during crash logging. */
 static volatile VstpocShared* g_shm = NULL;
+static SOCKET g_wake_socket = INVALID_SOCKET;
+static void wait_wake_or_sleep() {
+    if (g_wake_socket == INVALID_SOCKET) { Sleep(1); return; }
+    char b[32];
+    int n = recv(g_wake_socket, b, sizeof(b), 0);
+    if (n == SOCKET_ERROR) {
+        const int err = WSAGetLastError();
+        if (err == WSAETIMEDOUT || err == WSAEWOULDBLOCK) return;
+    } else if (n > 0) {
+        return;
+    }
+    closesocket(g_wake_socket);
+    g_wake_socket = INVALID_SOCKET;
+    Sleep(1);
+}
 
 struct HostTransport {
     uint64 samplePosition = 0, transportFrame = 0, loopEndFrame = 0;
@@ -1065,11 +1082,14 @@ static VstpocShared* map_shared(const char* path)
     CloseHandle(fh);
     if (shm && (shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
                 shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-                shm->shared_layout_size < sizeof(VstpocShared))) {
-        LOG("incompatible shared layout: magic=%llx version=%u size=%u expected=%u\n",
+                shm->shared_layout_size < sizeof(VstpocShared) ||
+                (shm->shared_feature_bits & (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET)) !=
+                    (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET))) {
+        LOG("incompatible shared layout/features: magic=%llx version=%u size=%u features=%llx expected=%u\n",
             (unsigned long long)shm->shared_layout_magic,
             (unsigned)shm->shared_layout_version,
-            (unsigned)shm->shared_layout_size, (unsigned)sizeof(VstpocShared));
+            (unsigned)shm->shared_layout_size,
+            (unsigned long long)shm->shared_feature_bits, (unsigned)sizeof(VstpocShared));
         UnmapViewOfFile(shm);
         return NULL;
     }
@@ -1840,15 +1860,19 @@ static DWORD WINAPI editor_thread_proc(LPVOID arg)
         __sync_synchronize();
     }
 
-    /* vstpoc (BIAS FX 2 tid 00a0 runaway recursion): capture the guest module
-     * map so the unix-side overflow scanner's return addresses are resolvable.
-     * libcef loads lazily *inside* attached(), so a pre-attached dump usually
-     * misses it — spawn a detached watcher that polls for libcef and dumps the
-     * full table the moment it appears (and once more shortly after). Runs on a
-     * thread the recursion does not block. Cheap; once. */
-    dump_guest_modules("pre-attach");
-    CreateThread(NULL, 0, libcef_modtable_watcher, NULL, 0, NULL);
-    CreateThread(NULL, 0, vstpoc_rip_sampler, NULL, 0, NULL);  /* no-op unless VSTPOC_RIP_SAMPLE set */
+    /* Expensive diagnostic module walks and RIP sampling are opt-in. They
+     * create threads and can emit thousands of log lines while audio runs. */
+    const char* module_watch = getenv("VSTPOC_MODULE_WATCH");
+    if (module_watch && *module_watch && *module_watch != '0') {
+        dump_guest_modules("pre-attach");
+        HANDLE watcher = CreateThread(NULL, 0, libcef_modtable_watcher, NULL, 0, NULL);
+        if (watcher) CloseHandle(watcher);
+    }
+    const char* rip_sample = getenv("VSTPOC_RIP_SAMPLE");
+    if (rip_sample && *rip_sample && *rip_sample != '0') {
+        HANDLE sampler = CreateThread(NULL, 0, vstpoc_rip_sampler, NULL, 0, NULL);
+        if (sampler) CloseHandle(sampler);
+    }
 
     LOG("editor: calling attached(hwnd=%p, HWND)%s\n", parent,
         ctx->pump_during_attach ? " [worker+pump]" : "");
@@ -2039,6 +2063,11 @@ static void update_channel_layout(IAudioProcessor* /*processor*/)
         g_pluginOutChannels = oc;
     }
 }
+static double g_configured_rate = 0.0;
+static uint32 g_configured_block = 0;
+static bool g_component_active = false;
+static bool g_processor_running = false;
+
 
 /* Process one block of stereo audio. Uses the existing ring layout —
  * deinterleave from `audio_in`, deinterleave/reinterleave through VST3
@@ -2065,6 +2094,8 @@ static void process_block(IAudioProcessor* processor,
     inBus.silenceFlags      = 0;
     inBus.channelBuffers32  = inChans;
 
+    outBus.numChannels      = g_pluginOutChannels;
+    outBus.silenceFlags     = 0;
     outBus.channelBuffers32 = outChans;
 
     /* Drain the controller's queued parameter edits (performEdit) into this
@@ -2107,26 +2138,29 @@ static void process_block(IAudioProcessor* processor,
     data.numSamples           = nFrames;
     data.numInputs            = 1;
     ProcessContext processContext{};
+    processContext.sampleRate = g_configured_rate > 0.0
+        ? g_configured_rate
+        : (g_transport.valid ? g_transport.sampleRate : 48000.0);
+    processContext.projectTimeSamples = g_transport.valid
+        ? (TSamples)g_transport.transportFrame
+        : 0;
     if (g_transport.valid) {
         processContext.state = ProcessContext::kTempoValid | ProcessContext::kTimeSigValid |
             ProcessContext::kContTimeValid | ProcessContext::kProjectTimeMusicValid |
             ProcessContext::kBarPositionValid;
         if (g_transport.flags & 1u) processContext.state |= ProcessContext::kPlaying;
-        processContext.sampleRate = g_transport.sampleRate;
-        processContext.projectTimeSamples = (TSamples)g_transport.transportFrame;
         processContext.continousTimeSamples = (TSamples)g_transport.samplePosition;
         processContext.tempo = g_transport.tempo;
         processContext.projectTimeMusic = (TQuarterNotes)g_transport.transportFrame *
-            g_transport.tempo / (g_transport.sampleRate * 60.0);
+            g_transport.tempo / (processContext.sampleRate * 60.0);
         processContext.barPositionMusic = (TQuarterNotes)(
             std::floor(processContext.projectTimeMusic / 4.0) * 4.0);
         processContext.timeSigNumerator = 4;
-        if ((g_transport.flags & 2u) && g_transport.loopEndFrame > 0 &&
-            std::isfinite(g_transport.sampleRate) && g_transport.sampleRate > 0.0) {
+        if ((g_transport.flags & 2u) && g_transport.loopEndFrame > 0) {
             processContext.state |= ProcessContext::kCycleValid | ProcessContext::kCycleActive;
             processContext.cycleStartMusic = 0.0;
             processContext.cycleEndMusic = (TQuarterNotes)g_transport.loopEndFrame *
-                g_transport.tempo / (g_transport.sampleRate * 60.0);
+                g_transport.tempo / (processContext.sampleRate * 60.0);
         }
         processContext.timeSigDenominator = 4;
     }
@@ -2138,7 +2172,7 @@ static void process_block(IAudioProcessor* processor,
     data.outputParameterChanges = nullptr;
     data.inputEvents          = &noEvents;
     data.outputEvents         = nullptr;
-    data.processContext       = g_transport.valid ? &processContext : nullptr;
+    data.processContext       = &processContext;
 
     if (!enter_process_call()) {
         for (int32 i = 0; i < nFrames; ++i) {
@@ -2158,20 +2192,28 @@ static void process_block(IAudioProcessor* processor,
     }
 }
 
-static double g_configured_rate = 0.0;
-static uint32 g_configured_block = 0;
 static bool configure_vst3_for_rate(IAudioProcessor* processor, IComponent* component,
                                     double rate, int32 block_frames)
 {
     if (!(rate > 0.0) || !std::isfinite(rate) ||
         block_frames < 1 || block_frames > (int32)VSTPOC_MAX_BLOCK_FRAMES) return false;
-    if (g_configured_rate == rate && g_configured_block == (uint32)block_frames) return true;
-    if (g_configured_rate > 0.0) {
+    if (g_configured_rate == rate && g_configured_block == (uint32)block_frames &&
+        g_component_active && g_processor_running) return true;
+    if (g_processor_running) {
         tresult r = processor->setProcessing(false);
         if (r != kResultOk) {
             LOG("setProcessing(false) failed during rate change: 0x%x\n", (unsigned)r);
             return false;
         }
+        g_processor_running = false;
+    }
+    if (g_component_active) {
+        tresult r = component->setActive(false);
+        if (r != kResultOk) {
+            LOG("setActive(false) failed during rate change: 0x%x\n", (unsigned)r);
+            return false;
+        }
+        g_component_active = false;
     }
     ProcessSetup setup{};
     setup.processMode = kRealtime;
@@ -2182,15 +2224,20 @@ static bool configure_vst3_for_rate(IAudioProcessor* processor, IComponent* comp
         LOG("setupProcessing(%.3f) failed: 0x%x\n", rate, (unsigned)r);
         return false;
     }
-    if (g_configured_rate == 0.0 && component->setActive(true) != kResultOk) {
-        LOG("setActive(true) failed after setup %.3f\n", rate);
+    r = component->setActive(true);
+    if (r != kResultOk) {
+        LOG("setActive(true) failed after setup %.3f: 0x%x\n", rate, (unsigned)r);
         return false;
     }
+    g_component_active = true;
     r = processor->setProcessing(true);
     if (r != kResultOk) {
         LOG("setProcessing(true) failed after setup %.3f: 0x%x\n", rate, (unsigned)r);
+        component->setActive(false);
+        g_component_active = false;
         return false;
     }
+    g_processor_running = true;
     g_configured_rate = rate;
     g_configured_block = (uint32)block_frames;
     LOG("configured VST3 sample rate %.3f Hz block=%d\n", rate, block_frames);
@@ -2228,11 +2275,11 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
         /* Pull a block from the input ring (mic). Producer = launcher. */
         if (!g_transport_pending) {
             g_transport_pending = read_transport((const VstpocShared*)g_shm);
-            if (!g_transport_pending) { Sleep(1); continue; }
+            if (!g_transport_pending) { wait_wake_or_sleep(); continue; }
         }
         if (!g_transport.valid || !(g_transport.sampleRate > 0.0) ||
             !std::isfinite(g_transport.sampleRate)) {
-            Sleep(1);
+            wait_wake_or_sleep();
             continue;
         }
         const int blockFrames = (int)g_transport.blockFrames;
@@ -2251,14 +2298,14 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
         uint64_t it = __atomic_load_n(&g_shm->audio_in_tail, __ATOMIC_RELAXED);
         uint64_t available = ih - it;
         if (available < (uint64_t)blockFrames) {
-            Sleep(1);
+            wait_wake_or_sleep();
             continue;
         }
         /* FIFO pairing: never skip input frames or transport records. */
         for (int i = 0; i < blockFrames; i++) {
             uint64_t idx = (it + i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
-            in_l[i] = g_shm->audio_in[idx * VSTPOC_CHANNELS + 0];
-            in_r[i] = g_shm->audio_in[idx * VSTPOC_CHANNELS + 1];
+            in_l[i] = g_shm->audio_in[0][idx];
+            in_r[i] = g_shm->audio_in[1][idx];
         }
         __atomic_store_n(&g_shm->audio_in_tail, it + blockFrames, __ATOMIC_RELEASE);
 
@@ -2288,8 +2335,8 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
         uint64_t push  = space < (uint64_t)blockFrames ? space : (uint64_t)blockFrames;
         for (uint64_t i = 0; i < push; i++) {
             uint64_t idx = (oh + i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
-            g_shm->audio[idx * VSTPOC_CHANNELS + 0] = out_l[i];
-            g_shm->audio[idx * VSTPOC_CHANNELS + 1] = out_r[i];
+            g_shm->audio[0][idx] = out_l[i];
+            g_shm->audio[1][idx] = out_r[i];
         }
         __atomic_store_n(&g_shm->audio_head, oh + push, __ATOMIC_RELEASE);
         if (g_shm) g_shm->guest_frames_produced += push;
@@ -2371,6 +2418,20 @@ int main(int argc, char** argv)
          * are meaningful (0 = legacy guest that never wrote them). */
         g_shm->diagnostic_layout_v = 1;
         __sync_synchronize();
+    }
+    if (g_shm) {
+        WSADATA w; if (WSAStartup(MAKEWORD(2,2), &w) == 0) {
+            g_wake_socket = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (g_wake_socket != INVALID_SOCKET) {
+                sockaddr_un a{}; a.sun_family = AF_UNIX;
+                _snprintf(a.sun_path, sizeof(a.sun_path), "%s.wake", argv[1]);
+                if (connect(g_wake_socket, (sockaddr*)&a, sizeof(a)) == 0) {
+                    DWORD timeoutMs = 10;
+                    setsockopt(g_wake_socket, SOL_SOCKET, SO_RCVTIMEO,
+                               reinterpret_cast<const char*>(&timeoutMs), sizeof(timeoutMs));
+                } else { closesocket(g_wake_socket); g_wake_socket = INVALID_SOCKET; }
+            }
+        }
     }
     write_status((VstpocShared*)g_shm, 0, "loading VST3");
 
@@ -2692,8 +2753,14 @@ int main(int argc, char** argv)
         CloseHandle(editorThread);
     }
     if (view) view->release();
-    processor->setProcessing(false);
-    component->setActive(false);
+    if (g_processor_running) {
+        processor->setProcessing(false);
+        g_processor_running = false;
+    }
+    if (g_component_active) {
+        component->setActive(false);
+        g_component_active = false;
+    }
     if (editController) {
         editController->terminate();
         editController->release();

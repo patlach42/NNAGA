@@ -133,9 +133,6 @@ void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     if (active_.load()) return;
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize ? bufferSize : 1024;
-    // The audio callback is RT-only: reserve the ABI maximum during activation
-    // so process() never grows or reallocates its interleave scratch buffer.
-    interleaved_.assign(static_cast<size_t>(VSTPOC_MAX_BLOCK_FRAMES) * 2, 0.0f);
 
     // Per-plugin shm + picker files. Naming matches vstpoc convention so
     // wine-side env vars + tmpfs lookups behave the same. The "_v" + uuid
@@ -347,14 +344,10 @@ void WineVstPlugin::process(const float* const* inputs,
         underruns_.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    // 1) push input into wine — interleave stereo into the reusable buffer.
-    const float* inL = inputs[0];
-    const float* inR = inputs[1] ? inputs[1] : inputs[0];   // mono → dup
-    for (uint32_t i = 0; i < numFrames; ++i) {
-        interleaved_[2 * i + 0] = inL ? inL[i] : 0.0f;
-        interleaved_[2 * i + 1] = inR ? inR[i] : 0.0f;
-    }
-    ring_->pushInput(interleaved_.data(), static_cast<int32_t>(numFrames));
+    // 1) push planar input into wine (mono input is duplicated).
+    const float* inL = (inputs && inputs[0]) ? inputs[0] : silentInput_.data();
+    const float* inR = (inputs && inputs[1]) ? inputs[1] : inL;
+    ring_->pushInput(inL, inR, static_cast<int32_t>(numFrames));
 
     // 2) pull processed output. There's a ≥1-block round-trip latency by
     //    design; pulled < numFrames is expected at startup and on any
@@ -519,6 +512,7 @@ bool WineVstPlugin::requestGuestState(uint32_t command,
 
     const uint32_t requestSeq =
         __atomic_add_fetch(&shared->state_request_seq, 1, __ATOMIC_RELEASE);
+    if (ring_) ring_->notifyGuest();
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(kGuestStateTimeoutMs);
     while (std::chrono::steady_clock::now() < deadline) {

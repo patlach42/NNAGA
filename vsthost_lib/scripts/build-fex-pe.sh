@@ -6,9 +6,8 @@
 # Both use llvm-mingw's clang as the cross compiler. Output lives at
 # external/fex-upstream/build-{arm64ec,wow64}/{Bin/,Source/Windows/.../}.
 #
-# This is upstream FEX with no patches applied yet. The first run will reveal
-# what (if anything) breaks for our toolchain version; fixes get applied via
-# patch files in patches/fex/ and re-applied via apply-fex-patches.sh.
+# FEX remains an upstream submodule; MinGW compatibility fixes live in
+# patches/fex/ and are applied idempotently before configuring either guest.
 
 set -euo pipefail
 
@@ -26,6 +25,20 @@ which arm64ec-w64-mingw32-clang aarch64-w64-mingw32-clang > /dev/null || {
   echo "error: external/fex-upstream missing. Run scripts/setup-fex-pivot.sh first."
   exit 1
 }
+
+PATCH_DIR="$repo_root/patches/fex"
+for patch in "$PATCH_DIR"/*.patch; do
+  [ -f "$patch" ] || continue
+  if git -C external/fex-upstream apply --check "$patch" 2>/dev/null; then
+    echo "[+] applying FEX patch $(basename "$patch")"
+    git -C external/fex-upstream apply "$patch"
+  elif git -C external/fex-upstream apply --reverse --check "$patch" 2>/dev/null; then
+    echo "[=] FEX patch already applied: $(basename "$patch")"
+  else
+    echo "error: stale FEX patch $(basename "$patch")" >&2
+    exit 1
+  fi
+done
 
 build_one() {
   triple="$1"        # arm64ec-w64-mingw32  |  aarch64-w64-mingw32

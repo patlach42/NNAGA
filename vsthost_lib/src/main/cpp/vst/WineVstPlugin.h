@@ -6,6 +6,7 @@
 #include "../ipc/SharedRing.h"
 #include "../ipc/PickerChannel.h"
 #include "../launcher/WineHostProcess.h"
+#include <array>
 #include <atomic>
 #include <memory>
 #include <string>
@@ -82,9 +83,11 @@ private:
     std::unique_ptr<SharedRing>      ring_;
     std::unique_ptr<PickerChannel>   picker_;
     std::unique_ptr<WineHostProcess> guest_;
+    // Permanent silent plane for nullable host inputs. Keeps transport,
+    // input, and output FIFOs advancing together without RT allocation.
+    std::array<float, VSTPOC_MAX_BLOCK_FRAMES> silentInput_{};
 
-    // Reused per process() call to avoid alloc on the audio thread.
-    std::vector<float> interleaved_;
+
 
     // Host-side mirror of param values pushed via setParameter or refreshed
     // from the guest snapshot. Used as a fallback for legacy guest builds.

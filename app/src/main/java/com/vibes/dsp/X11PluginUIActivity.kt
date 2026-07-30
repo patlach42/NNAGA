@@ -164,7 +164,10 @@ class X11PluginUIActivity : ComponentActivity() {
         frameCallback = object : Choreographer.FrameCallback {
             override fun doFrame(frameTimeNanos: Long) {
                 if (displayNumber >= 0 && !isFinishing() && frameCallback != null) {
-                    Handler(Looper.getMainLooper()).post { X11Bridge.requestX11Frame(displayNumber) }
+                    if (frameTimeNanos - lastFrameRequestNanos >= FRAME_INTERVAL_NANOS) {
+                        lastFrameRequestNanos = frameTimeNanos
+                        X11Bridge.requestX11Frame(displayNumber)
+                    }
                     choreographer.postFrameCallback(this)
                 }
             }
@@ -185,15 +188,17 @@ class X11PluginUIActivity : ComponentActivity() {
         X11DisplayManager.pluginUiExecutor.execute {
             if (!idleScheduled || isFinishing()) return@execute
             X11Bridge.idlePluginUIs()
-            Handler(Looper.getMainLooper()).postDelayed({
+            mainHandler.postDelayed({
                 if (idleScheduled && !isFinishing() && displayNumber >= 0) scheduleIdleLoop()
-            }, 8)
+            }, PLUGIN_IDLE_INTERVAL_MS)
         }
     }
     companion object {
         const val EXTRA_PLUGIN_ID = "com.vibes.dsp.extra.PLUGIN_ID"
         private const val TAG = "X11PluginUIActivity"
         private const val X11_INIT_DELAY_MS = 400L
+        private const val FRAME_INTERVAL_NANOS = 16_000_000L
+        private const val PLUGIN_IDLE_INTERVAL_MS = 17L
     }
 
     private var pluginId: String? = null
@@ -205,6 +210,8 @@ class X11PluginUIActivity : ComponentActivity() {
     private var attached: Boolean = false
     private var pendingDetach: Boolean = false
     private var frameCallback: Choreographer.FrameCallback? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var lastFrameRequestNanos: Long = 0L
     private var idleScheduled: Boolean = false
 
 }

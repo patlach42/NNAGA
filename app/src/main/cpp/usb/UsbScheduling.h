@@ -93,9 +93,14 @@ constexpr int resolvedPlaybackTargetFrames(
     const int maximum = std::max(0, maxTargetFrames);
     if (maximum == 0)
         return 0;
+    const int automatic =
+        std::min(maximum, std::max(0, automaticTargetFrames));
     if (manualTargetFrames <= 0)
-        return std::min(maximum, std::max(0, automaticTargetFrames));
-    const int minimum = std::min(maximum, std::max(0, graphQuantum));
+        return automatic;
+    // Calibration may raise the production runway, but a stale cached result
+    // must never undercut a newer automatic safety floor.
+    const int minimum = std::min(
+        maximum, std::max(std::max(0, graphQuantum), automatic));
     return std::min(maximum, std::max(minimum, manualTargetFrames));
 }
 constexpr uint64_t playbackRunwayNanoseconds(

@@ -127,6 +127,18 @@ struct UsbDriverTestAccess {
         d.implicitWrite_.store(write, std::memory_order_release);
         d.implicitRead_.store(read, std::memory_order_release);
     }
+    static size_t implicitRead(const LibusbUacDriver& d) {
+        return d.implicitRead_.load(std::memory_order_acquire);
+    }
+    static void implicitFrameMetadata(
+            LibusbUacDriver& d, size_t index, uint32_t frames) {
+        d.implicitFrames_[index % d.implicitFrames_.size()].store(
+            frames, std::memory_order_release);
+    }
+    static bool prepareImplicit(
+            LibusbUacDriver& d, libusb_transfer* xfr) {
+        return d.prepareImplicitTransfer(xfr);
+    }
     static void pending(LibusbUacDriver& d, libusb_transfer* xfr) {
         d.pendingImplicitTransfers_[0] = xfr;
         d.pendingImplicitCount_ = 1;
@@ -309,28 +321,63 @@ TEST(UsbDriverRing, DrainStarvationPadsSilenceAndCountsPlaybackUnderrun) {
     monotrypt::usb::LibusbUacDriver driver;
     monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
 
-    std::vector<uint8_t> output(2 * 4, 0xA5);
+    constexpr int frameStride = 4;
+    constexpr int outputFrames = 2;
+    const int outputBytes = outputFrames * frameStride;
+    std::vector<uint8_t> output(outputBytes, 0xA5);
     EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
-                  driver, output.data(), static_cast<int>(output.size())),
+                  driver, output.data(), outputBytes),
               0);
     EXPECT_EQ(driver.playbackXRunCount(), 0u);
     EXPECT_EQ(driver.playbackBackpressureCount(), 0u);
 
+    // Any pre-start padding is not an audible underrun. Compare exact
+    // silence totals against this baseline so the post-start contract is
+    // independent of whether the driver records pre-start padding.
+    const uint64_t silentPacketBaseline = driver.playbackSilentPacketCount();
+    const uint64_t silentFrameBaseline = driver.playbackSilentFrameCount();
+
     monotrypt::usb::UsbDriverTestAccess::playbackStarted(driver, true);
     std::fill(output.begin(), output.end(), 0xA5);
     EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
-                  driver, output.data(), static_cast<int>(output.size())),
+                  driver, output.data(), outputBytes),
               0);
     EXPECT_EQ(output, std::vector<uint8_t>(output.size(), 0));
     EXPECT_EQ(driver.playbackXRunCount(), 1u);
     EXPECT_EQ(driver.playbackBackpressureCount(), 0u);
+    EXPECT_EQ(driver.playbackSilentPacketCount(), silentPacketBaseline + 1);
+    EXPECT_EQ(driver.playbackSilentFrameCount(), silentFrameBaseline + outputFrames);
 
-    // Adjacent silence padding is one underrun event, not one event per
-    // packet.
+    // Adjacent starvation inserts another padded packet and its exact frame
+    // count, while the xrun transition remains latched at one event.
     EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
-                  driver, output.data(), static_cast<int>(output.size())),
+                  driver, output.data(), outputBytes),
               0);
     EXPECT_EQ(driver.playbackXRunCount(), 1u);
+    EXPECT_EQ(driver.playbackSilentPacketCount(), silentPacketBaseline + 2);
+    EXPECT_EQ(driver.playbackSilentFrameCount(), silentFrameBaseline + 2 * outputFrames);
+
+    // A full packet clears the starvation latch. The next empty packet must
+    // therefore create a new xrun transition and continue both totals.
+    const std::vector<uint8_t> input(outputBytes, 0x5A);
+    ASSERT_EQ(driver.writePcm(input.data(), outputFrames), outputFrames);
+    std::fill(output.begin(), output.end(), 0xA5);
+    ASSERT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                  driver, output.data(), outputBytes),
+              outputBytes);
+    EXPECT_EQ(output, input);
+    EXPECT_EQ(driver.playbackXRunCount(), 1u);
+    EXPECT_EQ(driver.playbackSilentPacketCount(), silentPacketBaseline + 2);
+    EXPECT_EQ(driver.playbackSilentFrameCount(), silentFrameBaseline + 2 * outputFrames);
+
+    std::fill(output.begin(), output.end(), 0xA5);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                  driver, output.data(), outputBytes),
+              0);
+    EXPECT_EQ(output, std::vector<uint8_t>(output.size(), 0));
+    EXPECT_EQ(driver.playbackXRunCount(), 2u);
+    EXPECT_EQ(driver.playbackSilentPacketCount(), silentPacketBaseline + 3);
+    EXPECT_EQ(driver.playbackSilentFrameCount(), silentFrameBaseline + 3 * outputFrames);
 }
 TEST(UsbDriverRing, DefaultWatermarkUsesHighWatermarkStartupLimit) {
     monotrypt::usb::LibusbUacDriver driver;
@@ -564,6 +611,93 @@ TEST(UsbDriverLifecycle, CaptureResubmitFailureTerminatesPump) {
     EXPECT_FALSE(driver.captureAvailableFrames() > 0);
     EXPECT_EQ(usb_driver_mock_submit_calls(), 1);
     libusb_free_transfer(xfr);
+}
+
+TEST(UsbDriverImplicit, PrepareDefersUntilWholeTransferPcmAndPreservesPendingOrder) {
+    resetMock();
+
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
+    monotrypt::usb::UsbDriverTestAccess::captureFormat(driver, 2, 2, true);
+    monotrypt::usb::UsbDriverTestAccess::captureActive(driver, true);
+    monotrypt::usb::UsbDriverTestAccess::playbackInflight(driver, 2);
+    monotrypt::usb::UsbDriverTestAccess::feedbackState(driver, 1, 8);
+    monotrypt::usb::UsbDriverTestAccess::implicitFrameMetadata(driver, 0, 3);
+    monotrypt::usb::UsbDriverTestAccess::implicitFrameMetadata(driver, 1, 2);
+    monotrypt::usb::UsbDriverTestAccess::implicitFrameMetadata(driver, 2, 2);
+    monotrypt::usb::UsbDriverTestAccess::implicitCursors(driver, 3, 0);
+
+    std::vector<uint8_t> firstPayload(24, 0xCD);
+    std::vector<uint8_t> secondPayload(8, 0xCD);
+    const std::vector<uint8_t> untouchedFirst = firstPayload;
+    const std::vector<uint8_t> untouchedSecond = secondPayload;
+    auto* first = makeTransfer(firstPayload, 2);
+    auto* second = makeTransfer(secondPayload);
+    ASSERT_NE(first, nullptr);
+    ASSERT_NE(second, nullptr);
+
+    std::vector<uint8_t> pcm(7 * 4);
+    for (size_t i = 0; i < pcm.size(); ++i)
+        pcm[i] = static_cast<uint8_t>(0x40 + i);
+    monotrypt::usb::UsbDriverTestAccess::playbackStarted(driver, true);
+    ASSERT_EQ(driver.writePcm(pcm.data(), 4), 4);
+
+    // The first URB needs 3 + 2 = 5 complete frames. A short ring must
+    // leave both metadata and packet storage untouched.
+    EXPECT_FALSE(monotrypt::usb::UsbDriverTestAccess::prepareImplicit(
+        driver, first));
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::implicitRead(driver), 0u);
+    EXPECT_EQ(driver.bufferedFrames(), 4);
+    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+    EXPECT_EQ(driver.playbackSilentPacketCount(), 0u);
+    EXPECT_EQ(driver.playbackSilentFrameCount(), 0u);
+    EXPECT_EQ(firstPayload, untouchedFirst);
+    EXPECT_EQ(first->iso_packet_desc[0].length, 12u);
+    EXPECT_EQ(first->iso_packet_desc[1].length, 12u);
+
+    // Once the first completion is deferred, a later completion joins the
+    // FIFO without overtaking it or consuming newer metadata.
+    monotrypt::usb::UsbDriverTestAccess::onIso(driver, first);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::pendingCount(driver), 1u);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::implicitRead(driver), 0u);
+    monotrypt::usb::UsbDriverTestAccess::onIso(driver, second);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::pendingCount(driver), 2u);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::implicitRead(driver), 0u);
+    EXPECT_EQ(secondPayload, untouchedSecond);
+    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+    EXPECT_EQ(driver.playbackSilentPacketCount(), 0u);
+    EXPECT_EQ(driver.playbackSilentFrameCount(), 0u);
+
+    ASSERT_EQ(driver.writePcm(pcm.data() + 4 * 4, 3), 3);
+    ASSERT_EQ(driver.bufferedFrames(), 7);
+    monotrypt::usb::UsbDriverTestAccess::submitPending(driver);
+
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::pendingCount(driver), 0u);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::implicitRead(driver), 3u);
+    EXPECT_EQ(driver.bufferedFrames(), 0);
+    EXPECT_EQ(driver.playedFrames(), 7);
+    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+    EXPECT_EQ(driver.playbackSilentPacketCount(), 0u);
+    EXPECT_EQ(driver.playbackSilentFrameCount(), 0u);
+    EXPECT_EQ(usb_driver_mock_submitted_transfer_count(), 2);
+    EXPECT_EQ(usb_driver_mock_submitted_payload_size(0), 20);
+    EXPECT_EQ(usb_driver_mock_submitted_payload_size(1), 8);
+    for (int offset = 0; offset < 20; ++offset) {
+        SCOPED_TRACE(offset);
+        EXPECT_EQ(usb_driver_mock_submitted_payload_byte(0, offset),
+                  pcm[static_cast<size_t>(offset)]);
+    }
+    for (int offset = 0; offset < 8; ++offset) {
+        SCOPED_TRACE(offset);
+        EXPECT_EQ(usb_driver_mock_submitted_payload_byte(1, offset),
+                  pcm[20 + static_cast<size_t>(offset)]);
+    }
+    EXPECT_EQ(first->iso_packet_desc[0].length, 12u);
+    EXPECT_EQ(first->iso_packet_desc[1].length, 8u);
+    EXPECT_EQ(second->iso_packet_desc[0].length, 8u);
+
+    libusb_free_transfer(first);
+    libusb_free_transfer(second);
 }
 
 TEST(UsbDriverLifecycle, PendingImplicitSubmitFailureRetainsOwnershipAndStops) {
