@@ -134,7 +134,7 @@ struct CaptureStats {
 };
 struct ImplicitFeedbackStats {
     uint64_t fifoDepth = 0;
-    uint64_t fallbackPackets = 0;
+    uint64_t deferredTransfers = 0;
     uint64_t metadataFifoOverruns = 0;
     uint64_t captureTransferErrors = 0;
     uint64_t playbackTransferErrors = 0;
@@ -143,6 +143,10 @@ struct ImplicitFeedbackStats {
     uint64_t lifecycleFailures = 0;
     bool transportFailed = false;
     bool eventThreadUrgentAudio = false;
+    uint64_t pendingDepth = 0;
+    uint64_t pendingHighWater = 0;
+    uint64_t zeroRunwayEvents = 0;
+    uint64_t maxPendingAgeNs = 0;
 };
 
 
@@ -205,7 +209,7 @@ public:
             std::max(1, captureFrameStride_.load(std::memory_order_acquire));
         return {
             implicitWrite >= implicitRead ? implicitWrite - implicitRead : 0,
-            implicitFallbackPackets_.load(std::memory_order_acquire),
+            deferredTransfers_.load(std::memory_order_acquire),
             metadataFifoOverruns_.load(std::memory_order_acquire),
             captureTransferErrors_.load(std::memory_order_acquire),
             playbackTransferErrors_.load(std::memory_order_acquire),
@@ -215,7 +219,11 @@ public:
                 static_cast<size_t>(captureStride),
             lifecycleFailures_.load(std::memory_order_acquire),
             transportFailed_.load(std::memory_order_acquire),
-            eventThreadUrgentAudio_.load(std::memory_order_acquire)
+            eventThreadUrgentAudio_.load(std::memory_order_acquire),
+            pendingDepth_.load(std::memory_order_acquire),
+            pendingHighWater_.load(std::memory_order_acquire),
+            zeroRunwayEvents_.load(std::memory_order_acquire),
+            maxPendingAgeNs_.load(std::memory_order_acquire)
         };
     }
     int32_t eventThreadTid() const noexcept {
@@ -477,7 +485,7 @@ private:
     int capturePacketsPerTransfer_ = 1;
     std::atomic<int> captureTransferFrames_{0};
     std::atomic<size_t> implicitWrite_{0};
-    std::atomic<uint64_t> implicitFallbackPackets_{0};
+    std::atomic<uint64_t> deferredTransfers_{0};
     std::atomic<uint64_t> metadataFifoOverruns_{0};
     std::atomic<uint64_t> captureTransferErrors_{0};
     std::atomic<uint64_t> playbackTransferErrors_{0};
@@ -494,7 +502,13 @@ private:
     std::vector<libusb_transfer*> feedbackTransfers_;
     std::vector<std::vector<uint8_t>> feedbackBuffers_;
     std::array<libusb_transfer*, kMaxTransferCount> pendingImplicitTransfers_{};
+    std::array<uint64_t, kMaxTransferCount> pendingImplicitSinceNs_{};
     size_t pendingImplicitCount_ = 0;
+    std::atomic<uint64_t> pendingDepth_{0};
+    std::atomic<uint64_t> pendingHighWater_{0};
+    std::atomic<uint64_t> zeroRunwayEvents_{0};
+    std::atomic<uint64_t> maxPendingAgeNs_{0};
+    std::atomic<bool> implicitZeroRunwayActive_{false};
     std::atomic<int> inflight_{0};     // active transfers (data + fb)
     // Cumulative frame counters used for honest position reporting
     // (see playedFrames() / writtenFrames()). Reset on start().

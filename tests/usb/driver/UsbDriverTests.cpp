@@ -574,7 +574,7 @@ TEST(UsbDriverCapture, ImplicitMetadataFifoResynchronizesAfterSaturation) {
 
     const auto stats = driver.implicitFeedbackStats();
     EXPECT_EQ(stats.fifoDepth, 1u);
-    EXPECT_EQ(stats.fallbackPackets, 0u);
+    EXPECT_EQ(stats.deferredTransfers, 0u);
     EXPECT_EQ(stats.metadataFifoOverruns, 1u);
     EXPECT_EQ(driver.captureStats().overruns, 0u);
     EXPECT_EQ(driver.captureAvailableFrames(), 64);
@@ -664,7 +664,9 @@ TEST(UsbDriverImplicit, PrepareDefersUntilWholeTransferPcmAndPreservesPendingOrd
     EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::pendingCount(driver), 2u);
     EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::implicitRead(driver), 0u);
     EXPECT_EQ(secondPayload, untouchedSecond);
-    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+    // Both completions belong to one contiguous zero-runway episode: the
+    // second pending completion must not double-count the same gap.
+    EXPECT_EQ(driver.playbackXRunCount(), 1u);
     EXPECT_EQ(driver.playbackSilentPacketCount(), 0u);
     EXPECT_EQ(driver.playbackSilentFrameCount(), 0u);
 
@@ -676,10 +678,27 @@ TEST(UsbDriverImplicit, PrepareDefersUntilWholeTransferPcmAndPreservesPendingOrd
     EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::implicitRead(driver), 3u);
     EXPECT_EQ(driver.bufferedFrames(), 0);
     EXPECT_EQ(driver.playedFrames(), 7);
-    EXPECT_EQ(driver.playbackXRunCount(), 0u);
+    EXPECT_EQ(driver.playbackXRunCount(), 1u);
     EXPECT_EQ(driver.playbackSilentPacketCount(), 0u);
     EXPECT_EQ(driver.playbackSilentFrameCount(), 0u);
-    EXPECT_EQ(usb_driver_mock_submitted_transfer_count(), 2);
+    // Completing the restored seven-frame runway clears the episode latch.
+    // A later short completion therefore starts exactly one new episode.
+    std::vector<uint8_t> thirdPayload(7 * 4, 0xCD);
+    auto* third = makeTransfer(thirdPayload);
+    ASSERT_NE(third, nullptr);
+    monotrypt::usb::UsbDriverTestAccess::onIso(driver, third);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::pendingCount(driver), 1u);
+    EXPECT_EQ(driver.playbackXRunCount(), 2u);
+
+    std::vector<uint8_t> secondPcm(7 * 4, 0x23);
+    ASSERT_EQ(driver.writePcm(secondPcm.data(), 7), 7);
+    monotrypt::usb::UsbDriverTestAccess::implicitFrameMetadata(driver, 3, 7);
+    monotrypt::usb::UsbDriverTestAccess::implicitCursors(driver, 4, 3);
+    monotrypt::usb::UsbDriverTestAccess::submitPending(driver);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::pendingCount(driver), 0u);
+    EXPECT_EQ(driver.playbackXRunCount(), 2u);
+    EXPECT_EQ(usb_driver_mock_submitted_transfer_count(), 3);
+    EXPECT_EQ(usb_driver_mock_submitted_payload_size(2), 28);
     EXPECT_EQ(usb_driver_mock_submitted_payload_size(0), 20);
     EXPECT_EQ(usb_driver_mock_submitted_payload_size(1), 8);
     for (int offset = 0; offset < 20; ++offset) {
@@ -696,6 +715,7 @@ TEST(UsbDriverImplicit, PrepareDefersUntilWholeTransferPcmAndPreservesPendingOrd
     EXPECT_EQ(first->iso_packet_desc[1].length, 8u);
     EXPECT_EQ(second->iso_packet_desc[0].length, 8u);
 
+    libusb_free_transfer(third);
     libusb_free_transfer(first);
     libusb_free_transfer(second);
 }

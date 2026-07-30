@@ -46,6 +46,13 @@ data class DirectUsbStats(
     val sequence: Long = 0,
     val captureOverruns: Long = 0,
     val captureUnderruns: Long = 0,
+    val implicitFeedbackFifoDepth: Long = 0,
+    val implicitDeferredTransfers: Long = 0,
+    val implicitMetadataOverruns: Long = 0,
+    val implicitPendingTransfers: Long = 0,
+    val implicitPendingHighWater: Long = 0,
+    val implicitZeroRunwayEvents: Long = 0,
+    val implicitMaxPendingAgeNs: Long = 0,
     val captureRingFrames: Long = 0,
     val playbackRingFrames: Long = 0,
     val captureTransferErrors: Long = 0,
@@ -83,6 +90,8 @@ data class DirectUsbStats(
         private const val SEQUENCE = 0
         private const val CAPTURE_OVERRUNS = 1
         private const val CAPTURE_UNDERRUNS = 2
+        private const val IMPLICIT_FIFO_DEPTH = 3
+        private const val IMPLICIT_DEFERRED_TRANSFERS = 4
         private const val CAPTURE_RING = 8
         private const val PLAYBACK_RING = 7
         private const val CAPTURE_TRANSFER_ERRORS = 5
@@ -115,6 +124,11 @@ data class DirectUsbStats(
         private const val PERFORMANCE_HINT_ACTIVE = 38
         private const val PLAYBACK_SILENT_PACKETS = 39
         private const val PLAYBACK_SILENT_FRAMES = 40
+        private const val IMPLICIT_METADATA_OVERRUNS = 41
+        private const val IMPLICIT_PENDING_TRANSFERS = 42
+        private const val IMPLICIT_PENDING_HIGH_WATER = 43
+        private const val IMPLICIT_ZERO_RUNWAY_EVENTS = 44
+        private const val IMPLICIT_MAX_PENDING_AGE_NS = 45
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -122,6 +136,13 @@ data class DirectUsbStats(
                 sequence = at(SEQUENCE),
                 captureOverruns = at(CAPTURE_OVERRUNS),
                 captureUnderruns = at(CAPTURE_UNDERRUNS),
+                implicitFeedbackFifoDepth = at(IMPLICIT_FIFO_DEPTH),
+                implicitDeferredTransfers = at(IMPLICIT_DEFERRED_TRANSFERS),
+                implicitMetadataOverruns = at(IMPLICIT_METADATA_OVERRUNS),
+                implicitPendingTransfers = at(IMPLICIT_PENDING_TRANSFERS),
+                implicitPendingHighWater = at(IMPLICIT_PENDING_HIGH_WATER),
+                implicitZeroRunwayEvents = at(IMPLICIT_ZERO_RUNWAY_EVENTS),
+                implicitMaxPendingAgeNs = at(IMPLICIT_MAX_PENDING_AGE_NS),
                 captureRingFrames = at(CAPTURE_RING),
                 playbackRingFrames = at(PLAYBACK_RING),
                 captureTransferErrors = at(CAPTURE_TRANSFER_ERRORS),

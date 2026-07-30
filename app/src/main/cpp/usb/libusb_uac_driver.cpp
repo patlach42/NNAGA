@@ -98,6 +98,12 @@ void subtractQueued(std::atomic<uint64_t>& value, uint64_t amount) noexcept {
                                          std::memory_order_relaxed)) return;
     }
 }
+
+uint64_t monotonicNowNs() noexcept {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+}
 } // namespace
 void signalWakeFd(int fd) noexcept {
     if (fd < 0) return;
@@ -1250,6 +1256,12 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
     stopRequested_.store(false, std::memory_order_relaxed);
     transportFailed_.store(false, std::memory_order_relaxed);
     eventThreadUrgentAudio_.store(false, std::memory_order_relaxed);
+    deferredTransfers_.store(0, std::memory_order_relaxed);
+    pendingDepth_.store(0, std::memory_order_relaxed);
+    pendingHighWater_.store(0, std::memory_order_relaxed);
+    zeroRunwayEvents_.store(0, std::memory_order_relaxed);
+    maxPendingAgeNs_.store(0, std::memory_order_relaxed);
+    implicitZeroRunwayActive_.store(false, std::memory_order_relaxed);
     eventThreadTid_.store(0, std::memory_order_relaxed);
 
     if (!deferOutputStart_ && !startIsoPump()) {
@@ -1446,8 +1458,13 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                     captureSequence_.store(0, std::memory_order_relaxed);
                     implicitRead_.store(0, std::memory_order_relaxed);
                     implicitWrite_.store(0, std::memory_order_relaxed);
-                    implicitFallbackPackets_.store(0, std::memory_order_relaxed);
+                    deferredTransfers_.store(0, std::memory_order_relaxed);
                     metadataFifoOverruns_.store(0, std::memory_order_relaxed);
+                    pendingDepth_.store(0, std::memory_order_relaxed);
+                    pendingHighWater_.store(0, std::memory_order_relaxed);
+                    zeroRunwayEvents_.store(0, std::memory_order_relaxed);
+                    maxPendingAgeNs_.store(0, std::memory_order_relaxed);
+                    implicitZeroRunwayActive_.store(false, std::memory_order_relaxed);
                     captureTransferErrors_.store(0, std::memory_order_relaxed);
                     playbackTransferErrors_.store(0, std::memory_order_relaxed);
                     lifecycleFailures_.store(0, std::memory_order_relaxed);
@@ -1978,6 +1995,7 @@ bool LibusbUacDriver::startIsoPump(bool submit) {
     framesPerUframe_q16_.store(seed_q16, std::memory_order_relaxed);
     fracAccumulator_q16_ = 0;
     pendingImplicitCount_ = 0;
+    pendingDepth_.store(0, std::memory_order_relaxed);
     const int nominalMaxFrames = baseFrames + (rateRemainder > 0 ? 1 : 0);
     const int frameStride = format_.channels * format_.bytesPerSample;
     const int maxPacket = libusb_get_max_iso_packet_size(
@@ -2211,6 +2229,7 @@ bool LibusbUacDriver::stopIsoPump() {
     }
     if (eventThread_.joinable()) eventThread_.join();
     pendingImplicitCount_ = 0;
+    pendingDepth_.store(0, std::memory_order_release);
     pendingImplicitTransfers_.fill(nullptr);
     for (libusb_transfer* xfr : transfers_) if (xfr) libusb_free_transfer(xfr);
     for (libusb_transfer* fxfr : feedbackTransfers_) if (fxfr) libusb_free_transfer(fxfr);
@@ -2344,6 +2363,12 @@ void LibusbUacDriver::submitPendingImplicitTransfers() {
             markTransportFailed();
             break;
         }
+        const uint64_t age = monotonicNowNs() - pendingImplicitSinceNs_[submitted];
+        uint64_t oldAge = maxPendingAgeNs_.load(std::memory_order_relaxed);
+        while (age > oldAge &&
+               !maxPendingAgeNs_.compare_exchange_weak(
+                   oldAge, age, std::memory_order_release,
+                   std::memory_order_relaxed)) {}
         ++submitted;
         uint64_t frames = 0;
         const int stride = format_.channels * format_.bytesPerSample;
@@ -2351,12 +2376,16 @@ void LibusbUacDriver::submitPendingImplicitTransfers() {
             for (int p = 0; p < xfr->num_iso_packets; ++p)
                 frames += static_cast<uint64_t>(xfr->iso_packet_desc[p].length / stride);
         queuedOutFrames_.fetch_add(frames, std::memory_order_acq_rel);
+        if (frames > 0)
+            implicitZeroRunwayActive_.store(false, std::memory_order_release);
     }
     if (submitted > 0) {
-        for (size_t i = submitted; i < pendingImplicitCount_; ++i)
-            pendingImplicitTransfers_[i - submitted] =
-                pendingImplicitTransfers_[i];
+        for (size_t i = submitted; i < pendingImplicitCount_; ++i) {
+            pendingImplicitTransfers_[i - submitted] = pendingImplicitTransfers_[i];
+            pendingImplicitSinceNs_[i - submitted] = pendingImplicitSinceNs_[i];
+        }
         pendingImplicitCount_ -= submitted;
+        pendingDepth_.store(pendingImplicitCount_, std::memory_order_release);
     }
 }
 
@@ -2385,21 +2414,30 @@ void LibusbUacDriver::onIso(libusb_transfer* xfr) {
     const bool implicit = captureActive_.load(std::memory_order_acquire) &&
                           captureFormat_.implicitFeedback &&
                           format_.feedbackEndpointAddress == 0;
-    for (int packet = 0; packet < xfr->num_iso_packets; ++packet) {
-        const bool packetOk = xfr->status == LIBUSB_TRANSFER_COMPLETED &&
-                              xfr->iso_packet_desc[packet].status ==
-                                  LIBUSB_TRANSFER_COMPLETED;
-        if (!packetOk)
-            playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
-    }
     if (implicit) {
         // Once one transfer is deferred, preserve completion order: every
         // later completion joins the same FIFO instead of consuming newer
         // capture metadata and overtaking the older transfer.
         if (pendingImplicitCount_ > 0 || !prepareImplicitTransfer(xfr)) {
             if (pendingImplicitCount_ < pendingImplicitTransfers_.size()) {
+                if (queuedOutFrames_.load(std::memory_order_acquire) == 0 &&
+                    !implicitZeroRunwayActive_.exchange(
+                        true, std::memory_order_acq_rel)) {
+                    zeroRunwayEvents_.fetch_add(1, std::memory_order_relaxed);
+                    playbackUnderruns_.fetch_add(1, std::memory_order_relaxed);
+                }
                 inflight_.fetch_sub(1, std::memory_order_acq_rel);
-                pendingImplicitTransfers_[pendingImplicitCount_++] = xfr;
+                const size_t slot = pendingImplicitCount_++;
+                pendingImplicitTransfers_[slot] = xfr;
+                pendingImplicitSinceNs_[slot] = monotonicNowNs();
+                deferredTransfers_.fetch_add(1, std::memory_order_relaxed);
+                pendingDepth_.store(pendingImplicitCount_, std::memory_order_release);
+                uint64_t oldHigh = pendingHighWater_.load(std::memory_order_relaxed);
+                while (pendingImplicitCount_ > oldHigh &&
+                       !pendingHighWater_.compare_exchange_weak(
+                           oldHigh, pendingImplicitCount_,
+                           std::memory_order_release,
+                           std::memory_order_relaxed)) {}
                 return;
             }
             playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
@@ -2442,6 +2480,8 @@ void LibusbUacDriver::onIso(libusb_transfer* xfr) {
             for (int p = 0; p < xfr->num_iso_packets; ++p)
                 frames += static_cast<uint64_t>(xfr->iso_packet_desc[p].length / stride);
         queuedOutFrames_.fetch_add(frames, std::memory_order_acq_rel);
+        if (implicit && frames > 0)
+            implicitZeroRunwayActive_.store(false, std::memory_order_release);
     }
 }
 
@@ -2594,13 +2634,11 @@ void LibusbUacDriver::setGraphQuantum(
                                 playbackPacketsPerTransfer_,
                                 microframesPerSec_)
         : physicalTransferFrames;
-    // Reserve roughly eight to nine milliseconds of userspace runway on the
-    // measured iD4 path. Six milliseconds still admitted rare 7-8 ms Android
-    // display/lifecycle stalls; the extra five USB transfers keep those
-    // outliers off the audible path.
+    // Keep the calibrated iD4 hidden reserve at nine transfers; generic
+    // devices retain their existing one-transfer reserve.
     const int reserveTransfers =
         clampPeriodMultiplier(periodMultiplier) +
-        (lowLatencyProfile_ ? 14 : 1);
+        (lowLatencyProfile_ ? 9 : 1);
     const int watermarkTransfers = playbackWatermarkTransferCount(
         transferCount_, reserveTransfers, lowLatencyProfile_);
     const int queuedTransferFrames = watermarkTransfers * transferFrames;

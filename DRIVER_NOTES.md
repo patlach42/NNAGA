@@ -108,7 +108,7 @@ The valid packet size must remain capture-derived. Latency and reliability
 knobs may control userspace reserve or transfer runway, but must not fabricate
 implicit-feedback layouts.
 
-## Audit after the root-cause fix
+## Production cleanup after the root-cause fix
 
 Keep:
 
@@ -121,57 +121,47 @@ Keep:
   writes, eventfd wakeups, urgent event thread, and explicit backpressure
   semantics.
 - Separate counters for producer backpressure, capture errors, submitted
-  silence, transfer errors, and lifecycle failure.
+  silence, transfer errors, lifecycle failure, and implicit runway health.
 
-Cleanup or revalidation candidates:
+Completed:
 
-1. `implicitFallbackPackets_` is reset and exported but never incremented.
-   Remove it or replace it with useful implicit-path telemetry.
-2. `metadataFifoOverruns_` is counted in native code but not exported through
-   JNI/Kotlin.
-3. Whole-transfer gating makes steady-state implicit `drainRing()` silence
-   padding unreachable under the current single-consumer invariant. A producer
-   stall instead moves OUT transfers into `pendingImplicitTransfers_`.
-4. Pending depth, defer count, maximum pending age, minimum in-flight transfer
-   count, and zero-runway events are not measured. All eight transfers can
-   become pending while `streaming=true` and silence/xrun counters remain zero.
-5. The iD4 Auto target includes a hidden `+14` transfer reserve. At 48 kHz this
-   produces the current 408-frame userspace target. It predates the confirmed
-   packet-offset fix and costs about 2.5 ms more than the earlier `+9` policy.
-   Do not remove it blindly: first add pending/zero-runway telemetry, rerun the
-   same display/lifecycle stress, and step down monotonically.
-6. The Settings text says a manual watermark bypasses the hidden reserve, but
-   native `resolvedPlaybackTargetFrames()` prevents a manual value from
-   undercutting the automatic floor.
-7. `DirectUsbAudioManager.disableInternal()` reaches `AudioEngine::stop()` via
-   both the engine facade and native Direct USB stop call. The duplicate call
-   is currently idempotent but unnecessary.
-8. The manual watermark, calibration controls, and period multiplier were
-   diagnostic tools during the click investigation. Keep them only as
-   intentionally supported latency/reliability controls, not as a substitute
-   for correct packet construction.
-9. The instrumentation test still references transport APIs removed by the
-   per-track transport cutover (`TransportInfo.looping` and
-   `setTransportLooping`). A stale installed test APK failed with
-   `NoSuchMethodError`, and a fresh instrumentation build must migrate to
-   `RackTrackInfo` plus `setTrackTransportLooping`.
-10. Device identity is persisted before full capture/probe validation in both
-    manager and Settings flows. A denied or incompatible replacement can
-    overwrite a known-good configuration; persist only after full probe
-    success.
-11. Device/format changes do not clamp and persist saved input channel/output
-    pair indices. Switching to a device with fewer channels can make
-    `startConfigured()` reject the otherwise valid format.
-12. `startConfigured()` ignores the persisted Android device ID and selects the
-    first VID/PID match. Two identical interfaces can route to the wrong
-    physical unit; prefer the saved ID while present and use VID/PID only as
-    reconnect fallback.
-13. Settings identifies formats only by sample rate and bit depth even though
-    native start requires the complete rate/bits/subslot/channels tuple.
-    Duplicate tuples can make later channel/subslot alternatives unreachable.
-14. Native start failure cleanup changes `Failed` to `Stopped` before the
-    categorized failure and native detail are returned. Snapshot category and
-    detail before cleanup instead of returning only a generic label.
+1. Stats schema 7 replaces dead `implicitFallbackPackets_` telemetry with the
+   number of deferred OUT transfers and exports metadata FIFO overruns,
+   current/high-water pending depth, maximum pending age, and zero-runway
+   events through JNI and Kotlin.
+2. A transition to zero queued OUT frames while an implicit transfer is
+   deferred is one playback xrun. A contiguous zero-runway episode is counted
+   once and resets only after a successful OUT submission restores runway.
+3. The iD4 hidden safety reserve is reduced from `+14` to `+9` transfers.
+   At 48 kHz, buffer 16, and multiplier 3, the Auto target falls from 408 to
+   288 frames, removing 120 frames or 2.5 ms of userspace reserve. Startup
+   prime is 304 frames.
+4. Manual watermark remains a supported reliability control but cannot
+   undercut the automatic safety floor. The Settings text now states this
+   contract; period multiplier remains the supported latency control.
+5. Direct USB cleanup reaches `AudioEngine::stop()` through one native stop
+   call instead of duplicate facade/native paths. Start failures preserve the
+   categorized native failure and detail before cleanup.
+6. Device identity and cached formats are persisted only after a successful
+   probe. A still-present Android device ID wins over VID/PID reconnect
+   fallback; format matching uses rate/bits/subslot/channels, and channel
+   selections are clamped and persisted.
+7. Instrumentation uses current per-track transport APIs and stats schema 7.
+   Global and per-track snapshots are validated independently because separate
+   JNI calls are not an atomic cross-snapshot contract.
+
+Hardware verification on the Audient iD4 MKII used eight 30-second
+start/run/stop cycles at 48 kHz, 24-bit PCM in 32-bit subslots, four channels,
+buffer 16, and multiplier 3:
+
+- 8/8 cycles passed; buffer 16 remained the minimum tested stable buffer;
+- capture, playback, aggregate, and zero-runway xruns stayed at zero;
+- transfer errors, metadata FIFO overruns, lifecycle failures, and deadline
+  misses stayed at zero;
+- deferred transfers were recovered in FIFO order; observed pending high-water
+  was at most 5 of 8 transfers and maximum pending age was 2.40 ms;
+- observed host queue estimate was 313-346 frames, or 6.52-7.21 ms. This is
+  host-side accounting, not analog end-to-end latency.
 
 ## Measurement contract
 

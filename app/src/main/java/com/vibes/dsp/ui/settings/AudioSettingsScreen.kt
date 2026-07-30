@@ -174,15 +174,17 @@ private fun DirectUsbSessionSettings(
     var devicesExpanded by remember { mutableStateOf(false) }
 
     suspend fun refreshDevices() {
+        val preferredDeviceId = AudioSettingsManager.getDirectUsbDeviceId(context)
         val preferredVendor = AudioSettingsManager.getDirectUsbVendorId(context)
         val preferredProduct = AudioSettingsManager.getDirectUsbProductId(context)
         val refreshedDevices = withContext(Dispatchers.IO) {
             DirectUsbAudioManager.getAudioDevices(context)
         }
         devices = refreshedDevices
-        selectedDevice = refreshedDevices.firstOrNull {
-            it.vendorId == preferredVendor && it.productId == preferredProduct
-        }
+        selectedDevice = refreshedDevices.firstOrNull { it.id == preferredDeviceId }
+            ?: refreshedDevices.firstOrNull {
+                it.vendorId == preferredVendor && it.productId == preferredProduct
+            }
         formats = AudioSettingsManager.getDirectUsbCachedFormats(context)
         inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
         message = null
@@ -230,6 +232,9 @@ private fun DirectUsbSessionSettings(
 
     fun selectCompatibleFormat() {
         val selected = formats.firstOrNull {
+            it.sampleRate == selectedRate && it.bits == selectedBits &&
+                it.subslotBytes == selectedSubslot && it.channels == selectedChannels
+        } ?: formats.firstOrNull {
             it.sampleRate == selectedRate && it.bits == selectedBits
         } ?: formats.firstOrNull()
         if (selected != null) {
@@ -237,32 +242,50 @@ private fun DirectUsbSessionSettings(
             selectedBits = selected.bits
             selectedSubslot = selected.subslotBytes
             selectedChannels = selected.channels
+            selectedInputChannel = selectedInputChannel.coerceIn(
+                0, (inputChannelCount - 1).coerceAtLeast(0)
+            )
+            selectedOutputPair = selectedOutputPair.coerceIn(
+                0, (selected.channels / 2 - 1).coerceAtLeast(0)
+            )
+            AudioSettingsManager.setDirectUsbInputChannel(context, selectedInputChannel)
+            AudioSettingsManager.setDirectUsbOutputPair(context, selectedOutputPair)
             DirectUsbAudioManager.startSelected(context, selected)
         }
     }
 
     fun selectedOutputPairCount(): Int = formats.firstOrNull {
-        it.sampleRate == selectedRate && it.bits == selectedBits
+        it.sampleRate == selectedRate && it.bits == selectedBits &&
+            it.subslotBytes == selectedSubslot && it.channels == selectedChannels
     }?.channels?.div(2) ?: 0
 
     fun loadDevice(device: DirectUsbDeviceOption) {
         selectedDevice = device
-        AudioSettingsManager.setDirectUsbIdentity(context, device.vendorId, device.productId, device.name)
         devicesExpanded = false
         scope.launch {
             DirectUsbAudioManager.probeFormats(context, device).onSuccess { available ->
                 formats = available.sortedWith(compareBy<DirectUsbFormat> { it.sampleRate }.thenBy { it.bits })
+                inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
                 val saved = formats.firstOrNull {
-                    it.sampleRate == selectedRate && it.bits == selectedBits
+                    it.sampleRate == selectedRate && it.bits == selectedBits &&
+                        it.subslotBytes == selectedSubslot && it.channels == selectedChannels
                 } ?: formats.firstOrNull()
                 if (saved != null) {
                     selectedRate = saved.sampleRate
                     selectedBits = saved.bits
                     selectedSubslot = saved.subslotBytes
                     selectedChannels = saved.channels
+                    selectedInputChannel = selectedInputChannel.coerceIn(
+                        0, (inputChannelCount - 1).coerceAtLeast(0)
+                    )
+                    selectedOutputPair = selectedOutputPair.coerceIn(
+                        0, (saved.channels / 2 - 1).coerceAtLeast(0)
+                    )
                     AudioSettingsManager.setDirectUsbFormat(
                         context, saved.sampleRate, saved.bits, saved.subslotBytes, saved.channels
                     )
+                    AudioSettingsManager.setDirectUsbInputChannel(context, selectedInputChannel)
+                    AudioSettingsManager.setDirectUsbOutputPair(context, selectedOutputPair)
                     DirectUsbAudioManager.startSelected(context, saved)
                 }
                 inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
@@ -391,9 +414,8 @@ private fun DirectUsbSessionSettings(
             }
         }
         Text(
-            "Auto derives a safe transport target; manual frames bypass the hidden reserve. " +
-                "Period multiplier affects Auto only.",
-            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+            "Auto derives a safe transport target; manual watermark can only raise that " +
+                "Auto floor. Period multiplier affects Auto only.",
         )
         selectedFormat?.let { format ->
             val device = selectedDevice
@@ -464,8 +486,8 @@ private fun DirectUsbSessionSettings(
         AudioSettingsManager.setDirectUsbPeriodMultiplier(context, multiplier)
     }
     Text(
-        text = "Lower values reduce latency but increase the risk of audio dropouts. " +
-            "Changes apply on the next engine start.",
+        text = "Lower values reduce the Auto reserve and latency but increase the risk of audio " +
+            "dropouts. Changes apply on the next engine start.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )

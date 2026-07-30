@@ -178,10 +178,6 @@ object DirectUsbAudioManager {
                 }
                 connection = opened
                 activeDeviceId = option.id
-                AudioSettingsManager.setDirectUsbDeviceId(context, option.id)
-                AudioSettingsManager.setDirectUsbIdentity(
-                    context, option.vendorId, option.productId, option.name
-                )
                 registerDetachReceiver(context.applicationContext)
             }
             availableInputChannels = engine.nativeGetDirectUsbInputChannelCount()
@@ -200,17 +196,25 @@ object DirectUsbAudioManager {
                 .map { DirectUsbFormat(it[0], it[1], it[2], it[3]) }
                 .toList()
             val formats = if (nativeFormats.isNotEmpty()) nativeFormats else fallbackFormats
+            AudioSettingsManager.setDirectUsbDeviceId(context, option.id)
+            AudioSettingsManager.setDirectUsbIdentity(
+                context, option.vendorId, option.productId, option.name
+            )
             AudioSettingsManager.setDirectUsbCachedFormats(context, formats)
             Result.success(formats)
         }
 
     suspend fun startConfigured(context: Context): Result<Unit> =
         lifecycleMutex.withLock {
+            val persistedDeviceId = AudioSettingsManager.getDirectUsbDeviceId(context)
             val vendorId = AudioSettingsManager.getDirectUsbVendorId(context)
             val productId = AudioSettingsManager.getDirectUsbProductId(context)
-            val device = getAudioDevices(context).firstOrNull {
-                it.vendorId == vendorId && it.productId == productId
-            } ?: return@withLock Result.failure(
+            val devices = getAudioDevices(context)
+            val device = devices.firstOrNull { it.id == persistedDeviceId }
+                ?: devices.firstOrNull {
+                    it.vendorId == vendorId && it.productId == productId
+                }
+            ?: return@withLock Result.failure(
                 IllegalStateException("No configured USB audio device")
             )
             val selected = DirectUsbFormat(
@@ -221,12 +225,6 @@ object DirectUsbAudioManager {
             )
             val available = probeFormatsInternal(context, device)
                 .getOrElse { return@withLock Result.failure(it) }
-            val inputChannel = AudioSettingsManager.getDirectUsbInputChannel(context)
-            if (inputChannel !in 0 until availableInputChannels) {
-                return@withLock Result.failure(
-                    IllegalStateException("Configured USB input channel is unavailable")
-                )
-            }
             val exact = available.firstOrNull {
                 it.sampleRate == selected.sampleRate && it.bits == selected.bits &&
                     it.subslotBytes == selected.subslotBytes &&
@@ -234,12 +232,12 @@ object DirectUsbAudioManager {
             } ?: return@withLock Result.failure(
                 IllegalStateException("Configured USB format is unavailable")
             )
+            val inputChannel = AudioSettingsManager.getDirectUsbInputChannel(context)
+                .coerceIn(0, (availableInputChannels - 1).coerceAtLeast(0))
             val outputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
-            if (outputPair !in 0 until exact.channels / 2) {
-                return@withLock Result.failure(
-                    IllegalStateException("Configured USB output pair is unavailable")
-                )
-            }
+                .coerceIn(0, (exact.channels / 2 - 1).coerceAtLeast(0))
+            AudioSettingsManager.setDirectUsbInputChannel(context, inputChannel)
+            AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
             val watermark = AudioSettingsManager.getDirectUsbWatermark(
                 context, device.vendorId, device.productId, exact.sampleRate,
                 exact.bits, exact.subslotBytes, exact.channels
@@ -263,8 +261,19 @@ object DirectUsbAudioManager {
                 inputChannel, outputPair, bufferFrames, periodMultiplier, watermark
             )
         ) {
+            val stats = runCatching { engine.getDirectUsbStats() }.getOrNull()
+            val failure = stats?.failure ?: DirectUsbFailure.Unknown
+            val detail = runCatching { engine.nativeGetDirectUsbErrorDetail() }
+                .getOrNull()
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+            val message = buildString {
+                append("USB start failed [${failure.name}] for ${exact.label}")
+                if (detail != null) append(": $detail")
+                else append(". Check the interface format and USB audio routing settings.")
+            }
             disableInternal(context)
-            return Result.failure(IllegalStateException("Could not start USB audio session (${exact.label})"))
+            return Result.failure(IllegalStateException(message))
         }
         return Result.success(Unit)
     }
@@ -536,7 +545,6 @@ object DirectUsbAudioManager {
 
     private fun disableInternal(context: Context) {
         val engine = NativeEngine.getInstance()
-        engine.stopEngine()
         engine.nativeStopDirectUsbOutput()
         runCatching { engine.nativeFlushPgoProfile() }
         connection?.close()

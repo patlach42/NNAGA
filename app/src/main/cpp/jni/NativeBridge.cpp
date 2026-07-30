@@ -492,7 +492,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 41;
+    constexpr jsize kStatCount = 46;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -501,7 +501,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         values[1] = static_cast<jlong>(capture.overruns);
         values[2] = static_cast<jlong>(capture.underruns);
         values[3] = static_cast<jlong>(transport.fifoDepth);
-        values[4] = static_cast<jlong>(transport.fallbackPackets);
+        values[4] = static_cast<jlong>(transport.deferredTransfers);
         values[5] = static_cast<jlong>(transport.captureTransferErrors);
         values[6] = static_cast<jlong>(transport.playbackTransferErrors);
         values[7] = static_cast<jlong>(transport.ringFrames);
@@ -520,13 +520,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             g_ctx->directUsbOutput->playbackSilentPacketCount());
         values[40] = static_cast<jlong>(
             g_ctx->directUsbOutput->playbackSilentFrameCount());
+        values[41] = static_cast<jlong>(transport.metadataFifoOverruns);
+        values[42] = static_cast<jlong>(transport.pendingDepth);
+        values[43] = static_cast<jlong>(transport.pendingHighWater);
+        values[44] = static_cast<jlong>(transport.zeroRunwayEvents);
+        values[45] = static_cast<jlong>(transport.maxPendingAgeNs);
         values[16] = g_ctx->audioEngine
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbCaptureWaitTimeouts()) : 0;
         values[17] = g_ctx->audioEngine
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 6;
+            values[18] = 7;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);

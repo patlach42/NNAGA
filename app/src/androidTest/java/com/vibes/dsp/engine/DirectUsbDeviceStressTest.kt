@@ -170,10 +170,10 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setDirectUsbOutputPair(context, originalOutputPair)
             AudioSettingsManager.setDirectUsbPeriodMultiplier(context, originalMultiplier)
             // Restore transport controls last. The exact frame cannot be restored
-            // because no public API exposes a frame setter.
+            // because no public API exposes a frame setter. Looping is a per-track
+            // control and the temporary track is removed by each case.
             originalTransport?.let {
                 runCatching { engine.setTransportBpm(it.beatsPerMinute) }
-                runCatching { engine.setTransportLooping(it.looping) }
                 runCatching { engine.setTransportPlaying(it.playing) }
             }
         }
@@ -225,6 +225,7 @@ class DirectUsbDeviceStressTest {
         var finalStats = runCatching { engine.getDirectUsbStats() }.getOrDefault(DirectUsbStats())
         var finalRaw = LongArray(0)
         var finalTransport: TransportInfo? = null
+        var finalTrack: RackTrackInfo? = null
         try {
             AudioSettingsManager.setBufferSize(context, buffer)
             DirectUsbAudioManager.startSelected(context, format)
@@ -252,7 +253,11 @@ class DirectUsbDeviceStressTest {
             }
             if (reason == null) {
                 temporaryTrackId = engine.addTrack()
-                if (temporaryTrackId <= 0L) reason = "temporary-track-create-failed"
+                if (temporaryTrackId <= 0L) {
+                    reason = "temporary-track-create-failed"
+                } else if (!engine.setTrackTransportLooping(temporaryTrackId, true)) {
+                    reason = "track-looping-set-failed"
+                }
             }
             if (reason == null) {
                 wav = createStressWav(context.cacheDir, format.sampleRate)
@@ -261,25 +266,35 @@ class DirectUsbDeviceStressTest {
                 }
             }
             if (reason == null) {
-                engine.setTransportLooping(true)
                 if (!engine.setTransportBpm(requestedBpm)) {
                     reason = "transport-bpm-set-failed"
-                } else if (!engine.restartTransport() || !engine.setTransportPlaying(true)) {
+                } else if (!engine.restartTransport()) {
+                    reason = "transport-start-failed"
+                } else if (!engine.setTrackTransportPlaying(temporaryTrackId, true, TrackLaunchQuantization.Sixteenth)) {
+                    reason = "track-play-set-failed"
+                } else if (!engine.setTransportPlaying(true)) {
                     reason = "transport-start-failed"
                 }
             }
             var transport: TransportInfo? = null
+            var track: RackTrackInfo? = null
             if (reason == null) {
                 val readyDeadline = SystemClock.elapsedRealtime() + 1_000L
                 var ready = false
                 while (SystemClock.elapsedRealtime() < readyDeadline) {
                     val candidate = engine.getTransportInfo()
+                    val candidateTrack = engine.getTracks().firstOrNull { it.id == temporaryTrackId }
                     transport = candidate
-                    val candidateDurationFrames = ceil(candidate.durationSec * format.sampleRate.toDouble()).toLong()
-                    ready = candidate.playing && candidate.looping &&
-                        candidate.loadedTrackCount > 0 && candidate.durationSec > 0.0 &&
+                    track = candidateTrack
+                    val candidateDurationFrames =
+                        ceil((candidateTrack?.wavDurationSec ?: 0.0) * format.sampleRate.toDouble()).toLong()
+                    ready = candidate.playing &&
+                        candidateTrack?.wavLoaded == true &&
+                        candidateTrack.playing &&
+                        candidateTrack.looping &&
+                        candidateTrack.wavDurationSec > 0.0 &&
                         candidateDurationFrames > 0L &&
-                        candidate.transportFrame < candidateDurationFrames &&
+                        candidateTrack.transportFrame < candidateDurationFrames &&
                         abs(candidate.beatsPerMinute - requestedBpm) <= 0.01
                     if (ready) break
                     SystemClock.sleep(10)
@@ -287,15 +302,15 @@ class DirectUsbDeviceStressTest {
                 if (!ready) reason = "transport-state-not-applied"
             }
 
-            if (reason == null && transport != null) {
+            if (reason == null && transport != null && track != null) {
                 val start = SystemClock.elapsedRealtime()
                 val deadline = start + durationMs
                 val warmupDeadline = start + warmupMs
                 var previousSequence = engine.getDirectUsbStats().sequence
                 var previousSamplePosition = transport.samplePosition
-                var previousTransportFrame = transport.transportFrame
+                var previousTrackFrame = track.transportFrame
                 var samplePositionProgressed = false
-                var transportFrameProgressed = false
+                var trackFrameProgressed = false
                 while (SystemClock.elapsedRealtime() < deadline && reason == null) {
                     val stats = engine.getDirectUsbStats()
                     val raw = engine.nativeGetDirectUsbStats()
@@ -303,21 +318,34 @@ class DirectUsbDeviceStressTest {
                     if (reason == null && stats.sequence < previousSequence) reason = "capture-sequence-regressed"
                     previousSequence = stats.sequence
                     val current = engine.getTransportInfo()
-                    val durationFrames = ceil(current.durationSec * format.sampleRate.toDouble()).toLong().coerceAtLeast(1L)
-                    val sampleDelta = current.samplePosition - previousSamplePosition
-                    val expectedTransportFrame = (previousTransportFrame + sampleDelta) % durationFrames
-                    val frameError = abs(current.transportFrame - expectedTransportFrame)
+                    val currentTrack = engine.getTracks().firstOrNull { it.id == temporaryTrackId }
+                    finalTrack = currentTrack ?: finalTrack
+                    val durationFrames =
+                        ceil((currentTrack?.wavDurationSec ?: 0.0) * format.sampleRate.toDouble()).toLong().coerceAtLeast(1L)
+                    val actualTrackFrame = currentTrack?.transportFrame ?: -1L
+                    if (reason == null && currentTrack == null) reason = "track-state-disappeared"
                     if (reason == null && current.samplePosition < previousSamplePosition) reason = "sample-position-regressed"
-                    if (reason == null && current.transportFrame >= durationFrames) reason = "transport-frame-out-of-range"
-                    if (reason == null && (!current.playing || !current.looping)) reason = "transport-state-changed"
-                    if (reason == null && frameError > TRANSPORT_FRAME_ROUNDING_TOLERANCE) {
-                        reason = "transport-frame-delta-incoherent-expected=$expectedTransportFrame-actual=${current.transportFrame}"
+                    if (reason == null && (actualTrackFrame < 0L || actualTrackFrame >= durationFrames)) {
+                        reason = "track-frame-out-of-range"
                     }
+                    if (reason == null && (!current.playing || currentTrack?.playing != true || currentTrack.looping != true)) {
+                        reason = "transport-state-changed"
+                    }
+                    val trackFrameDelta =
+                        if (actualTrackFrame >= 0L && actualTrackFrame != previousTrackFrame) {
+                            if (actualTrackFrame > previousTrackFrame) {
+                                actualTrackFrame - previousTrackFrame
+                            } else {
+                                durationFrames - previousTrackFrame + actualTrackFrame
+                            }
+                        } else {
+                            0L
+                        }
                     samplePositionProgressed = samplePositionProgressed || current.samplePosition > previousSamplePosition
-                    transportFrameProgressed = transportFrameProgressed || current.transportFrame > previousTransportFrame
+                    trackFrameProgressed = trackFrameProgressed || trackFrameDelta > 0L
                     if (reason == null && abs(current.beatsPerMinute - requestedBpm) > 0.01) reason = "transport-bpm-incoherent"
                     previousSamplePosition = current.samplePosition
-                    previousTransportFrame = current.transportFrame
+                    previousTrackFrame = actualTrackFrame.coerceAtLeast(0L)
                     if (warmupStats == null && SystemClock.elapsedRealtime() >= warmupDeadline) {
                         warmupStats = stats
                         warmupRaw = raw.copyOf()
@@ -330,17 +358,29 @@ class DirectUsbDeviceStressTest {
                 finalStats = engine.getDirectUsbStats()
                 finalRaw = engine.nativeGetDirectUsbStats()
                 finalTransport = engine.getTransportInfo()
+                finalTrack = engine.getTracks().firstOrNull { it.id == temporaryTrackId } ?: finalTrack
                 val baseline = warmupStats ?: finalStats
+                val baselineRaw = warmupRaw ?: finalRaw
                 val actualXrunGrowth = (finalStats.actualXruns - baseline.actualXruns).coerceAtLeast(0L)
                 val deadlineMissGrowth = (finalStats.deadlineMisses - baseline.deadlineMisses).coerceAtLeast(0L)
                 val silentPacketGrowth = (finalStats.playbackSilentPackets - baseline.playbackSilentPackets).coerceAtLeast(0L)
                 val silentFrameGrowth = (finalStats.playbackSilentFrames - baseline.playbackSilentFrames).coerceAtLeast(0L)
+                val metadataFifoOverflowGrowth =
+                    (finalRaw.getOrZero(METADATA_FIFO_OVERRUNS) - baselineRaw.getOrZero(METADATA_FIFO_OVERRUNS)).coerceAtLeast(0L)
+                val zeroRunwayGrowth =
+                    (finalRaw.getOrZero(ZERO_RUNWAY_EVENTS) - baselineRaw.getOrZero(ZERO_RUNWAY_EVENTS)).coerceAtLeast(0L)
                 if (reason == null && !samplePositionProgressed) reason = "sample-position-did-not-advance"
-                if (reason == null && !transportFrameProgressed) reason = "transport-frame-did-not-advance"
+                if (reason == null && !trackFrameProgressed) reason = "track-frame-did-not-advance"
                 if (reason == null && actualXrunGrowth > 0L) reason = "actual-xrun-growth-exceeded"
                 if (reason == null && deadlineMissGrowth > 0L) reason = "deadline-miss-growth-exceeded"
                 if (reason == null && (silentPacketGrowth > 0L || silentFrameGrowth > 0L)) {
                     reason = "playback-silence-padding-growth-exceeded-packets=$silentPacketGrowth-frames=$silentFrameGrowth"
+                }
+                if (reason == null && metadataFifoOverflowGrowth > 0L) {
+                    reason = "metadata-fifo-overflow-growth-exceeded-$metadataFifoOverflowGrowth"
+                }
+                if (reason == null && zeroRunwayGrowth > 0L) {
+                    reason = "zero-runway-growth-exceeded-$zeroRunwayGrowth"
                 }
                 if (reason == null) reason = validateRunningStats(finalStats, finalRaw, format, buffer, multiplier)
             }
@@ -349,6 +389,7 @@ class DirectUsbDeviceStressTest {
         } finally {
             runCatching { engine.setTransportPlaying(false) }
             if (temporaryTrackId > 0L) {
+                runCatching { engine.setTrackTransportPlaying(temporaryTrackId, false, TrackLaunchQuantization.Sixteenth) }
                 runCatching { engine.unloadTrackWav(temporaryTrackId) }
                 runCatching { engine.removeTrack(temporaryTrackId) }
             }
@@ -363,7 +404,7 @@ class DirectUsbDeviceStressTest {
         val transport = finalTransport ?: runCatching { engine.getTransportInfo() }.getOrNull()
         Log.i(
             tag,
-            telemetry(reason ?: "pass", cycle, format, buffer, multiplier, finalStats, finalRaw, lifecycleOk, transport, warmupStats, warmupRaw)
+            telemetry(reason ?: "pass", cycle, format, buffer, multiplier, finalStats, finalRaw, lifecycleOk, transport, finalTrack, warmupStats, warmupRaw)
         )
         Log.i(
             tag,
@@ -377,6 +418,7 @@ class DirectUsbDeviceStressTest {
                 lifecycleRaw,
                 lifecycleOk,
                 transport,
+                finalTrack,
                 warmupStats,
                 warmupRaw
             )
@@ -385,7 +427,7 @@ class DirectUsbDeviceStressTest {
     }
 
     private fun validateConfiguration(stats: DirectUsbStats, format: DirectUsbFormat, buffer: Int, multiplier: Int): String? {
-        if (stats.schemaVersion < 6L) return "unsupported-stats-schema-${stats.schemaVersion}"
+        if (stats.schemaVersion != TELEMETRY_SCHEMA_VERSION) return "unsupported-stats-schema-${stats.schemaVersion}"
         if (stats.periodMultiplier != multiplier.toLong()) return "period-multiplier-mismatch-${stats.periodMultiplier}"
         if (stats.effectiveQuantum != buffer.toLong()) return "effective-quantum-mismatch-${stats.effectiveQuantum}"
         val configuredTarget = minOf(1024L, buffer.toLong() * multiplier)
@@ -404,6 +446,7 @@ class DirectUsbDeviceStressTest {
         if (stats.state == DirectUsbSessionState.Failed) return "session-failed code=${stats.failure}"
         if (stats.state != DirectUsbSessionState.Running) return "session-state-${stats.state}"
         validateConfiguration(stats, format, buffer, multiplier)?.let { return it }
+        if (rawStats.size < RAW_STAT_COUNT) return "unsupported-raw-stats-count-${rawStats.size}"
         if (stats.queuedOut <= 0L) return "queued-output-empty"
         if (stats.deadlineBudgetNs <= 0L || stats.lastCycleNs <= 0L || stats.peakCycleNs < stats.lastCycleNs) return "invalid-cycle-timing"
         if (stats.captureTransferErrors != 0L || stats.playbackTransferErrors != 0L ||
@@ -411,7 +454,16 @@ class DirectUsbDeviceStressTest {
             rawStats.getOrZero(LIFECYCLE_FAILURES) != 0L || rawStats.getOrZero(TRANSPORT_FAILED) != 0L) {
             return "transfer-lifecycle-transport-failure"
         }
-        if (rawStats.getOrZero(CAPTURE_RING_FRAMES) > ringFrameLimit(format) || rawStats.getOrZero(PLAYBACK_RING_FRAMES) > ringFrameLimit(format) || rawStats.getOrZero(IMPLICIT_FIFO_DEPTH) > MAX_IMPLICIT_FIFO) return "usb-queue-depth-exceeded"
+        if (rawStats.getOrZero(CAPTURE_RING_FRAMES) > ringFrameLimit(format) ||
+            rawStats.getOrZero(PLAYBACK_RING_FRAMES) > ringFrameLimit(format) ||
+            rawStats.getOrZero(IMPLICIT_FIFO_DEPTH) > MAX_IMPLICIT_FIFO) {
+            return "usb-queue-depth-exceeded"
+        }
+        if (rawStats.getOrZero(PENDING_DEPTH) < 0L ||
+            rawStats.getOrZero(PENDING_HIGH_WATER) < rawStats.getOrZero(PENDING_DEPTH) ||
+            rawStats.getOrZero(MAX_PENDING_AGE_NS) < 0L) {
+            return "invalid-pending-telemetry"
+        }
         return null
     }
 
@@ -425,6 +477,7 @@ class DirectUsbDeviceStressTest {
         rawStats: LongArray,
         lifecycleOk: Boolean,
         transport: TransportInfo?,
+        track: RackTrackInfo?,
         warmup: DirectUsbStats?,
         warmupRaw: LongArray?,
     ): String {
@@ -444,6 +497,18 @@ class DirectUsbDeviceStressTest {
             (rawStats.getOrZero(RAW_PLAYBACK_XRUNS) -
                 (warmupRaw?.getOrZero(RAW_PLAYBACK_XRUNS) ?: rawStats.getOrZero(RAW_PLAYBACK_XRUNS)))
                 .coerceAtLeast(0L)
+        val deferredTransfersGrowth =
+            (rawStats.getOrZero(DEFERRED_TRANSFERS) -
+                (warmupRaw?.getOrZero(DEFERRED_TRANSFERS) ?: rawStats.getOrZero(DEFERRED_TRANSFERS)))
+                .coerceAtLeast(0L)
+        val metadataFifoOverflowGrowth =
+            (rawStats.getOrZero(METADATA_FIFO_OVERRUNS) -
+                (warmupRaw?.getOrZero(METADATA_FIFO_OVERRUNS) ?: rawStats.getOrZero(METADATA_FIFO_OVERRUNS)))
+                .coerceAtLeast(0L)
+        val zeroRunwayGrowth =
+            (rawStats.getOrZero(ZERO_RUNWAY_EVENTS) -
+                (warmupRaw?.getOrZero(ZERO_RUNWAY_EVENTS) ?: rawStats.getOrZero(ZERO_RUNWAY_EVENTS)))
+                .coerceAtLeast(0L)
         return "TELEMETRY reason=$reason cycle=$cycle rate=${format.sampleRate} bits=${format.bits} bytes=${format.subslotBytes} channels=${format.channels} " +
             "buffer=$buffer multiplier=$multiplier schema=${stats.schemaVersion} state=${stats.state} failure=${stats.failure} period_multiplier=${stats.periodMultiplier} " +
             "effective_quantum=${stats.effectiveQuantum} steady_target_frames=${stats.steadyTarget} startup_prime_frames=${stats.startupPrime} queued_out_frames=${stats.queuedOut} " +
@@ -456,13 +521,20 @@ class DirectUsbDeviceStressTest {
             "playback_silent_frames_growth=$silentFrameGrowth performance_hint_active=${if (stats.performanceHintActive) 1 else 0} " +
             "lifecycle_failures=${rawStats.getOrZero(LIFECYCLE_FAILURES)} transport_failed=${rawStats.getOrZero(TRANSPORT_FAILED)} " +
             "capture_ring_frames=${rawStats.getOrZero(CAPTURE_RING_FRAMES)} playback_ring_frames=${rawStats.getOrZero(PLAYBACK_RING_FRAMES)} " +
-            "implicit_fifo_depth=${rawStats.getOrZero(IMPLICIT_FIFO_DEPTH)} last_dsp_ns=${stats.lastDspNs} peak_dsp_ns=${stats.peakDspNs} " +
+            "implicit_fifo_depth=${rawStats.getOrZero(IMPLICIT_FIFO_DEPTH)} deferred_transfers=${rawStats.getOrZero(DEFERRED_TRANSFERS)} " +
+            "deferred_transfers_growth=$deferredTransfersGrowth metadata_fifo_overruns=${rawStats.getOrZero(METADATA_FIFO_OVERRUNS)} " +
+            "metadata_fifo_overruns_growth=$metadataFifoOverflowGrowth pending_depth=${rawStats.getOrZero(PENDING_DEPTH)} " +
+            "pending_high_water=${rawStats.getOrZero(PENDING_HIGH_WATER)} max_pending_age_ns=${rawStats.getOrZero(MAX_PENDING_AGE_NS)} " +
+            "zero_runway_events=${rawStats.getOrZero(ZERO_RUNWAY_EVENTS)} zero_runway_events_growth=$zeroRunwayGrowth " +
+            "last_dsp_ns=${stats.lastDspNs} peak_dsp_ns=${stats.peakDspNs} " +
             "last_cycle_ns=${stats.lastCycleNs} peak_cycle_ns=${stats.peakCycleNs} deadline_budget_ns=${stats.deadlineBudgetNs} deadline_misses=${stats.deadlineMisses} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
-            "transport_playing=${transport?.playing == true} transport_looping=${transport?.looping == true} transport_bpm=${transport?.beatsPerMinute ?: 0.0} " +
-            "sample_position=${transport?.samplePosition ?: 0L} transport_frame=${transport?.transportFrame ?: 0L} lifecycle_after_stop=${if (lifecycleOk) 1 else 0}"
+            "transport_playing=${transport?.playing == true} transport_bpm=${transport?.beatsPerMinute ?: 0.0} " +
+            "sample_position=${transport?.samplePosition ?: 0L} track_playing=${track?.playing == true} " +
+            "track_looping=${track?.looping == true} track_position=${track?.positionSec ?: 0.0} " +
+            "track_frame=${track?.transportFrame ?: 0L} lifecycle_after_stop=${if (lifecycleOk) 1 else 0}"
     }
 
     private fun createStressWav(directory: File, sampleRate: Int): File {
@@ -512,11 +584,13 @@ class DirectUsbDeviceStressTest {
     private data class CaseResult(val passed: Boolean, val reason: String?)
 
     private companion object {
+        const val TELEMETRY_SCHEMA_VERSION = 7L
+        const val RAW_STAT_COUNT = 46
         const val MAX_IMPLICIT_FIFO = 256L
-        const val TRANSPORT_FRAME_ROUNDING_TOLERANCE = 1L
         const val CAPTURE_OVERRUNS = 1
         const val CAPTURE_UNDERRUNS = 2
         const val IMPLICIT_FIFO_DEPTH = 3
+        const val DEFERRED_TRANSFERS = 4
         const val CAPTURE_TRANSFER_ERRORS = 5
         const val PLAYBACK_TRANSFER_ERRORS = 6
         const val PLAYBACK_RING_FRAMES = 7
@@ -528,5 +602,10 @@ class DirectUsbDeviceStressTest {
         const val RAW_WRITTEN_FRAMES = 13
         const val RAW_PLAYED_FRAMES = 14
         const val RAW_PLAYBACK_XRUNS = 15
+        const val METADATA_FIFO_OVERRUNS = 41
+        const val PENDING_DEPTH = 42
+        const val PENDING_HIGH_WATER = 43
+        const val ZERO_RUNWAY_EVENTS = 44
+        const val MAX_PENDING_AGE_NS = 45
     }
 }
