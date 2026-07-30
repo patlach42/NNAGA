@@ -93,7 +93,7 @@ object DirectUsbAudioManager {
         "com.vibes.dsp.action.DIRECT_USB_PERMISSION"
     private const val CALIBRATION_WARMUP_MS = 1_500L
     private const val CALIBRATION_MAX_CANDIDATES = 20
-    private const val CALIBRATION_SAFETY_STEPS = 2
+    private const val CALIBRATION_SAFETY_STEPS = 4
     private const val CALIBRATION_MEASURE_MS = 10_000L
     private const val CALIBRATION_CYCLES = 2
 
