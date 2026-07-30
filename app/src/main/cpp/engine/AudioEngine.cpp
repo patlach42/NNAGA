@@ -241,9 +241,8 @@ void AudioEngine::directUsbThermalPolicyLoop() {
 
 bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                         int32_t subslotBytes, int32_t channels,
-                                        int32_t inputChannel, int32_t outputPair,
-                                        int32_t bufferFrames, int32_t periodMultiplier,
-                                        int32_t watermarkFrames) {
+                                        int32_t outputPair, int32_t bufferFrames,
+                                        int32_t periodMultiplier, int32_t watermarkFrames) {
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
     if (directUsbSession_.load(std::memory_order_acquire)) {
         return true;
@@ -255,8 +254,6 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
         subslotBytes < (bitsPerSample + 7) / 8 ||
         subslotBytes > DirectUsbOutput::kMaxSubslotBytes ||
         channels < 2 || channels > DirectUsbOutput::kMaxDeviceChannels ||
-        inputChannel < 0 ||
-        inputChannel >= directUsbOutput_->captureChannelCount() ||
         outputPair < 0 || outputPair * 2 + 1 >= channels ||
         watermarkFrames < 0) {
         directUsbFailureCode_.store(
@@ -285,8 +282,7 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbDeadlineBudgetNs_.store(0, std::memory_order_relaxed);
     directUsbDeadlineMisses_.store(0, std::memory_order_relaxed);
     if (!directUsbOutput_->start(static_cast<int>(sampleRate), bitsPerSample,
-                                 subslotBytes, channels, inputChannel,
-                                 outputPair)) {
+                                 subslotBytes, channels, outputPair)) {
         const int32_t failure = directUsbOutput_->lastErrorCode();
         LOGE("Direct USB transport start failed: code=%d detail=%s",
              failure, directUsbOutput_->lastErrorDetail().c_str());
@@ -311,8 +307,26 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbConfiguredMultiplier_ = multiplier;
     directUsbThermalSafetyActive_ = false;
     directUsbThermalPolicyStop_.store(false, std::memory_order_release);
+    directUsbInputChannelCount_ = std::clamp(
+        directUsbOutput_->captureChannelCount(), 0,
+        DirectUsbOutput::kMaxDeviceChannels);
+    if (directUsbInputChannelCount_ <= 0) {
+        directUsbOutput_->requestStop();
+        directUsbFailureCode_.store(
+            usbFailureCode(monotrypt::usb::StartError::Unknown),
+            std::memory_order_release);
+        directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
+        directUsbOutput_->stop();
+        return false;
+    }
     try {
-        directUsbInputBuffer_.assign(static_cast<size_t>(renderFrames), 0.0f);
+        directUsbInputBuffer_.assign(
+            static_cast<size_t>(directUsbInputChannelCount_) * renderFrames, 0.0f);
+        directUsbInputPlanes_.resize(static_cast<size_t>(directUsbInputChannelCount_));
+        for (int32_t channel = 0; channel < directUsbInputChannelCount_; ++channel) {
+            directUsbInputPlanes_[static_cast<size_t>(channel)] =
+                directUsbInputBuffer_.data() + static_cast<size_t>(channel) * renderFrames;
+        }
         directUsbOutputLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
         directUsbOutputRight_.assign(static_cast<size_t>(renderFrames), 0.0f);
         directUsbStartupLeft_.assign(
@@ -340,6 +354,7 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbCaptureWaitTimeouts_.store(0, std::memory_order_relaxed);
     directUsbWriteWaitTimeouts_.store(0, std::memory_order_relaxed);
     rackGraph_.setSampleRate(sampleRate_, callbackFrameCount_);
+    rackGraph_.setAvailableInputChannelCount(directUsbInputChannelCount_);
     rackGraph_.activate();
     rackGraph_.pauseAndResetTransport();
     cleanupStarted_.store(false, std::memory_order_release);
@@ -585,9 +600,11 @@ bool AudioEngine::unloadTrackWav(RackPathId trackId) {
     return rackGraph_.unloadTrackWav(trackId);
 }
 
-void AudioEngine::processRackBlock(const float* const* liveInputs, float* const* outputs,
+void AudioEngine::processRackBlock(const float* const* liveInputs,
+                                   int32_t inputChannelCount,
+                                   float* const* outputs,
                                    uint32_t numFrames) noexcept {
-    rackGraph_.process(liveInputs, outputs, numFrames);
+    rackGraph_.process(liveInputs, inputChannelCount, outputs, numFrames);
 }
 
 void AudioEngine::directUsbRenderLoop() {
@@ -606,8 +623,7 @@ void AudioEngine::directUsbRenderLoop() {
         1000, std::max(20, static_cast<int>(std::ceil(period.count() * 4000.0))));
     int captureMissStreak = 0;
     int failureCode = 0;
-    const float* const renderInputPtrs[2] = {
-        directUsbInputBuffer_.data(), directUsbInputBuffer_.data()};
+    const float* const* renderInputPtrs = directUsbInputPlanes_.data();
     float* const renderOutputPtrs[2] = {
         directUsbOutputLeft_.data(), directUsbOutputRight_.data()};
     const float peakDecay = meterDecayForBlock(frames, sampleRate_);
@@ -637,12 +653,14 @@ void AudioEngine::directUsbRenderLoop() {
         }
         return false;
     };
-    const auto renderBlock = [this, frames, period, &renderInputPtrs,
+    const auto renderBlock = [this, frames, period, renderInputPtrs,
                               &renderOutputPtrs, peakDecay, effectiveQuantum,
                               publishedSampleRate]() noexcept {
-        directUsbOutput_->readMonoInput(directUsbInputBuffer_.data(), frames);
+        directUsbOutput_->readInputChannels(
+            directUsbInputPlanes_.data(), directUsbInputChannelCount_, frames);
         const auto began = std::chrono::steady_clock::now();
-        processRackBlock(renderInputPtrs, renderOutputPtrs, frames);
+        processRackBlock(renderInputPtrs, directUsbInputChannelCount_,
+                         renderOutputPtrs, frames);
         const auto elapsed = std::chrono::steady_clock::now() - began;
         const uint64_t dspNs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());

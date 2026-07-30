@@ -201,7 +201,11 @@ data class RackTrackInfo(
     val playing: Boolean,
     val looping: Boolean,
     val positionSec: Double,
-    val transportFrame: Long
+    val transportFrame: Long,
+    val recordPending: Boolean,
+    val recording: Boolean,
+    val punchArmed: Boolean,
+    val inputChannel: Int
 )
 
 data class TransportInfo(
@@ -305,13 +309,12 @@ class NativeEngine private constructor() {
 
     /** Opens an app-permitted USB device FD for the direct UAC playback prototype. */
     external fun nativeOpenDirectUsbOutput(fileDescriptor: Int): Boolean
-    /** Starts direct USB with one selected zero-based mono capture channel. */
+    /** Starts direct USB capture for all negotiated input channels. */
     external fun nativeStartDirectUsbSession(
         sampleRate: Int,
         bitsPerSample: Int,
         bytesPerSample: Int,
         channels: Int,
-        inputChannel: Int,
         outputPair: Int,
         bufferFrames: Int,
         periodMultiplier: Int,
@@ -521,6 +524,7 @@ class NativeEngine private constructor() {
     external fun nativeGetTracks(): Array<RackTrackInfo>
     external fun nativeSetTrackVolume(trackId: Long, volume: Float): Boolean
     external fun nativeSetTrackInputArmed(trackId: Long, armed: Boolean): Boolean
+    external fun nativeSetTrackInputChannel(trackId: Long, inputChannel: Int): Boolean
     external fun nativeLoadTrackWav(trackId: Long, path: String, displayName: String): Boolean
     external fun nativeUnloadTrackWav(trackId: Long): Boolean
     external fun nativeClearTrackWavs(): Boolean
@@ -533,6 +537,13 @@ class NativeEngine private constructor() {
         quantization: Int
     ): Boolean
     external fun nativeSetTrackTransportLooping(trackId: Long, looping: Boolean): Boolean
+    external fun nativeStartTrackLoopRecording(
+        trackId: Long,
+        bars: Double,
+        quantization: Int,
+        enterOnPunch: Boolean
+    ): Boolean
+    external fun nativeCancelTrackLoopRecording(trackId: Long): Boolean
     external fun nativeGetTransportInfo(): TransportInfo
 
 
@@ -583,6 +594,8 @@ class NativeEngine private constructor() {
     fun getTracks(): Array<RackTrackInfo> = nativeGetTracks()
     fun setTrackVolume(trackId: Long, volume: Float): Boolean = nativeSetTrackVolume(trackId, volume.coerceIn(0f, 1f))
     fun setTrackInputArmed(trackId: Long, armed: Boolean): Boolean = nativeSetTrackInputArmed(trackId, armed)
+    fun setTrackInputChannel(trackId: Long, inputChannel: Int): Boolean =
+        nativeSetTrackInputChannel(trackId, inputChannel)
     fun loadTrackWav(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackWav(trackId, path, displayName)
     fun unloadTrackWav(trackId: Long): Boolean = nativeUnloadTrackWav(trackId)
     fun clearTrackWavs(): Boolean = nativeClearTrackWavs()
@@ -596,6 +609,14 @@ class NativeEngine private constructor() {
     ): Boolean = nativeSetTrackTransportPlaying(trackId, playing, quantization.ordinal)
     fun setTrackTransportLooping(trackId: Long, looping: Boolean): Boolean =
         nativeSetTrackTransportLooping(trackId, looping)
+    fun startTrackLoopRecording(
+        trackId: Long,
+        bars: Double,
+        quantization: TrackLaunchQuantization,
+        enterOnPunch: Boolean
+    ): Boolean = nativeStartTrackLoopRecording(trackId, bars, quantization.ordinal, enterOnPunch)
+    fun cancelTrackLoopRecording(trackId: Long): Boolean =
+        nativeCancelTrackLoopRecording(trackId)
     fun getTransportInfo(): TransportInfo = nativeGetTransportInfo()
 
 }

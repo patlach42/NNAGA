@@ -84,8 +84,8 @@ data class DirectUsbCalibrationResult(
 
 /**
  * Owns the app-permitted USB connection used by the direct USB audio session.
- * Native code captures one selected mono channel and sends the processed stereo
- * signal through libusb; Android AudioManager routing is not involved.
+ * Native code captures all negotiated input channels and sends the processed
+ * stereo signal through libusb; Android AudioManager routing is not involved.
  */
 object DirectUsbAudioManager {
     private const val TAG = "DirectUsbAudio"
@@ -232,23 +232,19 @@ object DirectUsbAudioManager {
             } ?: return@withLock Result.failure(
                 IllegalStateException("Configured USB format is unavailable")
             )
-            val inputChannel = AudioSettingsManager.getDirectUsbInputChannel(context)
-                .coerceIn(0, (availableInputChannels - 1).coerceAtLeast(0))
             val outputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
                 .coerceIn(0, (exact.channels / 2 - 1).coerceAtLeast(0))
-            AudioSettingsManager.setDirectUsbInputChannel(context, inputChannel)
             AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
             val watermark = AudioSettingsManager.getDirectUsbWatermark(
                 context, device.vendorId, device.productId, exact.sampleRate,
                 exact.bits, exact.subslotBytes, exact.channels
             )
-            startExact(context, exact, inputChannel, outputPair, watermark)
+            startExact(context, exact, outputPair, watermark)
         }
 
     private fun startExact(
         context: Context,
         exact: DirectUsbFormat,
-        inputChannel: Int,
         outputPair: Int,
         watermark: Int,
         bufferFrames: Int = AudioSettingsManager.getBufferSize(context),
@@ -258,7 +254,7 @@ object DirectUsbAudioManager {
         val engine = NativeEngine.getInstance()
         if (!engine.nativeStartDirectUsbSession(
                 exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels,
-                inputChannel, outputPair, bufferFrames, periodMultiplier, watermark
+                outputPair, bufferFrames, periodMultiplier, watermark
             )
         ) {
             val stats = runCatching { engine.getDirectUsbStats() }.getOrNull()
@@ -304,15 +300,11 @@ object DirectUsbAudioManager {
                     try {
                     val available = probeFormatsInternal(context, option).getOrThrow()
                     require(format in available) { "Selected USB format is unavailable" }
-                    val inputChannel =
-                        AudioSettingsManager.getDirectUsbInputChannel(context)
-                            .coerceIn(0, (availableInputChannels - 1).coerceAtLeast(0))
                     val outputPair =
                         AudioSettingsManager.getDirectUsbOutputPair(context)
                             .coerceIn(0, (format.channels / 2 - 1).coerceAtLeast(0))
             startExact(
-                context, format, inputChannel, outputPair, 0,
-                bufferFrames, periodMultiplier
+                context, format, outputPair, 0, bufferFrames, periodMultiplier
             ).getOrThrow()
             delay(CALIBRATION_WARMUP_MS)
             val autoStats = NativeEngine.getInstance().getDirectUsbStats()
@@ -359,7 +351,7 @@ object DirectUsbAudioManager {
                             val valid = try {
                                 probeFormatsInternal(context, option).getOrThrow()
                                 startExact(
-                                    context, format, inputChannel, outputPair, candidate,
+                                    context, format, outputPair, candidate,
                                     bufferFrames, periodMultiplier
                                 ).getOrThrow()
                                 delay(CALIBRATION_WARMUP_MS)

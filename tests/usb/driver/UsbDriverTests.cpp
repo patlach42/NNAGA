@@ -1220,57 +1220,45 @@ TEST(DirectUsbOutput, WriteStereoPacksExactWrappedLeftJustifiedSamples) {
     }
 }
 
-TEST(DirectUsbOutput, ReadMonoInputSignExtendsSelectedChannelAcrossWrap) {
-    struct CaptureCase {
-        int bits;
-        int bytes;
-        int32_t minimum;
-        int32_t maximum;
-        float maximumExpected;
-    };
-    const std::vector<CaptureCase> cases{
-        {16, 2, -32768, 32767, 32767.0f / 32768.0f},
-        {24, 4, -8388608, 8388607, 8388607.0f / 8388608.0f},
-        {32, 4, std::numeric_limits<int32_t>::min(),
-         std::numeric_limits<int32_t>::max(), 1.0f},
-    };
 
-    for (const auto& test : cases) {
-        SCOPED_TRACE(test.bits);
-        guitarrackcraft::DirectUsbOutput output;
-        auto& driver = output.driver_;
-        monotrypt::usb::UsbDriverTestAccess::captureFormat(
-            driver, 2, test.bytes);
-        monotrypt::usb::UsbDriverTestAccess::captureBits(driver, test.bits);
-        driver.setGraphQuantum(4);
-        monotrypt::usb::UsbDriverTestAccess::captureActive(driver, true);
-        output.inputChannel_ = 1;
+TEST(DirectUsbOutput, ReadInputChannelsDeinterleavesWrapsAndZeroFills) {
+    guitarrackcraft::DirectUsbOutput output;
+    auto& driver = output.driver_;
+    monotrypt::usb::UsbDriverTestAccess::captureFormat(driver, 3, 2);
+    monotrypt::usb::UsbDriverTestAccess::captureBits(driver, 16);
+    monotrypt::usb::UsbDriverTestAccess::captureActive(driver, true);
 
-        const int stride = 2 * test.bytes;
-        const size_t tail =
-            monotrypt::usb::kPlaybackRingBytes - stride / 2;
-        std::vector<uint8_t> ring(monotrypt::usb::kPlaybackRingBytes, 0xa5);
-        auto writeSample = [&](size_t frame, int32_t sample) {
-            const int validBytes = (test.bits + 7) / 8;
-            const uint32_t packed = static_cast<uint32_t>(sample) <<
-                (8 * (test.bytes - validBytes));
-            const size_t base = (tail + frame * stride + test.bytes) %
-                                ring.size();
-            for (int byte = 0; byte < test.bytes; ++byte) {
-                ring[(base + byte) % ring.size()] =
-                    static_cast<uint8_t>(packed >> (8 * byte));
-            }
-        };
-        writeSample(0, test.minimum);
-        writeSample(1, test.maximum);
-        monotrypt::usb::UsbDriverTestAccess::setCaptureRingBytes(driver, ring);
-        monotrypt::usb::UsbDriverTestAccess::captureCursors(
-            driver, tail + 2 * stride, tail);
-
-        float outputSamples[2] = {};
-        ASSERT_EQ(output.readMonoInput(outputSamples, 2), 2);
-        EXPECT_FLOAT_EQ(outputSamples[0], -1.0f);
-        EXPECT_NEAR(outputSamples[1], test.maximumExpected, 1.0e-6f);
-        EXPECT_EQ(driver.captureAvailableFrames(), 0);
+    constexpr size_t capacity = monotrypt::usb::kPlaybackRingBytes;
+    constexpr int channels = 3;
+    constexpr int bytes = 2;
+    constexpr int stride = channels * bytes;
+    const size_t tail = capacity - 3;
+    std::vector<uint8_t> ring(capacity, 0);
+    const int16_t samples[2][channels] = {{1000, 2000, 3000}, {-1000, -2000, -3000}};
+    for (size_t frame = 0; frame < 2; ++frame) {
+        for (int channel = 0; channel < channels; ++channel) {
+            const uint16_t packed = static_cast<uint16_t>(samples[frame][channel]);
+            const size_t offset = (tail + frame * stride + channel * bytes) % capacity;
+            ring[offset] = static_cast<uint8_t>(packed);
+            ring[(offset + 1) % capacity] = static_cast<uint8_t>(packed >> 8);
+        }
     }
+    monotrypt::usb::UsbDriverTestAccess::setCaptureRingBytes(driver, ring);
+    monotrypt::usb::UsbDriverTestAccess::captureCursors(driver, tail + 2 * stride, tail);
+
+    float channel0[2] = {-9.0f, -9.0f};
+    float channel1[2] = {-9.0f, -9.0f};
+    float channel2[2] = {-9.0f, -9.0f};
+    float unavailable[2] = {-9.0f, -9.0f};
+    float* destinations[] = {channel0, channel1, channel2, unavailable};
+    ASSERT_EQ(output.readInputChannels(destinations, 4, 2), 2);
+    EXPECT_NEAR(channel0[0], 1000.0f / 32768.0f, 1.0e-6f);
+    EXPECT_NEAR(channel0[1], -1000.0f / 32768.0f, 1.0e-6f);
+    EXPECT_NEAR(channel1[0], 2000.0f / 32768.0f, 1.0e-6f);
+    EXPECT_NEAR(channel1[1], -2000.0f / 32768.0f, 1.0e-6f);
+    EXPECT_NEAR(channel2[0], 3000.0f / 32768.0f, 1.0e-6f);
+    EXPECT_NEAR(channel2[1], -3000.0f / 32768.0f, 1.0e-6f);
+    EXPECT_FLOAT_EQ(unavailable[0], 0.0f);
+    EXPECT_FLOAT_EQ(unavailable[1], 0.0f);
+    EXPECT_EQ(driver.captureAvailableFrames(), 0);
 }

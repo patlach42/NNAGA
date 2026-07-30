@@ -56,7 +56,7 @@ public:
     }
 
     bool start(int sampleRate, int bitsPerSample, int bytesPerSample, int channels,
-               int inputChannel, int outputPair) {
+               int outputPair) {
         {
             std::lock_guard<std::mutex> lock(errorMutex_);
             startErrorDetail_.clear();
@@ -66,7 +66,6 @@ public:
             bytesPerSample < (bitsPerSample + 7) / 8 ||
             bytesPerSample > kMaxSubslotBytes ||
             channels < kChannels || channels > kMaxDeviceChannels ||
-            inputChannel < 0 || inputChannel >= captureChannelCount() ||
             outputPair < 0 || outputPair * 2 + 1 >= channels) return false;
         stop();
         if (!driver_.startDuplex(sampleRate, bitsPerSample, channels, bytesPerSample)) {
@@ -84,7 +83,6 @@ public:
              capture.bitsPerSample != 32) ||
             capture.bytesPerSample < (capture.bitsPerSample + 7) / 8 ||
             capture.bytesPerSample > kMaxSubslotBytes ||
-            inputChannel >= capture.channels ||
             outputPair * 2 + 1 >= deviceChannels_) {
             {
                 std::lock_guard<std::mutex> lock(errorMutex_);
@@ -94,9 +92,7 @@ public:
             driver_.stop();
             return false;
         }
-        inputChannel_ = inputChannel;
         outputPair_ = outputPair;
-        accepting_.store(true, std::memory_order_release);
         streaming_.store(true, std::memory_order_release);
         return true;
     }
@@ -205,44 +201,38 @@ public:
         return offset;
     }
 
-    // Reads the selected capture channel as normalized float. Non-blocking
-    // and allocation-free; missing frames are zero-filled.
-    int readMonoInput(float* dst, int frames) noexcept {
-        if (!dst || frames <= 0) return 0;
+    // Reads all negotiated capture channels as normalized channel-major planes.
+    int readInputChannels(float* const* destinations, int destinationChannels,
+                          int frames) noexcept {
+        if (!destinations || destinationChannels <= 0 || frames <= 0) return 0;
         frames = std::min(frames, kMaxFramesPerWrite);
+        for (int channel = 0; channel < destinationChannels; ++channel) {
+            if (!destinations[channel]) return 0;
+            std::memset(destinations[channel], 0,
+                        static_cast<size_t>(frames) * sizeof(float));
+        }
         const auto region = driver_.prepareCaptureRead(frames);
         const auto& format = driver_.currentCaptureFormat();
-        switch (format.bitsPerSample) {
-            case 16:
-                unpackCaptureRegion<16>(region, format, dst);
-                break;
-            case 24:
-                unpackCaptureRegion<24>(region, format, dst);
-                break;
-            case 32:
-                unpackCaptureRegion<32>(region, format, dst);
-                break;
-            default:
-                if (region.frames > 0) {
-                    std::memset(
-                        dst, 0,
-                        static_cast<size_t>(region.frames) * sizeof(float));
-                }
-                break;
+        const int available = std::max(0, format.channels);
+        const int decodedFrames = std::max(0, std::min(region.frames, frames));
+        const int decodeChannels = std::min(destinationChannels, available);
+        for (int channel = 0; channel < decodeChannels; ++channel) {
+            const int sampleOffset = channel * format.bytesPerSample +
+                (format.bytesPerSample - (format.bitsPerSample + 7) / 8);
+            switch (format.bitsPerSample) {
+                case 16: unpackCaptureChannel<16>(region, sampleOffset,
+                    destinations[channel], decodedFrames); break;
+                case 24: unpackCaptureChannel<24>(region, sampleOffset,
+                    destinations[channel], decodedFrames); break;
+                case 32: unpackCaptureChannel<32>(region, sampleOffset,
+                    destinations[channel], decodedFrames); break;
+                default: break;
+            }
         }
         driver_.commitCaptureRead(region);
-        if (region.frames < frames) {
-            const int filled = std::max(0, region.frames);
-            std::memset(
-                dst + filled, 0,
-                static_cast<size_t>(frames - filled) * sizeof(float));
-        }
-        return region.frames;
+        return decodedFrames;
     }
 
-    int captureAvailableFrames() const noexcept {
-        return driver_.captureAvailableFrames();
-    }
     bool waitForCaptureFrames(int frames, int timeoutMs) const noexcept {
         return driver_.waitForCaptureFrames(frames, timeoutMs);
     }
@@ -411,52 +401,35 @@ private:
     }
 
     template <int Bits>
-    void unpackCaptureRegion(
+    void unpackCaptureChannel(
             const monotrypt::usb::LibusbUacDriver::CaptureReadRegion& region,
-            const monotrypt::usb::CaptureFormat& format,
-            float* destination) const noexcept {
-        if (region.frames <= 0 || region.frameStride <= 0) return;
-        constexpr int validBytes = (Bits + 7) / 8;
-        const int sampleOffset =
-            inputChannel_ * format.bytesPerSample +
-            (format.bytesPerSample - validBytes);
+            int sampleOffset, float* destination, int frames) const noexcept {
+        if (frames <= 0 || region.frameStride <= 0) return;
         const size_t stride = static_cast<size_t>(region.frameStride);
-        const int firstFrames =
-            static_cast<int>(region.firstBytes / stride);
-        unpackCaptureRun<Bits>(
-            region.first, firstFrames, region.frameStride,
-            sampleOffset, destination);
-
-        int destinationFrame = firstFrames;
+        const int firstFrames = std::min(frames,
+            static_cast<int>(region.firstBytes / stride));
+        unpackCaptureRun<Bits>(region.first, firstFrames, region.frameStride,
+                               sampleOffset, destination);
+        int out = firstFrames;
+        const size_t splitBytes = region.firstBytes -
+            static_cast<size_t>(firstFrames) * stride;
         size_t secondOffset = 0;
-        const size_t splitBytes =
-            region.firstBytes - static_cast<size_t>(firstFrames) * stride;
-        if (splitBytes > 0) {
-            uint8_t splitFrame[kMaxDeviceChannels * kMaxSubslotBytes];
-            std::memcpy(
-                splitFrame,
-                region.first + static_cast<size_t>(firstFrames) * stride,
-                splitBytes);
-            std::memcpy(
-                splitFrame + splitBytes, region.second,
-                stride - splitBytes);
-            unpackCaptureRun<Bits>(
-                splitFrame, 1, region.frameStride,
-                sampleOffset, destination + destinationFrame);
-            ++destinationFrame;
+        if (splitBytes > 0 && out < frames) {
+            uint8_t splitFrame[kMaxDeviceChannels * kMaxSubslotBytes]{};
+            std::memcpy(splitFrame, region.first +
+                static_cast<size_t>(firstFrames) * stride, splitBytes);
+            std::memcpy(splitFrame + splitBytes, region.second,
+                        stride - splitBytes);
+            unpackCaptureRun<Bits>(splitFrame, 1, region.frameStride,
+                                   sampleOffset, destination + out);
+            ++out;
             secondOffset = stride - splitBytes;
         }
-        const int remaining = region.frames - destinationFrame;
-        if (remaining > 0) {
-            unpackCaptureRun<Bits>(
-                region.second + secondOffset, remaining,
-                region.frameStride, sampleOffset,
-                destination + destinationFrame);
-        }
+        if (out < frames) unpackCaptureRun<Bits>(region.second + secondOffset,
+            frames - out, region.frameStride, sampleOffset, destination + out);
     }
 
     int deviceChannels_ = kChannels;
-    int inputChannel_ = 0;
     int outputPair_ = 0;
     mutable std::mutex errorMutex_;
     std::string startErrorDetail_;

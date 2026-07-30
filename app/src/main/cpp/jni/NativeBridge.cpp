@@ -428,7 +428,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbInputChannelCount(
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         JNIEnv* env, jobject thiz, jint sampleRate, jint bitsPerSample,
-        jint bytesPerSample, jint channels, jint inputChannel, jint outputPair,
+        jint bytesPerSample, jint channels, jint outputPair,
         jint bufferFrames, jint periodMultiplier, jint watermarkFrames) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->audioEngine->startDirectUsbSession(
@@ -436,7 +436,6 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         static_cast<int32_t>(bitsPerSample),
         static_cast<int32_t>(bytesPerSample),
         static_cast<int32_t>(channels),
-        static_cast<int32_t>(inputChannel),
         static_cast<int32_t>(outputPair),
         static_cast<int32_t>(bufferFrames),
         static_cast<int32_t>(periodMultiplier),
@@ -876,6 +875,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputArmed(
 }
 
 JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputChannel(
+    JNIEnv*, jobject, jlong trackId, jint inputChannel) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setTrackInputChannel(trackId, inputChannel)
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeLoadTrackWav(
     JNIEnv* env, jobject, jlong trackId, jstring path, jstring displayName) {
     if (!g_ctx || !g_ctx->audioEngine || !path || !displayName) return JNI_FALSE;
@@ -932,6 +939,26 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackTransportLooping(
     return g_ctx && g_ctx->audioEngine &&
         g_ctx->audioEngine->getRackGraph().setTrackTransportLooping(
             static_cast<RackPathId>(trackId), looping == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeStartTrackLoopRecording(
+    JNIEnv*, jobject, jlong trackId, jdouble bars, jint quantization, jboolean enterOnPunch) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    const auto value = static_cast<uint8_t>(std::clamp(quantization, 0, 3));
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().startTrackLoopRecording(
+        static_cast<RackPathId>(trackId), static_cast<double>(bars),
+        static_cast<LaunchQuantization>(value), enterOnPunch == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeCancelTrackLoopRecording(
+    JNIEnv*, jobject, jlong trackId) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().cancelTrackLoopRecording(
+        static_cast<RackPathId>(trackId)) ? JNI_TRUE : JNI_FALSE;
 }
 
 
@@ -993,7 +1020,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     const auto tracks = g_ctx->audioEngine->getRackGraph().getTracks();
     jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
     if (!clazz) return nullptr;
-    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;DZZDJ)V");
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;DZZDJZZZI)V");
     if (!ctor) return nullptr;
     jobjectArray result = env->NewObjectArray(static_cast<jsize>(tracks.size()), clazz, nullptr);
     for (size_t index = 0; index < tracks.size(); ++index) {
@@ -1004,7 +1031,11 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
             track.inputArmed ? JNI_TRUE : JNI_FALSE,
             track.wavLoaded ? JNI_TRUE : JNI_FALSE, name, track.wavDurationSec,
             track.playing ? JNI_TRUE : JNI_FALSE, track.looping ? JNI_TRUE : JNI_FALSE,
-            track.positionSec, static_cast<jlong>(track.transportFrame));
+            track.positionSec, static_cast<jlong>(track.transportFrame),
+            track.recordPending ? JNI_TRUE : JNI_FALSE,
+            track.recording ? JNI_TRUE : JNI_FALSE,
+            track.punchArmed ? JNI_TRUE : JNI_FALSE,
+            static_cast<jint>(track.inputChannel));
         env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         env->DeleteLocalRef(name);
         env->DeleteLocalRef(item);

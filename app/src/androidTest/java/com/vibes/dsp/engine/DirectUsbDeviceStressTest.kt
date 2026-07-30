@@ -74,7 +74,6 @@ class DirectUsbDeviceStressTest {
         val originalBits = AudioSettingsManager.getDirectUsbBits(context)
         val originalSubslot = AudioSettingsManager.getDirectUsbSubslot(context)
         val originalChannels = AudioSettingsManager.getDirectUsbChannels(context)
-        val originalInputChannel = AudioSettingsManager.getDirectUsbInputChannel(context)
         val originalOutputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
         val originalBuffer = AudioSettingsManager.getBufferSize(context)
         val originalMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
@@ -82,7 +81,6 @@ class DirectUsbDeviceStressTest {
         val results = linkedMapOf<CaseKey, MutableList<CaseResult>>()
         var cases = 0
         try {
-            AudioSettingsManager.setDirectUsbInputChannel(context, 0)
             AudioSettingsManager.setDirectUsbOutputPair(context, 0)
             EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
             assertTrue("Native engine initialization failed", EngineInitHelper.initEngine(context))
@@ -176,7 +174,6 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setDirectUsbCachedFormats(context, originalCachedFormats)
             AudioSettingsManager.setDirectUsbFormat(context, originalRate, originalBits, originalSubslot, originalChannels)
             AudioSettingsManager.setBufferSize(context, originalBuffer)
-            AudioSettingsManager.setDirectUsbInputChannel(context, originalInputChannel)
             AudioSettingsManager.setDirectUsbOutputPair(context, originalOutputPair)
             AudioSettingsManager.setDirectUsbPeriodMultiplier(context, originalMultiplier)
             // Restore transport controls last. The exact frame cannot be restored

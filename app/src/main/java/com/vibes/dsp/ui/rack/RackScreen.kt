@@ -27,6 +27,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
@@ -37,10 +38,12 @@ import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DesktopWindows
 import androidx.compose.material.icons.filled.Fullscreen
@@ -110,6 +113,7 @@ import com.vibes.dsp.engine.X11Bridge
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.UiType
 import com.vibes.dsp.engine.DirectUsbSessionState
+import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.engine.TrackLaunchQuantization
 import com.vibes.dsp.ui.modgui.InlineModguiView
@@ -130,6 +134,10 @@ import java.io.File
 import java.io.IOException
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -141,6 +149,8 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import kotlin.math.roundToInt
+
+private val PunchArmedColor = Color(0xFFFFC107)
 
 /** Item positions for drag-drop: (top in viewport px, height px) per plugin index. */
 private class ScrollableDragDropState(
@@ -265,8 +275,12 @@ fun RackScreen(
     val errorMessage by viewModel.errorMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
     val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
+    val inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
     var launchQuantizationOrdinal by rememberSaveable(selectedTrack?.id) { mutableIntStateOf(0) }
     val launchQuantization = TrackLaunchQuantization.entries[launchQuantizationOrdinal]
+    var loopLengthsByTrack by rememberSaveable {
+        mutableStateOf<Map<Long, Double>>(emptyMap())
+    }
     var showTempoDialog by rememberSaveable { mutableStateOf(false) }
     var tempoInput by rememberSaveable { mutableStateOf("") }
 
@@ -300,6 +314,7 @@ fun RackScreen(
 
     val scope = rememberCoroutineScope()
     var pendingAudioTargetId by remember { mutableStateOf<Long?>(null) }
+    val pendingTrackLaunches = remember { mutableStateMapOf<Long, Boolean>() }
     val audioFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -336,7 +351,7 @@ fun RackScreen(
                 DirectUsbSessionState.Stopping -> "Starting USB"
                 DirectUsbSessionState.Failed -> "USB failed"
                 DirectUsbSessionState.Running -> {
-                    var s = "Running · Estimated host queue ~%.1f ms · CPU %.0f%%".format(
+                    var s = "Running · DSP ~%.1f ms · CPU %.0f%%".format(
                         if (directUsbStats.sampleRateHz > 0)
                             directUsbStats.knownHostLatencyFrames.toDouble() /
                                 directUsbStats.sampleRateHz * 1000.0 else 0.0,
@@ -610,12 +625,33 @@ fun RackScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             tracks.forEachIndexed { index, track ->
-                FilterChip(
-                    selected = track.id == selectedPathId,
-                    onClick = { viewModel.selectPath(track.id) },
-                    label = { Text("Track ${index + 1}") },
-                    modifier = Modifier.heightIn(min = 44.dp)
-                )
+                var deleteMenuExpanded by remember(track.id) { mutableStateOf(false) }
+                Box {
+                    FilterChip(
+                        selected = track.id == selectedPathId,
+                        onClick = { viewModel.selectPath(track.id) },
+                        label = { Text("Track ${index + 1}") },
+                        modifier = Modifier
+                            .heightIn(min = 44.dp)
+                            .combinedClickable(
+                                onClick = { viewModel.selectPath(track.id) },
+                                onLongClick = { deleteMenuExpanded = true }
+                            )
+                    )
+                    DropdownMenu(
+                        expanded = deleteMenuExpanded,
+                        onDismissRequest = { deleteMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Delete track") },
+                            onClick = {
+                                deleteMenuExpanded = false
+                                pendingTrackLaunches.remove(track.id)
+                                viewModel.removeTrack(track.id)
+                            }
+                        )
+                    }
+                }
             }
             FilterChip(
                 selected = false,
@@ -628,120 +664,365 @@ fun RackScreen(
             }
         }
         selectedTrack?.let { track ->
+            var trackTransportMenuExpanded by remember(track.id) { mutableStateOf(false) }
+            var launchQuantizeMenuExpanded by remember(track.id) { mutableStateOf(false) }
+            var recordMenuExpanded by remember(track.id) { mutableStateOf(false) }
+            var loopLengthMenuExpanded by remember(track.id) { mutableStateOf(false) }
+            var inputMenuExpanded by remember(track.id) { mutableStateOf(false) }
+            var inputChannelMenuExpanded by remember(track.id) { mutableStateOf(false) }
+            val loopLengthBars = loopLengthsByTrack[track.id] ?: 1.0
+            val loopLengthLabel = when (loopLengthBars) {
+                0.25 -> "1/4"
+                1.0 -> "1 bar"
+                else -> "${loopLengthBars.toInt()} bars"
+            }
+            val launchPending = pendingTrackLaunches[track.id] == true &&
+                !track.playing && track.wavLoaded
+            LaunchedEffect(track.id, track.playing, track.wavLoaded) {
+                if (track.playing || !track.wavLoaded) pendingTrackLaunches.remove(track.id)
+            }
+            val playIconAlpha = if (launchPending) {
+                val transition = rememberInfiniteTransition(label = "Pending track launch")
+                val alpha by transition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = 0.45f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 650),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "Pending track launch alpha"
+                )
+                alpha
+            } else {
+                1f
+            }
+            val recordIconAlpha = if (track.recordPending) {
+                val transition = rememberInfiniteTransition(label = "Pending loop recording")
+                val alpha by transition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = 0.55f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(durationMillis = 850),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "Pending loop recording alpha"
+                )
+                alpha
+            } else {
+                1f
+            }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("REC", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Switch(checked = track.inputArmed, onCheckedChange = { viewModel.setTrackInputArmed(track.id, it) })
                 Text("Vol ${(track.volume * 100).roundToInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Slider(value = track.volume, onValueChange = { viewModel.setTrackVolume(track.id, it) }, modifier = Modifier.weight(1f))
-                IconButton(onClick = { viewModel.removeTrack(track.id) }, modifier = Modifier.size(44.dp)) {
-                    Icon(Icons.Default.Delete, "Delete track")
-                }
+                Slider(
+                    value = track.volume,
+                    onValueChange = { viewModel.setTrackVolume(track.id, it) },
+                    modifier = Modifier.weight(1f)
+                )
             }
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (!track.wavLoaded) {
-                    Button(
-                        onClick = {
-                            pendingAudioTargetId = track.id
-                            audioFilePickerLauncher.launch(
-                                arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a")
-                            )
-                        },
-                        modifier = Modifier.heightIn(min = 44.dp)
-                    ) { Text("Load Audio") }
-                } else {
-                    Text(track.wavDisplayName, Modifier.weight(1f), maxLines = 1)
-                    Text("WAV → FX", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = { viewModel.unloadTrackWav(track.id) }, modifier = Modifier.heightIn(min = 44.dp)) { Text("Unload") }
-                }
-            }
-            Column(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
+            if (track.wavLoaded) {
                 Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        "Selected track transport",
-                        style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Text(
-                        "${formatMusicalPosition(track.positionSec, transport.beatsPerMinute)} · " +
-                            formatElapsedTime(track.positionSec),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row(
-                    Modifier.fillMaxWidth(),
+                    Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    IconButton(
-                        onClick = {
-                            viewModel.setTrackTransportPlaying(
-                                track.id,
-                                !track.playing,
-                                launchQuantization
+                    Text(track.wavDisplayName, Modifier.weight(1f), maxLines = 1)
+                    Text("WAV → FX", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    "${formatMusicalPosition(track.positionSec, transport.beatsPerMinute)} · " +
+                        formatElapsedTime(track.positionSec),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Box {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .combinedClickable(
+                                onClick = {
+                                    viewModel.setTrackInputArmed(track.id, !track.inputArmed)
+                                },
+                                onLongClick = {
+                                    inputMenuExpanded = true
+                                    inputChannelMenuExpanded = false
+                                }
                             )
-                        },
-                        enabled = track.playing || transport.playing,
-                        modifier = Modifier.size(44.dp)
+                            .semantics {
+                                contentDescription = "Record input"
+                                stateDescription = if (track.inputArmed) "Active" else "Inactive"
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Default.Mic,
+                            contentDescription = null,
+                            tint = if (track.inputArmed) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = inputMenuExpanded,
+                        onDismissRequest = {
+                            inputMenuExpanded = false
+                            inputChannelMenuExpanded = false
+                        }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Input channel") },
+                            enabled = inputChannelCount > 0,
+                            onClick = { inputChannelMenuExpanded = true }
+                        )
+                    }
+                    DropdownMenu(
+                        expanded = inputChannelMenuExpanded,
+                        onDismissRequest = { inputChannelMenuExpanded = false }
+                    ) {
+                        repeat(inputChannelCount) { channel ->
+                            DropdownMenuItem(
+                                text = { Text("Input ${channel + 1}") },
+                                trailingIcon = {
+                                    RadioButton(
+                                        selected = track.inputChannel == channel,
+                                        onClick = null
+                                    )
+                                },
+                                onClick = {
+                                    viewModel.setTrackInputChannel(track.id, channel)
+                                    inputChannelMenuExpanded = false
+                                    inputMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                Box {
+                    val playEnabled = track.wavLoaded
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .alpha(if (playEnabled) 1f else 0.38f)
+                            .combinedClickable(
+                                enabled = playEnabled,
+                                onClick = {
+                                    when {
+                                        track.playing || launchPending -> {
+                                            pendingTrackLaunches.remove(track.id)
+                                            viewModel.setTrackTransportPlaying(
+                                                track.id,
+                                                false,
+                                                launchQuantization
+                                            )
+                                        }
+                                        else -> {
+                                            pendingTrackLaunches[track.id] = true
+                                            viewModel.launchTrackTransport(
+                                                track.id,
+                                                launchQuantization,
+                                                startGlobal = !transport.playing
+                                            )
+                                        }
+                                    }
+                                },
+                                onLongClick = {
+                                    trackTransportMenuExpanded = true
+                                    launchQuantizeMenuExpanded = false
+                                }
+                            )
+                            .semantics {
+                                contentDescription = when {
+                                    !playEnabled -> "Track play unavailable until audio is loaded"
+                                    track.playing -> "Pause selected track"
+                                    launchPending -> "Cancel pending track launch"
+                                    else -> "Start selected track"
+                                }
+                                if (launchPending) stateDescription = "Launch pending"
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             if (track.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            if (track.playing) "Pause selected track" else "Start selected track"
+                            contentDescription = null,
+                            modifier = Modifier.alpha(playIconAlpha)
                         )
                     }
-                    Text("Loop", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Switch(
-                        checked = track.looping,
-                        onCheckedChange = { viewModel.setTrackTransportLooping(track.id, it) },
-                        modifier = Modifier.semantics {
-                            contentDescription = "Loop selected track"
+                    DropdownMenu(
+                        expanded = trackTransportMenuExpanded,
+                        onDismissRequest = {
+                            trackTransportMenuExpanded = false
+                            launchQuantizeMenuExpanded = false
                         }
-                    )
-                }
-                if (!transport.playing) {
-                    Text(
-                        "Start global transport to launch this track",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Text(
-                        "Launch",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    TrackLaunchQuantization.entries.forEach { quantization ->
-                        val label = when (quantization) {
-                            TrackLaunchQuantization.Bar -> "Bar"
-                            TrackLaunchQuantization.Quarter -> "1/4"
-                            TrackLaunchQuantization.Eighth -> "1/8"
-                            TrackLaunchQuantization.Sixteenth -> "1/16"
-                        }
-                        FilterChip(
-                            selected = launchQuantization == quantization,
-                            onClick = { launchQuantizationOrdinal = quantization.ordinal },
-                            label = { Text(label) },
-                            modifier = Modifier.weight(1f).heightIn(min = 44.dp)
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Launch Quantize") },
+                            onClick = { launchQuantizeMenuExpanded = true }
                         )
+                    }
+                    DropdownMenu(
+                        expanded = launchQuantizeMenuExpanded,
+                        onDismissRequest = { launchQuantizeMenuExpanded = false }
+                    ) {
+                        TrackLaunchQuantization.entries.forEach { quantization ->
+                            val label = when (quantization) {
+                                TrackLaunchQuantization.Bar -> "Bar"
+                                TrackLaunchQuantization.Quarter -> "1/4"
+                                TrackLaunchQuantization.Eighth -> "1/8"
+                                TrackLaunchQuantization.Sixteenth -> "1/16"
+                            }
+                            DropdownMenuItem(
+                                text = { Text(label) },
+                                onClick = {
+                                    launchQuantizationOrdinal = quantization.ordinal
+                                    launchQuantizeMenuExpanded = false
+                                    trackTransportMenuExpanded = false
+                                }
+                            )
+                        }
+                    }
+                }
+                IconButton(
+                    onClick = { viewModel.setTrackTransportLooping(track.id, !track.looping) },
+                    modifier = Modifier.semantics {
+                        contentDescription = "Loop selected track"
+                        stateDescription = if (track.looping) "Active" else "Inactive"
+                    }
+                ) {
+                    Icon(
+                        Icons.Default.Repeat,
+                        contentDescription = null,
+                        tint = if (track.looping) Color(0xFF2E7D32)
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                when {
+                    track.wavLoaded -> {
+                        IconButton(onClick = { viewModel.unloadTrackWav(track.id) }) {
+                            Icon(Icons.Default.Close, contentDescription = "Unload audio from selected track")
+                        }
+                    }
+                    track.punchArmed || (track.inputArmed && track.looping) -> {
+                        Box {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .combinedClickable(
+                                        enabled = !track.recordPending && !track.recording,
+                                        onClick = {
+                                            if (!track.punchArmed) {
+                                                viewModel.startTrackLoopRecording(
+                                                    track.id,
+                                                    loopLengthBars,
+                                                    launchQuantization,
+                                                    startGlobal = !transport.playing
+                                                )
+                                            }
+                                        },
+                                        onLongClick = {
+                                            recordMenuExpanded = true
+                                            loopLengthMenuExpanded = false
+                                        }
+                                    )
+                                    .semantics {
+                                        contentDescription = "Record $loopLengthLabel loop"
+                                        stateDescription = when {
+                                            track.punchArmed -> "Enter on punch armed"
+                                            track.recording -> "Recording"
+                                            track.recordPending -> "Recording pending"
+                                            else -> "Ready"
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.FiberManualRecord,
+                                    contentDescription = null,
+                                    tint = when {
+                                        track.punchArmed -> PunchArmedColor
+                                        track.recordPending || track.recording ->
+                                            MaterialTheme.colorScheme.error
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    modifier = Modifier.alpha(recordIconAlpha)
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = recordMenuExpanded,
+                                onDismissRequest = {
+                                    recordMenuExpanded = false
+                                    loopLengthMenuExpanded = false
+                                }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("Loop length") },
+                                    onClick = { loopLengthMenuExpanded = true }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Enter on punch") },
+                                    enabled = !transport.playing,
+                                    leadingIcon = {
+                                        Checkbox(
+                                            checked = track.punchArmed,
+                                            onCheckedChange = null,
+                                            enabled = !transport.playing
+                                        )
+                                    },
+                                    onClick = {
+                                        viewModel.setEnterOnPunch(
+                                            track.id,
+                                            loopLengthBars,
+                                            launchQuantization,
+                                            armed = !track.punchArmed
+                                        )
+                                        recordMenuExpanded = false
+                                        loopLengthMenuExpanded = false
+                                    }
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = loopLengthMenuExpanded,
+                                onDismissRequest = { loopLengthMenuExpanded = false }
+                            ) {
+                                listOf(
+                                    0.25 to "1/4",
+                                    1.0 to "1 bar",
+                                    2.0 to "2 bars",
+                                    4.0 to "4 bars",
+                                    8.0 to "8 bars",
+                                    16.0 to "16 bars"
+                                ).forEach { (bars, label) ->
+                                    DropdownMenuItem(
+                                        text = { Text(label) },
+                                        onClick = {
+                                            loopLengthsByTrack = loopLengthsByTrack + (track.id to bars)
+                                            loopLengthMenuExpanded = false
+                                            recordMenuExpanded = false
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        IconButton(
+                            onClick = {
+                                pendingAudioTargetId = track.id
+                                audioFilePickerLauncher.launch(
+                                    arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a")
+                                )
+                            }
+                        ) {
+                            Icon(Icons.Default.Folder, contentDescription = "Load audio for selected track")
+                        }
                     }
                 }
             }
@@ -753,12 +1034,33 @@ fun RackScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             tracks.forEachIndexed { index, track ->
-                FilterChip(
-                    selected = false,
-                    onClick = { viewModel.selectPath(track.id) },
-                    label = { Text("Track ${index + 1}") },
-                    modifier = Modifier.heightIn(min = 44.dp)
-                )
+                var deleteMenuExpanded by remember(track.id) { mutableStateOf(false) }
+                Box {
+                    FilterChip(
+                        selected = false,
+                        onClick = { viewModel.selectPath(track.id) },
+                        label = { Text("Track ${index + 1}") },
+                        modifier = Modifier
+                            .heightIn(min = 44.dp)
+                            .combinedClickable(
+                                onClick = { viewModel.selectPath(track.id) },
+                                onLongClick = { deleteMenuExpanded = true }
+                            )
+                    )
+                    DropdownMenu(
+                        expanded = deleteMenuExpanded,
+                        onDismissRequest = { deleteMenuExpanded = false }
+                    ) {
+                        DropdownMenuItem(
+                            text = { Text("Delete track") },
+                            onClick = {
+                                deleteMenuExpanded = false
+                                pendingTrackLaunches.remove(track.id)
+                                viewModel.removeTrack(track.id)
+                            }
+                        )
+                    }
+                }
             }
             FilterChip(selected = true, onClick = {}, label = { Text("Master") }, modifier = Modifier.heightIn(min = 44.dp))
             IconButton(onClick = { viewModel.addTrack() }, modifier = Modifier.size(44.dp)) {

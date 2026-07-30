@@ -51,7 +51,6 @@ class DirectUsbCalibrationTest {
         )
         val bufferFrames = AudioSettingsManager.getBufferSize(context)
         val periodMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
-        val inputChannel = AudioSettingsManager.getDirectUsbInputChannel(context)
         val outputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
         val engine = NativeEngine.getInstance()
         EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
@@ -102,7 +101,6 @@ class DirectUsbCalibrationTest {
             Log.i(
                 TAG,
                 "CALIBRATION_RESULT buffer_frames=$bufferFrames " +
-                    "period_multiplier=$periodMultiplier input_channel=$inputChannel " +
                     "output_pair=$outputPair vid=${formatId(result.vendorId)} " +
                     "pid=${formatId(result.productId)} format=${formatToken(result.format)} " +
                     "selected_frames=${result.selectedFrames} " +

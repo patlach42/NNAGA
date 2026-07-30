@@ -40,7 +40,6 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_BITS = "directUsbBits"
     private const val KEY_DIRECT_USB_SUBSLOT = "directUsbSubslot"
     private const val KEY_DIRECT_USB_CHANNELS = "directUsbChannels"
-    private const val KEY_DIRECT_USB_INPUT_CHANNEL = "directUsbInputChannel"
     private const val KEY_DIRECT_USB_OUTPUT_PAIR = "directUsbOutputPair"
     private const val KEY_DIRECT_USB_PERIOD_MULTIPLIER = "directUsbPeriodMultiplier"
     private const val KEY_DIRECT_USB_WATERMARK_PREFIX = "directUsbWatermark:"
@@ -211,8 +210,8 @@ object AudioSettingsManager {
         listOf(
             KEY_USB_DEVICE_ID, KEY_USB_VENDOR_ID, KEY_USB_PRODUCT_ID, KEY_USB_DEVICE_NAME,
             KEY_USB_FORMATS, KEY_ENGINE_RUN_AT_START, KEY_DIRECT_USB_RATE, KEY_DIRECT_USB_BITS,
-            KEY_DIRECT_USB_SUBSLOT, KEY_DIRECT_USB_CHANNELS, KEY_DIRECT_USB_INPUT_CHANNEL,
-            KEY_DIRECT_USB_OUTPUT_PAIR, KEY_DIRECT_USB_PERIOD_MULTIPLIER
+            KEY_DIRECT_USB_SUBSLOT, KEY_DIRECT_USB_CHANNELS, KEY_DIRECT_USB_OUTPUT_PAIR,
+            KEY_DIRECT_USB_PERIOD_MULTIPLIER
         ).forEach(editor::remove)
         editor.apply()
     }
@@ -222,12 +221,6 @@ object AudioSettingsManager {
     fun getDirectUsbBits(context: Context): Int = prefs(context).getInt(KEY_DIRECT_USB_BITS, 32)
     fun getDirectUsbSubslot(context: Context): Int = prefs(context).getInt(KEY_DIRECT_USB_SUBSLOT, 4)
     fun getDirectUsbChannels(context: Context): Int = prefs(context).getInt(KEY_DIRECT_USB_CHANNELS, 2)
-    fun getDirectUsbInputChannel(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_INPUT_CHANNEL, 0)
-
-    fun setDirectUsbInputChannel(context: Context, channel: Int) {
-        prefs(context).edit().putInt(KEY_DIRECT_USB_INPUT_CHANNEL, channel).apply()
-    }
 
     fun getDirectUsbOutputPair(context: Context): Int =
         prefs(context).getInt(KEY_DIRECT_USB_OUTPUT_PAIR, 0)

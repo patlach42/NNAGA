@@ -221,6 +221,23 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+    fun setTrackInputChannel(trackId: RackPathId, inputChannel: Int) {
+        _tracks.value = _tracks.value.map { track ->
+            if (track.id == trackId) track.copy(inputChannel = inputChannel) else track
+        }
+        viewModelScope.launch {
+            rackControlMutex.withLock {
+                val ok = withContext(Dispatchers.IO) {
+                    RackManager.setTrackInputChannel(trackId, inputChannel)
+                }
+                if (!ok) {
+                    _errorMessage.value = "Failed to set track input channel"
+                    refreshRackNow()
+                }
+            }
+        }
+    }
+
 
     suspend fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = withBlockingOperation("Loading WAV") { withContext(Dispatchers.IO) { RackManager.loadTrackWav(trackId, path, displayName) } }.also { if (!it) _errorMessage.value = "Failed to load WAV"; refreshRack() }
     fun loadTrackWavAsync(trackId: RackPathId, path: String, displayName: String) { viewModelScope.launch { loadTrackWav(trackId, path, displayName) } }
@@ -239,9 +256,58 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             refreshTrackTransport()
         }
     }
+    fun launchTrackTransport(
+        trackId: RackPathId,
+        quantization: TrackLaunchQuantization,
+        startGlobal: Boolean
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (startGlobal) RackManager.setTransportPlaying(true)
+            RackManager.setTrackTransportPlaying(trackId, true, quantization)
+            refreshTransport()
+            refreshTrackTransport()
+        }
+    }
     fun setTrackTransportLooping(trackId: RackPathId, looping: Boolean) {
         viewModelScope.launch(Dispatchers.IO) {
             RackManager.setTrackTransportLooping(trackId, looping)
+            refreshTrackTransport()
+        }
+    }
+    fun startTrackLoopRecording(
+        trackId: RackPathId,
+        bars: Double,
+        quantization: TrackLaunchQuantization,
+        startGlobal: Boolean
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (startGlobal) RackManager.setTransportPlaying(true)
+            val ok = RackManager.startTrackLoopRecording(trackId, bars, quantization, false)
+            if (!ok) _errorMessage.value = "Failed to start loop recording"
+            refreshTransport()
+            refreshTrackTransport()
+        }
+    }
+    fun setEnterOnPunch(
+        trackId: RackPathId,
+        bars: Double,
+        quantization: TrackLaunchQuantization,
+        armed: Boolean
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = if (armed) {
+                RackManager.startTrackLoopRecording(trackId, bars, quantization, true)
+            } else {
+                RackManager.cancelTrackLoopRecording(trackId)
+            }
+            if (!ok) {
+                _errorMessage.value = if (armed) {
+                    "Failed to arm enter on punch"
+                } else {
+                    "Failed to cancel enter on punch"
+                }
+            }
+            refreshTransport()
             refreshTrackTransport()
         }
     }

@@ -81,7 +81,7 @@ public:
      */
     bool startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                int32_t subslotBytes, int32_t channels,
-                               int32_t inputChannel, int32_t outputPair,
+                               int32_t outputPair,
                                int32_t bufferFrames, int32_t periodMultiplier,
                                int32_t watermarkFrames);
 
@@ -216,6 +216,8 @@ private:
     int32_t directUsbSubslotBytes_ = 0;
     int32_t directUsbChannels_ = 0;
     std::vector<float> directUsbInputBuffer_;
+    std::vector<float*> directUsbInputPlanes_;
+    int32_t directUsbInputChannelCount_ = 0;
     std::vector<float> directUsbOutputLeft_;
     std::atomic<uint64_t> directUsbCaptureWaitTimeouts_{0};
     std::vector<float> directUsbStartupLeft_;
@@ -263,8 +265,8 @@ private:
 
 
     DirectUsbOutput* directUsbOutput_ = nullptr; // non-owning, NativeContext-owned
-    void processRackBlock(const float* const* liveInputs, float* const* outputs,
-                          uint32_t numFrames) noexcept;
+    void processRackBlock(const float* const* liveInputs, int32_t inputChannelCount,
+                          float* const* outputs, uint32_t numFrames) noexcept;
     void cleanupEngineState();
 };
 

@@ -37,6 +37,8 @@ object RackManager {
     fun getTracks(): Array<RackTrackInfo> = native.getTracks()
     fun setTrackVolume(trackId: RackPathId, volume: Float): Boolean = native.setTrackVolume(trackId, volume)
     fun setTrackInputArmed(trackId: RackPathId, armed: Boolean): Boolean = native.setTrackInputArmed(trackId, armed)
+    fun setTrackInputChannel(trackId: RackPathId, inputChannel: Int): Boolean =
+        native.setTrackInputChannel(trackId, inputChannel)
     fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = native.loadTrackWav(trackId, path, displayName)
     fun unloadTrackWav(trackId: RackPathId): Boolean = native.unloadTrackWav(trackId)
     fun clearTrackWavs(): Boolean = native.clearTrackWavs()
@@ -47,6 +49,14 @@ object RackManager {
     ): Boolean = native.setTrackTransportPlaying(trackId, playing, quantization)
     fun setTrackTransportLooping(trackId: RackPathId, looping: Boolean): Boolean =
         native.setTrackTransportLooping(trackId, looping)
+    fun startTrackLoopRecording(
+        trackId: RackPathId,
+        bars: Double,
+        quantization: TrackLaunchQuantization,
+        enterOnPunch: Boolean
+    ): Boolean = native.startTrackLoopRecording(trackId, bars, quantization, enterOnPunch)
+    fun cancelTrackLoopRecording(trackId: RackPathId): Boolean =
+        native.cancelTrackLoopRecording(trackId)
     fun setTransportBpm(bpm: Double): Boolean = native.setTransportBpm(bpm)
     fun setTransportPlaying(playing: Boolean): Boolean = native.setTransportPlaying(playing)
     fun restartTransport(): Boolean = native.restartTransport()
