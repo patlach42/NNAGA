@@ -46,7 +46,11 @@ void copyInputChannels(const float* const* inputs, float* const* outputs,
             continue;
         }
         if (inputs && inputs[channel]) {
-            std::memcpy(outputs[channel], inputs[channel], numFrames * sizeof(float));
+            if (outputs[channel] != inputs[channel]) {
+                std::memcpy(
+                    outputs[channel], inputs[channel],
+                    numFrames * sizeof(float));
+            }
         } else {
             std::memset(outputs[channel], 0, numFrames * sizeof(float));
         }
@@ -120,6 +124,9 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
             index = position;
         }
 
+        pluginCount_.store(
+            static_cast<uint32_t>(plugins_.size()),
+            std::memory_order_release);
         LOGI("addPlugin: index=%d sampleRate=%.0f", index, sampleRate_);
         return index;
     }
@@ -136,6 +143,9 @@ bool PluginChain::removePlugin(int index) {
 
         removedPlugin = std::move(plugins_[index].plugin);
         plugins_.erase(plugins_.begin() + index);
+        pluginCount_.store(
+            static_cast<uint32_t>(plugins_.size()),
+            std::memory_order_release);
     }
 
     // Wine VST teardown can block while the helper process exits. Detach first
@@ -236,8 +246,14 @@ void PluginChain::process(const float* const* inputs, float* const* outputs, uin
 
     if (plugins_.empty()) {
         if (inputs && inputs[0] && inputs[1]) {
-            std::memcpy(outputs[0], inputs[0], numFrames * sizeof(float));
-            std::memcpy(outputs[1], inputs[1], numFrames * sizeof(float));
+            if (outputs[0] != inputs[0]) {
+                std::memcpy(
+                    outputs[0], inputs[0], numFrames * sizeof(float));
+            }
+            if (outputs[1] != inputs[1]) {
+                std::memcpy(
+                    outputs[1], inputs[1], numFrames * sizeof(float));
+            }
         } else {
             clearOutputs(outputs, numFrames);
         }

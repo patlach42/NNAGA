@@ -1,7 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "libusb_uac_driver.h"
+#define private public
 #include "engine/DirectUsbOutput.h"
+#undef private
 
 #include <algorithm>
 #include <atomic>
@@ -28,6 +30,60 @@ namespace monotrypt::usb {
 // friend keeps callback/ring assertions on the actual implementation without
 // duplicating its state machine in a test model.
 struct UsbDriverTestAccess {
+    struct PlaybackRegionView {
+        uint8_t* first = nullptr;
+        size_t firstBytes = 0;
+        uint8_t* second = nullptr;
+        size_t secondBytes = 0;
+        size_t producerCursor = 0;
+        int frames = 0;
+        int frameStride = 0;
+    };
+    struct CaptureRegionView {
+        const uint8_t* first = nullptr;
+        size_t firstBytes = 0;
+        const uint8_t* second = nullptr;
+        size_t secondBytes = 0;
+        size_t consumerCursor = 0;
+        int frames = 0;
+        int frameStride = 0;
+    };
+    static PlaybackRegionView preparePlaybackWrite(
+            LibusbUacDriver& d, int requestedFrames) {
+        const auto r = d.preparePlaybackWrite(requestedFrames);
+        return {r.first, r.firstBytes, r.second, r.secondBytes,
+                r.producerCursor, r.frames, r.frameStride};
+    }
+    static void commitPlaybackWrite(
+            LibusbUacDriver& d, const PlaybackRegionView& r) {
+        LibusbUacDriver::PlaybackWriteRegion privateRegion;
+        privateRegion.first = r.first;
+        privateRegion.firstBytes = r.firstBytes;
+        privateRegion.second = r.second;
+        privateRegion.secondBytes = r.secondBytes;
+        privateRegion.producerCursor = r.producerCursor;
+        privateRegion.frames = r.frames;
+        privateRegion.frameStride = r.frameStride;
+        d.commitPlaybackWrite(privateRegion);
+    }
+    static CaptureRegionView prepareCaptureRead(
+            LibusbUacDriver& d, int requestedFrames) {
+        const auto r = d.prepareCaptureRead(requestedFrames);
+        return {r.first, r.firstBytes, r.second, r.secondBytes,
+                r.consumerCursor, r.frames, r.frameStride};
+    }
+    static void commitCaptureRead(
+            LibusbUacDriver& d, const CaptureRegionView& r) {
+        LibusbUacDriver::CaptureReadRegion privateRegion;
+        privateRegion.first = r.first;
+        privateRegion.firstBytes = r.firstBytes;
+        privateRegion.second = r.second;
+        privateRegion.secondBytes = r.secondBytes;
+        privateRegion.consumerCursor = r.consumerCursor;
+        privateRegion.frames = r.frames;
+        privateRegion.frameStride = r.frameStride;
+        d.commitCaptureRead(privateRegion);
+    }
     static void playbackFormat(LibusbUacDriver& d, int channels, int bytes) {
         d.format_.channels = channels;
         d.format_.bytesPerSample = bytes;
@@ -37,6 +93,9 @@ struct UsbDriverTestAccess {
         d.captureFormat_.channels = channels;
         d.captureFormat_.bytesPerSample = bytes;
         d.captureFormat_.implicitFeedback = implicit;
+    }
+    static void captureBits(LibusbUacDriver& d, int bits) {
+        d.captureFormat_.bitsPerSample = bits;
     }
     static void captureActive(LibusbUacDriver& d, bool active) {
         d.captureActive_.store(active, std::memory_order_release);
@@ -97,6 +156,10 @@ struct UsbDriverTestAccess {
     static void submitPending(LibusbUacDriver& d) { d.submitPendingImplicitTransfers(); }
     static void setRingBytes(LibusbUacDriver& d, const std::vector<uint8_t>& bytes) {
         d.ring_ = bytes;
+    }
+    static void setCaptureRingBytes(
+            LibusbUacDriver& d, const std::vector<uint8_t>& bytes) {
+        d.captureRing_ = bytes;
     }
     static bool stopRequested(const LibusbUacDriver& d) {
         return d.stopRequested_.load(std::memory_order_acquire);
@@ -758,4 +821,209 @@ TEST(UsbDriverLifecycle, QueuedOutFramesTracksCompletionAndStop) {
 
     driver.stop();
     EXPECT_EQ(driver.queuedOutFrames(), uint64_t{0});
+}
+
+TEST(UsbDriverRing, PrepareCommitPlaybackPublishesWholeWrappedFrames) {
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
+    driver.setGraphQuantum(8);
+
+    constexpr size_t capacity = monotrypt::usb::kPlaybackRingBytes;
+    constexpr size_t frameStride = 4;
+    monotrypt::usb::UsbDriverTestAccess::playbackCursors(
+        driver, capacity - 2, capacity - 2);
+    const auto region =
+        monotrypt::usb::UsbDriverTestAccess::preparePlaybackWrite(driver, 2);
+
+    ASSERT_EQ(region.frames, 2);
+    ASSERT_EQ(region.frameStride, static_cast<int>(frameStride));
+    ASSERT_EQ(region.firstBytes, 2u);
+    ASSERT_EQ(region.secondBytes, 6u);
+    EXPECT_EQ(driver.bufferedFrames(), 0);
+    EXPECT_EQ(driver.writtenFrames(), 0);
+
+    const std::vector<uint8_t> input{1, 2, 3, 4, 5, 6, 7, 8};
+    std::memcpy(region.first, input.data(), region.firstBytes);
+    std::memcpy(region.second, input.data() + region.firstBytes,
+                region.secondBytes);
+    EXPECT_EQ(driver.bufferedFrames(), 0);
+
+    monotrypt::usb::UsbDriverTestAccess::commitPlaybackWrite(driver, region);
+    EXPECT_EQ(driver.bufferedFrames(), 2);
+    EXPECT_EQ(driver.writtenFrames(), 2);
+
+    monotrypt::usb::UsbDriverTestAccess::playbackStarted(driver, true);
+    std::vector<uint8_t> output(input.size(), 0);
+    ASSERT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                  driver, output.data(), static_cast<int>(output.size())),
+              static_cast<int>(output.size()));
+    EXPECT_EQ(output, input);
+    EXPECT_EQ(driver.bufferedFrames(), 0);
+}
+
+TEST(UsbDriverRing, PrepareCommitPlaybackReportsWholeFramePartialAdmission) {
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::playbackFormat(driver, 2, 2);
+    driver.setGraphQuantum(2);
+
+    const auto region =
+        monotrypt::usb::UsbDriverTestAccess::preparePlaybackWrite(driver, 1000);
+    ASSERT_GT(region.frames, 0);
+    ASSERT_LT(region.frames, 1000);
+    EXPECT_EQ(region.firstBytes + region.secondBytes,
+              static_cast<size_t>(region.frames * region.frameStride));
+    EXPECT_EQ(driver.bufferedFrames(), 0);
+
+    monotrypt::usb::UsbDriverTestAccess::commitPlaybackWrite(driver, region);
+    EXPECT_EQ(driver.bufferedFrames(), region.frames);
+    const auto full =
+        monotrypt::usb::UsbDriverTestAccess::preparePlaybackWrite(driver, 1);
+    EXPECT_EQ(full.frames, 0);
+    EXPECT_EQ(driver.bufferedFrames(), region.frames);
+}
+
+TEST(UsbDriverCapture, PrepareCommitCaptureKeepsWrappedFramesPrivate) {
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::captureFormat(driver, 2, 2);
+    constexpr size_t capacity = monotrypt::usb::kPlaybackRingBytes;
+    monotrypt::usb::UsbDriverTestAccess::captureActive(driver, true);
+
+    monotrypt::usb::UsbDriverTestAccess::captureCursors(
+        driver, capacity - 2, capacity - 2);
+    std::vector<uint8_t> ring(capacity, 0);
+    const std::vector<uint8_t> input{0x11, 0x22, 0x33, 0x44,
+                                     0x55, 0x66, 0x77, 0x88};
+    std::memcpy(ring.data() + capacity - 2, input.data(), 2);
+    std::memcpy(ring.data(), input.data() + 2, input.size() - 2);
+    monotrypt::usb::UsbDriverTestAccess::setCaptureRingBytes(driver, ring);
+    monotrypt::usb::UsbDriverTestAccess::captureCursors(
+        driver, capacity - 2 + input.size(), capacity - 2);
+
+    const auto region =
+        monotrypt::usb::UsbDriverTestAccess::prepareCaptureRead(driver, 2);
+    ASSERT_EQ(region.frames, 2);
+    ASSERT_EQ(region.frameStride, 4);
+    ASSERT_EQ(region.firstBytes, 2u);
+    ASSERT_EQ(region.secondBytes, 6u);
+    EXPECT_EQ(driver.captureAvailableFrames(), 2);
+
+    std::vector<uint8_t> output(input.size(), 0);
+    std::memcpy(output.data(), region.first, region.firstBytes);
+    std::memcpy(output.data() + region.firstBytes, region.second,
+                region.secondBytes);
+    EXPECT_EQ(output, input);
+    EXPECT_EQ(driver.captureAvailableFrames(), 2);
+
+    monotrypt::usb::UsbDriverTestAccess::commitCaptureRead(driver, region);
+    EXPECT_EQ(driver.captureAvailableFrames(), 0);
+}
+
+struct DirectPcmCase {
+    int bits;
+    int bytes;
+    int channels;
+    int outputPair;
+    std::vector<uint8_t> expected;
+};
+
+TEST(DirectUsbOutput, WriteStereoPacksExactWrappedLeftJustifiedSamples) {
+    const std::vector<DirectPcmCase> cases{
+        {16, 2, 2, 0, {0x00, 0x80, 0xff, 0x7f,
+                       0xff, 0x7f, 0x00, 0x80}},
+        {24, 4, 4, 1, {
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x80, 0x00, 0xff, 0xff, 0x7f,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0xff, 0xff, 0x7f, 0x00, 0x00, 0x00, 0x80}},
+        {32, 4, 2, 0, {0x00, 0x00, 0x00, 0x80,
+                       0xff, 0xff, 0xff, 0x7f,
+                       0xff, 0xff, 0xff, 0x7f,
+                       0x00, 0x00, 0x00, 0x80}},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.bits);
+        guitarrackcraft::DirectUsbOutput output;
+        auto& driver = output.driver_;
+        monotrypt::usb::UsbDriverTestAccess::playbackFormat(
+            driver, test.channels, test.bytes);
+        driver.setGraphQuantum(4);
+        output.formatBits_ = test.bits;
+        output.formatBytes_ = test.bytes;
+        output.deviceChannels_ = test.channels;
+        output.outputPair_ = test.outputPair;
+        output.accepting_.store(true, std::memory_order_release);
+
+        const int stride = test.channels * test.bytes;
+        const size_t head =
+            monotrypt::usb::kPlaybackRingBytes - stride / 2;
+        monotrypt::usb::UsbDriverTestAccess::playbackCursors(
+            driver, head, head);
+        const float left[] = {-1.0f, 1.0f};
+        const float right[] = {1.0f, -1.0f};
+        ASSERT_EQ(output.writeStereo(left, right, 2), 2);
+        EXPECT_EQ(driver.bufferedFrames(), 2);
+
+        monotrypt::usb::UsbDriverTestAccess::playbackStarted(driver, true);
+        std::vector<uint8_t> actual(test.expected.size(), 0xcd);
+        ASSERT_EQ(monotrypt::usb::UsbDriverTestAccess::drain(
+                      driver, actual.data(), static_cast<int>(actual.size())),
+                  static_cast<int>(actual.size()));
+        EXPECT_EQ(actual, test.expected);
+    }
+}
+
+TEST(DirectUsbOutput, ReadMonoInputSignExtendsSelectedChannelAcrossWrap) {
+    struct CaptureCase {
+        int bits;
+        int bytes;
+        int32_t minimum;
+        int32_t maximum;
+        float maximumExpected;
+    };
+    const std::vector<CaptureCase> cases{
+        {16, 2, -32768, 32767, 32767.0f / 32768.0f},
+        {24, 4, -8388608, 8388607, 8388607.0f / 8388608.0f},
+        {32, 4, std::numeric_limits<int32_t>::min(),
+         std::numeric_limits<int32_t>::max(), 1.0f},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.bits);
+        guitarrackcraft::DirectUsbOutput output;
+        auto& driver = output.driver_;
+        monotrypt::usb::UsbDriverTestAccess::captureFormat(
+            driver, 2, test.bytes);
+        monotrypt::usb::UsbDriverTestAccess::captureBits(driver, test.bits);
+        driver.setGraphQuantum(4);
+        monotrypt::usb::UsbDriverTestAccess::captureActive(driver, true);
+        output.inputChannel_ = 1;
+
+        const int stride = 2 * test.bytes;
+        const size_t tail =
+            monotrypt::usb::kPlaybackRingBytes - stride / 2;
+        std::vector<uint8_t> ring(monotrypt::usb::kPlaybackRingBytes, 0xa5);
+        auto writeSample = [&](size_t frame, int32_t sample) {
+            const int validBytes = (test.bits + 7) / 8;
+            const uint32_t packed = static_cast<uint32_t>(sample) <<
+                (8 * (test.bytes - validBytes));
+            const size_t base = (tail + frame * stride + test.bytes) %
+                                ring.size();
+            for (int byte = 0; byte < test.bytes; ++byte) {
+                ring[(base + byte) % ring.size()] =
+                    static_cast<uint8_t>(packed >> (8 * byte));
+            }
+        };
+        writeSample(0, test.minimum);
+        writeSample(1, test.maximum);
+        monotrypt::usb::UsbDriverTestAccess::setCaptureRingBytes(driver, ring);
+        monotrypt::usb::UsbDriverTestAccess::captureCursors(
+            driver, tail + 2 * stride, tail);
+
+        float outputSamples[2] = {};
+        ASSERT_EQ(output.readMonoInput(outputSamples, 2), 2);
+        EXPECT_FLOAT_EQ(outputSamples[0], -1.0f);
+        EXPECT_NEAR(outputSamples[1], test.maximumExpected, 1.0e-6f);
+        EXPECT_EQ(driver.captureAvailableFrames(), 0);
+    }
 }

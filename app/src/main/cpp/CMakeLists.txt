@@ -192,15 +192,19 @@ target_link_libraries(audio_engine
     direct_usb_output
 )
 
-# Audio runs in production even from developer APKs. Keep the RT/native path
-# optimized while retaining debug symbols and unoptimized UI/JNI code.
-foreach(rt_target
+# Third-party/general targets keep conservative optimization. Host realtime
+# targets use -O3; ThinLTO and optional PGO are configured independently below.
+foreach(general_target
         libusb_static
+        lv2_backend)
+    target_compile_options(${general_target} PRIVATE -O2)
+endforeach()
+
+foreach(rt_target
         direct_usb_output
         plugin_abstraction
-        lv2_backend
         audio_engine)
-    target_compile_options(${rt_target} PRIVATE -O2)
+    target_compile_options(${rt_target} PRIVATE -O3)
 endforeach()
 
 option(GRC_ENABLE_AUDIO_THINLTO

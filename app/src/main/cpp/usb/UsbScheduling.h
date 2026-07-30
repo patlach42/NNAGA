@@ -133,18 +133,24 @@ constexpr int startupPlaybackPrimeFrames(
 class RationalPacketScheduler {
 public:
     void reset(uint32_t rate, uint32_t packetsPerSecond) {
-        rate_ = rate;
         period_ = packetsPerSecond ? packetsPerSecond : 1;
+        whole_ = rate / period_;
+        fraction_ = rate % period_;
         remainder_ = 0;
     }
-    uint32_t next() {
-        const uint64_t total = static_cast<uint64_t>(remainder_) + rate_;
-        const uint32_t frames = static_cast<uint32_t>(total / period_);
-        remainder_ = static_cast<uint32_t>(total % period_);
+    uint32_t next() noexcept {
+        uint32_t frames = whole_;
+        if (remainder_ >= period_ - fraction_) {
+            remainder_ = remainder_ - (period_ - fraction_);
+            ++frames;
+        } else {
+            remainder_ += fraction_;
+        }
         return frames;
     }
 private:
-    uint32_t rate_ = 0;
+    uint32_t whole_ = 0;
+    uint32_t fraction_ = 0;
     uint32_t period_ = 1;
     uint32_t remainder_ = 0;
 };

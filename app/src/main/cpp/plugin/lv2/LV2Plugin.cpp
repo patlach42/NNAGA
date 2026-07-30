@@ -372,32 +372,37 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
                                     : kAtomBufferSize - sizeof(LV2_Atom);
     }
     // UI atom mailbox: bounded copy, dropped when full or malformed.
-    AtomMessage atomMsg{};
-    while (pendingAtoms_.pop(atomMsg)) {
-        if (atomMsg.size < sizeof(LV2_Atom) || atomMsg.size > kUiPayloadSize) continue;
+    while (pendingAtoms_.consume([&](const AtomMessage& atomMsg) {
+        if (atomMsg.size < sizeof(LV2_Atom) ||
+            atomMsg.size > kUiPayloadSize) return;
         auto* src = reinterpret_cast<const LV2_Atom*>(atomMsg.data);
         const uint32_t payload = atomMsg.size - sizeof(LV2_Atom);
-        if (src->size > payload) continue;
-        const uint64_t eventBytes = sizeof(LV2_Atom_Event) + static_cast<uint64_t>(src->size);
+        if (src->size > payload) return;
+        const uint64_t eventBytes =
+            sizeof(LV2_Atom_Event) + static_cast<uint64_t>(src->size);
         const uint64_t padded = (eventBytes + 7u) & ~uint64_t(7u);
         for (auto& ap : atomPorts_) {
             if (!ap.isInput) continue;
-            auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(atomPortBuffers_[ap.bufferIdx].data());
+            auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(
+                atomPortBuffers_[ap.bufferIdx].data());
             if (seq->atom.size > kAtomBufferSize - sizeof(LV2_Atom) ||
                 static_cast<uint64_t>(seq->atom.size) + padded >
-                    kAtomBufferSize - sizeof(LV2_Atom_Sequence_Body)) break;
+                    kAtomBufferSize - sizeof(LV2_Atom_Sequence_Body)) {
+                break;
+            }
             auto* evt = reinterpret_cast<LV2_Atom_Event*>(
                 reinterpret_cast<uint8_t*>(&seq->body) + seq->atom.size);
-            evt->time.frames = 0; evt->body = *src;
-            std::memcpy(reinterpret_cast<uint8_t*>(evt) + sizeof(LV2_Atom_Event),
-                        atomMsg.data + sizeof(LV2_Atom), src->size);
+            evt->time.frames = 0;
+            evt->body = *src;
+            std::memcpy(
+                reinterpret_cast<uint8_t*>(evt) + sizeof(LV2_Atom_Event),
+                atomMsg.data + sizeof(LV2_Atom), src->size);
             seq->atom.size += padded;
             break;
         }
-    }
+    })) {}
     // File path mailbox is fixed-size and pre-mapped on the control side.
-    FilePathMessage fileMsg{};
-    if (pendingFilePaths_.pop(fileMsg)) {
+    pendingFilePaths_.consume([&](const FilePathMessage& fileMsg) {
         for (auto& ap : atomPorts_) {
             if (!ap.isInput) continue;
             auto* buf = atomPortBuffers_[ap.bufferIdx].data();
@@ -410,10 +415,11 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
             lv2_atom_forge_urid(&forge_, fileMsg.propertyUrid);
             lv2_atom_forge_key(&forge_, patch_value_);
             lv2_atom_forge_path(&forge_, fileMsg.path, fileMsg.pathSize);
-            lv2_atom_forge_pop(&forge_, &of); lv2_atom_forge_pop(&forge_, &sf);
+            lv2_atom_forge_pop(&forge_, &of);
+            lv2_atom_forge_pop(&forge_, &sf);
             break;
         }
-    }
+    });
     for (auto& ap : atomPorts_) {
         if (!ap.isInput) continue;
         auto* buf = atomPortBuffers_[ap.bufferIdx].data();
@@ -431,17 +437,17 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
         LV2_Atom_Forge_Frame of;
         lv2_atom_forge_frame_time(&forge_, 0);
         lv2_atom_forge_object(&forge_, &of, 0, time_Position_);
-        const double bpm = std::isfinite(context.beatsPerMinute) ?
-            std::max(20.0, std::min(400.0, context.beatsPerMinute)) : 120.0;
-        const double rate = context.sampleRate > 0.0 ? context.sampleRate : sampleRate_;
-        const double beat = static_cast<double>(context.transportFrame) / rate * bpm / 60.0;
-        const int64_t bar = static_cast<int64_t>(std::floor(beat / 4.0));
-        const double barBeat = std::fmod(beat, 4.0);
-        lv2_atom_forge_key(&forge_, time_frame_); lv2_atom_forge_long(&forge_, static_cast<int64_t>(context.transportFrame));
-        lv2_atom_forge_key(&forge_, time_speed_); lv2_atom_forge_double(&forge_, context.playing ? 1.0 : 0.0);
-        lv2_atom_forge_key(&forge_, time_beatsPerMinute_); lv2_atom_forge_double(&forge_, bpm);
-        lv2_atom_forge_key(&forge_, time_bar_); lv2_atom_forge_long(&forge_, bar);
-        lv2_atom_forge_key(&forge_, time_barBeat_); lv2_atom_forge_double(&forge_, barBeat);
+        lv2_atom_forge_key(&forge_, time_frame_);
+        lv2_atom_forge_long(
+            &forge_, static_cast<int64_t>(context.transportFrame));
+        lv2_atom_forge_key(&forge_, time_speed_);
+        lv2_atom_forge_double(&forge_, context.playing ? 1.0 : 0.0);
+        lv2_atom_forge_key(&forge_, time_beatsPerMinute_);
+        lv2_atom_forge_double(&forge_, context.beatsPerMinute);
+        lv2_atom_forge_key(&forge_, time_bar_);
+        lv2_atom_forge_long(&forge_, context.bar);
+        lv2_atom_forge_key(&forge_, time_barBeat_);
+        lv2_atom_forge_double(&forge_, context.barBeat);
         lv2_atom_forge_pop(&forge_, &of);
         if (forge_.offset > remaining) {
             seq->atom.size = oldSize;
@@ -454,11 +460,11 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
     if (!instance_) { passthrough(); processing_.store(false, std::memory_order_seq_cst); return; }
     lilv_instance_run(instance_, static_cast<uint32_t>(maxCopy));
     if (workerInterface_ && workerInterface_->work_response) {
-        WorkerMessage response{};
         LV2_Handle handle = lilv_instance_get_handle(instance_);
-        while (workResponses_.pop(response)) {
-            workerInterface_->work_response(handle, response.size, response.data);
-        }
+        while (workResponses_.consume([&](const WorkerMessage& response) {
+            workerInterface_->work_response(
+                handle, response.size, response.data);
+        })) {}
     }
     if (workerInterface_ && workerInterface_->end_run)
         workerInterface_->end_run(lilv_instance_get_handle(instance_));
@@ -469,16 +475,24 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
         if (seq->atom.size <= sizeof(LV2_Atom_Sequence_Body) ||
             seq->atom.size > kAtomBufferSize - sizeof(LV2_Atom)) continue;
         LV2_ATOM_SEQUENCE_FOREACH(seq, ev) {
-            const uint64_t size64 = sizeof(LV2_Atom) + static_cast<uint64_t>(ev->body.size);
+            const uint64_t size64 =
+                sizeof(LV2_Atom) + static_cast<uint64_t>(ev->body.size);
             if (size64 > kUiPayloadSize) continue;
-            const uint8_t* body = reinterpret_cast<const uint8_t*>(&ev->body);
-            const uint8_t* bufEnd = atomPortBuffers_[ap.bufferIdx].data() + kAtomBufferSize;
-            if (body > bufEnd || size64 > static_cast<uint64_t>(bufEnd - body)) break;
+            const uint8_t* body =
+                reinterpret_cast<const uint8_t*>(&ev->body);
+            const uint8_t* bufEnd =
+                atomPortBuffers_[ap.bufferIdx].data() + kAtomBufferSize;
+            if (body > bufEnd ||
+                size64 > static_cast<uint64_t>(bufEnd - body)) break;
             const uint32_t size = static_cast<uint32_t>(size64);
-            const uint8_t* end = body + size;
-            OutputMessage out{}; out.portIndex = ap.portIndex; out.size = size;
-            std::memcpy(out.data, &ev->body, size);
-            if (!pendingOutputAtoms_.push(out)) outputAtomDrops_.fetch_add(1, std::memory_order_relaxed);
+            if (!pendingOutputAtoms_.tryEmplace(
+                    [&](OutputMessage& out) {
+                        out.portIndex = ap.portIndex;
+                        out.size = size;
+                        std::memcpy(out.data, &ev->body, size);
+                    })) {
+                outputAtomDrops_.fetch_add(1, std::memory_order_relaxed);
+            }
         }
     }
     for (size_t i = 0; i < audioOutputPorts_.size() && i < 2; ++i) {
@@ -652,33 +666,45 @@ uint32_t LV2Plugin::getNumOutputPorts() const {
     return static_cast<uint32_t>(audioOutputPorts_.size());
 }
 
-void LV2Plugin::setFilePath(const std::string& propertyUri, const std::string& path) {
-    FilePathMessage msg{};
-    msg.propertyUrid = getGlobalUridMap().map(propertyUri.c_str());
-    msg.propertySize = static_cast<uint32_t>(std::min(propertyUri.size(), sizeof(msg.property) - 1));
-    msg.pathSize = static_cast<uint32_t>(std::min(path.size() + 1, sizeof(msg.path)));
-    std::memcpy(msg.property, propertyUri.data(), msg.propertySize);
-    msg.property[msg.propertySize] = '\0';
-    std::memcpy(msg.path, path.data(), msg.pathSize ? msg.pathSize - 1 : 0);
-    msg.path[msg.pathSize ? msg.pathSize - 1 : 0] = '\0';
-    if (!pendingFilePaths_.push(msg)) filePathDrops_.fetch_add(1, std::memory_order_relaxed);
+void LV2Plugin::setFilePath(
+        const std::string& propertyUri, const std::string& path) {
+    const LV2_URID propertyUrid =
+        getGlobalUridMap().map(propertyUri.c_str());
+    const uint32_t propertySize = static_cast<uint32_t>(
+        std::min(propertyUri.size(), sizeof(FilePathMessage::property) - 1));
+    const uint32_t pathSize = static_cast<uint32_t>(
+        std::min(path.size() + 1, sizeof(FilePathMessage::path)));
+    if (!pendingFilePaths_.tryEmplace([&](FilePathMessage& msg) {
+            msg.propertyUrid = propertyUrid;
+            msg.propertySize = propertySize;
+            msg.pathSize = pathSize;
+            std::memcpy(msg.property, propertyUri.data(), propertySize);
+            msg.property[propertySize] = '\0';
+            std::memcpy(msg.path, path.data(), pathSize ? pathSize - 1 : 0);
+            msg.path[pathSize ? pathSize - 1 : 0] = '\0';
+        })) {
+        filePathDrops_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void LV2Plugin::injectAtom(const void* data, uint32_t size) {
     if (!data || size == 0 || size > kUiPayloadSize) return;
-    AtomMessage msg{}; msg.size = size;
-    std::memcpy(msg.data, data, size);
-    if (!pendingAtoms_.push(msg)) pendingAtomDrops_.fetch_add(1, std::memory_order_relaxed);
+    if (!pendingAtoms_.tryEmplace([&](AtomMessage& msg) {
+            msg.size = size;
+            std::memcpy(msg.data, data, size);
+        })) {
+        pendingAtomDrops_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 std::vector<OutputAtomEvent> LV2Plugin::drainOutputAtoms() {
     std::vector<OutputAtomEvent> result;
-    OutputMessage msg{};
-    while (pendingOutputAtoms_.pop(msg)) {
+    while (pendingOutputAtoms_.consume([&](const OutputMessage& msg) {
         std::vector<uint8_t> data(msg.size);
         std::memcpy(data.data(), msg.data, msg.size);
-        result.push_back(OutputAtomEvent{msg.portIndex, std::move(data)});
-    }
+        result.push_back(OutputAtomEvent{
+            msg.portIndex, std::move(data)});
+    })) {}
     return result;
 }
 
@@ -989,19 +1015,27 @@ void LV2Plugin::stopWorker() {
 }
 
 void LV2Plugin::workerThreadFunc() {
+    auto processOne = [this]() {
+        return workRequests_.consume([this](const WorkerMessage& msg) {
+            if (msg.size > 0 && workerInterface_ && instance_) {
+                workerInterface_->work(
+                    lilv_instance_get_handle(instance_), respondCallback,
+                    this, msg.size, msg.data);
+            }
+        });
+    };
     while (true) {
-        WorkerMessage msg{};
-        if (!workRequests_.pop(msg)) {
+        if (!processOne()) {
             std::unique_lock<std::mutex> lock(workerMutex_);
             workerCond_.wait(lock, [this] {
-                return workerWake_.exchange(false, std::memory_order_acq_rel) ||
+                return workerWake_.exchange(
+                           false, std::memory_order_acq_rel) ||
                        !workerRunning_.load(std::memory_order_acquire);
             });
-            if (!workerRunning_.load(std::memory_order_acquire) && !workRequests_.pop(msg)) break;
-        }
-        if (msg.size > 0 && workerInterface_ && instance_) {
-            workerInterface_->work(lilv_instance_get_handle(instance_), respondCallback,
-                                   this, msg.size, msg.data);
+            if (!workerRunning_.load(std::memory_order_acquire) &&
+                !processOne()) {
+                break;
+            }
         }
     }
 }
@@ -1009,10 +1043,12 @@ void LV2Plugin::workerThreadFunc() {
 LV2_Worker_Status LV2Plugin::scheduleWorkCallback(
     LV2_Worker_Schedule_Handle handle, uint32_t size, const void* data) {
     auto* self = static_cast<LV2Plugin*>(handle);
-    if (size > kWorkerPayloadSize || (!data && size != 0)) return LV2_WORKER_ERR_NO_SPACE;
-    WorkerMessage msg{}; msg.size = size;
-    if (size) std::memcpy(msg.data, data, size);
-    if (!self->workRequests_.push(msg)) {
+    if (size > kWorkerPayloadSize || (!data && size != 0))
+        return LV2_WORKER_ERR_NO_SPACE;
+    if (!self->workRequests_.tryEmplace([&](WorkerMessage& msg) {
+            msg.size = size;
+            if (size) std::memcpy(msg.data, data, size);
+        })) {
         self->workRequestDrops_.fetch_add(1, std::memory_order_relaxed);
         return LV2_WORKER_ERR_NO_SPACE;
     }
@@ -1024,10 +1060,12 @@ LV2_Worker_Status LV2Plugin::scheduleWorkCallback(
 LV2_Worker_Status LV2Plugin::respondCallback(
     LV2_Worker_Respond_Handle handle, uint32_t size, const void* data) {
     auto* self = static_cast<LV2Plugin*>(handle);
-    if (size > kWorkerPayloadSize || (!data && size != 0)) return LV2_WORKER_ERR_NO_SPACE;
-    WorkerMessage msg{}; msg.size = size;
-    if (size) std::memcpy(msg.data, data, size);
-    if (!self->workResponses_.push(msg)) {
+    if (size > kWorkerPayloadSize || (!data && size != 0))
+        return LV2_WORKER_ERR_NO_SPACE;
+    if (!self->workResponses_.tryEmplace([&](WorkerMessage& msg) {
+            msg.size = size;
+            if (size) std::memcpy(msg.data, data, size);
+        })) {
         self->workResponseDrops_.fetch_add(1, std::memory_order_relaxed);
         return LV2_WORKER_ERR_NO_SPACE;
     }

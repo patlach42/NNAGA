@@ -40,6 +40,36 @@ void mixScaledStereo(
         mixRight[frame] += inputRight[frame] * gain;
     }
 }
+
+void copyScaledStereo(
+        float* outputLeft, float* outputRight,
+        const float* inputLeft, const float* inputRight,
+        uint32_t frames, float gain) noexcept {
+    if (gain == 1.0f) {
+        if (outputLeft != inputLeft) {
+            std::memcpy(outputLeft, inputLeft, sizeof(float) * frames);
+        }
+        if (outputRight != inputRight) {
+            std::memcpy(outputRight, inputRight, sizeof(float) * frames);
+        }
+        return;
+    }
+    uint32_t frame = 0;
+#if defined(__aarch64__)
+    for (; frame + 4 <= frames; frame += 4) {
+        vst1q_f32(
+            outputLeft + frame,
+            vmulq_n_f32(vld1q_f32(inputLeft + frame), gain));
+        vst1q_f32(
+            outputRight + frame,
+            vmulq_n_f32(vld1q_f32(inputRight + frame), gain));
+    }
+#endif
+    for (; frame < frames; ++frame) {
+        outputLeft[frame] = inputLeft[frame] * gain;
+        outputRight[frame] = inputRight[frame] * gain;
+    }
+}
 } // namespace
 
 RackGraph::RackGraph() : master_(std::make_shared<PluginChain>()) {
@@ -362,6 +392,7 @@ RackGraph::State RackGraph::saveState() {
     state.master = master_->saveChainState();
     return state;
 }
+
 void RackGraph::advanceTransport(uint32_t frames) noexcept {
     const uint64_t sequence = mailbox_.sequence.load(std::memory_order_acquire);
     if ((sequence & 1U) == 0) {
@@ -450,59 +481,149 @@ void RackGraph::process(const float* const* liveInputs, float* const* outputs, u
     if (audioLooping_ && durationFrames > 0) {
         audioTransportFrame_ %= durationFrames;
     }
+    const double bpm = std::isfinite(audioBpm_)
+        ? std::clamp(audioBpm_, 20.0, 400.0) : 120.0;
+    const double beatPosition =
+        static_cast<double>(audioTransportFrame_) * bpm / (rate * 60.0);
+    const int64_t bar =
+        static_cast<int64_t>(std::floor(beatPosition * 0.25));
     const AudioProcessContext context{
         audioSamplePosition_, audioTransportFrame_,
-        audioLooping_ ? durationFrames : 0, rate, audioBpm_,
-        audioPlaying_, audioLooping_};
-    std::fill(snapshot->mixLeft.begin(), snapshot->mixLeft.begin() + frames, 0.0f);
-    std::fill(snapshot->mixRight.begin(), snapshot->mixRight.begin() + frames, 0.0f);
+        audioLooping_ ? durationFrames : 0, rate, bpm,
+        audioPlaying_, audioLooping_, beatPosition, bar,
+        beatPosition - static_cast<double>(bar) * 4.0};
+    const bool masterEmpty = snapshot->master->isEmptyForAudio();
+    const bool directSingleTrack =
+        masterEmpty && snapshot->tracks.size() == 1;
+    bool mixHasData = false;
     for (const auto& view : snapshot->tracks) {
         auto& node = *view.node;
         float* source[2] = {node.sourceLeft.data(), node.sourceRight.data()};
+        const float* chainInput[2] = {source[0], source[1]};
         if (view.clip) {
             const auto& clip = *view.clip;
-            const double step = static_cast<double>(clip.sampleRate) / rate;
-            const double clipFrames = static_cast<double>(clip.left.size());
-            const double exactBoundary = (clipFrames / static_cast<double>(clip.sampleRate)) * rate;
-            const uint64_t hostBoundary = exactBoundary >= static_cast<double>(std::numeric_limits<uint64_t>::max())
-                ? std::numeric_limits<uint64_t>::max() : static_cast<uint64_t>(std::ceil(exactBoundary));
-            for (uint32_t frame = 0; frame < frames; ++frame) {
-                if (!audioPlaying_) { source[0][frame] = source[1][frame] = 0.0f; continue; }
-                const uint64_t hostFrame = audioTransportFrame_ + frame;
-                if (hostBoundary == 0 || (!audioLooping_ && hostFrame >= hostBoundary)) {
-                    source[0][frame] = source[1][frame] = 0.0f; continue;
+            const bool equalRate = static_cast<double>(clip.sampleRate) == rate;
+            if (equalRate) {
+                const size_t clipFrames = clip.left.size();
+                if (!audioPlaying_ || clipFrames == 0) {
+                    std::memset(source[0], 0, frames * sizeof(float));
+                    std::memset(source[1], 0, frames * sizeof(float));
+                } else if (!audioLooping_) {
+                    const uint64_t hostFrame = audioTransportFrame_;
+                    if (hostFrame >= clipFrames) {
+                        std::memset(source[0], 0, frames * sizeof(float));
+                        std::memset(source[1], 0, frames * sizeof(float));
+                    } else {
+                        const size_t available = clipFrames - static_cast<size_t>(hostFrame);
+                        const size_t copied = std::min<size_t>(frames, available);
+                        std::memcpy(source[0], clip.left.data() + hostFrame, copied * sizeof(float));
+                        if (clip.right.empty()) {
+                            std::memcpy(source[1], clip.left.data() + hostFrame, copied * sizeof(float));
+                        } else {
+                            std::memcpy(source[1], clip.right.data() + hostFrame, copied * sizeof(float));
+                        }
+                        if (copied < frames) {
+                            std::memset(source[0] + copied, 0, (frames - copied) * sizeof(float));
+                            std::memset(source[1] + copied, 0, (frames - copied) * sizeof(float));
+                        }
+                    }
+                } else {
+                    size_t destination = 0;
+                    const size_t start = static_cast<size_t>(audioTransportFrame_ % clipFrames);
+                    size_t sourceFrame = start;
+                    while (destination < frames) {
+                        const size_t run = std::min<size_t>(frames - destination, clipFrames - sourceFrame);
+                        std::memcpy(source[0] + destination, clip.left.data() + sourceFrame, run * sizeof(float));
+                        if (clip.right.empty()) {
+                            std::memcpy(source[1] + destination, clip.left.data() + sourceFrame, run * sizeof(float));
+                        } else {
+                            std::memcpy(source[1] + destination, clip.right.data() + sourceFrame, run * sizeof(float));
+                        }
+                        destination += run;
+                        sourceFrame = 0;
+                    }
                 }
-                const double sampleFrame = static_cast<double>(audioLooping_ ? (hostFrame % hostBoundary) : hostFrame) * step;
-                if (sampleFrame >= clipFrames) {
-                    source[0][frame] = source[1][frame] = 0.0f;
-                    continue;
+            } else {
+                const double step = static_cast<double>(clip.sampleRate) / rate;
+                const double clipFrames = static_cast<double>(clip.left.size());
+                const double exactBoundary = (clipFrames / static_cast<double>(clip.sampleRate)) * rate;
+                const uint64_t hostBoundary = exactBoundary >= static_cast<double>(std::numeric_limits<uint64_t>::max())
+                    ? std::numeric_limits<uint64_t>::max() : static_cast<uint64_t>(std::ceil(exactBoundary));
+                for (uint32_t frame = 0; frame < frames; ++frame) {
+                    if (!audioPlaying_) { source[0][frame] = source[1][frame] = 0.0f; continue; }
+                    const uint64_t hostFrame = audioTransportFrame_ + frame;
+                    if (hostBoundary == 0 || (!audioLooping_ && hostFrame >= hostBoundary)) {
+                        source[0][frame] = source[1][frame] = 0.0f; continue;
+                    }
+                    const double sampleFrame = static_cast<double>(audioLooping_ ? (hostFrame % hostBoundary) : hostFrame) * step;
+                    if (sampleFrame >= clipFrames) {
+                        source[0][frame] = source[1][frame] = 0.0f;
+                        continue;
+                    }
+                    const size_t first = static_cast<size_t>(sampleFrame);
+                    const size_t second = std::min(first + 1, clip.left.size() - 1);
+                    const float fraction = static_cast<float>(sampleFrame - first);
+                    source[0][frame] = clip.left[first] + (clip.left[second] - clip.left[first]) * fraction;
+                    source[1][frame] = clip.right.empty() ? source[0][frame] : clip.right[first] + (clip.right[second] - clip.right[first]) * fraction;
                 }
-                const size_t first = static_cast<size_t>(sampleFrame);
-                const size_t second = std::min(first + 1, clip.left.size() - 1);
-                const float fraction = static_cast<float>(sampleFrame - first);
-                source[0][frame] = clip.left[first] + (clip.left[second] - clip.left[first]) * fraction;
-                source[1][frame] = clip.right.empty() ? source[0][frame] : clip.right[first] + (clip.right[second] - clip.right[first]) * fraction;
             }
-        } else if (node.inputArmed.load(std::memory_order_acquire) && liveInputs && liveInputs[0] && liveInputs[1]) {
-            std::memcpy(source[0], liveInputs[0], frames * sizeof(float));
-            std::memcpy(source[1], liveInputs[1], frames * sizeof(float));
+        } else if (node.inputArmed.load(std::memory_order_acquire) &&
+                   liveInputs && liveInputs[0] && liveInputs[1]) {
+            chainInput[0] = liveInputs[0];
+            chainInput[1] = liveInputs[1];
         } else {
             std::memset(source[0], 0, frames * sizeof(float));
             std::memset(source[1], 0, frames * sizeof(float));
         }
-        float* trackOutput[2] = {node.outputLeft.data(), node.outputRight.data()};
-        node.chain->process(source, trackOutput, frames, context);
+        const bool trackChainEmpty = node.chain->isEmptyForAudio();
+        const float* trackSignal[2] = {chainInput[0], chainInput[1]};
+        if (!trackChainEmpty) {
+            float* trackOutput[2] = {
+                directSingleTrack ? outputs[0] : node.outputLeft.data(),
+                directSingleTrack ? outputs[1] : node.outputRight.data()};
+            node.chain->process(chainInput, trackOutput, frames, context);
+            trackSignal[0] = trackOutput[0];
+            trackSignal[1] = trackOutput[1];
+        }
         const float volume = node.volume.load(std::memory_order_acquire);
-        mixScaledStereo(
-            snapshot->mixLeft.data(), snapshot->mixRight.data(),
-            trackOutput[0], trackOutput[1], frames, volume);
+        if (directSingleTrack) {
+            copyScaledStereo(
+                outputs[0], outputs[1],
+                trackSignal[0], trackSignal[1], frames, volume);
+            continue;
+        }
+        if (!mixHasData) {
+            copyScaledStereo(
+                snapshot->mixLeft.data(), snapshot->mixRight.data(),
+                trackSignal[0], trackSignal[1], frames, volume);
+            mixHasData = true;
+        } else {
+            mixScaledStereo(
+                snapshot->mixLeft.data(), snapshot->mixRight.data(),
+                trackSignal[0], trackSignal[1], frames, volume);
+        }
     }
-    const float* mix[2] = {snapshot->mixLeft.data(), snapshot->mixRight.data()};
-    snapshot->master->process(mix, outputs, frames, context);
+    if (!directSingleTrack) {
+        if (!mixHasData) {
+            std::memset(
+                snapshot->mixLeft.data(), 0, frames * sizeof(float));
+            std::memset(
+                snapshot->mixRight.data(), 0, frames * sizeof(float));
+        }
+        const float* mix[2] = {
+            snapshot->mixLeft.data(), snapshot->mixRight.data()};
+        if (masterEmpty) {
+            copyScaledStereo(
+                outputs[0], outputs[1], mix[0], mix[1], frames, 1.0f);
+        } else {
+            snapshot->master->process(mix, outputs, frames, context);
+        }
+    }
     audioSamplePosition_ += frames;
     if (audioPlaying_) {
         audioTransportFrame_ += frames;
-        if (durationFrames > 0 && !audioLooping_ && audioTransportFrame_ >= durationFrames) {
+        if (durationFrames > 0 && !audioLooping_ &&
+            audioTransportFrame_ >= durationFrames) {
             audioTransportFrame_ = durationFrames;
             audioPlaying_ = false;
         } else if (durationFrames > 0 && audioLooping_) {

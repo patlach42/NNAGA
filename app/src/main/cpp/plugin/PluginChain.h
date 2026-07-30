@@ -20,6 +20,7 @@
 #ifndef GUITARRACKCRAFT_PLUGIN_CHAIN_H
 #define GUITARRACKCRAFT_PLUGIN_CHAIN_H
 
+#include <atomic>
 #include <cstdint>
 #include <condition_variable>
 #include <deque>
@@ -48,6 +49,9 @@ public:
 
     void process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
                  const AudioProcessContext& context);
+    bool isEmptyForAudio() const noexcept {
+        return pluginCount_.load(std::memory_order_acquire) == 0;
+    }
 
     void setSampleRate(float sampleRate, uint32_t bufferSize = 0);
     void activate();
@@ -77,6 +81,7 @@ public:
 private:
     std::vector<PluginSlot> plugins_;
     mutable std::shared_mutex chainMutex_;
+    std::atomic<uint32_t> pluginCount_{0};
 
     float sampleRate_ = 0.0f;
     uint32_t bufferSize_ = 0;

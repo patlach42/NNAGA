@@ -123,8 +123,8 @@ private:
     };
 
     std::unique_ptr<GraphSnapshot> activeOwner_;
-    std::atomic<GraphSnapshot*> activeSnapshot_{nullptr};
-    std::atomic<GraphSnapshot*> hazardSnapshot_{nullptr};
+    alignas(64) std::atomic<GraphSnapshot*> activeSnapshot_{nullptr};
+    alignas(64) std::atomic<GraphSnapshot*> hazardSnapshot_{nullptr};
     RetiredSnapshot* retired_ = nullptr;
     std::thread reclaimerThread_;
     std::condition_variable reclaimerWake_;

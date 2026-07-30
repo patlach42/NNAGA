@@ -35,14 +35,16 @@ class DirectUsbDeviceStressTest {
     private val tag = "DirectUsbDeviceStress"
     private val defaultRates = intArrayOf(44_100, 48_000)
     private val defaultBuffers = intArrayOf(16, 32, 64, 128, 256, 512, 1024)
+    private val allowedBuffers = AudioSettingsManager.BUFFER_SIZE_OPTIONS.map { it.first }.toIntArray()
     private val defaultMultipliers = intArrayOf(1, 2, 3)
+    private val allowedMultipliers = (1..8).toList().toIntArray()
 
     @Test
     fun duplexRateBufferLifecycleStress() {
         val args = InstrumentationRegistry.getArguments()
-        val selectedRates = argumentCsv(args, "direct_usb_rates", defaultRates)
-        val selectedBuffers = argumentCsv(args, "direct_usb_buffers", defaultBuffers)
-        val selectedMultipliers = argumentCsv(args, "direct_usb_multipliers", defaultMultipliers)
+        val selectedRates = argumentCsv(args, "direct_usb_rates", defaultRates, defaultRates)
+        val selectedBuffers = argumentCsv(args, "direct_usb_buffers", defaultBuffers, allowedBuffers)
+        val selectedMultipliers = argumentCsv(args, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
         val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 2, 8)
         val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 30_000L)
         val warmupMs = minOf(1_000L, (durationMs / 3L).coerceAtLeast(250L))
@@ -180,19 +182,27 @@ class DirectUsbDeviceStressTest {
     fun directUsbCsvArgumentsSelectTargetedCases() {
         val args = Bundle().apply {
             putString("direct_usb_rates", "48000")
-            putString("direct_usb_buffers", "512,16")
-            putString("direct_usb_multipliers", "2")
+            putString("direct_usb_buffers", "512,48,16")
+            putString("direct_usb_multipliers", "8,4,5,6,7")
         }
 
-        assertArrayEquals(intArrayOf(48_000), argumentCsv(args, "direct_usb_rates", defaultRates))
+        assertArrayEquals(intArrayOf(48_000), argumentCsv(args, "direct_usb_rates", defaultRates, defaultRates))
         assertArrayEquals(
-            intArrayOf(16, 512),
-            argumentCsv(args, "direct_usb_buffers", defaultBuffers)
+            intArrayOf(16, 48, 512),
+            argumentCsv(args, "direct_usb_buffers", defaultBuffers, allowedBuffers)
         )
-        assertArrayEquals(intArrayOf(2), argumentCsv(args, "direct_usb_multipliers", defaultMultipliers))
-        assertThrows(IllegalArgumentException::class.java) {
-            argumentCsv(Bundle().apply { putString("direct_usb_buffers", "17") }, "direct_usb_buffers", defaultBuffers)
+        assertArrayEquals(
+            intArrayOf(4, 5, 6, 7, 8),
+            argumentCsv(args, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
+        )
+        val invalidBuffer = assertThrows(IllegalArgumentException::class.java) {
+            argumentCsv(Bundle().apply { putString("direct_usb_buffers", "17") }, "direct_usb_buffers", defaultBuffers, allowedBuffers)
         }
+        assertTrue(invalidBuffer.message?.contains("allowed=") == true)
+        val invalidMultiplier = assertThrows(IllegalArgumentException::class.java) {
+            argumentCsv(Bundle().apply { putString("direct_usb_multipliers", "9") }, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
+        }
+        assertTrue(invalidMultiplier.message?.contains("allowed=1,2,3,4,5,6,7,8") == true)
     }
 
 
@@ -431,9 +441,9 @@ class DirectUsbDeviceStressTest {
         return File.createTempFile("direct-usb-stress-$sampleRate-", ".wav", directory).also { it.writeBytes(bytes) }
     }
 
-    private fun argumentCsv(args: Bundle, key: String, allowed: IntArray): IntArray {
+    private fun argumentCsv(args: Bundle, key: String, defaults: IntArray, allowed: IntArray): IntArray {
         val raw = args.getString(key)?.trim()
-        if (raw.isNullOrEmpty()) return allowed.copyOf()
+        if (raw.isNullOrEmpty()) return defaults.copyOf()
 
         val requested = raw.split(',').mapIndexed { index, token ->
             token.trim().toIntOrNull()

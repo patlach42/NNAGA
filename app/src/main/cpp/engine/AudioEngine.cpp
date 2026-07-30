@@ -612,6 +612,16 @@ void AudioEngine::directUsbRenderLoop() {
         1000, std::max(20, static_cast<int>(std::ceil(period.count() * 4000.0))));
     int captureMissStreak = 0;
     int failureCode = 0;
+    const float* const renderInputPtrs[2] = {
+        directUsbInputBuffer_.data(), directUsbInputBuffer_.data()};
+    float* const renderOutputPtrs[2] = {
+        directUsbOutputLeft_.data(), directUsbOutputRight_.data()};
+    const float peakDecay = meterDecayForBlock(frames, sampleRate_);
+    const uint64_t effectiveQuantum =
+        directUsbEffectiveQuantum_.load(std::memory_order_relaxed);
+    const double publishedSampleRate =
+        publishedSampleRate_.load(std::memory_order_relaxed);
+
 
     const auto canContinue = [this]() noexcept {
         return directUsbSession_.load(std::memory_order_acquire) &&
@@ -633,41 +643,42 @@ void AudioEngine::directUsbRenderLoop() {
         }
         return false;
     };
-    const auto renderBlock = [this, frames, period]() noexcept {
+    const auto renderBlock = [this, frames, period, &renderInputPtrs,
+                              &renderOutputPtrs, peakDecay, effectiveQuantum,
+                              publishedSampleRate]() noexcept {
         directUsbOutput_->readMonoInput(directUsbInputBuffer_.data(), frames);
-        inputPtrs_[0] = directUsbInputBuffer_.data();
-        inputPtrs_[1] = directUsbInputBuffer_.data();
-        outputPtrs_[0] = directUsbOutputLeft_.data();
-        outputPtrs_[1] = directUsbOutputRight_.data();
         const auto began = std::chrono::steady_clock::now();
-        processRackBlock(inputPtrs_, outputPtrs_, frames);
+        processRackBlock(renderInputPtrs, renderOutputPtrs, frames);
         const auto elapsed = std::chrono::steady_clock::now() - began;
         const uint64_t dspNs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
         directUsbLastDspNs_.store(dspNs, std::memory_order_relaxed);
         const auto transport = directUsbOutput_->transportStats();
+        const uint64_t queuedOutFrames = directUsbOutput_->queuedOutFrames();
+        const int captureTransferFrames = directUsbOutput_->captureTransferFrames();
+        const auto captures = directUsbOutput_->captureStats();
+        const uint64_t playbackXruns = directUsbOutput_->xrunCount();
+        const uint64_t captureXruns = captures.overruns + captures.underruns;
         directCaptureRingFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
             transport.captureRingFrames, std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
         directPlaybackRingFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
             transport.ringFrames, std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
         directQueuedOutFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
-            directUsbOutput_->queuedOutFrames(), std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
+            queuedOutFrames, std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
         directCaptureTransferFrames_.store(static_cast<uint32_t>(
-            std::max(0, directUsbOutput_->captureTransferFrames())), std::memory_order_relaxed);
-        const auto captures = directUsbOutput_->captureStats();
+            std::max(0, captureTransferFrames)), std::memory_order_relaxed);
         directCaptureOverruns_.store(captures.overruns, std::memory_order_relaxed);
         directCaptureUnderruns_.store(captures.underruns, std::memory_order_relaxed);
-        directPlaybackXruns_.store(directUsbOutput_->xrunCount(), std::memory_order_relaxed);
+        directPlaybackXruns_.store(playbackXruns, std::memory_order_relaxed);
         const uint64_t latencyFrames = std::max<uint64_t>(
-            directUsbEffectiveQuantum_.load(std::memory_order_relaxed),
+            effectiveQuantum,
             std::max<uint64_t>(transport.captureRingFrames,
-                               directCaptureTransferFrames_.load(std::memory_order_relaxed)))
-            + transport.ringFrames + directUsbOutput_->queuedOutFrames();
+                               static_cast<uint64_t>(std::max(0, captureTransferFrames))))
+            + transport.ringFrames + queuedOutFrames;
         publishedLatencyMs_.store(
-            static_cast<double>(latencyFrames) / publishedSampleRate_.load(std::memory_order_relaxed) * 1000.0,
+            static_cast<double>(latencyFrames) / publishedSampleRate * 1000.0,
             std::memory_order_relaxed);
-        const uint64_t totalXruns = directUsbOutput_->xrunCount() +
-                                    directUsbOutput_->captureXRunCount();
+        const uint64_t totalXruns = playbackXruns + captureXruns;
         publishedXRunCount_.store(static_cast<int32_t>(std::min<uint64_t>(
             totalXruns, static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))),
             std::memory_order_relaxed);
@@ -683,9 +694,8 @@ void AudioEngine::directUsbRenderLoop() {
         float inputPeak;
         float outputPeak;
         measureStereoPeaks(
-            directUsbInputBuffer_.data(), directUsbOutputLeft_.data(),
-            directUsbOutputRight_.data(), frames, inputPeak, outputPeak);
-        const float peakDecay = meterDecayForBlock(frames, sampleRate_);
+            renderInputPtrs[0], renderOutputPtrs[0], renderOutputPtrs[1],
+            frames, inputPeak, outputPeak);
         inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * peakDecay);
         outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * peakDecay);
         inputPeakLevel_.store(inputPeakHold_, std::memory_order_relaxed);

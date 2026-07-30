@@ -20,6 +20,7 @@
 #ifndef GUITARRACKCRAFT_RING_BUFFER_H
 #define GUITARRACKCRAFT_RING_BUFFER_H
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <vector>
@@ -64,9 +65,12 @@ public:
         size_t r = readPos_.load(std::memory_order_acquire);
         size_t available = capacity() - (w - r);
         size_t toWrite = count < available ? count : available;
+        if (toWrite == 0) return 0;
 
-        for (size_t i = 0; i < toWrite; ++i) {
-            buffer_[(w + i) & mask_] = data[i];
+        const size_t first = std::min(toWrite, capacity() - (w & mask_));
+        std::memcpy(buffer_.data() + (w & mask_), data, first * sizeof(float));
+        if (first < toWrite) {
+            std::memcpy(buffer_.data(), data + first, (toWrite - first) * sizeof(float));
         }
 
         writePos_.store(w + toWrite, std::memory_order_release);
@@ -82,9 +86,12 @@ public:
         size_t w = writePos_.load(std::memory_order_acquire);
         size_t available = w - r;
         size_t toRead = count < available ? count : available;
+        if (toRead == 0) return 0;
 
-        for (size_t i = 0; i < toRead; ++i) {
-            data[i] = buffer_[(r + i) & mask_];
+        const size_t first = std::min(toRead, capacity() - (r & mask_));
+        std::memcpy(data, buffer_.data() + (r & mask_), first * sizeof(float));
+        if (first < toRead) {
+            std::memcpy(data + first, buffer_.data(), (toRead - first) * sizeof(float));
         }
 
         readPos_.store(r + toRead, std::memory_order_release);
@@ -107,8 +114,8 @@ public:
 private:
     std::vector<float> buffer_;
     size_t mask_ = 0;
-    std::atomic<size_t> writePos_;
-    std::atomic<size_t> readPos_;
+    alignas(64) std::atomic<size_t> writePos_;
+    alignas(64) std::atomic<size_t> readPos_;
 };
 
 } // namespace guitarrackcraft

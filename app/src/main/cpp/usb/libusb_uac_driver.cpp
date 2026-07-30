@@ -1743,35 +1743,72 @@ int LibusbUacDriver::captureFrameLimit() const noexcept {
     return std::min(physicalLimit, latencyLimit);
 }
 
-int LibusbUacDriver::readCapturePcm(uint8_t* dst, int frames) {
-    if (!captureActive_.load(std::memory_order_acquire)) return 0;
-    if (!dst || frames <= 0 || captureFormat_.channels <= 0) return 0;
-    const int stride = captureFormat_.channels * captureFormat_.bytesPerSample;
-    const size_t want = static_cast<size_t>(frames) * stride;
+LibusbUacDriver::CaptureReadRegion
+LibusbUacDriver::prepareCaptureRead(int requestedFrames) noexcept {
+    CaptureReadRegion region;
+    if (!captureActive_.load(std::memory_order_acquire) ||
+        requestedFrames <= 0 || captureFormat_.channels <= 0) {
+        return region;
+    }
+    const int stride =
+        captureFormat_.channels * captureFormat_.bytesPerSample;
+    if (stride <= 0 || captureRing_.empty()) return region;
+
     const size_t head = captureHead_.load(std::memory_order_acquire);
     size_t tail = captureTail_.load(std::memory_order_relaxed);
-
     const size_t limitBytes =
-        static_cast<size_t>(captureFrameLimit()) * stride;
+        static_cast<size_t>(captureFrameLimit()) *
+        static_cast<size_t>(stride);
     if (head - tail > limitBytes) {
-        // The consumer owns tail, so it can discard stale capture without
-        // violating the SPSC producer's ownership of head. Preserve the
-        // newest bounded window after a render stall.
+        // The consumer owns tail and may discard stale capture while retaining
+        // the newest bounded window after a render stall.
         tail = head - limitBytes;
         captureOverruns_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    size_t n = std::min(want, head - tail);
-    n -= n % stride;
-    const size_t off = tail & captureRingMask_;
-    const size_t first = std::min(n, captureRing_.size() - off);
-    if (first) std::memcpy(dst, captureRing_.data() + off, first);
-    if (first < n) std::memcpy(dst + first, captureRing_.data(), n - first);
-    captureTail_.store(tail + n, std::memory_order_release);
-    const int got = static_cast<int>(n / stride);
-    if (got < frames)
+    const size_t availableFrames =
+        (head - tail) / static_cast<size_t>(stride);
+    const size_t frames = std::min(
+        availableFrames, static_cast<size_t>(requestedFrames));
+    const size_t bytes = frames * static_cast<size_t>(stride);
+    const size_t offset = tail & captureRingMask_;
+    const size_t first = std::min(bytes, captureRing_.size() - offset);
+
+    region.first = captureRing_.data() + offset;
+    region.firstBytes = first;
+    region.second = captureRing_.data();
+    region.secondBytes = bytes - first;
+    region.consumerCursor = tail;
+    region.frames = static_cast<int>(frames);
+    region.frameStride = stride;
+    if (region.frames < requestedFrames) {
         captureUnderruns_.fetch_add(1, std::memory_order_relaxed);
-    return got;
+    }
+    return region;
+}
+
+void LibusbUacDriver::commitCaptureRead(
+        const CaptureReadRegion& region) noexcept {
+    if (region.frames <= 0 || region.frameStride <= 0) return;
+    const size_t consumed =
+        static_cast<size_t>(region.frames) *
+        static_cast<size_t>(region.frameStride);
+    captureTail_.store(
+        region.consumerCursor + consumed, std::memory_order_release);
+}
+
+int LibusbUacDriver::readCapturePcm(uint8_t* dst, int frames) {
+    if (!dst || frames <= 0) return 0;
+    const CaptureReadRegion region = prepareCaptureRead(frames);
+    if (region.firstBytes > 0) {
+        std::memcpy(dst, region.first, region.firstBytes);
+    }
+    if (region.secondBytes > 0) {
+        std::memcpy(
+            dst + region.firstBytes, region.second, region.secondBytes);
+    }
+    commitCaptureRead(region);
+    return region.frames;
 }
 
 int LibusbUacDriver::discardCaptureFrames(int maxFrames) noexcept {
@@ -2270,12 +2307,15 @@ bool LibusbUacDriver::prepareImplicitTransfer(libusb_transfer* xfr) {
     }
 
     const int stride = format_.channels * format_.bytesPerSample;
-    uint8_t* cursor = xfr->buffer;
     for (size_t packet = 0; packet < count; ++packet) {
         const int bytes = frameCounts[packet] * stride;
         xfr->iso_packet_desc[packet].length = bytes;
-        if (bytes > 0) drainRing(cursor, bytes);
-        cursor += bytes;
+        if (bytes > 0) {
+            uint8_t* packetBuffer =
+                libusb_get_iso_packet_buffer_simple(
+                    xfr, static_cast<unsigned int>(packet));
+            drainRing(packetBuffer, bytes);
+        }
     }
     return true;
 }
@@ -2357,7 +2397,6 @@ void LibusbUacDriver::onIso(libusb_transfer* xfr) {
         const int stride = format_.channels * format_.bytesPerSample;
         const uint32_t rate =
             framesPerUframe_q16_.load(std::memory_order_acquire);
-        uint8_t* cursor = xfr->buffer;
         for (int packet = 0; packet < xfr->num_iso_packets; ++packet) {
             int frames = format_.feedbackEndpointAddress == 0
                 ? static_cast<int>(nominalScheduler_.next())
@@ -2368,8 +2407,11 @@ void LibusbUacDriver::onIso(libusb_transfer* xfr) {
             frames = std::min(frames, maxFramesPerPacket_);
             const int bytes = frames * stride;
             xfr->iso_packet_desc[packet].length = bytes;
-            if (bytes > 0) drainRing(cursor, bytes);
-            cursor += bytes;
+            if (bytes > 0) {
+                uint8_t* packetBuffer =
+                    libusb_get_iso_packet_buffer_simple(xfr, packet);
+                drainRing(packetBuffer, bytes);
+            }
         }
     }
     signalWakeFd(captureWakeFd_);
@@ -2426,43 +2468,78 @@ int LibusbUacDriver::drainRing(uint8_t* dst, int bytes) {
     return n;
 }
 
-int LibusbUacDriver::writePcm(const uint8_t* data, int frames) {
-    if (frames <= 0 || format_.channels == 0) return 0;
-    int bytes = frames * format_.channels * format_.bytesPerSample;
-    size_t head = ringHead_.load(std::memory_order_relaxed);
-    size_t tail = ringTail_.load(std::memory_order_acquire);
-    size_t free = kRingBytes - (head - tail);
-    int frameStride = format_.channels * format_.bytesPerSample;
-    const size_t queuedFrames = frameStride > 0 ? (head - tail) / static_cast<size_t>(frameStride) : 0;
+LibusbUacDriver::PlaybackWriteRegion
+LibusbUacDriver::preparePlaybackWrite(int requestedFrames) noexcept {
+    PlaybackWriteRegion region;
+    const int frameStride = format_.channels * format_.bytesPerSample;
+    if (requestedFrames <= 0 || frameStride <= 0 || ring_.empty()) {
+        return region;
+    }
+
+    const size_t head = ringHead_.load(std::memory_order_relaxed);
+    const size_t tail = ringTail_.load(std::memory_order_acquire);
+    const size_t queuedBytes = head - tail;
+    const size_t queuedFrames =
+        queuedBytes / static_cast<size_t>(frameStride);
     const bool started = playbackStarted_.load(std::memory_order_acquire);
     const size_t frameLimit = static_cast<size_t>(
         (started ? playbackTargetFrames_.load(std::memory_order_acquire)
                  : startupPrimeFrames_.load(std::memory_order_acquire)) +
         graphQuantum_.load(std::memory_order_acquire));
-    if (queuedFrames >= frameLimit) free = 0;
-    else free = std::min(free, (frameLimit - queuedFrames) * static_cast<size_t>(frameStride));
-    int writable = static_cast<int>(std::min<size_t>(free, static_cast<size_t>(bytes)));
-    // Round down to whole frames to avoid splitting a frame across calls.
-    if (frameStride > 0) writable -= writable % frameStride;
-    if (writable < bytes) {
-        if (!playbackOverrunActive_.exchange(true, std::memory_order_acq_rel)) {
+    const size_t physicalFrames =
+        (ring_.size() - queuedBytes) / static_cast<size_t>(frameStride);
+    const size_t logicalFrames =
+        queuedFrames < frameLimit ? frameLimit - queuedFrames : 0;
+    const size_t admitted = std::min(
+        static_cast<size_t>(requestedFrames),
+        std::min(physicalFrames, logicalFrames));
+
+    if (admitted < static_cast<size_t>(requestedFrames)) {
+        if (!playbackOverrunActive_.exchange(
+                true, std::memory_order_acq_rel)) {
             playbackOverruns_.fetch_add(1, std::memory_order_relaxed);
         }
     } else {
         playbackOverrunActive_.store(false, std::memory_order_release);
     }
-    if (writable <= 0) return 0;
+    if (admitted == 0) return region;
 
-    size_t off = head & ringMask_;
-    size_t first = std::min<size_t>(writable, kRingBytes - off);
-    std::memcpy(ring_.data() + off, data, first);
-    if (first < static_cast<size_t>(writable)) {
-        std::memcpy(ring_.data(), data + first, writable - first);
+    const size_t bytes = admitted * static_cast<size_t>(frameStride);
+    const size_t offset = head & ringMask_;
+    const size_t first = std::min(bytes, ring_.size() - offset);
+    region.first = ring_.data() + offset;
+    region.firstBytes = first;
+    region.second = ring_.data();
+    region.secondBytes = bytes - first;
+    region.producerCursor = head;
+    region.frames = static_cast<int>(admitted);
+    region.frameStride = frameStride;
+    return region;
+}
+
+void LibusbUacDriver::commitPlaybackWrite(
+        const PlaybackWriteRegion& region) noexcept {
+    if (region.frames <= 0 || region.frameStride <= 0) return;
+    const size_t written =
+        static_cast<size_t>(region.frames) *
+        static_cast<size_t>(region.frameStride);
+    ringHead_.store(
+        region.producerCursor + written, std::memory_order_release);
+    writtenFrames_.fetch_add(region.frames, std::memory_order_acq_rel);
+}
+
+int LibusbUacDriver::writePcm(const uint8_t* data, int frames) {
+    if (!data || frames <= 0) return 0;
+    const PlaybackWriteRegion region = preparePlaybackWrite(frames);
+    if (region.firstBytes > 0) {
+        std::memcpy(region.first, data, region.firstBytes);
     }
-    ringHead_.store(head + writable, std::memory_order_release);
-    int framesPushed = writable / frameStride;
-    writtenFrames_.fetch_add(framesPushed, std::memory_order_acq_rel);
-    return framesPushed;
+    if (region.secondBytes > 0) {
+        std::memcpy(
+            region.second, data + region.firstBytes, region.secondBytes);
+    }
+    commitPlaybackWrite(region);
+    return region.frames;
 }
 
 int LibusbUacDriver::startupPrimeFrames() const noexcept {

@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <thread>
@@ -37,9 +38,7 @@ public:
     static constexpr int kMaxGraphQuantum = monotrypt::usb::kMaxGraphQuantum;
     static constexpr int kMaxFramesPerWrite = kMaxGraphQuantum;
 
-    DirectUsbOutput()
-        : pcm_(static_cast<size_t>(kMaxFramesPerWrite) * kMaxDeviceChannels * 4),
-          capturePcm_(static_cast<size_t>(kMaxFramesPerWrite) * kMaxDeviceChannels * 4) {}
+    DirectUsbOutput() = default;
     ~DirectUsbOutput() { stop(); close(); }
 
     bool open(int fd) {
@@ -81,7 +80,9 @@ public:
         const auto& capture = driver_.currentCaptureFormat();
         if (deviceChannels_ < kChannels || deviceChannels_ > kMaxDeviceChannels ||
             capture.channels <= 0 || capture.channels > kMaxDeviceChannels ||
-            capture.bytesPerSample <= 0 ||
+            (capture.bitsPerSample != 16 && capture.bitsPerSample != 24 &&
+             capture.bitsPerSample != 32) ||
+            capture.bytesPerSample < (capture.bitsPerSample + 7) / 8 ||
             capture.bytesPerSample > kMaxSubslotBytes ||
             inputChannel >= capture.channels ||
             outputPair * 2 + 1 >= deviceChannels_) {
@@ -173,24 +174,32 @@ public:
             activeWriters_.fetch_sub(1, std::memory_order_release);
             return 0;
         }
+
         int offset = 0;
         while (offset < frames) {
-            const int count = (frames - offset > kMaxFramesPerWrite)
-                    ? kMaxFramesPerWrite : (frames - offset);
-            const int frameStride = deviceChannels_ * formatBytes_;
-            for (int i = 0; i < count; ++i) {
-                uint8_t* frame = pcm_.data() + static_cast<size_t>(i) * frameStride;
-                const int selectedLeft = outputPair_ * 2;
-                for (int channel = 0; channel < deviceChannels_; ++channel) {
-                    const float value = channel == selectedLeft ? left[offset + i] :
-                                        channel == selectedLeft + 1 ? right[offset + i] : 0.0f;
-                    packPcm(value, frame + channel * formatBytes_);
-                }
+            const int requested = std::min(
+                frames - offset, kMaxFramesPerWrite);
+            const auto region = driver_.preparePlaybackWrite(requested);
+            if (region.frames <= 0) break;
+            switch (formatBits_) {
+                case 16:
+                    packPlaybackRegion<16>(
+                        region, left + offset, right + offset);
+                    break;
+                case 24:
+                    packPlaybackRegion<24>(
+                        region, left + offset, right + offset);
+                    break;
+                case 32:
+                    packPlaybackRegion<32>(
+                        region, left + offset, right + offset);
+                    break;
+                default:
+                    break;
             }
-            const int written = driver_.writePcm(pcm_.data(), count);
-            if (written <= 0) break;
-            offset += written;
-            if (written < count) break;
+            driver_.commitPlaybackWrite(region);
+            offset += region.frames;
+            if (region.frames < requested) break;
         }
         activeWriters_.fetch_sub(1, std::memory_order_release);
         return offset;
@@ -200,34 +209,35 @@ public:
     // and allocation-free; missing frames are zero-filled.
     int readMonoInput(float* dst, int frames) noexcept {
         if (!dst || frames <= 0) return 0;
-        if (frames > kMaxFramesPerWrite) frames = kMaxFramesPerWrite;
-        const auto& f = driver_.currentCaptureFormat();
-        const int stride = f.channels * f.bytesPerSample;
-        const int got = (stride > 0) ? driver_.readCapturePcm(capturePcm_.data(), frames) : 0;
-        for (int i = 0; i < frames; ++i) {
-            if (i >= got) { dst[i] = 0.0f; continue; }
-            const uint8_t* p = capturePcm_.data() +
-                static_cast<size_t>(i) * stride +
-                static_cast<size_t>(inputChannel_) * f.bytesPerSample;
-            uint32_t raw = 0;
-            for (int b = 0; b < f.bytesPerSample; ++b)
-                raw |= static_cast<uint32_t>(p[b]) << (8 * b);
-            const int validBytes = (f.bitsPerSample + 7) / 8;
-            const int shift = 8 * (f.bytesPerSample - validBytes);
-            int32_t sample = static_cast<int32_t>(raw >> shift);
-            const int validBits = f.bitsPerSample;
-            if (validBits < 32) {
-                const uint32_t sign = 1u << (validBits - 1);
-                const uint32_t mask = (1u << validBits) - 1u;
-                uint32_t v = static_cast<uint32_t>(sample) & mask;
-                if (v & sign) v |= ~mask;
-                sample = static_cast<int32_t>(v);
-            }
-            const float scale = validBits == 16 ? 32768.0f :
-                                validBits == 24 ? 8388608.0f : 2147483648.0f;
-            dst[i] = static_cast<float>(sample) / scale;
+        frames = std::min(frames, kMaxFramesPerWrite);
+        const auto region = driver_.prepareCaptureRead(frames);
+        const auto& format = driver_.currentCaptureFormat();
+        switch (format.bitsPerSample) {
+            case 16:
+                unpackCaptureRegion<16>(region, format, dst);
+                break;
+            case 24:
+                unpackCaptureRegion<24>(region, format, dst);
+                break;
+            case 32:
+                unpackCaptureRegion<32>(region, format, dst);
+                break;
+            default:
+                if (region.frames > 0) {
+                    std::memset(
+                        dst, 0,
+                        static_cast<size_t>(region.frames) * sizeof(float));
+                }
+                break;
         }
-        return got;
+        driver_.commitCaptureRead(region);
+        if (region.frames < frames) {
+            const int filled = std::max(0, region.frames);
+            std::memset(
+                dst + filled, 0,
+                static_cast<size_t>(frames - filled) * sizeof(float));
+        }
+        return region.frames;
     }
 
     int captureAvailableFrames() const noexcept {
@@ -274,12 +284,13 @@ public:
     }
 
 private:
+    template <int Bits>
     void packPcm(float value, uint8_t* out) const noexcept {
-        int32_t sample = 0;
-        if (formatBits_ == 16) {
+        int32_t sample;
+        if constexpr (Bits == 16) {
             sample = value >= 1.0f ? 32767 : value <= -1.0f ? -32768
                 : static_cast<int32_t>(value * 32767.0f);
-        } else if (formatBits_ == 24) {
+        } else if constexpr (Bits == 24) {
             sample = value >= 1.0f ? 0x7FFFFF : value <= -1.0f ? -0x800000
                 : static_cast<int32_t>(value * 8388607.0f);
         } else {
@@ -287,24 +298,163 @@ private:
                 : value <= -1.0f ? std::numeric_limits<int32_t>::min()
                 : static_cast<int32_t>(value * 2147483647.0f);
         }
-
-        // USB Audio PCM is left-justified in the audio subslot. In
-        // particular, iD4 advertises 24 valid bits in a 4-byte subslot:
-        // sending a sign-extended S24_LE value makes it 48 dB too quiet.
-        const int validBytes = (formatBits_ + 7) / 8;
+        constexpr int validBytes = (Bits + 7) / 8;
         const int shift = 8 * (formatBytes_ - validBytes);
         const uint32_t subslot = static_cast<uint32_t>(sample) << shift;
-        for (int i = 0; i < formatBytes_; ++i)
-            out[i] = static_cast<uint8_t>(subslot >> (8 * i));
+        for (int byte = 0; byte < formatBytes_; ++byte) {
+            out[byte] = static_cast<uint8_t>(subslot >> (8 * byte));
+        }
     }
+
+    template <int Bits>
+    void packStereoRun(
+            uint8_t* destination, int frames,
+            const float* left, const float* right) const noexcept {
+        if (frames <= 0) return;
+        const int frameStride = deviceChannels_ * formatBytes_;
+        if (deviceChannels_ != kChannels) {
+            std::memset(
+                destination, 0,
+                static_cast<size_t>(frames) * frameStride);
+        }
+        const size_t leftOffset =
+            static_cast<size_t>(outputPair_ * 2) * formatBytes_;
+        const size_t rightOffset = leftOffset + formatBytes_;
+        for (int frame = 0; frame < frames; ++frame) {
+            uint8_t* output =
+                destination + static_cast<size_t>(frame) * frameStride;
+            packPcm<Bits>(left[frame], output + leftOffset);
+            packPcm<Bits>(right[frame], output + rightOffset);
+        }
+    }
+
+    template <int Bits>
+    void packPlaybackRegion(
+            const monotrypt::usb::LibusbUacDriver::PlaybackWriteRegion& region,
+            const float* left, const float* right) const noexcept {
+        const size_t stride = static_cast<size_t>(region.frameStride);
+        const int firstFrames =
+            static_cast<int>(region.firstBytes / stride);
+        packStereoRun<Bits>(region.first, firstFrames, left, right);
+
+        int sourceFrame = firstFrames;
+        size_t secondOffset = 0;
+        const size_t splitBytes =
+            region.firstBytes - static_cast<size_t>(firstFrames) * stride;
+        if (splitBytes > 0) {
+            uint8_t splitFrame[kMaxDeviceChannels * kMaxSubslotBytes]{};
+            packStereoRun<Bits>(
+                splitFrame, 1, left + sourceFrame, right + sourceFrame);
+            std::memcpy(
+                region.first + static_cast<size_t>(firstFrames) * stride,
+                splitFrame, splitBytes);
+            std::memcpy(
+                region.second, splitFrame + splitBytes, stride - splitBytes);
+            ++sourceFrame;
+            secondOffset = stride - splitBytes;
+        }
+        const int remaining = region.frames - sourceFrame;
+        if (remaining > 0) {
+            packStereoRun<Bits>(
+                region.second + secondOffset, remaining,
+                left + sourceFrame, right + sourceFrame);
+        }
+    }
+
+
+    template <int Bits>
+    static float unpackPcm(
+            const uint8_t* input, float scale) noexcept {
+        if constexpr (Bits == 16) {
+            const uint32_t bits =
+                static_cast<uint32_t>(input[0]) |
+                (static_cast<uint32_t>(input[1]) << 8);
+            const uint32_t extended =
+                (bits & 0x8000u) ? bits | 0xffff0000u : bits;
+            return static_cast<float>(
+                static_cast<int32_t>(extended)) / scale;
+        } else if constexpr (Bits == 24) {
+            uint32_t bits =
+                static_cast<uint32_t>(input[0]) |
+                (static_cast<uint32_t>(input[1]) << 8) |
+                (static_cast<uint32_t>(input[2]) << 16);
+            if (bits & 0x00800000u) bits |= 0xff000000u;
+            return static_cast<float>(static_cast<int32_t>(bits)) / scale;
+        } else {
+            const uint32_t bits =
+                static_cast<uint32_t>(input[0]) |
+                (static_cast<uint32_t>(input[1]) << 8) |
+                (static_cast<uint32_t>(input[2]) << 16) |
+                (static_cast<uint32_t>(input[3]) << 24);
+            return static_cast<float>(static_cast<int32_t>(bits)) / scale;
+        }
+    }
+
+    template <int Bits>
+    void unpackCaptureRun(
+            const uint8_t* source, int frames, int frameStride,
+            int sampleOffset, float* destination) const noexcept {
+        constexpr float scale = Bits == 16 ? 32768.0f :
+                                Bits == 24 ? 8388608.0f : 2147483648.0f;
+        for (int frame = 0; frame < frames; ++frame) {
+            destination[frame] = unpackPcm<Bits>(
+                source + static_cast<size_t>(frame) * frameStride +
+                    sampleOffset,
+                scale);
+        }
+    }
+
+    template <int Bits>
+    void unpackCaptureRegion(
+            const monotrypt::usb::LibusbUacDriver::CaptureReadRegion& region,
+            const monotrypt::usb::CaptureFormat& format,
+            float* destination) const noexcept {
+        if (region.frames <= 0 || region.frameStride <= 0) return;
+        constexpr int validBytes = (Bits + 7) / 8;
+        const int sampleOffset =
+            inputChannel_ * format.bytesPerSample +
+            (format.bytesPerSample - validBytes);
+        const size_t stride = static_cast<size_t>(region.frameStride);
+        const int firstFrames =
+            static_cast<int>(region.firstBytes / stride);
+        unpackCaptureRun<Bits>(
+            region.first, firstFrames, region.frameStride,
+            sampleOffset, destination);
+
+        int destinationFrame = firstFrames;
+        size_t secondOffset = 0;
+        const size_t splitBytes =
+            region.firstBytes - static_cast<size_t>(firstFrames) * stride;
+        if (splitBytes > 0) {
+            uint8_t splitFrame[kMaxDeviceChannels * kMaxSubslotBytes];
+            std::memcpy(
+                splitFrame,
+                region.first + static_cast<size_t>(firstFrames) * stride,
+                splitBytes);
+            std::memcpy(
+                splitFrame + splitBytes, region.second,
+                stride - splitBytes);
+            unpackCaptureRun<Bits>(
+                splitFrame, 1, region.frameStride,
+                sampleOffset, destination + destinationFrame);
+            ++destinationFrame;
+            secondOffset = stride - splitBytes;
+        }
+        const int remaining = region.frames - destinationFrame;
+        if (remaining > 0) {
+            unpackCaptureRun<Bits>(
+                region.second + secondOffset, remaining,
+                region.frameStride, sampleOffset,
+                destination + destinationFrame);
+        }
+    }
+
     int deviceChannels_ = kChannels;
     int inputChannel_ = 0;
     int outputPair_ = 0;
     mutable std::mutex errorMutex_;
     std::string startErrorDetail_;
     monotrypt::usb::LibusbUacDriver driver_;
-    std::vector<uint8_t> pcm_;
-    std::vector<uint8_t> capturePcm_;
     int formatBits_ = kBitsPerSample;
     int formatBytes_ = 4;
     std::atomic<bool> accepting_{false};

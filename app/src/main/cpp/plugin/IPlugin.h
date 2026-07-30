@@ -112,6 +112,9 @@ struct AudioProcessContext {
     double beatsPerMinute = 120.0;
     bool playing = false;
     bool looping = false;
+    double beatPosition = 0.0;
+    int64_t bar = 0;
+    double barBeat = 0.0;
 };
 
 /**

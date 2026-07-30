@@ -254,6 +254,81 @@ TEST_F(PluginChainRealtimeTest, OversizedCallbackPassthroughsWithoutAllocating) 
     }
 }
 
+TEST(PluginChainEmptyTest, InPlacePassesThroughWithoutAllocating) {
+    constexpr uint32_t frames = 64;
+    PluginChain chain;
+    chain.setSampleRate(48000.0f, frames);
+
+    std::array<float, frames> left{};
+    std::array<float, frames> right{};
+    for (uint32_t frame = 0; frame < frames; ++frame) {
+        left[frame] = 0.25f + static_cast<float>(frame) * 0.03125f;
+        right[frame] = -0.5f - static_cast<float>(frame) * 0.0625f;
+    }
+    const auto expectedLeft = left;
+    const auto expectedRight = right;
+    const float* inputs[] = {left.data(), right.data()};
+    float* outputs[] = {left.data(), right.data()};
+
+    std::size_t allocations = 0;
+    {
+        allocation_probe::NoAllocScope noAlloc;
+        chain.process(inputs, outputs, frames,
+                      guitarrackcraft::AudioProcessContext{});
+        allocations = noAlloc.count();
+    }
+
+    EXPECT_EQ(allocations, 0u);
+    for (uint32_t frame = 0; frame < frames; ++frame) {
+        EXPECT_EQ(left[frame], expectedLeft[frame]);
+        EXPECT_EQ(right[frame], expectedRight[frame]);
+    }
+}
+
+TEST(PluginChainContentionTest,
+     EmptyChainInPlaceContentionPassesThroughWithoutAllocating) {
+    constexpr uint32_t frames = 64;
+    PluginChain chain;
+    chain.setSampleRate(48000.0f, frames);
+
+    std::array<float, frames> left{};
+    std::array<float, frames> right{};
+    for (uint32_t frame = 0; frame < frames; ++frame) {
+        left[frame] = 1.25f + static_cast<float>(frame) * 0.03125f;
+        right[frame] = -2.5f - static_cast<float>(frame) * 0.0625f;
+    }
+    const auto expectedLeft = left;
+    const auto expectedRight = right;
+    const float* inputs[] = {left.data(), right.data()};
+    float* outputs[] = {left.data(), right.data()};
+
+    std::unique_lock controlLock(*chain.getChainMutex());
+    std::promise<void> processFinished;
+    std::future<void> completion = processFinished.get_future();
+    std::atomic<std::size_t> callbackAllocations{0};
+    std::thread callback([&] {
+        allocation_probe::NoAllocScope noAlloc;
+        chain.process(inputs, outputs, frames,
+                      guitarrackcraft::AudioProcessContext{});
+        callbackAllocations.store(noAlloc.count(), std::memory_order_release);
+        processFinished.set_value();
+    });
+
+    const bool completedWhileContended =
+        completion.wait_for(std::chrono::seconds(1)) ==
+        std::future_status::ready;
+    controlLock.unlock();
+    callback.join();
+
+    ASSERT_TRUE(completedWhileContended);
+    EXPECT_EQ(callbackAllocations.load(std::memory_order_acquire), 0u);
+    for (uint32_t frame = 0; frame < frames; ++frame) {
+        EXPECT_EQ(left[frame], expectedLeft[frame]);
+        EXPECT_EQ(right[frame], expectedRight[frame]);
+    }
+}
+
+
 TEST(PluginChainContentionTest,
      ExclusiveControlContentionPassesDryInputWithoutBlocking) {
     constexpr uint32_t frames = 64;

@@ -27,6 +27,10 @@
 #include <libusb.h>
 #include "UsbScheduling.h"
 
+namespace guitarrackcraft {
+class DirectUsbOutput;
+}
+
 namespace monotrypt::usb {
 
 // Categorised reason the most recent start() returned false. Surfaced
@@ -316,6 +320,37 @@ public:
     std::vector<ClockRateRange> supportedRates() const;
 
 private:
+    friend class guitarrackcraft::DirectUsbOutput;
+
+    struct PlaybackWriteRegion {
+        uint8_t* first = nullptr;
+        size_t firstBytes = 0;
+        uint8_t* second = nullptr;
+        size_t secondBytes = 0;
+        size_t producerCursor = 0;
+        int frames = 0;
+        int frameStride = 0;
+    };
+
+    struct CaptureReadRegion {
+        const uint8_t* first = nullptr;
+        size_t firstBytes = 0;
+        const uint8_t* second = nullptr;
+        size_t secondBytes = 0;
+        size_t consumerCursor = 0;
+        int frames = 0;
+        int frameStride = 0;
+    };
+
+    // Single-producer/two-phase playback write. The caller fills both spans
+    // before commit publishes the producer cursor to the USB event thread.
+    PlaybackWriteRegion preparePlaybackWrite(int requestedFrames) noexcept;
+    void commitPlaybackWrite(const PlaybackWriteRegion& region) noexcept;
+
+    // Single-consumer/two-phase capture read. The selected bytes remain owned
+    // by the render thread until commit publishes the consumer cursor.
+    CaptureReadRegion prepareCaptureRead(int requestedFrames) noexcept;
+    void commitCaptureRead(const CaptureReadRegion& region) noexcept;
     // Walks the active config, finds an Audio Streaming alt-setting
     // whose AS_GENERAL/AS_FORMAT_TYPE descriptors match the request,
     // and fills out_fmt. Returns false if no match.
