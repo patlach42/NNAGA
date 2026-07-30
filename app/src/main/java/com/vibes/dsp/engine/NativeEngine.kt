@@ -54,6 +54,8 @@ data class DirectUsbStats(
     val writeWaitPressure: Long = 0,
     val playbackXruns: Long = 0,
     val playbackBackpressure: Long = 0,
+    val lifecycleFailures: Long = 0,
+    val transportFailed: Boolean = false,
     val performanceHintActive: Boolean = false,
     val schemaVersion: Long = 0,
     val sessionId: Long = 0,
@@ -87,6 +89,8 @@ data class DirectUsbStats(
         private const val CAPTURE_WAIT_PRESSURE = 16
         private const val WRITE_WAIT_PRESSURE = 17
         private const val SCHEMA = 18
+        private const val LIFECYCLE_FAILURES = 9
+        private const val TRANSPORT_FAILED = 10
         private const val SESSION = 19
         private const val STATE = 20
         private const val FAILURE = 21
@@ -122,6 +126,8 @@ data class DirectUsbStats(
                 writeWaitPressure = at(WRITE_WAIT_PRESSURE),
                 playbackXruns = at(PLAYBACK_XRUNS),
                 playbackBackpressure = at(PLAYBACK_BACKPRESSURE),
+                lifecycleFailures = at(LIFECYCLE_FAILURES),
+                transportFailed = at(TRANSPORT_FAILED) != 0L,
                 performanceHintActive = at(PERFORMANCE_HINT_ACTIVE) != 0L,
                 schemaVersion = at(SCHEMA),
                 sessionId = at(SESSION),
@@ -273,7 +279,8 @@ class NativeEngine private constructor() {
         inputChannel: Int,
         outputPair: Int,
         bufferFrames: Int,
-        periodMultiplier: Int
+        periodMultiplier: Int,
+        watermarkFrames: Int
     ): Boolean
 
 
@@ -295,6 +302,8 @@ class NativeEngine private constructor() {
     fun getDirectUsbStats(): DirectUsbStats = DirectUsbStats.fromRaw(nativeGetDirectUsbStats())
     external fun nativeGetDirectUsbStats(): LongArray
     external fun nativeGetDirectUsbErrorDetail(): String
+    /** Flushes live PGO profile data; best effort and safe when unsupported. */
+    external fun nativeFlushPgoProfile(): Boolean
 
     /**
      * Stop the audio engine.

@@ -28,9 +28,14 @@
 #include <cstring>
 #include <ctime>
 #include <unistd.h>
-#include <algorithm>
 #include <thread>
 #include <limits>
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <pthread.h>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 
 #define LOG_TAG "AudioEngine"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -42,6 +47,37 @@ constexpr int32_t usbFailureCode(monotrypt::usb::StartError error) noexcept {
     return static_cast<int32_t>(error);
 }
 constexpr float kMeterReleaseSeconds = 0.15f;
+
+void measureStereoPeaks(
+        const float* __restrict input,
+        const float* __restrict outputLeft,
+        const float* __restrict outputRight,
+        int32_t frames, float& inputPeak, float& outputPeak) noexcept {
+    int32_t frame = 0;
+#if defined(__aarch64__)
+    float32x4_t inputMaximum = vdupq_n_f32(0.0f);
+    float32x4_t outputMaximum = vdupq_n_f32(0.0f);
+    for (; frame + 4 <= frames; frame += 4) {
+        inputMaximum = vmaxnmq_f32(
+            inputMaximum, vabsq_f32(vld1q_f32(input + frame)));
+        outputMaximum = vmaxnmq_f32(
+            outputMaximum,
+            vmaxnmq_f32(vabsq_f32(vld1q_f32(outputLeft + frame)),
+                        vabsq_f32(vld1q_f32(outputRight + frame))));
+    }
+    inputPeak = vmaxnmvq_f32(inputMaximum);
+    outputPeak = vmaxnmvq_f32(outputMaximum);
+#else
+    inputPeak = 0.0f;
+    outputPeak = 0.0f;
+#endif
+    for (; frame < frames; ++frame) {
+        inputPeak = std::max(inputPeak, std::fabs(input[frame]));
+        outputPeak = std::max(
+            outputPeak,
+            std::max(std::fabs(outputLeft[frame]), std::fabs(outputRight[frame])));
+    }
+}
 
 float meterDecayForBlock(int32_t frames, float sampleRate) noexcept {
     if (frames <= 0 || sampleRate <= 0.0f) return 0.0f;
@@ -70,11 +106,144 @@ AudioEngine::~AudioEngine() {
     if (cleanupWorker_.joinable()) cleanupWorker_.join();
 }
 
+void AudioEngine::stopDirectUsbThermalPolicy() noexcept {
+    directUsbThermalPolicyStop_.store(true, std::memory_order_release);
+    directUsbThermalPolicyCv_.notify_one();
+    if (directUsbThermalPolicyThread_.joinable()) {
+        directUsbThermalPolicyThread_.join();
+    }
+    directUsbThermalSafetyActive_ = false;
+}
+
+void AudioEngine::directUsbThermalPolicyLoop() {
+    (void)pthread_setname_np(pthread_self(), "UsbThermalPolicy");
+#if defined(__ANDROID__) || defined(__linux__)
+    (void)setpriority(PRIO_PROCESS,
+                      static_cast<id_t>(syscall(SYS_gettid)), 5);
+#endif
+    int32_t initialRenderTid = 0;
+    int32_t initialEventTid = 0;
+    {
+        std::unique_lock<std::mutex> lock(directUsbThermalPolicyMutex_);
+        while (!directUsbThermalPolicyStop_.load(std::memory_order_acquire)) {
+            initialRenderTid =
+                directUsbRenderTid_.load(std::memory_order_acquire);
+            initialEventTid =
+                directUsbOutput_ ? directUsbOutput_->eventThreadTid() : 0;
+            if (initialRenderTid > 0 && initialEventTid > 0 &&
+                initialEventTid != initialRenderTid) {
+                break;
+            }
+            directUsbThermalPolicyCv_.wait_for(
+                lock, std::chrono::milliseconds(1));
+        }
+    }
+    if (directUsbThermalPolicyStop_.load(std::memory_order_acquire))
+        return;
+    const int32_t initialThreadIds[] = {
+        initialRenderTid, initialEventTid
+    };
+    constexpr size_t initialThreadCount = 2;
+    const int64_t targetWorkDurationNs = std::max<int64_t>(
+        1, static_cast<int64_t>(
+            1'000'000'000.0 * static_cast<double>(callbackFrameCount_) /
+            static_cast<double>(sampleRate_)));
+    PerformanceHintSession performanceHint(
+        targetWorkDurationNs, initialThreadIds, initialThreadCount);
+    ThermalHeadroomMonitor monitor;
+    bool safetyActive = false;
+    int32_t configuredRenderTid = initialRenderTid;
+    int32_t configuredEventTid = initialEventTid;
+
+    const auto updateHintThreads = [&]() noexcept {
+        if (!performanceHint.active()) return;
+        const int32_t renderTid =
+            directUsbRenderTid_.load(std::memory_order_acquire);
+        const int32_t eventTid =
+            directUsbOutput_ ? directUsbOutput_->eventThreadTid() : 0;
+        if (renderTid <= 0 ||
+            (renderTid == configuredRenderTid &&
+             eventTid == configuredEventTid)) {
+            return;
+        }
+        const int32_t threadIds[] = {renderTid, eventTid};
+        const size_t threadCount =
+            eventTid > 0 && eventTid != renderTid ? 2U : 1U;
+        if (performanceHint.setThreads(threadIds, threadCount)) {
+            LOGI("ADPF session audioThreads=%zu", threadCount);
+        }
+        configuredRenderTid = renderTid;
+        configuredEventTid = eventTid;
+    };
+
+    directUsbPerformanceHintActive_.store(
+        performanceHint.active(), std::memory_order_release);
+    directUsbPerformanceHintSession_.store(
+        performanceHint.active()
+            ? static_cast<void*>(&performanceHint)
+            : nullptr,
+        std::memory_order_release);
+
+    for (;;) {
+        std::unique_lock<std::mutex> lock(directUsbThermalPolicyMutex_);
+        if (directUsbThermalPolicyCv_.wait_for(
+                lock, std::chrono::seconds(1), [this] {
+                    return directUsbThermalPolicyStop_.load(
+                        std::memory_order_acquire);
+                })) {
+            break;
+        }
+        lock.unlock();
+        if (!directUsbSession_.load(std::memory_order_acquire)) continue;
+        updateHintThreads();
+        const float headroom = monitor.sample(5);
+        if (!std::isfinite(headroom)) continue;
+        if (!safetyActive && headroom >= 0.85f) {
+            const int32_t quantum = static_cast<int32_t>(
+                directUsbEffectiveQuantum_.load(std::memory_order_acquire));
+            const int32_t currentTarget = static_cast<int32_t>(
+                directUsbSteadyTargetFrames_.load(std::memory_order_acquire));
+            if (quantum > 0 && currentTarget > 0 && directUsbOutput_) {
+                directUsbOutput_->setGraphQuantum(
+                    quantum, directUsbConfiguredMultiplier_,
+                    currentTarget + 2 * quantum);
+                directUsbSteadyTargetFrames_.store(
+                    static_cast<uint32_t>(std::max(
+                        0, directUsbOutput_->playbackTargetFrames())),
+                    std::memory_order_release);
+                safetyActive = true;
+                directUsbThermalSafetyActive_ = true;
+                LOGI("Direct USB thermal safety entered (headroom=%.3f)",
+                     headroom);
+            }
+        } else if (safetyActive && headroom <= 0.65f) {
+            const int32_t quantum = static_cast<int32_t>(
+                directUsbEffectiveQuantum_.load(std::memory_order_acquire));
+            if (quantum > 0 && directUsbOutput_) {
+                directUsbOutput_->setGraphQuantum(
+                    quantum, directUsbConfiguredMultiplier_,
+                    directUsbConfiguredWatermarkFrames_);
+                directUsbSteadyTargetFrames_.store(
+                    static_cast<uint32_t>(std::max(
+                        0, directUsbOutput_->playbackTargetFrames())),
+                    std::memory_order_release);
+            }
+            safetyActive = false;
+            directUsbThermalSafetyActive_ = false;
+            LOGI("Direct USB thermal safety exited (headroom=%.3f)",
+                 headroom);
+        }
+    }
+    directUsbPerformanceHintSession_.store(nullptr, std::memory_order_release);
+    directUsbPerformanceHintActive_.store(false, std::memory_order_release);
+}
+
 
 bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                         int32_t subslotBytes, int32_t channels,
                                         int32_t inputChannel, int32_t outputPair,
-                                        int32_t bufferFrames, int32_t periodMultiplier) {
+                                        int32_t bufferFrames, int32_t periodMultiplier,
+                                        int32_t watermarkFrames) {
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
     if (directUsbSession_.load(std::memory_order_acquire)) {
         return true;
@@ -88,7 +257,8 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
         channels < 2 || channels > DirectUsbOutput::kMaxDeviceChannels ||
         inputChannel < 0 ||
         inputChannel >= directUsbOutput_->captureChannelCount() ||
-        outputPair < 0 || outputPair * 2 + 1 >= channels) {
+        outputPair < 0 || outputPair * 2 + 1 >= channels ||
+        watermarkFrames < 0) {
         return false;
     }
     const int32_t renderFrames = bufferFrames > 0
@@ -124,7 +294,8 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
         directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
         return false;
     }
-    directUsbOutput_->setGraphQuantum(renderFrames, multiplier);
+    directUsbOutput_->setGraphQuantum(
+        renderFrames, multiplier, watermarkFrames);
     const int32_t primeFrames = std::max(0, directUsbOutput_->startupPrimeFrames());
     const int32_t startupBlocks =
         (primeFrames + renderFrames - 1) / renderFrames;
@@ -132,6 +303,10 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbSteadyTargetFrames_.store(
         static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())),
         std::memory_order_release);
+    directUsbConfiguredWatermarkFrames_ = watermarkFrames;
+    directUsbConfiguredMultiplier_ = multiplier;
+    directUsbThermalSafetyActive_ = false;
+    directUsbThermalPolicyStop_.store(false, std::memory_order_release);
     try {
         directUsbInputBuffer_.assign(static_cast<size_t>(renderFrames), 0.0f);
         directUsbOutputLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
@@ -168,10 +343,18 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbSession_.store(true, std::memory_order_release);
     isRunning_.store(false, std::memory_order_release);
     try {
+        directUsbThermalPolicyThread_ =
+            std::thread(&AudioEngine::directUsbThermalPolicyLoop, this);
+    } catch (...) {
+        LOGE("Direct USB thermal/ADPF policy thread unavailable");
+        directUsbThermalPolicyStop_.store(true, std::memory_order_release);
+    }
+    try {
         directUsbRenderThread_ = std::thread(&AudioEngine::directUsbRenderLoop, this);
     } catch (...) {
         directUsbSession_.store(false, std::memory_order_release);
         isRunning_.store(false, std::memory_order_release);
+        stopDirectUsbThermalPolicy();
         directUsbOutput_->requestStop();
         directUsbFailureCode_.store(
             usbFailureCode(monotrypt::usb::StartError::Unknown),
@@ -180,8 +363,8 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
         directUsbOutput_->stop();
         cleanupEngineState();
         return false;
-
     }
+    directUsbThermalPolicyCv_.notify_one();
     return true;
 }
 
@@ -242,6 +425,7 @@ void AudioEngine::finishDirectUsbCleanup() {
     isRunning_.store(false, std::memory_order_release);
     if (directUsbOutput_) directUsbOutput_->requestStop();
     if (directUsbRenderThread_.joinable()) directUsbRenderThread_.join();
+    stopDirectUsbThermalPolicy();
     if (directUsbOutput_) directUsbOutput_->stop();
     cleanupEngineState();
     publishedLatencyMs_.store(0.0, std::memory_order_release);
@@ -413,6 +597,8 @@ void AudioEngine::processRackBlock(const float* const* liveInputs, float* const*
 }
 
 void AudioEngine::directUsbRenderLoop() {
+    directUsbRenderTid_.store(
+        static_cast<int32_t>(getTid()), std::memory_order_release);
     directUsbRenderUrgentAudio_.store(
         setCurrentThreadUrgentAudio("UsbAudioRender"),
         std::memory_order_release);
@@ -424,11 +610,6 @@ void AudioEngine::directUsbRenderLoop() {
         2, static_cast<int>(std::ceil(period.count() * 2000.0)));
     const int captureTimeoutMs = std::min(
         1000, std::max(20, static_cast<int>(std::ceil(period.count() * 4000.0))));
-    const int64_t targetWorkDurationNs = std::max<int64_t>(
-        1, std::chrono::duration_cast<std::chrono::nanoseconds>(period).count());
-    PerformanceHintSession performanceHint(targetWorkDurationNs);
-    directUsbPerformanceHintActive_.store(
-        performanceHint.active(), std::memory_order_release);
     int captureMissStreak = 0;
     int failureCode = 0;
 
@@ -499,13 +680,11 @@ void AudioEngine::directUsbRenderLoop() {
             static_cast<float>(std::chrono::duration<double>(elapsed).count() / period.count())
         ), std::memory_order_relaxed);
 
-        float inputPeak = 0.0f;
-        float outputPeak = 0.0f;
-        for (int32_t i = 0; i < frames; ++i) {
-            inputPeak = std::max(inputPeak, std::fabs(directUsbInputBuffer_[i]));
-            outputPeak = std::max(outputPeak, std::max(
-                std::fabs(directUsbOutputLeft_[i]), std::fabs(directUsbOutputRight_[i])));
-        }
+        float inputPeak;
+        float outputPeak;
+        measureStereoPeaks(
+            directUsbInputBuffer_.data(), directUsbOutputLeft_.data(),
+            directUsbOutputRight_.data(), frames, inputPeak, outputPeak);
         const float peakDecay = meterDecayForBlock(frames, sampleRate_);
         inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * peakDecay);
         outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * peakDecay);
@@ -634,7 +813,11 @@ void AudioEngine::directUsbRenderLoop() {
         const uint64_t cycleNs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - cycleBegan).count());
-        performanceHint.reportActualWorkDuration(cycleNs);
+        if (auto* performanceHint = static_cast<PerformanceHintSession*>(
+                directUsbPerformanceHintSession_.load(
+                    std::memory_order_acquire))) {
+            performanceHint->reportActualWorkDuration(cycleNs);
+        }
         if (submitted) {
             if (directUsbState_.load(std::memory_order_acquire) == DirectUsbState::Running) {
                 uint64_t peak = directUsbPeakCycleNs_.load(std::memory_order_relaxed);
@@ -658,7 +841,7 @@ void AudioEngine::directUsbRenderLoop() {
         }
         break;
     }
-    directUsbPerformanceHintActive_.store(false, std::memory_order_release);
+    directUsbRenderTid_.store(0, std::memory_order_release);
     const bool sessionWasActive =
         directUsbSession_.exchange(false, std::memory_order_acq_rel);
     if (failureCode == 0 && sessionWasActive) {

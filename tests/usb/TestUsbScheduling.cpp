@@ -156,7 +156,7 @@ TEST(UsbPacketSchedule, NominalTransferFramesRejectsNonPositiveInputs) {
 
 
 
-TEST(UsbPlaybackWatermark, UsesThreeQuantumTargetAndAdmissionHeadroom) {
+TEST(UsbPlaybackWatermark, SupportsExactExplicitGraphQuantaAndClampsBounds) {
     struct WatermarkCase {
         int request;
         int expectedGraphQuantum;
@@ -165,15 +165,25 @@ TEST(UsbPlaybackWatermark, UsesThreeQuantumTargetAndAdmissionHeadroom) {
         const char* name;
     };
     const WatermarkCase cases[] = {
-        {16, 16, 48, 64, "minimum graph quantum"},
-        {64, 64, 192, 256, "64-frame direct-USB low-latency request"},
-        {256, 256, 768, 1024, "256-frame direct-USB low-latency request"},
-        {512, 512, 1024, 1536, "512-frame request capped at maximum target"},
-        {1024, 1024, 1024, 2048, "maximum graph quantum request"},
+        {4, 4, 12, 16, "4-frame experimental quantum"},
+        {6, 6, 18, 24, "6-frame experimental quantum"},
+        {8, 8, 24, 32, "8-frame experimental quantum"},
+        {12, 12, 36, 48, "12-frame experimental quantum"},
+        {16, 16, 48, 64, "16-frame quantum"},
+        {24, 24, 72, 96, "24-frame experimental quantum"},
+        {32, 32, 96, 128, "32-frame quantum"},
+        {48, 48, 144, 192, "48-frame experimental quantum"},
+        {64, 64, 192, 256, "64-frame quantum"},
+        {72, 72, 216, 288, "72-frame experimental quantum"},
+        {96, 96, 288, 384, "96-frame experimental quantum"},
+        {128, 128, 384, 512, "128-frame quantum"},
+        {256, 256, 768, 1024, "256-frame quantum"},
+        {512, 512, 1024, 1536, "512-frame quantum capped at target maximum"},
+        {1024, 1024, 1024, 2048, "maximum graph quantum"},
+        {0, 4, 12, 16, "zero request clamps to minimum quantum"},
+        {-1, 4, 12, 16, "negative request clamps to minimum quantum"},
         {monotrypt::usb::kMaxGraphQuantum + 1, 1024, 1024, 2048,
-         "oversized request"},
-        {0, 16, 48, 64, "zero request"},
-        {-1, 16, 48, 64, "negative request"},
+         "oversized request clamps to maximum quantum"},
     };
 
     for (const auto& test : cases) {
@@ -225,6 +235,45 @@ TEST(UsbPlaybackWatermark, ExplicitMultiplierControlsTargetAndClampsBounds) {
     EXPECT_EQ(aboveMaximum.graphQuantum, 64);
     EXPECT_EQ(aboveMaximum.targetFrames, 512);
     EXPECT_EQ(aboveMaximum.frameLimit, 576);
+}
+TEST(UsbPlaybackWatermark, ResolvesAutomaticAndManualTargetsWithoutHiddenReserve) {
+    struct ResolveCase {
+        int automaticTargetFrames;
+        int manualTargetFrames;
+        int graphQuantum;
+        int maxTargetFrames;
+        int expected;
+        const char* name;
+    };
+    const ResolveCase cases[] = {
+        {144, 0, 16, 4096, 144, "zero manual uses automatic target exactly"},
+        {144, -1, 16, 4096, 144, "negative manual uses automatic target exactly"},
+        {-20, 0, 16, 4096, 0, "automatic target clamps below zero"},
+        {5000, -1, 64, 4096, 4096,
+         "automatic target clamps to physical maximum"},
+        {512, 144, 16, 4096, 144,
+         "graph16 manual144 overrides larger automatic target exactly"},
+        {512, 144, 64, 4096, 144,
+         "graph64 manual144 remains exact above quantum"},
+        {512, 1, 16, 4096, 16,
+         "manual target clamps up to graph16 quantum"},
+        {512, 63, 64, 4096, 64,
+         "manual target clamps up to graph64 quantum"},
+        {512, 5000, 16, 4096, 4096,
+         "manual target clamps down to physical maximum"},
+        {512, 4097, 64, 4096, 4096,
+         "graph64 manual target above maximum clamps down"},
+        {512, 144, 64, 0, 0, "zero physical capacity disables target"},
+        {512, 144, 64, -1, 0, "negative physical capacity disables target"},
+    };
+
+    for (const auto& test : cases) {
+        SCOPED_TRACE(test.name);
+        EXPECT_EQ(monotrypt::usb::resolvedPlaybackTargetFrames(
+                      test.automaticTargetFrames, test.manualTargetFrames,
+                      test.graphQuantum, test.maxTargetFrames),
+                  test.expected);
+    }
 }
 
 TEST(UsbPlaybackWatermark, EveryWatermarkFitsPhysicalWorstFormatRing) {

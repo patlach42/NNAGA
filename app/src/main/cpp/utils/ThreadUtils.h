@@ -117,7 +117,10 @@ inline void applyCurrentThreadAudioAffinity() noexcept {
 // min-SDK 26 binary remains loadable on pre-API-31 devices.
 class PerformanceHintSession {
 public:
-    explicit PerformanceHintSession(int64_t targetDurationNs) noexcept {
+    explicit PerformanceHintSession(
+            int64_t targetDurationNs,
+            const int32_t* threadIds = nullptr,
+            size_t threadCount = 0) noexcept {
 #if defined(__ANDROID__)
         if (targetDurationNs <= 0) return;
         library_ = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
@@ -130,19 +133,28 @@ public:
             dlsym(library_, "APerformanceHint_reportActualWorkDuration"));
         closeSession_ = reinterpret_cast<CloseSessionFn>(
             dlsym(library_, "APerformanceHint_closeSession"));
+        setThreads_ = reinterpret_cast<SetThreadsFn>(
+            dlsym(library_, "APerformanceHint_setThreads"));
         if (!getManager_ || !createSession_ || !reportActual_ || !closeSession_) {
             dlclose(library_);
             library_ = nullptr;
             return;
         }
         void* manager = getManager_();
-        const int32_t tid = static_cast<int32_t>(getTid());
+        const int32_t currentTid = static_cast<int32_t>(getTid());
+        const int32_t* initialThreadIds =
+            threadIds && threadCount > 0 ? threadIds : &currentTid;
+        const size_t initialThreadCount =
+            threadIds && threadCount > 0 ? threadCount : 1U;
         if (manager) {
             session_ = createSession_(
-                manager, &tid, 1, targetDurationNs);
+                manager, initialThreadIds, initialThreadCount,
+                targetDurationNs);
         }
 #else
         (void)targetDurationNs;
+        (void)threadIds;
+        (void)threadCount;
 #endif
     }
 
@@ -164,6 +176,17 @@ public:
 #endif
     }
 
+    bool setThreads(const int32_t* tids, size_t count) noexcept {
+#if defined(__ANDROID__)
+        return session_ && setThreads_ && tids && count > 0 &&
+               setThreads_(session_, tids, count) == 0;
+#else
+        (void)tids;
+        (void)count;
+        return false;
+#endif
+    }
+
     void reportActualWorkDuration(uint64_t durationNs) noexcept {
 #if defined(__ANDROID__)
         if (session_ && durationNs > 0) {
@@ -179,6 +202,7 @@ private:
     using GetManagerFn = void* (*)();
     using CreateSessionFn = void* (*)(void*, const int32_t*, size_t, int64_t);
     using ReportActualFn = int (*)(void*, int64_t);
+    using SetThreadsFn = int (*)(void*, const int32_t*, size_t);
     using CloseSessionFn = void (*)(void*);
 
     void* library_ = nullptr;
@@ -186,7 +210,63 @@ private:
     GetManagerFn getManager_ = nullptr;
     CreateSessionFn createSession_ = nullptr;
     ReportActualFn reportActual_ = nullptr;
+    SetThreadsFn setThreads_ = nullptr;
     CloseSessionFn closeSession_ = nullptr;
+#endif
+};
+
+class ThermalHeadroomMonitor {
+public:
+    ThermalHeadroomMonitor() noexcept {
+#if defined(__ANDROID__)
+        library_ = dlopen("libandroid.so", RTLD_NOW | RTLD_LOCAL);
+        if (!library_) return;
+        acquire_ = reinterpret_cast<AcquireFn>(
+            dlsym(library_, "AThermal_acquireManager"));
+        release_ = reinterpret_cast<ReleaseFn>(
+            dlsym(library_, "AThermal_releaseManager"));
+        getHeadroom_ = reinterpret_cast<GetHeadroomFn>(
+            dlsym(library_, "AThermal_getThermalHeadroom"));
+        if (acquire_ && release_ && getHeadroom_)
+            manager_ = acquire_();
+        if (!manager_) {
+            dlclose(library_);
+            library_ = nullptr;
+        }
+#endif
+    }
+
+    ~ThermalHeadroomMonitor() {
+#if defined(__ANDROID__)
+        if (manager_ && release_) release_(manager_);
+        if (library_) dlclose(library_);
+#endif
+    }
+
+    ThermalHeadroomMonitor(const ThermalHeadroomMonitor&) = delete;
+    ThermalHeadroomMonitor& operator=(const ThermalHeadroomMonitor&) = delete;
+
+    float sample(int forecastSeconds) const noexcept {
+#if defined(__ANDROID__)
+        return manager_ && getHeadroom_
+            ? getHeadroom_(manager_, forecastSeconds)
+            : -1.0f;
+#else
+        (void)forecastSeconds;
+        return -1.0f;
+#endif
+    }
+
+private:
+#if defined(__ANDROID__)
+    using AcquireFn = void* (*)();
+    using ReleaseFn = void (*)(void*);
+    using GetHeadroomFn = float (*)(void*, int);
+    void* library_ = nullptr;
+    void* manager_ = nullptr;
+    AcquireFn acquire_ = nullptr;
+    ReleaseFn release_ = nullptr;
+    GetHeadroomFn getHeadroom_ = nullptr;
 #endif
 };
 

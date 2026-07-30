@@ -185,6 +185,8 @@ static void sigabrt_handler(int signum) {
     raise(SIGABRT);
 }
 
+extern "C" int __llvm_profile_write_file(void) __attribute__((weak));
+
 extern "C" {
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
@@ -428,7 +430,7 @@ JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         JNIEnv* env, jobject thiz, jint sampleRate, jint bitsPerSample,
         jint bytesPerSample, jint channels, jint inputChannel, jint outputPair,
-        jint bufferFrames, jint periodMultiplier) {
+        jint bufferFrames, jint periodMultiplier, jint watermarkFrames) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->audioEngine->startDirectUsbSession(
         static_cast<float>(sampleRate),
@@ -438,8 +440,19 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         static_cast<int32_t>(inputChannel),
         static_cast<int32_t>(outputPair),
         static_cast<int32_t>(bufferFrames),
-        static_cast<int32_t>(periodMultiplier)
+        static_cast<int32_t>(periodMultiplier),
+        static_cast<int32_t>(watermarkFrames)
     ) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeFlushPgoProfile(
+        JNIEnv* env, jobject thiz) {
+    (void)env;
+    (void)thiz;
+    if (__llvm_profile_write_file == nullptr)
+        return JNI_FALSE;
+    return __llvm_profile_write_file() == 0 ? JNI_TRUE : JNI_FALSE;
 }
 
 

@@ -1245,6 +1245,7 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
     stopRequested_.store(false, std::memory_order_relaxed);
     transportFailed_.store(false, std::memory_order_relaxed);
     eventThreadUrgentAudio_.store(false, std::memory_order_relaxed);
+    eventThreadTid_.store(0, std::memory_order_relaxed);
 
     if (!deferOutputStart_ && !startIsoPump()) {
         if (lastError_.load(std::memory_order_relaxed) == StartError::Ok) {
@@ -1458,6 +1459,9 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
             // submitting OUT transfers, then require enough metadata to size
             // every initially queued packet without a nominal fallback.
             eventThread_ = std::thread([this]() {
+                eventThreadTid_.store(
+                    static_cast<int32_t>(guitarrackcraft::getTid()),
+                    std::memory_order_release);
                 eventThreadUrgentAudio_.store(
                     guitarrackcraft::setCurrentThreadUrgentAudio("UsbIsoEvents"),
                     std::memory_order_release);
@@ -1465,6 +1469,7 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                     timeval tv{0, 100000};
                     libusb_handle_events_timeout(ctx_, &tv);
                 }
+                eventThreadTid_.store(0, std::memory_order_release);
             });
             const int startupPacketsPerSecond = packetsPerSecondForInterval(
                 format_.isHighSpeed, format_.bInterval);
@@ -2059,6 +2064,9 @@ bool LibusbUacDriver::startIsoPump(bool submit) {
     }
     if (!eventThread_.joinable()) {
         eventThread_ = std::thread([this]() {
+            eventThreadTid_.store(
+                static_cast<int32_t>(guitarrackcraft::getTid()),
+                std::memory_order_release);
             eventThreadUrgentAudio_.store(
                 guitarrackcraft::setCurrentThreadUrgentAudio("UsbIsoEvents"),
                 std::memory_order_release);
@@ -2066,6 +2074,7 @@ bool LibusbUacDriver::startIsoPump(bool submit) {
                 timeval tv{0, 100000};
                 libusb_handle_events_timeout(ctx_, &tv);
             }
+            eventThreadTid_.store(0, std::memory_order_release);
         });
     }
     if (!submit) return true;
@@ -2468,7 +2477,8 @@ int LibusbUacDriver::bufferedFrames() const {
                             static_cast<size_t>(stride));
 }
 
-void LibusbUacDriver::setGraphQuantum(int frames, int periodMultiplier) {
+void LibusbUacDriver::setGraphQuantum(
+        int frames, int periodMultiplier, int watermarkFrames) {
     const auto config = playbackWatermarkConfig(frames, periodMultiplier);
     const int stride = format_.channels * format_.bytesPerSample;
     const int physicalFrames = stride > 0
@@ -2495,10 +2505,10 @@ void LibusbUacDriver::setGraphQuantum(int frames, int periodMultiplier) {
     const int watermarkTransfers = playbackWatermarkTransferCount(
         transferCount_, reserveTransfers, lowLatencyProfile_);
     const int queuedTransferFrames = watermarkTransfers * transferFrames;
-    const int target = std::min(
-        effectivePlaybackTargetFrames(config.targetFrames,
-                                      queuedTransferFrames),
-        maxTarget);
+    const int automaticTarget = effectivePlaybackTargetFrames(
+        config.targetFrames, queuedTransferFrames);
+    const int target = resolvedPlaybackTargetFrames(
+        automaticTarget, watermarkFrames, config.graphQuantum, maxTarget);
     const int prime = startupPlaybackPrimeFrames(maxTarget, exactInitialPacketFrames_, target, config.graphQuantum);
     graphQuantum_.store(config.graphQuantum, std::memory_order_release);
     playbackTargetFrames_.store(target, std::memory_order_release);

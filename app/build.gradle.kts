@@ -55,6 +55,12 @@ android {
             cmake {
                 cppFlags += "-std=c++17"
                 arguments += listOf("-DANDROID_STL=c++_shared")
+                val audioPgoMode =
+                    (project.findProperty("grcAudioPgoMode")?.toString() ?: "OFF").uppercase()
+                arguments += "-DGRC_AUDIO_PGO_MODE=$audioPgoMode"
+                project.findProperty("grcAudioPgoProfile")?.toString()
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { arguments += "-DGRC_AUDIO_PGO_PROFILE=${project.file(it).absolutePath}" }
             }
         }
 

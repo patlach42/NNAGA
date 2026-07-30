@@ -5,6 +5,9 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#if defined(__aarch64__)
+#include <arm_neon.h>
+#endif
 
 namespace guitarrackcraft {
 namespace {
@@ -14,6 +17,27 @@ void silence(float* const* outputs, uint32_t frames) noexcept {
     if (!outputs) return;
     for (uint32_t channel = 0; channel < kStereoChannels; ++channel) {
         if (outputs[channel]) std::memset(outputs[channel], 0, sizeof(float) * frames);
+    }
+}
+
+void mixScaledStereo(
+        float* __restrict mixLeft, float* __restrict mixRight,
+        const float* __restrict inputLeft, const float* __restrict inputRight,
+        uint32_t frames, float gain) noexcept {
+    uint32_t frame = 0;
+#if defined(__aarch64__)
+    for (; frame + 4 <= frames; frame += 4) {
+        const float32x4_t left = vld1q_f32(inputLeft + frame);
+        const float32x4_t right = vld1q_f32(inputRight + frame);
+        vst1q_f32(mixLeft + frame,
+                  vmlaq_n_f32(vld1q_f32(mixLeft + frame), left, gain));
+        vst1q_f32(mixRight + frame,
+                  vmlaq_n_f32(vld1q_f32(mixRight + frame), right, gain));
+    }
+#endif
+    for (; frame < frames; ++frame) {
+        mixLeft[frame] += inputLeft[frame] * gain;
+        mixRight[frame] += inputRight[frame] * gain;
     }
 }
 } // namespace
@@ -469,10 +493,9 @@ void RackGraph::process(const float* const* liveInputs, float* const* outputs, u
         float* trackOutput[2] = {node.outputLeft.data(), node.outputRight.data()};
         node.chain->process(source, trackOutput, frames, context);
         const float volume = node.volume.load(std::memory_order_acquire);
-        for (uint32_t frame = 0; frame < frames; ++frame) {
-            snapshot->mixLeft[frame] += trackOutput[0][frame] * volume;
-            snapshot->mixRight[frame] += trackOutput[1][frame] * volume;
-        }
+        mixScaledStereo(
+            snapshot->mixLeft.data(), snapshot->mixRight.data(),
+            trackOutput[0], trackOutput[1], frames, volume);
     }
     const float* mix[2] = {snapshot->mixLeft.data(), snapshot->mixRight.data()};
     snapshot->master->process(mix, outputs, frames, context);

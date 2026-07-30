@@ -249,9 +249,11 @@ public:
     uint64_t playbackBackpressureCount() const noexcept {
         return driver_.playbackBackpressureCount();
     }
-    void setGraphQuantum(int frames, int periodMultiplier =
-                         monotrypt::usb::kDefaultPeriodMultiplier) noexcept {
-        driver_.setGraphQuantum(frames, periodMultiplier);
+    void setGraphQuantum(
+            int frames,
+            int periodMultiplier = monotrypt::usb::kDefaultPeriodMultiplier,
+            int watermarkFrames = 0) noexcept {
+        driver_.setGraphQuantum(frames, periodMultiplier, watermarkFrames);
     }
     int bufferedFrames() const noexcept { return driver_.bufferedFrames(); }
     int writableFrames() const noexcept { return driver_.writableFrames(); }
@@ -267,6 +269,9 @@ public:
     }
     long writtenFrames() const noexcept { return driver_.writtenFrames(); }
     long playedFrames() const noexcept { return driver_.playedFrames(); }
+    int32_t eventThreadTid() const noexcept {
+        return driver_.eventThreadTid();
+    }
 
 private:
     void packPcm(float value, uint8_t* out) const noexcept {

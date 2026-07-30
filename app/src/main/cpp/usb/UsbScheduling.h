@@ -6,7 +6,7 @@
 
 namespace monotrypt::usb {
 
-constexpr int kMinGraphQuantum = 16;
+constexpr int kMinGraphQuantum = 4;
 constexpr int kMaxGraphQuantum = 1024;
 constexpr std::size_t kPlaybackRingBytes = 1u << 16;
 constexpr int kMaxTransportChannels = 8;
@@ -85,6 +85,18 @@ inline PlaybackWatermarkConfig playbackWatermarkConfig(
 inline int effectivePlaybackTargetFrames(int configured,
                                          int queuedTransferFrames) noexcept {
     return std::max(0, std::max(configured, queuedTransferFrames));
+}
+
+constexpr int resolvedPlaybackTargetFrames(
+        int automaticTargetFrames, int manualTargetFrames,
+        int graphQuantum, int maxTargetFrames) noexcept {
+    const int maximum = std::max(0, maxTargetFrames);
+    if (maximum == 0)
+        return 0;
+    if (manualTargetFrames <= 0)
+        return std::min(maximum, std::max(0, automaticTargetFrames));
+    const int minimum = std::min(maximum, std::max(0, graphQuantum));
+    return std::min(maximum, std::max(minimum, manualTargetFrames));
 }
 constexpr uint64_t playbackRunwayNanoseconds(
         uint64_t queuedFrames, uint32_t sampleRate) noexcept {

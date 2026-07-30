@@ -83,7 +83,8 @@ public:
     bool startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
                                int32_t subslotBytes, int32_t channels,
                                int32_t inputChannel, int32_t outputPair,
-                               int32_t bufferFrames, int32_t periodMultiplier);
+                               int32_t bufferFrames, int32_t periodMultiplier,
+                               int32_t watermarkFrames);
 
     void stop();
     bool openDirectUsbDevice(int fd);
@@ -178,6 +179,17 @@ public:
 
 private:
     void directUsbRenderLoop();
+    void directUsbThermalPolicyLoop();
+    void stopDirectUsbThermalPolicy() noexcept;
+    std::thread directUsbThermalPolicyThread_;
+    std::mutex directUsbThermalPolicyMutex_;
+    std::condition_variable directUsbThermalPolicyCv_;
+    std::atomic<bool> directUsbThermalPolicyStop_{false};
+    int32_t directUsbConfiguredWatermarkFrames_ = 0;
+    int32_t directUsbConfiguredMultiplier_ = 0;
+    bool directUsbThermalSafetyActive_ = false;
+    std::atomic<int32_t> directUsbRenderTid_{0};
+    std::atomic<void*> directUsbPerformanceHintSession_{nullptr};
     std::thread directUsbRenderThread_;
     std::atomic<bool> directUsbSession_{false};
     void cleanupWorkerLoop();

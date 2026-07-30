@@ -90,6 +90,7 @@ private fun AudioSettingsContent(
 ) {
     val context = LocalContext.current
     var selectedBufferSize by remember { mutableIntStateOf(AudioSettingsManager.getBufferSize(context)) }
+    var isCalibrationRunning by remember { mutableStateOf(false) }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -97,9 +98,13 @@ private fun AudioSettingsContent(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        DirectUsbSessionSettings()
+        DirectUsbSessionSettings(
+            selectedBufferFrames = selectedBufferSize,
+            onCalibrationStateChange = { isCalibrationRunning = it }
+        )
         BufferSizeDropdown(
             selectedSize = selectedBufferSize,
+            enabled = !isCalibrationRunning,
             onSelected = { size ->
                 selectedBufferSize = size
                 AudioSettingsManager.setBufferSize(context, size)
@@ -125,7 +130,10 @@ private fun AudioSettingsContent(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DirectUsbSessionSettings() {
+private fun DirectUsbSessionSettings(
+    selectedBufferFrames: Int,
+    onCalibrationStateChange: (Boolean) -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var devices by remember { mutableStateOf<List<DirectUsbDeviceOption>>(emptyList()) }
@@ -133,6 +141,8 @@ private fun DirectUsbSessionSettings() {
     var formats by remember { mutableStateOf<List<DirectUsbFormat>>(emptyList()) }
     var selectedRate by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRate(context)) }
     var selectedBits by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbBits(context)) }
+    var selectedSubslot by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbSubslot(context)) }
+    var selectedChannels by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbChannels(context)) }
     var selectedInputChannel by remember {
         mutableIntStateOf(AudioSettingsManager.getDirectUsbInputChannel(context))
     }
@@ -143,6 +153,10 @@ private fun DirectUsbSessionSettings() {
     var selectedPeriodMultiplier by remember {
         mutableIntStateOf(AudioSettingsManager.getDirectUsbPeriodMultiplier(context))
     }
+    var selectedWatermark by remember { mutableIntStateOf(0) }
+    var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
+    var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
+    var isCalibrating by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
     var devicesExpanded by remember { mutableStateOf(false) }
 
@@ -190,15 +204,15 @@ private fun DirectUsbSessionSettings() {
         onDispose { runCatching { context.unregisterReceiver(receiver) } }
     }
 
-
     fun selectCompatibleFormat() {
         val selected = formats.firstOrNull {
             it.sampleRate == selectedRate && it.bits == selectedBits
         } ?: formats.firstOrNull()
         if (selected != null) {
             selectedRate = selected.sampleRate
-
             selectedBits = selected.bits
+            selectedSubslot = selected.subslotBytes
+            selectedChannels = selected.channels
             DirectUsbAudioManager.startSelected(context, selected)
         }
     }
@@ -210,12 +224,13 @@ private fun DirectUsbSessionSettings() {
     Text("USB Interface", style = MaterialTheme.typography.labelLarge)
     ExposedDropdownMenuBox(
         expanded = devicesExpanded,
-        onExpandedChange = { devicesExpanded = it }
+        onExpandedChange = { if (!isCalibrating) devicesExpanded = it }
     ) {
         OutlinedTextField(
             value = selectedDevice?.name ?: "No USB audio interface found",
             onValueChange = {},
             readOnly = true,
+            enabled = !isCalibrating,
             modifier = Modifier.fillMaxWidth().menuAnchor(),
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(devicesExpanded) }
         )
@@ -226,6 +241,7 @@ private fun DirectUsbSessionSettings() {
             devices.forEach { device ->
                 DropdownMenuItem(
                     text = { Text(device.name) },
+                    enabled = !isCalibrating,
                     onClick = {
                         selectedDevice = device
                         formats = emptyList()
@@ -238,7 +254,8 @@ private fun DirectUsbSessionSettings() {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(
             onClick = { scope.launch { refreshDevices() } },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            enabled = !isCalibrating,
         ) { Text("Refresh") }
         Button(
             onClick = {
@@ -259,6 +276,8 @@ private fun DirectUsbSessionSettings() {
                                 selectedRate = saved.sampleRate
                                 selectedBits = saved.bits
                                 DirectUsbAudioManager.startSelected(context, saved)
+                                selectedSubslot = saved.subslotBytes
+                                selectedChannels = saved.channels
                             }
                             inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
                             if (selectedInputChannel >= inputChannelCount) {
@@ -274,18 +293,19 @@ private fun DirectUsbSessionSettings() {
                     }
                 }
             },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.weight(1f),
+            enabled = !isCalibrating,
         ) { Text("Probe formats") }
     }
 
     val rates = formats.map { it.sampleRate }.distinct()
     val bits = formats.filter { it.sampleRate == selectedRate }.map { it.bits }.distinct()
     if (formats.isNotEmpty()) {
-        IntSelector("Sample rate", selectedRate, rates) {
+        IntSelector("Sample rate", selectedRate, rates, enabled = !isCalibrating) {
             selectedRate = it
             selectCompatibleFormat()
         }
-        IntSelector("Bit depth", selectedBits, bits) {
+        IntSelector("Bit depth", selectedBits, bits, enabled = !isCalibrating) {
             selectedBits = it
             selectCompatibleFormat()
         }
@@ -293,7 +313,8 @@ private fun DirectUsbSessionSettings() {
             IntSelector(
                 label = "Input",
                 selected = selectedInputChannel + 1,
-                options = (1..inputChannelCount).toList()
+                options = (1..inputChannelCount).toList(),
+                enabled = !isCalibrating,
             ) { channel ->
                 selectedInputChannel = channel - 1
                 AudioSettingsManager.setDirectUsbInputChannel(context, selectedInputChannel)
@@ -304,17 +325,125 @@ private fun DirectUsbSessionSettings() {
             IntSelector(
                 label = "Output",
                 selected = selectedOutputPair + 1,
-                options = (1..outputPairCount).toList()
+                options = (1..outputPairCount).toList(),
+                enabled = !isCalibrating,
             ) { pair ->
                 selectedOutputPair = pair - 1
                 AudioSettingsManager.setDirectUsbOutputPair(context, selectedOutputPair)
+            }
+        }
+        val selectedFormat = formats.firstOrNull {
+            it.sampleRate == selectedRate && it.bits == selectedBits &&
+                it.subslotBytes == selectedSubslot && it.channels == selectedChannels
+        }
+        LaunchedEffect(
+            selectedDevice?.vendorId,
+            selectedDevice?.productId,
+            selectedFormat,
+            selectedBufferFrames,
+            selectedPeriodMultiplier
+        ) {
+            selectedWatermark = if (selectedDevice != null && selectedFormat != null) {
+                AudioSettingsManager.getDirectUsbWatermark(
+                    context, selectedDevice!!.vendorId, selectedDevice!!.productId,
+                    selectedFormat.sampleRate, selectedFormat.bits,
+                    selectedFormat.subslotBytes, selectedFormat.channels,
+                    selectedBufferFrames, selectedPeriodMultiplier
+                )
+            } else 0
+        }
+        val watermarkOptions = remember(selectedWatermark) {
+            (listOf(
+                0, 16, 32, 48, 64, 96, 128, 144, 192, 256, 384, 512,
+                768, 1024, 1536, 2048, 3072, 4096, selectedWatermark
+            )).distinct().sorted()
+        }
+        IntSelector(
+            label = "Userspace watermark",
+            selected = selectedWatermark,
+            options = watermarkOptions,
+            enabled = !isCalibrating,
+        ) { frames ->
+            selectedWatermark = frames
+            val device = selectedDevice
+            val format = selectedFormat
+            if (device != null && format != null) {
+                AudioSettingsManager.setDirectUsbWatermark(
+                    context, device.vendorId, device.productId, format.sampleRate,
+                    format.bits, format.subslotBytes, format.channels, frames,
+                    selectedBufferFrames, selectedPeriodMultiplier
+                )
+            }
+        }
+        Text(
+            "Auto derives a safe transport target; manual frames bypass the hidden reserve. " +
+                "Period multiplier affects Auto only.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        selectedFormat?.let { format ->
+            val device = selectedDevice
+            OutlinedButton(
+                onClick = {
+                    if (device == null) {
+                        message = "Select an interface first"
+                    } else {
+                        scope.launch {
+                            isCalibrating = true
+                            onCalibrationStateChange(true)
+                            calibrationResult = null
+                            calibrationProgress = null
+                            try {
+                                DirectUsbAudioManager.calibrate(context, device, format) {
+                                    calibrationProgress = it
+                                }.also { result ->
+                                    calibrationResult = result
+                                    if (selectedDevice?.id == device.id &&
+                                        selectedFormat == result.format
+                                    ) {
+                                        selectedWatermark = result.selectedFrames
+                                    }
+                                }
+                            } finally {
+                                isCalibrating = false
+                                onCalibrationStateChange(false)
+                            }
+                        }
+                    }
+                },
+                enabled = device != null && !isCalibrating
+            ) {
+                Text(if (isCalibrating) "Calibrating…" else "Calibrate this interface")
+            }
+            Text(
+                "Stops the engine. Two measured runs per target; allow about 2–9 minutes.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            calibrationProgress?.let {
+                Text("Candidate ${it.candidateIndex + 1}/${it.candidateCount}: ${it.candidateFrames} frames — ${it.message}")
+            }
+            calibrationResult?.let {
+                val vidPid = "%04x:%04x".format(it.vendorId, it.productId)
+                val milliseconds = "%.2f".format(it.selectedMilliseconds)
+                val passedVariants = it.passedCandidates
+                    .joinToString(separator = ", ", postfix = " frames")
+                    .ifEmpty { "none" }
+                Text(
+                    "VID:PID $vidPid · ${it.format.sampleRate} Hz/${it.format.bits}-bit/" +
+                        "${it.format.subslotBytes}-byte/${it.format.channels}ch · " +
+                        "${it.message}: ${it.selectedFrames} frames ($milliseconds ms); " +
+                        "passed watermark variants: $passedVariants; " +
+                        "failed ${it.failedCandidates.joinToString()}",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
         }
     }
     IntSelector(
         label = "Period multiplier",
         selected = selectedPeriodMultiplier,
-        options = (1..8).toList()
+        options = (1..8).toList(),
+        enabled = !isCalibrating,
     ) { multiplier ->
         selectedPeriodMultiplier = multiplier
         AudioSettingsManager.setDirectUsbPeriodMultiplier(context, multiplier)
@@ -332,27 +461,39 @@ private fun DirectUsbSessionSettings() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun IntSelector(label: String, selected: Int, options: List<Int>, onSelected: (Int) -> Unit) {
+private fun IntSelector(
+    label: String,
+    selected: Int,
+    options: List<Int>,
+    enabled: Boolean = true,
+    onSelected: (Int) -> Unit
+) {
     var expanded by remember { mutableStateOf(false) }
     Column {
         Text(label, style = MaterialTheme.typography.labelLarge)
-        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+        ExposedDropdownMenuBox(
+            expanded = expanded,
+            onExpandedChange = { if (enabled) expanded = it }
+        ) {
             OutlinedTextField(
                 value = when (label) {
                     "Sample rate" -> "$selected Hz"
                     "Input" -> "Input $selected"
                     "Output" -> "Outputs ${selected * 2 - 1}–${selected * 2}"
                     "Period multiplier" -> "$selected×"
+                    "Userspace watermark" -> if (selected == 0) "Auto" else "$selected frames"
                     else -> "$selected-bit"
                 },
                 onValueChange = {},
                 readOnly = true,
+                enabled = enabled,
                 modifier = Modifier.fillMaxWidth().menuAnchor(),
                 trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
             )
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 options.forEach { value ->
                     DropdownMenuItem(
+                        enabled = enabled,
                         text = {
                             Text(
                                 when (label) {
@@ -360,6 +501,7 @@ private fun IntSelector(label: String, selected: Int, options: List<Int>, onSele
                                     "Input" -> "Input $value"
                                     "Output" -> "Outputs ${value * 2 - 1}–${value * 2}"
                                     "Period multiplier" -> "$value×"
+                                    "Userspace watermark" -> if (value == 0) "Auto" else "$value frames"
                                     else -> "$value-bit"
                                 }
                             )
@@ -401,11 +543,12 @@ private fun InfoRow(label: String, value: String) {
 @Composable
 private fun BufferSizeDropdown(
     selectedSize: Int,
+    enabled: Boolean,
     onSelected: (Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
     val options = AudioSettingsManager.BUFFER_SIZE_OPTIONS
-    val selectedLabel = options.find { it.first == selectedSize }?.second ?: "Auto"
+    val selectedLabel = options.find { it.first == selectedSize }?.second ?: "16"
 
     Column {
         Text(
@@ -415,12 +558,13 @@ private fun BufferSizeDropdown(
         )
         ExposedDropdownMenuBox(
             expanded = expanded,
-            onExpandedChange = { expanded = it }
+            onExpandedChange = { if (enabled) expanded = it }
         ) {
             OutlinedTextField(
                 value = selectedLabel,
                 onValueChange = {},
                 readOnly = true,
+                enabled = enabled,
                 modifier = Modifier
                     .fillMaxWidth()
                     .menuAnchor(),
@@ -432,6 +576,7 @@ private fun BufferSizeDropdown(
             ) {
                 options.forEach { (size, label) ->
                     DropdownMenuItem(
+                        enabled = enabled,
                         text = { Text(label) },
                         onClick = {
                             onSelected(size)
@@ -441,5 +586,10 @@ private fun BufferSizeDropdown(
                 }
             }
         }
+        Text(
+            "Experimental values can reduce latency but may underrun with heavy plug-ins.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }

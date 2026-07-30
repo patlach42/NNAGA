@@ -202,6 +202,9 @@ public:
                 transportFailed_.load(std::memory_order_acquire),
                 eventThreadUrgentAudio_.load(std::memory_order_acquire)};
     }
+    int32_t eventThreadTid() const noexcept {
+        return eventThreadTid_.load(std::memory_order_acquire);
+    }
     uint64_t captureSequence() const {
         return captureSequence_.load(std::memory_order_acquire);
     }
@@ -238,8 +241,12 @@ public:
         return playbackTargetFrames_.load(std::memory_order_acquire);
     }
     int bufferedFrames() const;
-    // Set graph quantum and direct-USB playback period multiplier.
-    void setGraphQuantum(int frames, int periodMultiplier = kDefaultPeriodMultiplier);
+    // Set graph quantum and playback watermark. A positive watermarkFrames is
+    // an explicit userspace target; zero selects the device-derived policy.
+    void setGraphQuantum(
+        int frames,
+        int periodMultiplier = kDefaultPeriodMultiplier,
+        int watermarkFrames = 0);
 
     // Returns true when the iso pump is already streaming a stream
     // matching [sampleRate]/[bitsPerSample]/[channels]. Used by
@@ -421,6 +428,7 @@ private:
     std::atomic<bool> transportFailed_{false};
     int captureMaxFramesPerPacket_ = 0;
     std::atomic<bool> eventThreadUrgentAudio_{false};
+    std::atomic<int32_t> eventThreadTid_{0};
 
     // Iso pump state — touched only from the event thread once
     // streaming_ is true.

@@ -38,13 +38,35 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_INPUT_CHANNEL = "directUsbInputChannel"
     private const val KEY_DIRECT_USB_OUTPUT_PAIR = "directUsbOutputPair"
     private const val KEY_DIRECT_USB_PERIOD_MULTIPLIER = "directUsbPeriodMultiplier"
+    private const val KEY_DIRECT_USB_WATERMARK_PREFIX = "directUsbWatermark:"
+    private const val DEFAULT_BUFFER_SIZE = 16
 
     private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 3
     private const val MIN_DIRECT_USB_PERIOD_MULTIPLIER = 1
     private const val MAX_DIRECT_USB_PERIOD_MULTIPLIER = 8
+    private const val MAX_DIRECT_USB_WATERMARK = 4096
 
     private fun clampDirectUsbPeriodMultiplier(value: Int): Int =
         value.coerceIn(MIN_DIRECT_USB_PERIOD_MULTIPLIER, MAX_DIRECT_USB_PERIOD_MULTIPLIER)
+
+    private fun clampWatermark(value: Int): Int = value.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+    private fun normalizeBufferSize(value: Int): Int =
+        value.takeIf { candidate -> BUFFER_SIZE_OPTIONS.any { it.first == candidate } }
+            ?: DEFAULT_BUFFER_SIZE
+
+    private fun watermarkKey(
+        vendorId: Int,
+        productId: Int,
+        rate: Int,
+        bits: Int,
+        subslotBytes: Int,
+        channels: Int,
+        bufferFrames: Int,
+        periodMultiplier: Int
+    ): String =
+        "$KEY_DIRECT_USB_WATERMARK_PREFIX$vendorId:$productId:$rate:$bits:" +
+            "$subslotBytes:$channels:${normalizeBufferSize(bufferFrames)}:" +
+            clampDirectUsbPeriodMultiplier(periodMultiplier)
 
     fun getDirectUsbPeriodMultiplier(context: Context): Int =
         clampDirectUsbPeriodMultiplier(
@@ -52,23 +74,86 @@ object AudioSettingsManager {
         )
 
     fun setDirectUsbPeriodMultiplier(context: Context, multiplier: Int) {
-        prefs(context).edit()
-            .putInt(KEY_DIRECT_USB_PERIOD_MULTIPLIER, clampDirectUsbPeriodMultiplier(multiplier))
-            .apply()
+        prefs(context).edit().putInt(KEY_DIRECT_USB_PERIOD_MULTIPLIER, clampDirectUsbPeriodMultiplier(multiplier)).apply()
     }
 
+    fun getDirectUsbWatermark(
+        context: Context,
+        vendorId: Int,
+        productId: Int,
+        rate: Int,
+        bits: Int,
+        subslotBytes: Int,
+        channels: Int,
+        bufferFrames: Int = getBufferSize(context),
+        periodMultiplier: Int = getDirectUsbPeriodMultiplier(context)
+    ): Int = clampWatermark(
+        prefs(context).getInt(
+            watermarkKey(
+                vendorId, productId, rate, bits, subslotBytes, channels,
+                bufferFrames, periodMultiplier
+            ),
+            0
+        )
+    )
+
+    fun setDirectUsbWatermark(
+        context: Context,
+        vendorId: Int,
+        productId: Int,
+        rate: Int,
+        bits: Int,
+        subslotBytes: Int,
+        channels: Int,
+        frames: Int,
+        bufferFrames: Int = getBufferSize(context),
+        periodMultiplier: Int = getDirectUsbPeriodMultiplier(context)
+    ) {
+        prefs(context).edit().putInt(
+            watermarkKey(
+                vendorId, productId, rate, bits, subslotBytes, channels,
+                bufferFrames, periodMultiplier
+            ),
+            clampWatermark(frames)
+        ).apply()
+    }
+    fun persistDirectUsbWatermark(
+        context: Context,
+        vendorId: Int,
+        productId: Int,
+        rate: Int,
+        bits: Int,
+        subslotBytes: Int,
+        channels: Int,
+        frames: Int,
+        bufferFrames: Int = getBufferSize(context),
+        periodMultiplier: Int = getDirectUsbPeriodMultiplier(context)
+    ): Boolean = prefs(context).edit().putInt(
+        watermarkKey(
+            vendorId, productId, rate, bits, subslotBytes, channels,
+            bufferFrames, periodMultiplier
+        ),
+        clampWatermark(frames)
+    ).commit()
+
+
     val BUFFER_SIZE_OPTIONS = listOf(
-        0 to "Auto", 16 to "16", 32 to "32", 64 to "64",
+        4 to "4 (experimental)", 6 to "6 (experimental)",
+        8 to "8 (experimental)", 12 to "12 (experimental)",
+        16 to "16", 24 to "24 (experimental)", 32 to "32",
+        48 to "48 (experimental)", 64 to "64",
+        72 to "72 (experimental)", 96 to "96 (experimental)",
         128 to "128", 256 to "256", 512 to "512", 1024 to "1024"
     )
 
     private fun prefs(context: Context) =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 
-    fun getBufferSize(context: Context): Int = prefs(context).getInt(KEY_BUFFER_SIZE, 0)
+    fun getBufferSize(context: Context): Int =
+        normalizeBufferSize(prefs(context).getInt(KEY_BUFFER_SIZE, DEFAULT_BUFFER_SIZE))
 
     fun setBufferSize(context: Context, size: Int) {
-        prefs(context).edit().putInt(KEY_BUFFER_SIZE, size).apply()
+        prefs(context).edit().putInt(KEY_BUFFER_SIZE, normalizeBufferSize(size)).apply()
     }
 
     fun getDirectUsbDeviceId(context: Context): Int =

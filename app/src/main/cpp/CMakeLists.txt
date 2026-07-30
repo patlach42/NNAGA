@@ -203,6 +203,53 @@ foreach(rt_target
     target_compile_options(${rt_target} PRIVATE -O2)
 endforeach()
 
+option(GRC_ENABLE_AUDIO_THINLTO
+       "Enable ThinLTO for the native realtime audio path" ON)
+if(GRC_ENABLE_AUDIO_THINLTO)
+    foreach(lto_target
+            direct_usb_output
+            plugin_abstraction
+            audio_engine)
+        target_compile_options(${lto_target} PRIVATE -flto=thin)
+    endforeach()
+endif()
+
+set(GRC_AUDIO_PGO_MODE "OFF" CACHE STRING
+    "Audio PGO mode: OFF, GENERATE, or USE")
+set_property(CACHE GRC_AUDIO_PGO_MODE PROPERTY STRINGS OFF GENERATE USE)
+set(GRC_AUDIO_PGO_PROFILE "" CACHE FILEPATH
+    "Merged arm64 LLVM profile for GRC_AUDIO_PGO_MODE=USE")
+string(TOUPPER "${GRC_AUDIO_PGO_MODE}" GRC_AUDIO_PGO_MODE)
+set(GRC_AUDIO_PGO_COMPILE_FLAG "")
+set(GRC_AUDIO_PGO_LINK_FLAG "")
+if(GRC_AUDIO_PGO_MODE STREQUAL "GENERATE")
+    set(GRC_AUDIO_PGO_COMPILE_FLAG
+        "-fprofile-instr-generate=/data/user/0/com.vibes.dsp/files/grc-audio-%p.profraw")
+    set(GRC_AUDIO_PGO_LINK_FLAG "${GRC_AUDIO_PGO_COMPILE_FLAG}")
+elseif(GRC_AUDIO_PGO_MODE STREQUAL "USE")
+    if(NOT IS_ABSOLUTE "${GRC_AUDIO_PGO_PROFILE}" OR
+       NOT EXISTS "${GRC_AUDIO_PGO_PROFILE}")
+        message(FATAL_ERROR
+            "GRC_AUDIO_PGO_PROFILE must be an existing absolute .profdata path")
+    endif()
+    set(GRC_AUDIO_PGO_COMPILE_FLAG
+        "-fprofile-instr-use=${GRC_AUDIO_PGO_PROFILE}")
+    set(GRC_AUDIO_PGO_LINK_FLAG "${GRC_AUDIO_PGO_COMPILE_FLAG}")
+elseif(NOT GRC_AUDIO_PGO_MODE STREQUAL "OFF")
+    message(FATAL_ERROR
+        "GRC_AUDIO_PGO_MODE must be OFF, GENERATE, or USE")
+endif()
+
+if(GRC_AUDIO_PGO_COMPILE_FLAG)
+    foreach(pgo_target
+            direct_usb_output
+            plugin_abstraction
+            audio_engine)
+        target_compile_options(${pgo_target} PRIVATE
+            "${GRC_AUDIO_PGO_COMPILE_FLAG}")
+    endforeach()
+endif()
+
 # XShm stub - used when plugin UI .so references MIT-SHM (fallback to XPutImage)
 add_library(xshm_stub STATIC
     xshm_stub.c
@@ -239,6 +286,17 @@ target_link_libraries(guitarrackcraft
     log
     android
 )
+
+# The final shared-library link consumes ThinLTO bitcode from the three
+# realtime static archives. JNI/LV2/X11 translation units remain outside LTO.
+if(GRC_ENABLE_AUDIO_THINLTO)
+    target_link_options(guitarrackcraft PRIVATE -flto=thin)
+endif()
+
+if(GRC_AUDIO_PGO_LINK_FLAG)
+    target_link_options(guitarrackcraft PRIVATE
+        "${GRC_AUDIO_PGO_LINK_FLAG}")
+endif()
 
 # Link LV2 libraries if available
 if(LV2_AVAILABLE)
