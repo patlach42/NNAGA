@@ -259,6 +259,10 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
         inputChannel >= directUsbOutput_->captureChannelCount() ||
         outputPair < 0 || outputPair * 2 + 1 >= channels ||
         watermarkFrames < 0) {
+        directUsbFailureCode_.store(
+            usbFailureCode(monotrypt::usb::StartError::Unknown),
+            std::memory_order_release);
+        directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
         return false;
     }
     const int32_t renderFrames = bufferFrames > 0

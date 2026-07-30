@@ -2410,6 +2410,14 @@ void LibusbUacDriver::onIso(libusb_transfer* xfr) {
     }
     if (xfr->status != LIBUSB_TRANSFER_COMPLETED)
         playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+    if (xfr->status == LIBUSB_TRANSFER_COMPLETED) {
+        for (int packet = 0; packet < xfr->num_iso_packets; ++packet) {
+            if (xfr->iso_packet_desc[packet].status !=
+                LIBUSB_TRANSFER_COMPLETED) {
+                playbackTransferErrors_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
 
     const bool implicit = captureActive_.load(std::memory_order_acquire) &&
                           captureFormat_.implicitFeedback &&

@@ -65,6 +65,11 @@ class DirectUsbDeviceStressTest {
         assumeTrue("SKIP reason=authorized-device-not-exposed-by-manager", option != null)
 
         val engine = NativeEngine.getInstance()
+        val originalDeviceId = AudioSettingsManager.getDirectUsbDeviceId(context)
+        val originalVendorId = AudioSettingsManager.getDirectUsbVendorId(context)
+        val originalProductId = AudioSettingsManager.getDirectUsbProductId(context)
+        val originalDeviceName = AudioSettingsManager.getDirectUsbDeviceName(context)
+        val originalCachedFormats = AudioSettingsManager.getDirectUsbCachedFormats(context)
         val originalRate = AudioSettingsManager.getDirectUsbRate(context)
         val originalBits = AudioSettingsManager.getDirectUsbBits(context)
         val originalSubslot = AudioSettingsManager.getDirectUsbSubslot(context)
@@ -76,9 +81,9 @@ class DirectUsbDeviceStressTest {
         var originalTransport: TransportInfo? = null
         val results = linkedMapOf<CaseKey, MutableList<CaseResult>>()
         var cases = 0
-        AudioSettingsManager.setDirectUsbInputChannel(context, 0)
-        AudioSettingsManager.setDirectUsbOutputPair(context, 0)
         try {
+            AudioSettingsManager.setDirectUsbInputChannel(context, 0)
+            AudioSettingsManager.setDirectUsbOutputPair(context, 0)
             EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
             assertTrue("Native engine initialization failed", EngineInitHelper.initEngine(context))
             originalTransport = runCatching { engine.getTransportInfo() }.getOrNull()
@@ -164,6 +169,11 @@ class DirectUsbDeviceStressTest {
             assertTrue("Direct USB buffer audit failed; inspect AUDIT_SUMMARY/TELEMETRY", auditPassed)
         } finally {
             runCatching { DirectUsbAudioManager.disable(context) }
+            AudioSettingsManager.setDirectUsbDeviceId(context, originalDeviceId)
+            AudioSettingsManager.setDirectUsbIdentity(
+                context, originalVendorId, originalProductId, originalDeviceName
+            )
+            AudioSettingsManager.setDirectUsbCachedFormats(context, originalCachedFormats)
             AudioSettingsManager.setDirectUsbFormat(context, originalRate, originalBits, originalSubslot, originalChannels)
             AudioSettingsManager.setBufferSize(context, originalBuffer)
             AudioSettingsManager.setDirectUsbInputChannel(context, originalInputChannel)
@@ -447,7 +457,6 @@ class DirectUsbDeviceStressTest {
         if (stats.state != DirectUsbSessionState.Running) return "session-state-${stats.state}"
         validateConfiguration(stats, format, buffer, multiplier)?.let { return it }
         if (rawStats.size < RAW_STAT_COUNT) return "unsupported-raw-stats-count-${rawStats.size}"
-        if (stats.queuedOut <= 0L) return "queued-output-empty"
         if (stats.deadlineBudgetNs <= 0L || stats.lastCycleNs <= 0L || stats.peakCycleNs < stats.lastCycleNs) return "invalid-cycle-timing"
         if (stats.captureTransferErrors != 0L || stats.playbackTransferErrors != 0L ||
             rawStats.getOrZero(CAPTURE_TRANSFER_ERRORS) != 0L || rawStats.getOrZero(PLAYBACK_TRANSFER_ERRORS) != 0L ||

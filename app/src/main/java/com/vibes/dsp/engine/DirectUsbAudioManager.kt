@@ -188,7 +188,7 @@ object DirectUsbAudioManager {
                 )
             }
             val packedFormats = runCatching { engine.nativeGetDirectUsbOutputFormats() }
-                .getOrDefault(intArrayOf())
+                .getOrNull() ?: intArrayOf()
             val nativeFormats = packedFormats
                 .asSequence()
                 .chunked(4)

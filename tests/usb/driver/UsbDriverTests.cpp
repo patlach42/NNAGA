@@ -1017,6 +1017,58 @@ TEST(UsbDriverLifecycle, QueuedOutFramesTracksCompletionAndStop) {
     driver.stop();
     EXPECT_EQ(driver.queuedOutFrames(), uint64_t{0});
 }
+TEST(UsbDriverTelemetry, CompletedOutPacketErrorCountsAndResubmits) {
+    resetMock();
+    usb_driver_mock_set_max_iso_packet_size(7 * 4);
+
+    constexpr int kTransfers = 4;
+    constexpr int kPacketsPerTransfer = 8;
+    constexpr int kFrameBytes = 4;
+    constexpr int kFramesPerPacket = 6;
+    constexpr int kInitialFrames =
+        kTransfers * kPacketsPerTransfer * kFramesPerPacket;
+
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::isoStartupState(driver);
+    monotrypt::usb::UsbDriverTestAccess::setRingBytes(
+        driver, std::vector<uint8_t>(monotrypt::usb::kPlaybackRingBytes, 0));
+    monotrypt::usb::UsbDriverTestAccess::playbackCursors(
+        driver, kInitialFrames * kFrameBytes, 0);
+
+    ASSERT_TRUE(monotrypt::usb::UsbDriverTestAccess::prepareIsoPump(driver));
+    ASSERT_TRUE(driver.startPlayback());
+    ASSERT_EQ(usb_driver_mock_submitted_transfer_count(), kTransfers);
+
+    auto* completed =
+        monotrypt::usb::UsbDriverTestAccess::playbackTransfer(driver, 0);
+    ASSERT_NE(completed, nullptr);
+    const uint64_t queuedBefore = driver.queuedOutFrames();
+    const int inflightBefore =
+        monotrypt::usb::UsbDriverTestAccess::inflight(driver);
+    ASSERT_EQ(queuedBefore, static_cast<uint64_t>(kInitialFrames));
+    ASSERT_EQ(inflightBefore, kTransfers);
+
+    completed->status = LIBUSB_TRANSFER_COMPLETED;
+    completed->iso_packet_desc[0].status = LIBUSB_TRANSFER_COMPLETED;
+    completed->iso_packet_desc[1].status = LIBUSB_TRANSFER_OVERFLOW;
+    for (int packet = 2; packet < completed->num_iso_packets; ++packet)
+        completed->iso_packet_desc[packet].status = LIBUSB_TRANSFER_COMPLETED;
+
+    monotrypt::usb::UsbDriverTestAccess::onIso(driver, completed);
+
+    EXPECT_EQ(driver.implicitFeedbackStats().playbackTransferErrors, 1u);
+    EXPECT_EQ(driver.queuedOutFrames(), queuedBefore);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::inflight(driver),
+              inflightBefore);
+    EXPECT_EQ(monotrypt::usb::UsbDriverTestAccess::playbackTransfer(driver, 0),
+              completed);
+    EXPECT_EQ(usb_driver_mock_submitted_transfer_count(), kTransfers + 1);
+    EXPECT_TRUE(driver.isStreaming());
+    EXPECT_FALSE(driver.implicitFeedbackStats().transportFailed);
+
+    driver.stop();
+}
+
 
 TEST(UsbDriverRing, PrepareCommitPlaybackPublishesWholeWrappedFrames) {
     monotrypt::usb::LibusbUacDriver driver;
