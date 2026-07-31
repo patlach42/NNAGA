@@ -86,7 +86,8 @@ public:
                                int32_t watermarkFrames);
 
     void stop();
-    bool openDirectUsbDevice(int fd);
+    bool openDirectUsbDevice(int fd, int driverCode = 0);
+    void closeDirectUsbDevice();
 
     /**
      * Check if engine is running.

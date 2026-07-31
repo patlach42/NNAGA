@@ -387,15 +387,21 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     return true;
 }
 
-bool AudioEngine::openDirectUsbDevice(int fd) {
+bool AudioEngine::openDirectUsbDevice(int fd, int driverCode) {
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
     waitForDirectUsbCleanup();
     if (fd < 0 || directUsbSession_.load(std::memory_order_acquire) ||
         isRunning_.load(std::memory_order_acquire) ||
-        directUsbState_.load(std::memory_order_acquire) != DirectUsbState::Stopped) {
-        return false;
-    }
-    return directUsbOutput_ && directUsbOutput_->open(fd);
+        directUsbState_.load(std::memory_order_acquire) != DirectUsbState::Stopped) return false;
+    return directUsbOutput_ && directUsbOutput_->open(fd, driverCode);
+}
+
+void AudioEngine::closeDirectUsbDevice() {
+    std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
+    waitForDirectUsbCleanup();
+    if (directUsbSession_.load(std::memory_order_acquire) ||
+        isRunning_.load(std::memory_order_acquire)) return;
+    if (directUsbOutput_) directUsbOutput_->close();
 }
 
 void AudioEngine::cleanupWorkerLoop() {

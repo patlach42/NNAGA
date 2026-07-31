@@ -219,7 +219,7 @@ bool LibusbUacDriver::ensureContext() {
     return true;
 }
 
-bool LibusbUacDriver::open(int fileDescriptor) {
+bool LibusbUacDriver::open(int fileDescriptor, int driverCode) {
     std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
     if (!ensureContext()) return false;
     stop();
@@ -232,7 +232,7 @@ bool LibusbUacDriver::open(int fileDescriptor) {
         LOGW("open refused: previous USB transfers are still live");
         return false;
     }
-    if (device_ != nullptr && fd_ == fileDescriptor) return true;
+    if (device_ != nullptr && fd_ == fileDescriptor && driverCode_ == driverCode) return true;
     if (device_ != nullptr) {
         libusb_close(device_);
         device_ = nullptr;
@@ -247,12 +247,21 @@ bool LibusbUacDriver::open(int fileDescriptor) {
         return false;
     }
     device_ = handle;
+    if (driverCode != 0 && driverCode != 1) { libusb_close(device_); device_ = nullptr; fd_ = -1; return false; }
+    driverCode_ = driverCode;
     fd_ = fileDescriptor;
     libusb_device_descriptor descriptor{};
     const int descriptorResult = libusb_get_device_descriptor(
         libusb_get_device(device_), &descriptor);
-    lowLatencyProfile_ =
-        descriptorResult == LIBUSB_SUCCESS &&
+    line6Profile_ = driverCode_ == 1;
+    if (line6Profile_ && (descriptorResult != LIBUSB_SUCCESS ||
+        descriptor.idVendor != 0x0e41 ||
+        (descriptor.idProduct != 0x4141 && descriptor.idProduct != 0x4150))) {
+        std::lock_guard<std::mutex> e(errorMutex_);
+        lastErrorDetail_ = "Line6 driver requires UX1 VID/PID 0e41:4141 or 0e41:4150";
+        libusb_close(device_); device_ = nullptr; fd_ = -1; return false;
+    }
+    lowLatencyProfile_ = descriptorResult == LIBUSB_SUCCESS &&
         descriptor.idVendor == kAudientVendorId &&
         descriptor.idProduct == kAudientId4ProductId;
     transferCount_ =
@@ -290,6 +299,10 @@ std::vector<UsbFormatCandidate> LibusbUacDriver::enumerateFormats() {
     std::vector<UsbFormatCandidate> result;
     std::lock_guard<std::mutex> lock(mutex_);
     if (!device_) return result;
+    if (line6Profile_) {
+        result.push_back({44100, 16, 2, 2});
+        return result;
+    }
     libusb_device* dev = libusb_get_device(device_);
     libusb_config_descriptor* config = nullptr;
     int rc = libusb_get_active_config_descriptor(dev, &config);
@@ -423,6 +436,7 @@ std::vector<UsbFormatCandidate> LibusbUacDriver::enumerateFormats() {
 int LibusbUacDriver::captureChannelCount() const {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!device_) return 0;
+    if (line6Profile_) return 2;
     libusb_config_descriptor* config = nullptr;
     libusb_device* dev = libusb_get_device(device_);
     int rc = libusb_get_active_config_descriptor(dev, &config);
@@ -468,6 +482,83 @@ int LibusbUacDriver::captureChannelCount() const {
     return maximum;
 }
 
+
+bool LibusbUacDriver::line6SelectFormat(StreamFormat* playback, StreamFormat* capture) {
+    if (!device_ || !playback || !capture) return false;
+    libusb_config_descriptor* config = nullptr;
+    libusb_device* dev = libusb_get_device(device_);
+    int rc = libusb_get_active_config_descriptor(dev, &config);
+    if (rc != LIBUSB_SUCCESS) rc = libusb_get_config_descriptor(dev, 0, &config);
+    if (rc != LIBUSB_SUCCESS || !config) return false;
+    const libusb_interface_descriptor* chosen = nullptr;
+    const libusb_endpoint_descriptor* outEp = nullptr;
+    const libusb_endpoint_descriptor* inEp = nullptr;
+    for (uint8_t i = 0; i < config->bNumInterfaces && !chosen; ++i) {
+        const auto& iface = config->interface[i];
+        for (int a = 0; a < iface.num_altsetting; ++a) {
+            const auto& alt = iface.altsetting[a];
+            if (alt.bAlternateSetting != 2) continue;
+            bool pcm = true;
+            const libusb_endpoint_descriptor* o = nullptr; const libusb_endpoint_descriptor* in = nullptr;
+            for (int e = 0; e < alt.bNumEndpoints; ++e) {
+                const auto& ep = alt.endpoint[e];
+                if ((ep.bmAttributes & 3) != LIBUSB_TRANSFER_TYPE_ISOCHRONOUS) continue;
+                if (ep.bEndpointAddress == 0x01) o = &ep;
+                if (ep.bEndpointAddress == 0x82) in = &ep;
+            }
+            if (pcm && o && in) { chosen = &alt; outEp = o; inEp = in; }
+        }
+    }
+    if (!chosen) { libusb_free_config_descriptor(config); return false; }
+    const bool hs = libusb_get_device_speed(dev) >= LIBUSB_SPEED_HIGH;
+    *playback = {}; *capture = {};
+    playback->sampleRateHz = capture->sampleRateHz = 44100;
+    playback->bitsPerSample = capture->bitsPerSample = 16;
+    playback->bytesPerSample = capture->bytesPerSample = 2;
+    playback->channels = capture->channels = 2;
+    playback->interfaceNumber = capture->interfaceNumber = chosen->bInterfaceNumber;
+    playback->altSetting = capture->altSetting = chosen->bAlternateSetting;
+    playback->maxPacketSize = outEp->wMaxPacketSize & 0x07ff;
+    capture->maxPacketSize = inEp->wMaxPacketSize & 0x07ff;
+    playback->endpointAddress = 0x01; capture->endpointAddress = 0x82;
+    playback->bInterval = outEp->bInterval; capture->bInterval = inEp->bInterval;
+    playback->isHighSpeed = capture->isHighSpeed = hs;
+    playback->uacVersion = capture->uacVersion = 0x0100;
+    capture->implicitFeedback = true;
+    libusb_free_config_descriptor(config);
+    return true;
+}
+
+bool LibusbUacDriver::line6VendorSetup() {
+    ErrorSink err{&lastError_, &errorMutex_, &lastErrorDetail_};
+    const uint32_t epoch = static_cast<uint32_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+    uint8_t payload[4] = {static_cast<uint8_t>(epoch), static_cast<uint8_t>(epoch >> 8), static_cast<uint8_t>(epoch >> 16), static_cast<uint8_t>(epoch >> 24)};
+    if (libusb_control_transfer(device_, 0x40, 0x67, 0x0022, 0x80c6, payload, 4, 1000) != 4) {
+        err(StartError::SetSampleRateFailed, "Line6 UX1 epoch vendor request failed");
+        return false;
+    }
+    uint8_t status = 0xff;
+    for (int i = 0; i < 100 && status == 0xff; ++i) {
+        if (i != 0) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if (libusb_control_transfer(device_, 0xc0, 0x67, 0x0012, 0, &status, 1, 1000) != 1) {
+            err(StartError::SetSampleRateFailed, "Line6 UX1 vendor status poll failed");
+            return false;
+        }
+    }
+    if (status != 0) {
+        err(StartError::SetSampleRateFailed, "Line6 UX1 vendor status did not become zero");
+        return false;
+    }
+    if (libusb_control_transfer(device_, 0x40, 0x67, 0x0301, 0, nullptr, 0, 1000) != 0) {
+        err(StartError::SetSampleRateFailed, "Line6 UX1 command 0x0301 failed");
+        return false;
+    }
+    if (libusb_control_transfer(device_, 0x40, 0x67, 0x0b01, 0, nullptr, 0, 1000) != 0) {
+        err(StartError::SetSampleRateFailed, "Line6 UX1 instrument command failed");
+        return false;
+    }
+    return true;
+}
 
 // --- UAC2 enumeration -------------------------------------------------
 
@@ -1091,9 +1182,25 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
     std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
     std::lock_guard<std::mutex> lock(mutex_);
     ErrorSink err{&lastError_, &errorMutex_, &lastErrorDetail_};
-    // Optimistic clear; failure sites overwrite. Successful return
-    // also clears at the bottom.
     lastError_.store(StartError::Ok, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> elock(errorMutex_);
+        lastErrorDetail_.clear();
+        supportedRates_.clear();
+    }
+    if (!device_) {
+        err(StartError::NoDevice, "start() called before open() — no UsbDeviceConnection wrapped yet");
+        return false;
+    }
+    if (line6Profile_) {
+        if (sampleRateHz != 44100 || bitsPerSample != 16 || channels != 2 ||
+            (bytesPerSample != 0 && bytesPerSample != 2)) {
+            err(StartError::NoMatchingAlt, "Line6 UX1 requires fixed 44100 Hz / 16-bit / 2-channel PCM");
+            return false;
+        }
+        return line6StartDuplex();
+    }
+    // Optimistic clear; failure sites overwrite. Successful return
     {
         std::lock_guard<std::mutex> elock(errorMutex_);
         lastErrorDetail_.clear();
@@ -1277,6 +1384,74 @@ bool LibusbUacDriver::start(int sampleRateHz, int bitsPerSample, int channels,
          format_.endpointAddress);
     return true;
 }
+bool LibusbUacDriver::line6StartDuplex() {
+    ErrorSink err{&lastError_, &errorMutex_, &lastErrorDetail_};
+    auto fail = [&](StartError code, const char* detail) {
+        err(code, detail);
+        captureActive_.store(false, std::memory_order_release);
+        (void)stopIsoPump();
+        (void)stopCapturePump();
+        if (device_ && interfaceClaimed_) {
+            (void)libusb_set_interface_alt_setting(device_, format_.interfaceNumber, 0);
+            (void)libusb_release_interface(device_, format_.interfaceNumber);
+            interfaceClaimed_ = false;
+        }
+        streaming_.store(false, std::memory_order_release);
+        return false;
+    };
+    if (streaming_.load(std::memory_order_acquire) ||
+        captureActive_.load(std::memory_order_acquire) ||
+        !transfers_.empty() || !captureTransfers_.empty() ||
+        eventThread_.joinable() ||
+        inflight_.load(std::memory_order_acquire) != 0 ||
+        captureInflight_.load(std::memory_order_acquire) != 0) {
+        err(StartError::IsoPumpSubmitFailed,
+            "Line6 UX1 start requested while USB transfers are still active");
+        return false;
+    }
+    StreamFormat playback{}, capture{};
+    if (!line6SelectFormat(&playback, &capture)) return fail(StartError::NoMatchingAlt, "Line6 UX1 alt 2 with endpoints 0x01/0x82 not found");
+    if (!interfaceClaimed_ && libusb_claim_interface(device_, playback.interfaceNumber) != LIBUSB_SUCCESS)
+        return fail(StartError::ClaimInterfaceFailed, "libusb_claim_interface failed for Line6 UX1 streaming interface");
+    interfaceClaimed_ = true;
+    stopRequested_.store(false, std::memory_order_release);
+    streaming_.store(false, std::memory_order_release);
+    playbackStarted_.store(false, std::memory_order_relaxed);
+    transportFailed_.store(false, std::memory_order_relaxed);
+    captureHead_.store(0, std::memory_order_relaxed);
+    captureTail_.store(0, std::memory_order_relaxed);
+    ringHead_.store(0, std::memory_order_relaxed);
+    ringTail_.store(0, std::memory_order_relaxed);
+    implicitRead_.store(0, std::memory_order_relaxed);
+    implicitWrite_.store(0, std::memory_order_relaxed);
+    pendingImplicitCount_ = 0;
+    pendingDepth_.store(0, std::memory_order_relaxed);
+    pendingImplicitTransfers_.fill(nullptr);
+    inflight_.store(0, std::memory_order_relaxed);
+    captureInflight_.store(0, std::memory_order_relaxed);
+    format_ = playback; captureFormat_ = capture;
+    if (libusb_set_interface_alt_setting(device_, playback.interfaceNumber, 2) != LIBUSB_SUCCESS)
+        return fail(StartError::SetAltFailed, "Line6 UX1 set alternate setting 2 failed");
+    if (!line6VendorSetup()) return fail(StartError::SetSampleRateFailed, "Line6 UX1 vendor initialization failed");
+    if (!ensureEventThread()) return fail(StartError::IsoPumpAllocFailed, "Line6 UX1 event thread failed");
+    if (!startCapturePump()) return fail(StartError::IsoPumpAllocFailed, "Line6 UX1 capture pump failed");
+    const int startupPacketsPerSecond = packetsPerSecondForInterval(format_.isHighSpeed, format_.bInterval);
+    const int startupPacketsPerTransfer = lowLatencyProfile_ && startupPacketsPerSecond >= 8000
+        ? kId4PacketsPerTransfer : packetsPerTransferForRate(startupPacketsPerSecond);
+    const size_t required = static_cast<size_t>(transferCount_) * static_cast<size_t>(startupPacketsPerTransfer);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+    while (implicitWrite_.load(std::memory_order_acquire) - implicitRead_.load(std::memory_order_acquire) < required &&
+           !stopRequested_.load(std::memory_order_acquire)) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
+        if (remaining <= 0 || !pollWakeFd(captureWakeFd_, static_cast<int>(remaining))) break;
+        drainWakeFd(captureWakeFd_);
+    }
+    if (implicitWrite_.load(std::memory_order_acquire) - implicitRead_.load(std::memory_order_acquire) < required)
+        return fail(StartError::IsoPumpSubmitFailed, "implicit-feedback capture did not prime output within 50 ms");
+    if (!startIsoPump(false)) return fail(StartError::IsoPumpSubmitFailed, "Line6 UX1 playback pump failed");
+    streaming_.store(true, std::memory_order_release);
+    return true;
+}
 bool LibusbUacDriver::selectCaptureAltSetting(const StreamFormat& playback,
                                               StreamFormat* out_fmt) {
     libusb_config_descriptor* config = nullptr;
@@ -1342,6 +1517,7 @@ bool LibusbUacDriver::selectCaptureAltSetting(const StreamFormat& playback,
         for (int a = 0; a < iface.num_altsetting; ++a) {
             const auto& alt = iface.altsetting[a];
             if (alt.bInterfaceClass != USB_CLASS_AUDIO ||
+
                 alt.bInterfaceSubClass != SUBCLASS_AUDIOSTREAM ||
                 alt.bAlternateSetting == 0) continue;
             int channels = 0, bits = 0, bytes = 0;
@@ -1413,6 +1589,15 @@ bool LibusbUacDriver::startDuplex(int sampleRateHz, int bitsPerSample,
                                   int channels, int bytesPerSample) {
     std::lock_guard<std::recursive_mutex> sessionLock(sessionMutex_);
     ErrorSink err{&lastError_, &errorMutex_, &lastErrorDetail_};
+    if (line6Profile_) {
+        if (sampleRateHz != 44100 || bitsPerSample != 16 || channels != 2 ||
+            (bytesPerSample != 0 && bytesPerSample != 2)) {
+            err(StartError::NoMatchingAlt,
+                "Line6 UX1 requires 44100 Hz / 16-bit / 2-channel PCM");
+            return false;
+        }
+        return line6StartDuplex();
+    }
     deferOutputStart_.store(true, std::memory_order_release);
     const bool prepared = start(sampleRateHz, bitsPerSample, channels, bytesPerSample);
     deferOutputStart_.store(false, std::memory_order_release);
@@ -1954,6 +2139,25 @@ void LibusbUacDriver::stop() {
 
 // --- Iso pump ---------------------------------------------------------
 
+bool LibusbUacDriver::ensureEventThread() {
+    if (eventThread_.joinable()) return true;
+    eventThread_ = std::thread([this]() {
+        eventThreadTid_.store(
+            static_cast<int32_t>(guitarrackcraft::getTid()),
+            std::memory_order_release);
+        eventThreadUrgentAudio_.store(
+            guitarrackcraft::setCurrentThreadUrgentAudio("UsbIsoEvents"),
+            std::memory_order_release);
+        while (!stopRequested_.load(std::memory_order_acquire)) {
+            timeval tv{0, 100000};
+            libusb_handle_events_timeout(ctx_, &tv);
+        }
+        eventThreadTid_.store(0, std::memory_order_release);
+    });
+    return true;
+}
+
+ // --- Iso pump ---------------------------------------------------------
 bool LibusbUacDriver::startIsoPump(bool submit) {
     auto setErr = [this](StartError c, const std::string& d) {
         lastError_.store(c, std::memory_order_release);
@@ -2123,20 +2327,11 @@ bool LibusbUacDriver::startIsoPump(bool submit) {
             feedbackTransfers_.push_back(fxfr);
         }
     }
-    if (!eventThread_.joinable()) {
-        eventThread_ = std::thread([this]() {
-            eventThreadTid_.store(
-                static_cast<int32_t>(guitarrackcraft::getTid()),
-                std::memory_order_release);
-            eventThreadUrgentAudio_.store(
-                guitarrackcraft::setCurrentThreadUrgentAudio("UsbIsoEvents"),
-                std::memory_order_release);
-            while (!stopRequested_.load(std::memory_order_acquire)) {
-                timeval tv{0, 100000};
-                libusb_handle_events_timeout(ctx_, &tv);
-            }
-            eventThreadTid_.store(0, std::memory_order_release);
-        });
+    if (!ensureEventThread()) {
+        setErr(StartError::IsoPumpAllocFailed,
+               "failed to create libusb event thread");
+        stopIsoPump();
+        return false;
     }
     if (!submit) return true;
     return submitIsoPump();

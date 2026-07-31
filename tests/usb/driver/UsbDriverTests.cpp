@@ -205,6 +205,10 @@ struct UsbDriverTestAccess {
         return d.startIsoPump(false);
     }
     static bool stopIsoPump(LibusbUacDriver& d) { return d.stopIsoPump(); }
+    static bool line6VendorSetup(LibusbUacDriver& d) { return d.line6VendorSetup(); }
+    static bool line6SelectFormat(LibusbUacDriver& d, StreamFormat* p, StreamFormat* c) { return d.line6SelectFormat(p, c); }
+    static void fakeDevice(LibusbUacDriver& d) { d.device_ = reinterpret_cast<libusb_device_handle*>(static_cast<uintptr_t>(1)); }
+    static void line6Profile(LibusbUacDriver& d, bool enabled) { d.line6Profile_ = enabled; }
 };
 
 } // namespace monotrypt::usb
@@ -1261,4 +1265,10 @@ TEST(DirectUsbOutput, ReadInputChannelsDeinterleavesWrapsAndZeroFills) {
     EXPECT_FLOAT_EQ(unavailable[0], 0.0f);
     EXPECT_FLOAT_EQ(unavailable[1], 0.0f);
     EXPECT_EQ(driver.captureAvailableFrames(), 0);
+}
+TEST(UsbDriverLine6, ProfileReportsFixedCaptureChannels) {
+    monotrypt::usb::LibusbUacDriver driver;
+    monotrypt::usb::UsbDriverTestAccess::fakeDevice(driver);
+    monotrypt::usb::UsbDriverTestAccess::line6Profile(driver, true);
+    EXPECT_EQ(driver.captureChannelCount(), 2);
 }

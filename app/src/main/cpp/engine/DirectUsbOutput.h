@@ -41,11 +41,11 @@ public:
     DirectUsbOutput() = default;
     ~DirectUsbOutput() { stop(); close(); }
 
-    bool open(int fd) {
+    bool open(int fd, int driverCode = 0) {
         if (fd < 0) return false;
         stop();
         close();
-        if (!driver_.ensureContext() || !driver_.open(fd)) return false;
+        if (!driver_.ensureContext() || !driver_.open(fd, driverCode)) return false;
         accepting_.store(false, std::memory_order_release);
         return true;
     }
@@ -93,6 +93,8 @@ public:
             return false;
         }
         outputPair_ = outputPair;
+        // The render thread must fill the ring before startPlayback() arms OUT.
+        accepting_.store(true, std::memory_order_release);
         streaming_.store(true, std::memory_order_release);
         return true;
     }

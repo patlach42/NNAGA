@@ -307,8 +307,8 @@ class NativeEngine private constructor() {
     external fun nativeGetRackPlugins(pathId: Long): Array<RackPluginEntry>
 
 
-    /** Opens an app-permitted USB device FD for the direct UAC playback prototype. */
-    external fun nativeOpenDirectUsbOutput(fileDescriptor: Int): Boolean
+    /** Opens an app-permitted USB device FD using the selected transport driver. */
+    external fun nativeOpenDirectUsbOutput(fileDescriptor: Int, driverCode: Int): Boolean
     /** Starts direct USB capture for all negotiated input channels. */
     external fun nativeStartDirectUsbSession(
         sampleRate: Int,
@@ -330,6 +330,8 @@ class NativeEngine private constructor() {
 
     /** Stops direct USB playback without closing the Java UsbDeviceConnection. */
     external fun nativeStopDirectUsbOutput()
+    /** Closes the native libusb handle after streaming has stopped. */
+    external fun nativeCloseDirectUsbOutput()
 
     external fun nativeIsDirectUsbOutputStreaming(): Boolean
 

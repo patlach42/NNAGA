@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "plugin/RackGraph.h"
+#include "usb/UsbScheduling.h"
 
 #include <array>
 #include <cstddef>
@@ -662,6 +663,69 @@ TEST(RackGraphTransportTest, PunchIgnoresSubThresholdInputWhilePaused) {
     EXPECT_EQ(after.transportFrame, before.transportFrame);
 }
 
+TEST(RackGraphTransportTest, PunchCalibratesSteadyNoiseBeforeTransient) {
+    RackGraph graph;
+    graph.setSampleRate(1000.0f, 512);
+    graph.setBeatsPerMinute(60.0);
+    graph.setAvailableInputChannelCount(2);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    ASSERT_TRUE(graph.setTrackTransportLooping(track, true));
+    ASSERT_TRUE(graph.startTrackLoopRecording(
+        track, 0.25, guitarrackcraft::LaunchQuantization::Quarter, true));
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    ASSERT_TRUE(trackSnapshot(graph, track, tracks).punchArmed);
+    const auto paused = graph.getTransportSnapshot();
+    EXPECT_FALSE(paused.playing);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    for (uint32_t frame = 0; frame < 20; ++frame) {
+        buffers.left[frame] = 0.025f;
+        buffers.right[frame] = 0.025f;
+    }
+    graph.process(buffers.inputs, 2, buffers.outputs, 20);
+
+    const auto& stillArmed = trackSnapshot(graph, track, tracks);
+    EXPECT_TRUE(stillArmed.punchArmed);
+    EXPECT_FALSE(stillArmed.recording);
+    EXPECT_FALSE(stillArmed.wavLoaded);
+    const auto stillPaused = graph.getTransportSnapshot();
+    EXPECT_FALSE(stillPaused.playing);
+    EXPECT_EQ(stillPaused.transportFrame, paused.transportFrame);
+
+    clearBuffers(buffers);
+    buffers.left[0] = 0.08f;
+    buffers.right[0] = 0.08f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    const auto& recording = trackSnapshot(graph, track, tracks);
+    EXPECT_FALSE(recording.punchArmed);
+    EXPECT_TRUE(recording.recording);
+    const auto resumed = graph.getTransportSnapshot();
+    EXPECT_TRUE(resumed.playing);
+
+    uint32_t remaining = 999;
+    while (remaining != 0) {
+        const uint32_t chunk = remaining < 512u ? remaining : 512u;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, chunk);
+        remaining -= chunk;
+    }
+
+    const auto& completed = trackSnapshot(graph, track, tracks);
+    ASSERT_TRUE(completed.wavLoaded);
+    EXPECT_FALSE(completed.recording);
+    EXPECT_FALSE(completed.punchArmed);
+    EXPECT_DOUBLE_EQ(completed.wavDurationSec, 1.0);
+
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 0.08f);
+    EXPECT_FLOAT_EQ(buffers.outputRight[0], 0.08f);
+}
+
 TEST(RackGraphTransportTest, PunchCapturesThresholdSampleAsFrameZeroAndResumesClock) {
     RackGraph graph;
     configure(graph);
@@ -673,18 +737,17 @@ TEST(RackGraphTransportTest, PunchCapturesThresholdSampleAsFrameZeroAndResumesCl
 
     StereoBuffers buffers;
     clearBuffers(buffers);
-    buffers.left[0] = 0.0199f;
-    buffers.right[0] = -0.0199f;
-    graph.process(buffers.inputs, 2, buffers.outputs, 1);
-    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    // At 60 Hz the detector calibrates one frame before evaluating a punch.
+    buffers.left[0] = 0.0f;
+    buffers.right[0] = 0.0f;
     graph.process(buffers.inputs, 2, buffers.outputs, 1);
     std::vector<guitarrackcraft::TrackSnapshot> tracks;
     ASSERT_TRUE(trackSnapshot(graph, track, tracks).punchArmed);
     const auto paused = graph.getTransportSnapshot();
     EXPECT_FALSE(paused.playing);
 
-    constexpr float triggerLeft = 0.02f;
-    constexpr float triggerRight = -0.015f;
+    constexpr float triggerLeft = 0.08f;
+    constexpr float triggerRight = -0.08f;
     buffers.left[0] = triggerLeft;
     buffers.right[0] = triggerRight;
     graph.process(buffers.inputs, 2, buffers.outputs, 1);
@@ -768,14 +831,18 @@ TEST(RackGraphTransportTest, PunchAudioCallbackDoesNotAllocate) {
 
     StereoBuffers buffers;
     clearBuffers(buffers);
-    buffers.left[0] = 0.02f;
-    buffers.right[0] = -0.03f;
+    // At 60 Hz the detector calibrates one frame before evaluating a punch.
+    allocation_probe::allocations = 0;
+    allocation_probe::enabled = true;
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    clearBuffers(buffers);
+    buffers.left[0] = 0.08f;
+    buffers.right[0] = -0.08f;
     for (uint32_t frame = 1; frame < 60; ++frame) {
         buffers.left[frame] = 0.1f;
         buffers.right[frame] = -0.1f;
     }
-    allocation_probe::allocations = 0;
-    allocation_probe::enabled = true;
     graph.process(buffers.inputs, 2, buffers.outputs, 64);
     allocation_probe::enabled = false;
 
@@ -784,10 +851,26 @@ TEST(RackGraphTransportTest, PunchAudioCallbackDoesNotAllocate) {
     const auto& completed = trackSnapshot(graph, track, tracks);
     EXPECT_TRUE(completed.wavLoaded);
     EXPECT_FALSE(completed.punchArmed);
-    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 0.02f);
-    EXPECT_FLOAT_EQ(buffers.outputRight[0], 0.02f);
-    EXPECT_FLOAT_EQ(buffers.outputLeft[60], 0.02f);
-    EXPECT_FLOAT_EQ(buffers.outputRight[60], 0.02f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 0.08f);
+    EXPECT_FLOAT_EQ(buffers.outputRight[0], 0.08f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[60], 0.08f);
+    EXPECT_FLOAT_EQ(buffers.outputRight[60], 0.08f);
+}
+TEST(RackGraphInputChannelTest, AllowsPreSessionSelectionAndClampsOnNegotiation) {
+    RackGraph graph;
+    const RackPathId track = graph.getTracks().front().id;
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+
+    EXPECT_EQ(trackSnapshot(graph, track, tracks).inputChannel, 0);
+    EXPECT_TRUE(graph.setTrackInputChannel(track, 1));
+    EXPECT_EQ(trackSnapshot(graph, track, tracks).inputChannel, 1);
+    EXPECT_FALSE(graph.setTrackInputChannel(track, -1));
+    EXPECT_FALSE(graph.setTrackInputChannel(
+        track, monotrypt::usb::kMaxTransportChannels));
+    EXPECT_EQ(trackSnapshot(graph, track, tracks).inputChannel, 1);
+
+    graph.setAvailableInputChannelCount(1);
+    EXPECT_EQ(trackSnapshot(graph, track, tracks).inputChannel, 0);
 }
 TEST(RackGraphInputChannelTest, SetterRejectsInvalidAndClampsWhenAvailableCountShrinks) {
     RackGraph graph;
@@ -869,13 +952,21 @@ TEST(RackGraphInputChannelTest, PunchUsesSelectedChannelPerTrack) {
         first, 0.25, guitarrackcraft::LaunchQuantization::Quarter, true));
     ASSERT_TRUE(graph.startTrackLoopRecording(
         second, 0.25, guitarrackcraft::LaunchQuantization::Quarter, true));
-
     StereoBuffers buffers;
     clearBuffers(buffers);
+    // Each track calibrates the channel it selected (left for first, right for
+    // second) before transient detection begins.
     buffers.left[0] = 0.01f;
     buffers.right[0] = 0.03f;
     graph.process(buffers.inputs, 2, buffers.outputs, 1);
     std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    EXPECT_TRUE(trackSnapshot(graph, first, tracks).punchArmed);
+    EXPECT_TRUE(trackSnapshot(graph, second, tracks).punchArmed);
+
+    clearBuffers(buffers);
+    buffers.left[0] = 0.01f;
+    buffers.right[0] = 0.08f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
     EXPECT_TRUE(trackSnapshot(graph, first, tracks).punchArmed);
     EXPECT_FALSE(trackSnapshot(graph, first, tracks).recording);
     EXPECT_FALSE(trackSnapshot(graph, second, tracks).punchArmed);

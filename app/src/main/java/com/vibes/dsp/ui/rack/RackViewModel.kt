@@ -232,8 +232,8 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 if (!ok) {
                     _errorMessage.value = "Failed to set track input channel"
-                    refreshRackNow()
                 }
+                refreshRackNow()
             }
         }
     }
@@ -416,6 +416,28 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                     if (!result.isSuccess) _errorMessage.value =
                         "USB audio session unavailable: ${result.exceptionOrNull()?.message}"
                 }
+            }
+        }
+    }
+    fun setUsbAudioDriver(driver: UsbAudioDriver) {
+        viewModelScope.launch(Dispatchers.IO) {
+            lifecycleMutex.withLock {
+                val stats = native.getDirectUsbStats()
+                val localState = _directUsbState.value
+                val blocked = native.nativeIsEngineRunning() ||
+                    localState == DirectUsbSessionState.Starting ||
+                    localState == DirectUsbSessionState.Running ||
+                    localState == DirectUsbSessionState.Stopping ||
+                    stats.state == DirectUsbSessionState.Starting ||
+                    stats.state == DirectUsbSessionState.Running ||
+                    stats.state == DirectUsbSessionState.Stopping
+                if (blocked) {
+                    _errorMessage.value = "Stop the audio engine before changing USB driver"
+                    return@withLock
+                }
+                DirectUsbAudioManager.switchDriver(getApplication(), driver)
+                _directUsbState.value = DirectUsbSessionState.Stopped
+                _errorMessage.value = null
             }
         }
     }

@@ -70,6 +70,10 @@ private:
         std::atomic<uint64_t> commandSerial{0};
         std::atomic<bool> statusPlaying{false};
         std::atomic<bool> statusLooping{false};
+        std::atomic<uint32_t> punchCalibrationRemaining{0};
+        std::atomic<uint32_t> punchCalibrationFrames{0};
+        std::atomic<float> punchNoiseSum{0.0f};
+        std::atomic<float> punchThreshold{0.02f};
         std::atomic<uint64_t> statusFrame{0};
         std::atomic<bool> recordPending{false};
         std::atomic<bool> recording{false};

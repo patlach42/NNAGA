@@ -159,7 +159,7 @@ public:
     LibusbUacDriver& operator=(const LibusbUacDriver&) = delete;
 
     bool ensureContext();
-    bool open(int fileDescriptor);
+    bool open(int fileDescriptor, int driverCode = 0);
     // Enumerates PCM Type-I playback alternatives with at least two
     // channels. This is a control-thread operation and may issue
     // descriptor/control reads.
@@ -402,6 +402,10 @@ private:
     void captureRangeForClock(uint8_t clockId);
 
     bool startIsoPump(bool submit = true);
+    bool ensureEventThread();
+    bool line6SelectFormat(StreamFormat* playback, StreamFormat* capture);
+    bool line6VendorSetup();
+    bool line6StartDuplex();
     // Number of frames in all initially prepared OUT packets.
     int exactInitialPacketFrames_ = 0;
     bool submitIsoPump();
@@ -436,6 +440,8 @@ private:
     mutable std::recursive_mutex sessionMutex_; // serializes start/duplex/stop
     libusb_context* ctx_ = nullptr;
     libusb_device_handle* device_ = nullptr;
+    int driverCode_ = 0;
+    bool line6Profile_ = false;
     int fd_ = -1;
     std::atomic<bool> contextReady_{false};
 

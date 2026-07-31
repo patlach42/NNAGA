@@ -21,6 +21,13 @@ package com.vibes.dsp.engine
 
 import android.content.Context
 
+enum class UsbAudioDriver(val code: Int, val persisted: String) {
+    Uac(0, "uac"), Line6(1, "line6");
+    companion object {
+        fun fromPersisted(value: String?): UsbAudioDriver = entries.firstOrNull { it.persisted == value } ?: Uac
+    }
+}
+
 data class AudioDeviceOption(
     val id: Int,
     val name: String,
@@ -29,6 +36,7 @@ data class AudioDeviceOption(
 
 object AudioSettingsManager {
     private const val PREFS_NAME = "audio_settings"
+    private const val KEY_USB_DRIVER = "usbAudioDriver"
     private const val KEY_BUFFER_SIZE = "bufferSize"
     private const val KEY_USB_DEVICE_ID = "directUsbDeviceId"
     private const val KEY_USB_VENDOR_ID = "directUsbVendorId"
@@ -159,6 +167,13 @@ object AudioSettingsManager {
     fun setBufferSize(context: Context, size: Int) {
         prefs(context).edit().putInt(KEY_BUFFER_SIZE, normalizeBufferSize(size)).apply()
     }
+    fun getUsbAudioDriver(context: Context): UsbAudioDriver =
+        UsbAudioDriver.fromPersisted(prefs(context).getString(KEY_USB_DRIVER, UsbAudioDriver.Uac.persisted))
+
+    fun setUsbAudioDriver(context: Context, driver: UsbAudioDriver) {
+        prefs(context).edit().putString(KEY_USB_DRIVER, driver.persisted).apply()
+    }
+
     fun getDirectUsbDeviceId(context: Context): Int =
         prefs(context).getInt(KEY_USB_DEVICE_ID, 0)
 
@@ -200,6 +215,14 @@ object AudioSettingsManager {
 
     fun setEngineRunAtStart(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_ENGINE_RUN_AT_START, enabled).apply()
+    }
+
+    fun clearDirectUsbSelection(context: Context) {
+        listOf(
+            KEY_USB_DEVICE_ID, KEY_USB_VENDOR_ID, KEY_USB_PRODUCT_ID, KEY_USB_DEVICE_NAME,
+            KEY_USB_FORMATS, KEY_DIRECT_USB_RATE, KEY_DIRECT_USB_BITS,
+            KEY_DIRECT_USB_SUBSLOT, KEY_DIRECT_USB_CHANNELS, KEY_DIRECT_USB_OUTPUT_PAIR
+        ).fold(prefs(context).edit()) { editor, key -> editor.remove(key) }.apply()
     }
 
     fun forgetDirectUsbInterface(context: Context) {

@@ -31,11 +31,13 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {std::lock_guard lock(co
 bool RackGraph::setTrackVolume(RackPathId id,float value){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->volume.store(std::clamp(value,0.f,1.f));return true;}
 bool RackGraph::setTrackInputArmed(RackPathId id,bool armed){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->inputArmed.store(armed);return true;}
 bool RackGraph::setTrackInputChannel(RackPathId id, int32_t channel) {
+    constexpr int32_t kMaxInputChannels = 8;
     std::lock_guard lock(controlMutex_);
     auto it = std::find_if(tracks_.begin(), tracks_.end(),
                            [&](const auto& node) { return node->id == id; });
     const int32_t count = availableInputChannelCount_.load(std::memory_order_acquire);
-    if (it == tracks_.end() || channel < 0 || channel >= count) return false;
+    if (it == tracks_.end() || channel < 0 || channel >= kMaxInputChannels ||
+        (count > 0 && channel >= count)) return false;
     (*it)->inputChannel.store(channel, std::memory_order_release);
     return true;
 }
@@ -52,7 +54,7 @@ void RackGraph::setAvailableInputChannelCount(int32_t count) noexcept {
 bool RackGraph::attachTrackWav(RackPathId id,std::shared_ptr<const WavClip> clip){if(!clip||clip->left.empty()||!clip->sampleRate||(!clip->right.empty()&&clip->right.size()!=clip->left.size()))return false;std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;auto copy=clips_;copy[it-tracks_.begin()]=std::move(clip);auto recs=recordingClips_;recs[it-tracks_.begin()].reset();if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,copy,recs)))return false;clips_=std::move(copy);recordingClips_=std::move(recs);(*it)->recordPending.store(false);(*it)->recording.store(false);(*it)->punchArmed.store(false);(*it)->recordComplete.store(false);return true;}
 bool RackGraph::unloadTrackWav(RackPathId id){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;auto copy=clips_;auto recs=recordingClips_;auto i=static_cast<size_t>(it-tracks_.begin());copy[i].reset();recs[i].reset();(*it)->recordPending.store(false);(*it)->recording.store(false);(*it)->punchArmed.store(false);(*it)->recordComplete.store(false);if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,copy,recs)))return false;clips_=std::move(copy);recordingClips_=std::move(recs);return true;}
 bool RackGraph::clearTrackWavs(){std::lock_guard lock(controlMutex_);auto copy=clips_;auto recs=recordingClips_;for(size_t i=0;i<copy.size();++i){copy[i].reset();recs[i].reset();tracks_[i]->recordPending.store(false);tracks_[i]->recording.store(false);tracks_[i]->punchArmed.store(false);tracks_[i]->recordComplete.store(false);}if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,copy,recs)))return false;clips_=std::move(copy);recordingClips_=std::move(recs);return true;}
-bool RackGraph::startTrackLoopRecording(RackPathId id,double bars,LaunchQuantization q,bool enterOnPunch){if(!(bars==.25||bars==1||bars==2||bars==4||bars==8||bars==16))return false;std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;auto& n=**it;size_t i=static_cast<size_t>(it-tracks_.begin());if(!n.inputArmed.load()||!n.desiredLooping.load()||clips_[i]||recordingClips_[i])return false;double rate=sampleRate_.load(),bpm=mailbox_.desiredBpm.load();if(rate<=0||bpm<=0)return false;if(enterOnPunch && statusPlaying_.load(std::memory_order_acquire))return false;uint32_t length=static_cast<uint32_t>(std::llround(bars*4.*60./bpm*rate));if(!length)return false;auto rec=std::make_shared<WavClip>();rec->sampleRate=static_cast<uint32_t>(rate);rec->left.resize(length);rec->right.resize(length);rec->displayName="Recorded loop";auto recs=recordingClips_;recs[i]=rec;n.recordLength=length;n.recordQuantization=static_cast<uint8_t>(q);n.recordFrame.store(0);n.recordComplete.store(false);n.recording.store(false);n.recordPending.store(!enterOnPunch);n.punchArmed.store(enterOnPunch);n.recordStartFrame.store(enterOnPunch?std::numeric_limits<uint64_t>::max():nextBoundary(statusTransportFrame_.load(std::memory_order_acquire),rate,bpm,q));if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs)))return false;recordingClips_=std::move(recs);return true;}
+bool RackGraph::startTrackLoopRecording(RackPathId id,double bars,LaunchQuantization q,bool enterOnPunch){if(!(bars==.25||bars==1||bars==2||bars==4||bars==8||bars==16))return false;std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;auto& n=**it;size_t i=static_cast<size_t>(it-tracks_.begin());if(!n.inputArmed.load()||!n.desiredLooping.load()||clips_[i]||recordingClips_[i])return false;double rate=sampleRate_.load(),bpm=mailbox_.desiredBpm.load();if(rate<=0||bpm<=0)return false;if(enterOnPunch && statusPlaying_.load(std::memory_order_acquire))return false;uint32_t length=static_cast<uint32_t>(std::llround(bars*4.*60./bpm*rate));if(!length)return false;auto rec=std::make_shared<WavClip>();rec->sampleRate=static_cast<uint32_t>(rate);rec->left.resize(length);rec->right.resize(length);rec->displayName="Recorded loop";auto recs=recordingClips_;recs[i]=rec;n.recordLength=length;n.recordQuantization=static_cast<uint8_t>(q);n.recordFrame.store(0);n.recordComplete.store(false);n.recording.store(false);n.recordPending.store(!enterOnPunch);n.punchArmed.store(enterOnPunch);const uint32_t calibrationFrames=enterOnPunch?std::max<uint32_t>(1,static_cast<uint32_t>(std::ceil(rate*0.01))):0;n.punchCalibrationFrames.store(calibrationFrames);n.punchCalibrationRemaining.store(calibrationFrames);n.punchNoiseSum.store(0.0f);n.punchThreshold.store(0.02f);n.recordStartFrame.store(enterOnPunch?std::numeric_limits<uint64_t>::max():nextBoundary(statusTransportFrame_.load(std::memory_order_acquire),rate,bpm,q));if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs)))return false;recordingClips_=std::move(recs);return true;}
 bool RackGraph::cancelTrackLoopRecording(RackPathId id){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;size_t i=static_cast<size_t>(it-tracks_.begin());auto& n=**it;if(!recordingClips_[i]||n.recordComplete.load())return false;auto recs=recordingClips_;recs[i].reset();n.recordPending.store(false);n.recording.store(false);n.punchArmed.store(false);n.recordComplete.store(false);if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs)))return false;recordingClips_=std::move(recs);return true;}
 void RackGraph::writeMailboxLocked(bool changePlay,bool playing,bool reset,bool changeBpm,double bpm){mailbox_.sequence.fetch_add(1);if(changePlay){mailbox_.desiredPlaying.store(playing);mailbox_.playSerial.fetch_add(1);}if(changeBpm){mailbox_.desiredBpm.store(std::clamp(std::isfinite(bpm)?bpm:120.,20.,400.));mailbox_.bpmSerial.fetch_add(1);}if(reset)mailbox_.resetSerial.fetch_add(1);mailbox_.sequence.fetch_add(1,std::memory_order_release);}
 bool RackGraph::setTransportPlaying(bool playing){std::lock_guard lock(controlMutex_);if(playing){auto recs=recordingClips_;bool changed=false;for(size_t i=0;i<recs.size();++i)if(tracks_[i]->punchArmed.load()){recs[i].reset();tracks_[i]->punchArmed.store(false);tracks_[i]->recordPending.store(false);tracks_[i]->recording.store(false);tracks_[i]->recordComplete.store(false);changed=true;}if(changed){publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs));recordingClips_=std::move(recs);}}else{auto recs=recordingClips_;bool changed=false;for(size_t i=0;i<recs.size();++i)if(recs[i] && !clips_[i] && !tracks_[i]->recordComplete.load(std::memory_order_acquire)){recs[i].reset();tracks_[i]->recordPending.store(false);tracks_[i]->recording.store(false);tracks_[i]->punchArmed.store(false);tracks_[i]->recordComplete.store(false);changed=true;}if(changed){publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs));recordingClips_=std::move(recs);}}writeMailboxLocked(true,playing,false);return true;}bool RackGraph::restartTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,true,true);return true;}void RackGraph::setBeatsPerMinute(double bpm){std::lock_guard lock(controlMutex_);writeMailboxLocked(false,false,false,true,bpm);}
@@ -154,14 +156,37 @@ void RackGraph::process(
                 node.localFrame = 0;
             }
 
-            if (view.recordingClip && node.punchArmed.load(std::memory_order_relaxed) &&
-                std::fabs(liveInput) >= 0.02f) {
-                node.punchArmed.store(false, std::memory_order_relaxed);
-                node.recording.store(true, std::memory_order_relaxed);
-                node.recordFrame.store(0, std::memory_order_relaxed);
-                audioPlaying_ = true;
-                mailbox_.desiredPlaying.store(true, std::memory_order_relaxed);
-                statusPlaying_.store(true, std::memory_order_relaxed);
+            if (view.recordingClip &&
+                node.punchArmed.load(std::memory_order_relaxed)) {
+                const float magnitude = std::fabs(liveInput);
+                uint32_t calibrationRemaining =
+                    node.punchCalibrationRemaining.load(std::memory_order_relaxed);
+                if (calibrationRemaining > 0) {
+                    node.punchNoiseSum.store(
+                        node.punchNoiseSum.load(std::memory_order_relaxed) + magnitude,
+                        std::memory_order_relaxed);
+                    --calibrationRemaining;
+                    node.punchCalibrationRemaining.store(
+                        calibrationRemaining, std::memory_order_relaxed);
+                    if (calibrationRemaining == 0) {
+                        const uint32_t calibrationFrames = std::max<uint32_t>(
+                            1, node.punchCalibrationFrames.load(std::memory_order_relaxed));
+                        const float noiseAverage =
+                            node.punchNoiseSum.load(std::memory_order_relaxed) /
+                            static_cast<float>(calibrationFrames);
+                        node.punchThreshold.store(
+                            std::max(0.02f, noiseAverage * 2.0f),
+                            std::memory_order_relaxed);
+                    }
+                } else if (magnitude >=
+                           node.punchThreshold.load(std::memory_order_relaxed)) {
+                    node.punchArmed.store(false, std::memory_order_relaxed);
+                    node.recording.store(true, std::memory_order_relaxed);
+                    node.recordFrame.store(0, std::memory_order_relaxed);
+                    audioPlaying_ = true;
+                    mailbox_.desiredPlaying.store(true, std::memory_order_relaxed);
+                    statusPlaying_.store(true, std::memory_order_relaxed);
+                }
             }
             if (view.recordingClip &&
                 node.recordPending.load(std::memory_order_relaxed) &&

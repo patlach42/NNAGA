@@ -11,25 +11,35 @@
 
 package com.vibes.dsp.ui.settings
 
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.vibes.dsp.BuildConfig
+import com.vibes.dsp.engine.AudioSettingsManager
+import com.vibes.dsp.engine.UsbAudioDriver
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.tone3000.Tone
 import com.vibes.dsp.ui.tone3000.Tone3000Screen
@@ -46,7 +56,7 @@ enum class SettingsTab(val argument: String, val label: String) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun SettingsScreen(
     viewModel: RackViewModel,
@@ -69,6 +79,22 @@ fun SettingsScreen(
     var selectedTab by remember(initialTab, availableTabs) {
         mutableStateOf(initialTab.takeIf { it in availableTabs } ?: SettingsTab.Driver)
     }
+    var showDriverDialog by remember { mutableStateOf(false) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    if (showDriverDialog) {
+        val current = AudioSettingsManager.getUsbAudioDriver(context)
+        AlertDialog(
+            onDismissRequest = { showDriverDialog = false },
+            title = { Text("USB driver (${current.name})") },
+            text = { Text("Choose the direct USB transport driver") },
+            confirmButton = {
+                androidx.compose.foundation.layout.Row {
+                    TextButton(onClick = { viewModel.setUsbAudioDriver(UsbAudioDriver.Uac); showDriverDialog = false }) { Text("UAC") }
+                    TextButton(onClick = { viewModel.setUsbAudioDriver(UsbAudioDriver.Line6); showDriverDialog = false }) { Text("Line6") }
+                }
+            }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -82,18 +108,31 @@ fun SettingsScreen(
             )
         }
     ) { padding ->
-        androidx.compose.foundation.layout.Column(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
             TabRow(selectedTabIndex = availableTabs.indexOf(selectedTab)) {
                 availableTabs.forEach { tab ->
-                    Tab(
-                        selected = selectedTab == tab,
-                        onClick = { selectedTab = tab },
-                        text = { Text(tab.label) }
-                    )
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(48.dp)
+                            .semantics {
+                                selected = selectedTab == tab
+                                role = Role.Tab
+                            }
+                            .combinedClickable(
+                                onClick = { selectedTab = tab },
+                                onLongClick = if (tab == SettingsTab.Driver) {
+                                    { showDriverDialog = true }
+                                } else null,
+                                onLongClickLabel = if (tab == SettingsTab.Driver) "Choose USB driver" else null,
+                                role = Role.Tab
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) { Text(tab.label) }
                 }
             }
             when (selectedTab) {

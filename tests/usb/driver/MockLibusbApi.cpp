@@ -7,7 +7,6 @@
 #include <unordered_set>
 #include <vector>
 
-namespace {
 std::atomic<int> gSubmitResult{LIBUSB_SUCCESS};
 std::atomic<int> gSubmitCalls{0};
 std::atomic<int> gCancelCallbackCalls{0};
@@ -15,7 +14,6 @@ std::atomic<int> gMaxIsoPacketSize{28};
 std::mutex gTransferMutex;
 std::unordered_set<libusb_transfer*> gAcceptedTransfers;
 std::vector<std::vector<uint8_t>> gSubmittedPayloads;
-}
 
 // The test executable controls these through the weakly linked test hooks below.
 // The transfer callback itself remains production code; only this API boundary

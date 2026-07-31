@@ -412,10 +412,10 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRefreshPluginRegistry(JNIEnv* env, 
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeOpenDirectUsbOutput(
-        JNIEnv* env, jobject thiz, jint fileDescriptor) {
+        JNIEnv* env, jobject thiz, jint fileDescriptor, jint driverCode) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
-    return g_ctx->audioEngine->openDirectUsbDevice(static_cast<int>(fileDescriptor))
-        ? JNI_TRUE : JNI_FALSE;
+    return g_ctx->audioEngine->openDirectUsbDevice(
+        static_cast<int>(fileDescriptor), static_cast<int>(driverCode)) ? JNI_TRUE : JNI_FALSE;
 }
 JNIEXPORT jint JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbInputChannelCount(
@@ -478,6 +478,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStopDirectUsbOutput(
         JNIEnv* env, jobject thiz) {
     if (g_ctx && g_ctx->audioEngine) {
         g_ctx->audioEngine->stop();
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeCloseDirectUsbOutput(
+        JNIEnv* env, jobject thiz) {
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->closeDirectUsbDevice();
     }
 }
 
