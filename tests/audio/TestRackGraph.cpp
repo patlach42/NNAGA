@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "plugin/RackGraph.h"
-#include "usb/UsbScheduling.h"
+#include <liblowlatencyaudio/UsbScheduling.h>
 
 #include <array>
 #include <cstddef>

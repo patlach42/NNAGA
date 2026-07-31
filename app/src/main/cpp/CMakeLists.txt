@@ -94,49 +94,15 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/jni
     ${CMAKE_CURRENT_SOURCE_DIR}/x11
 )
-# Direct USB Audio Class backend. `libusb` is pinned as a project submodule;
-# use the Android usbfs implementation with the app-granted device FD.
-set(LIBUSB_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/libusb")
-if(NOT EXISTS "${LIBUSB_ROOT}/libusb/core.c")
-    message(FATAL_ERROR "libusb not found. Run: git submodule update --init --recursive 3rd_party/libusb")
+# Direct USB Audio Class backend is provided by the local standalone submodule.
+set(LOWLATENCY_AUDIO_ROOT
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../liblowlatencyaudio"
+    CACHE PATH "Path to the liblowlatencyaudio source tree")
+if(NOT EXISTS "${LOWLATENCY_AUDIO_ROOT}/CMakeLists.txt")
+    message(FATAL_ERROR
+        "liblowlatencyaudio not found at ${LOWLATENCY_AUDIO_ROOT}; initialize the submodule or set LOWLATENCY_AUDIO_ROOT")
 endif()
-
-add_library(libusb_static STATIC
-    ${LIBUSB_ROOT}/libusb/core.c
-    ${LIBUSB_ROOT}/libusb/descriptor.c
-    ${LIBUSB_ROOT}/libusb/hotplug.c
-    ${LIBUSB_ROOT}/libusb/io.c
-    ${LIBUSB_ROOT}/libusb/sync.c
-    ${LIBUSB_ROOT}/libusb/strerror.c
-    ${LIBUSB_ROOT}/libusb/os/linux_usbfs.c
-    ${LIBUSB_ROOT}/libusb/os/events_posix.c
-    ${LIBUSB_ROOT}/libusb/os/threads_posix.c
-    ${LIBUSB_ROOT}/libusb/os/linux_netlink.c
-)
-target_include_directories(libusb_static PUBLIC
-    ${LIBUSB_ROOT}/libusb
-    ${LIBUSB_ROOT}/libusb/os
-    ${LIBUSB_ROOT}/android
-)
-target_compile_options(libusb_static PRIVATE
-    -fvisibility=hidden
-    -Wno-unused-parameter
-    -Wno-unused-but-set-variable
-)
-set_target_properties(libusb_static PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
-add_library(direct_usb_output STATIC
-    usb/libusb_uac_driver.cpp
-)
-target_include_directories(direct_usb_output PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/usb
-    ${LIBUSB_ROOT}/libusb
-)
-target_link_libraries(direct_usb_output
-    libusb_static
-    android
-    log
-)
+add_subdirectory("${LOWLATENCY_AUDIO_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/liblowlatencyaudio")
 
 # Plugin abstraction layer
 add_library(plugin_abstraction STATIC
@@ -146,6 +112,8 @@ add_library(plugin_abstraction STATIC
     plugin/PluginUIGuard.cpp
     plugin/PluginUIManager.cpp
 )
+target_link_libraries(plugin_abstraction PRIVATE
+    lowlatencyaudio::lowlatencyaudio)
 
 # LV2 backend (conditional compilation)
 if(LV2_AVAILABLE)
@@ -187,19 +155,18 @@ add_library(audio_engine STATIC
 )
 target_link_libraries(audio_engine
     utils
-    direct_usb_output
+    lowlatencyaudio::lowlatencyaudio
 )
+target_compile_options(lowlatencyaudio PRIVATE -O3)
 
 # Third-party/general targets keep conservative optimization. Host realtime
 # targets use -O3; ThinLTO and optional PGO are configured independently below.
 foreach(general_target
-        libusb_static
         lv2_backend)
     target_compile_options(${general_target} PRIVATE -O2)
 endforeach()
 
 foreach(rt_target
-        direct_usb_output
         plugin_abstraction
         audio_engine)
     target_compile_options(${rt_target} PRIVATE -O3)
@@ -209,11 +176,11 @@ option(GRC_ENABLE_AUDIO_THINLTO
        "Enable ThinLTO for the native realtime audio path" ON)
 if(GRC_ENABLE_AUDIO_THINLTO)
     foreach(lto_target
-            direct_usb_output
             plugin_abstraction
             audio_engine)
         target_compile_options(${lto_target} PRIVATE -flto=thin)
     endforeach()
+    target_compile_options(lowlatencyaudio PRIVATE -flto=thin)
 endif()
 
 set(GRC_AUDIO_PGO_MODE "OFF" CACHE STRING
@@ -244,12 +211,13 @@ endif()
 
 if(GRC_AUDIO_PGO_COMPILE_FLAG)
     foreach(pgo_target
-            direct_usb_output
             plugin_abstraction
             audio_engine)
         target_compile_options(${pgo_target} PRIVATE
             "${GRC_AUDIO_PGO_COMPILE_FLAG}")
     endforeach()
+    target_compile_options(lowlatencyaudio PRIVATE
+        "${GRC_AUDIO_PGO_COMPILE_FLAG}")
 endif()
 
 # XShm stub - used when plugin UI .so references MIT-SHM (fallback to XPutImage)
@@ -273,6 +241,7 @@ target_link_libraries(x11_native_display
     android
     EGL
     GLESv2
+    lowlatencyaudio::lowlatencyaudio
 )
 
 add_library(guitarrackcraft SHARED

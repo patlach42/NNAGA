@@ -18,7 +18,7 @@
  */
 
 #include "PluginChain.h"
-#include "../utils/ThreadUtils.h"
+#include <liblowlatencyaudio/ThreadUtils.h>
 #include <android/log.h>
 #include <algorithm>
 #include <chrono>

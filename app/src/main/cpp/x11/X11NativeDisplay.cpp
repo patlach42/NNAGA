@@ -28,7 +28,7 @@
 #include "X11EventBuilder.h"
 #include "X11Log.h"
 #include "../plugin/PluginUIGuard.h"
-#include "../utils/ThreadUtils.h"
+#include <liblowlatencyaudio/ThreadUtils.h>
 #include <android/log.h>
 #include <android/native_window_jni.h>
 #include <EGL/egl.h>

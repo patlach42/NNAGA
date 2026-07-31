@@ -16,7 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with Guitar RackCraft. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.vibes.dsp.ui.settings
 
 import android.content.BroadcastReceiver
@@ -25,8 +24,13 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.hardware.usb.UsbManager
 import android.os.Build
+
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
@@ -34,24 +38,25 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
 import com.vibes.dsp.engine.AudioEngine
 import com.vibes.dsp.engine.AudioSettingsManager
 import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.DirectUsbDeviceOption
 import com.vibes.dsp.engine.DirectUsbFormat
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import kotlinx.coroutines.launch
-
+import com.vibes.dsp.engine.UsbAudioDriver
 import com.vibes.dsp.ui.rack.RackViewModel
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -93,6 +98,11 @@ private fun AudioSettingsContent(
     var selectedBufferSize by remember { mutableIntStateOf(AudioSettingsManager.getBufferSize(context)) }
     var isCalibrationRunning by remember { mutableStateOf(false) }
     val isEngineRunning by viewModel.isEngineRunning.collectAsState()
+    val directUsbStats by viewModel.directUsbStats.collectAsState()
+    DisposableEffect(viewModel) {
+        viewModel.setUsbDiagnosticsVisible(true)
+        onDispose { viewModel.setUsbDiagnosticsVisible(false) }
+    }
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -125,6 +135,31 @@ private fun AudioSettingsContent(
             InfoRow("Sample Rate", "%.0f Hz".format(AudioEngine.getSampleRate()))
             InfoRow("Buffer Size", "${AudioEngine.getBufferFrameCount()} frames")
             InfoRow("Output", "USB outputs ${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 1}–${AudioSettingsManager.getDirectUsbOutputPair(context) * 2 + 2}")
+            val captureContribution = maxOf(
+                directUsbStats.effectiveQuantum,
+                directUsbStats.captureRingFrames,
+                directUsbStats.captureTransferFrames
+            )
+            val estimatedFrames = directUsbStats.knownHostLatencyFrames
+            val estimatedMs = if (directUsbStats.sampleRateHz > 0) {
+                estimatedFrames * 1000.0 / directUsbStats.sampleRateHz
+            } else {
+                0.0
+            }
+            InfoRow(
+                "Estimated host queue",
+                "$estimatedFrames frames / ${String.format(Locale.US, "%.2f", estimatedMs)} ms"
+            )
+            Text(
+                text = "max(graph quantum ${directUsbStats.effectiveQuantum}, " +
+                    "capture ring ${directUsbStats.captureRingFrames}, " +
+                    "capture transfer ${directUsbStats.captureTransferFrames}) = $captureContribution\n" +
+                    "+ playback ring ${directUsbStats.playbackRingFrames}\n" +
+                    "+ queued OUT ${directUsbStats.queuedOut}\n" +
+                    "= $estimatedFrames frames",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             OutlinedButton(
                 onClick = viewModel::stopEngine,
                 modifier = Modifier.fillMaxWidth()
@@ -135,7 +170,7 @@ private fun AudioSettingsContent(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun DirectUsbSessionSettings(
     selectedBufferFrames: Int,
@@ -144,6 +179,7 @@ private fun DirectUsbSessionSettings(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val isLine6Driver = AudioSettingsManager.getUsbAudioDriver(context) == UsbAudioDriver.Line6
     var devices by remember { mutableStateOf<List<DirectUsbDeviceOption>>(emptyList()) }
     var selectedDevice by remember { mutableStateOf<DirectUsbDeviceOption?>(null) }
     var formats by remember {
@@ -159,14 +195,25 @@ private fun DirectUsbSessionSettings(
     var selectedPeriodMultiplier by remember {
         mutableIntStateOf(AudioSettingsManager.getDirectUsbPeriodMultiplier(context))
     }
+    var showAllUsbDevices by remember(isLine6Driver) {
+        mutableStateOf(AudioSettingsManager.getLine6ShowAllUsbDevices(context))
+    }
     var selectedWatermark by remember { mutableIntStateOf(0) }
     var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
     var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
     var isCalibrating by remember { mutableStateOf(false) }
-    val controlsEnabled = inputsEnabled && !isCalibrating
-    var message by remember { mutableStateOf<String?>(null) }
+    var showUsbInterfaceLog by remember { mutableStateOf(false) }
+    var usbInterfaceLog by remember { mutableStateOf("Long press the interface selector to collect diagnostics.") }
     var runAtStart by remember { mutableStateOf(AudioSettingsManager.getEngineRunAtStart(context)) }
+    var message by remember { mutableStateOf<String?>(null) }
+    val controlsEnabled = inputsEnabled && !isCalibrating
     var devicesExpanded by remember { mutableStateOf(false) }
+    val clipboardManager = LocalClipboardManager.current
+
+    fun refreshUsbInterfaceLog() {
+        usbInterfaceLog = DirectUsbAudioManager.getAudioDevicesDebugLog(context)
+        showUsbInterfaceLog = true
+    }
 
     fun persistFormatSelection(selected: DirectUsbFormat) {
         selectedRate = selected.sampleRate
@@ -224,6 +271,7 @@ private fun DirectUsbSessionSettings(
                 }
         }
     }
+
     LaunchedEffect(context, inputsEnabled) {
         refreshDevices()
     }
@@ -297,35 +345,105 @@ private fun DirectUsbSessionSettings(
             enabled = controlsEnabled
         ) { Icon(Icons.Default.Refresh, contentDescription = "Refresh USB interfaces") }
     }
-    ExposedDropdownMenuBox(
-        expanded = devicesExpanded,
-        onExpandedChange = { if (controlsEnabled) devicesExpanded = it }
-    ) {
-        OutlinedTextField(
-            value = selectedDevice?.name
-                ?: AudioSettingsManager.getDirectUsbDeviceName(context)
-                    .ifEmpty { "No USB audio interface found" } +
-                if (selectedDevice == null &&
-                    AudioSettingsManager.getDirectUsbDeviceName(context).isNotEmpty()
-                ) " (disconnected)" else "",
-            onValueChange = {},
-            readOnly = true,
-            enabled = controlsEnabled,
-            modifier = Modifier.fillMaxWidth().menuAnchor(),
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(devicesExpanded) }
-        )
-        ExposedDropdownMenu(
+    val renderInterfaceSelector: @Composable () -> Unit = {
+        ExposedDropdownMenuBox(
             expanded = devicesExpanded,
-            onDismissRequest = { devicesExpanded = false }
+            onExpandedChange = { if (controlsEnabled) devicesExpanded = it }
         ) {
-            devices.forEach { device ->
-                DropdownMenuItem(
-                    text = { Text(device.name) },
+            Box(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = selectedDevice?.name
+                        ?: AudioSettingsManager.getDirectUsbDeviceName(context)
+                            .ifEmpty { "No USB audio interface found" } +
+                        if (selectedDevice == null &&
+                            AudioSettingsManager.getDirectUsbDeviceName(context).isNotEmpty()
+                        ) " (disconnected)" else "",
+                    onValueChange = {},
+                    readOnly = true,
                     enabled = controlsEnabled,
-                    onClick = { loadDevice(device) }
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .menuAnchor(),
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(devicesExpanded) }
+                )
+                Box(
+                    modifier = Modifier
+                        .matchParentSize()
+                        .combinedClickable(
+                            enabled = controlsEnabled,
+                            onClick = { devicesExpanded = !devicesExpanded },
+                            onLongClick = { refreshUsbInterfaceLog() }
+                        )
                 )
             }
+            ExposedDropdownMenu(
+                expanded = devicesExpanded,
+                onDismissRequest = { devicesExpanded = false }
+            ) {
+                devices.forEach { device ->
+                    DropdownMenuItem(
+                        text = { Text(device.name) },
+                        enabled = controlsEnabled,
+                        onClick = { loadDevice(device) }
+                    )
+                }
+            }
         }
+    }
+    if (isLine6Driver) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Show all USB devices")
+                Switch(
+                    checked = showAllUsbDevices,
+                    enabled = controlsEnabled,
+                    onCheckedChange = {
+                        showAllUsbDevices = it
+                        AudioSettingsManager.setLine6ShowAllUsbDevices(context, it)
+                        scope.launch { refreshDevices() }
+                    }
+                )
+            }
+            renderInterfaceSelector()
+        }
+    } else {
+        renderInterfaceSelector()
+    }
+
+    if (showUsbInterfaceLog) {
+        val logScrollState = rememberScrollState()
+        AlertDialog(
+            onDismissRequest = { showUsbInterfaceLog = false },
+            title = { Text("USB interface scan log") },
+            text = {
+                Text(
+                    usbInterfaceLog,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp)
+                        .verticalScroll(logScrollState)
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    clipboardManager.setText(AnnotatedString(usbInterfaceLog))
+                    showUsbInterfaceLog = false
+                }) {
+                    Text("Copy")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUsbInterfaceLog = false }) {
+                    Text("Close")
+                }
+            }
+        )
     }
 
     val rates = formats.map { it.sampleRate }.distinct()
@@ -364,12 +482,19 @@ private fun DirectUsbSessionSettings(
         ) {
             selectedWatermark = if (selectedDevice != null && selectedFormat != null) {
                 AudioSettingsManager.getDirectUsbWatermark(
-                    context, selectedDevice!!.vendorId, selectedDevice!!.productId,
-                    selectedFormat.sampleRate, selectedFormat.bits,
-                    selectedFormat.subslotBytes, selectedFormat.channels,
-                    selectedBufferFrames, selectedPeriodMultiplier
+                    context,
+                    selectedDevice!!.vendorId,
+                    selectedDevice!!.productId,
+                    selectedFormat.sampleRate,
+                    selectedFormat.bits,
+                    selectedFormat.subslotBytes,
+                    selectedFormat.channels,
+                    selectedBufferFrames,
+                    selectedPeriodMultiplier
                 )
-            } else 0
+            } else {
+                0
+            }
         }
         val watermarkOptions = remember(selectedWatermark) {
             (listOf(
@@ -388,9 +513,16 @@ private fun DirectUsbSessionSettings(
             val format = selectedFormat
             if (device != null && format != null) {
                 AudioSettingsManager.setDirectUsbWatermark(
-                    context, device.vendorId, device.productId, format.sampleRate,
-                    format.bits, format.subslotBytes, format.channels, frames,
-                    selectedBufferFrames, selectedPeriodMultiplier
+                    context,
+                    device.vendorId,
+                    device.productId,
+                    format.sampleRate,
+                    format.bits,
+                    format.subslotBytes,
+                    format.channels,
+                    frames,
+                    selectedBufferFrames,
+                    selectedPeriodMultiplier
                 )
             }
         }
@@ -457,6 +589,7 @@ private fun DirectUsbSessionSettings(
             }
         }
     }
+
     IntSelector(
         label = "Period multiplier",
         selected = selectedPeriodMultiplier,

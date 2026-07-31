@@ -135,16 +135,96 @@ object DirectUsbAudioManager {
     private val lifecycleMutex = Mutex()
     private val activeCalibrationJob = AtomicReference<Job?>(null)
 
+    private fun resolveLine6DeviceSelection(
+        driver: UsbAudioDriver,
+        showAllUsbDevices: Boolean,
+        devices: Collection<UsbDevice>
+    ): List<UsbDevice> {
+        val filteredDevices = devices.filter { device ->
+            when {
+                driver == UsbAudioDriver.Line6 && showAllUsbDevices -> true
+                driver == UsbAudioDriver.Line6 -> isSupportedLine6(device)
+                else -> isUsbAudioDevice(device)
+            }
+        }
+        return if (driver == UsbAudioDriver.Line6) {
+            if (showAllUsbDevices) filteredDevices else filteredDevices.ifEmpty {
+                devices.filter { isSupportedLine6(it) || isUsbAudioDevice(it) }
+            }
+        } else {
+            filteredDevices
+        }
+    }
+
+    private fun formatDeviceLineForDiagnostics(device: UsbDevice): String {
+        val interfaces = (0 until device.interfaceCount).joinToString(
+            separator = ",",
+            prefix = "[",
+            postfix = "]"
+        ) { index ->
+            val usbInterface = device.getInterface(index)
+            "${usbInterface.interfaceClass}/${usbInterface.interfaceSubclass}/${usbInterface.interfaceProtocol}"
+        }
+        return "${buildDeviceName(device)} [vid=0x${device.vendorId.toString(16)} " +
+            "pid=0x${device.productId.toString(16)} name=${device.deviceName}] " +
+            "class=${device.deviceClass} interfaces=$interfaces"
+    }
+
+    fun getAudioDevicesDebugLog(context: Context): String {
+        return try {
+            val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
+            val driver = selectedDriver(context)
+            val showAllUsbDevices = driver == UsbAudioDriver.Line6 &&
+                AudioSettingsManager.getLine6ShowAllUsbDevices(context)
+            val devices = usbManager.deviceList.values.toList()
+                .sortedBy { it.deviceName }
+            val filteredDevices = resolveLine6DeviceSelection(driver, showAllUsbDevices, devices)
+            val selectedIds = filteredDevices.map { it.deviceId }.toHashSet()
+            buildString {
+                appendLine("USB device scan")
+                appendLine("Driver=$driver, showAllUsbDevices=$showAllUsbDevices")
+                appendLine("Total USB devices=${devices.size}, visible devices=${filteredDevices.size}")
+                appendLine()
+                appendLine("Visible devices:")
+                if (filteredDevices.isEmpty()) {
+                    appendLine("(none)")
+                } else {
+                    filteredDevices.forEach { device ->
+                        appendLine("  [${device.deviceId}] ${formatDeviceLineForDiagnostics(device)}")
+                    }
+                }
+                appendLine()
+                appendLine("All devices:")
+                devices.forEach { device ->
+                    val include = if (selectedIds.contains(device.deviceId)) "yes" else "no"
+                    val reason = when {
+                        driver == UsbAudioDriver.Uac && isUsbAudioDevice(device) -> "usb-audio"
+                        driver == UsbAudioDriver.Line6 && showAllUsbDevices -> "line6-show-all"
+                        driver == UsbAudioDriver.Line6 && (isSupportedLine6(device) || isUsbAudioDevice(device)) -> "line6-fallback"
+                        driver == UsbAudioDriver.Line6 && isSupportedLine6(device) -> "line6-vidpid"
+                        driver == UsbAudioDriver.Line6 -> "line6-no-match"
+                        else -> "other"
+                    }
+                    appendLine("  [$include] [${device.deviceId}] $reason ${formatDeviceLineForDiagnostics(device)}")
+                }
+            }
+        } catch (error: Throwable) {
+            "Failed to collect USB device diagnostic log: ${error.message}"
+        }
+    }
+
     fun getAudioDevices(context: Context): List<DirectUsbDeviceOption> {
         val usbManager = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val driver = selectedDriver(context)
-        return usbManager.deviceList.values
-            .filter { device -> if (driver == UsbAudioDriver.Line6) isSupportedLine6(device) else isUsbAudioDevice(device) }
+        val showAllUsbDevices = driver == UsbAudioDriver.Line6 &&
+            AudioSettingsManager.getLine6ShowAllUsbDevices(context)
+        return resolveLine6DeviceSelection(driver, showAllUsbDevices, usbManager.deviceList.values)
             .sortedBy { it.deviceName }
             .map { device ->
                 DirectUsbDeviceOption(device.deviceId, buildDeviceName(device), device.vendorId, device.productId, device)
             }
     }
+
 
 
     suspend fun probeFormats(

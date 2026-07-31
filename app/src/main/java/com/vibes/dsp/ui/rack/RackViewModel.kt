@@ -53,6 +53,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private var autoStartAttempted = false
     @Volatile private var nativeReady = false
     @Volatile private var rackVisible = false
+    @Volatile private var usbDiagnosticsVisible = false
 
     init {
         // Native meters are sampled once and published as one conflated immutable state.
@@ -77,9 +78,9 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         // away from Compose Main and at a lower cadence than the meters.
         viewModelScope.launch(Dispatchers.IO) {
             while (true) {
-                if (nativeReady && rackVisible) {
+                if (nativeReady && (rackVisible || usbDiagnosticsVisible)) {
                     runCatching { pollDirectUsbStats() }
-                    if (_isEngineRunning.value) {
+                    if (_isEngineRunning.value && rackVisible) {
                         runCatching {
                             _cpuLoad.value = AudioEngine.getCpuLoad()
                             _latencyMs.value = AudioEngine.getLatencyMs()
@@ -89,8 +90,10 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                             )
                         }
                     }
-                    refreshTransport()
-                    refreshTrackTransport()
+                    if (rackVisible) {
+                        refreshTransport()
+                        refreshTrackTransport()
+                    }
                 }
                 delay(200)
             }
@@ -152,6 +155,9 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun setRackVisible(visible: Boolean) {
         rackVisible = visible
+    }
+    fun setUsbDiagnosticsVisible(visible: Boolean) {
+        usbDiagnosticsVisible = visible
     }
     fun selectPath(pathId: RackPathId) { if (pathId == MASTER_PATH_ID || _tracks.value.any { it.id == pathId }) { _selectedPathId.value = pathId; refreshSelectedPath() } }
     fun refreshRack(forceNewInstanceIds: Boolean = false) {

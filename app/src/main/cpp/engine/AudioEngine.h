@@ -28,8 +28,7 @@
 #include <string>
 #include <vector>
 #include "plugin/PluginChain.h"
-#include "DirectUsbOutput.h"
-
+#include <liblowlatencyaudio/DirectUsbOutput.h>
 #include "../plugin/RackGraph.h"
 namespace guitarrackcraft {
 

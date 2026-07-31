@@ -38,6 +38,7 @@ object AudioSettingsManager {
     private const val PREFS_NAME = "audio_settings"
     private const val KEY_USB_DRIVER = "usbAudioDriver"
     private const val KEY_BUFFER_SIZE = "bufferSize"
+    private const val KEY_LINE6_SHOW_ALL_USB_DEVICES = "line6ShowAllUsbDevices"
     private const val KEY_USB_DEVICE_ID = "directUsbDeviceId"
     private const val KEY_USB_VENDOR_ID = "directUsbVendorId"
     private const val KEY_USB_PRODUCT_ID = "directUsbProductId"
@@ -167,11 +168,19 @@ object AudioSettingsManager {
     fun setBufferSize(context: Context, size: Int) {
         prefs(context).edit().putInt(KEY_BUFFER_SIZE, normalizeBufferSize(size)).apply()
     }
+
     fun getUsbAudioDriver(context: Context): UsbAudioDriver =
         UsbAudioDriver.fromPersisted(prefs(context).getString(KEY_USB_DRIVER, UsbAudioDriver.Uac.persisted))
 
     fun setUsbAudioDriver(context: Context, driver: UsbAudioDriver) {
         prefs(context).edit().putString(KEY_USB_DRIVER, driver.persisted).apply()
+    }
+
+    fun getLine6ShowAllUsbDevices(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_LINE6_SHOW_ALL_USB_DEVICES, false)
+
+    fun setLine6ShowAllUsbDevices(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_LINE6_SHOW_ALL_USB_DEVICES, enabled).apply()
     }
 
     fun getDirectUsbDeviceId(context: Context): Int =

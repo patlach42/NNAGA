@@ -51,7 +51,7 @@
 #include "../x11/X11NativeDisplay.h"
 #include "../x11/X11Worker.h"
 #include "../x11/DisplayState.h"
-#include "../utils/ThreadUtils.h"
+#include <liblowlatencyaudio/ThreadUtils.h>
 
 #define LOG_TAG "NativeBridge"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)

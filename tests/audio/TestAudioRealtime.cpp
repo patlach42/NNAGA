@@ -4,7 +4,7 @@
 
 #include "utils/WavIO.h"
 #include "utils/BoundedSPSCQueue.h"
-#include "utils/ThreadUtils.h"
+#include <liblowlatencyaudio/ThreadUtils.h>
 
 #if defined(__linux__)
 #include <sched.h>

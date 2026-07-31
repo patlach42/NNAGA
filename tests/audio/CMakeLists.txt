@@ -15,8 +15,8 @@ add_executable(audio_realtime_tests
 target_include_directories(audio_realtime_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${AUDIO_APP_CPP_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../liblowlatencyaudio/include
 )
-
 target_link_libraries(audio_realtime_tests PRIVATE GTest::gtest_main pthread)
 
 include(GoogleTest)
