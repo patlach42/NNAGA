@@ -219,7 +219,10 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Common spawn + wait + drain + discover + pick flow. Called by both
-     *  installFromExe (after PREPARING) and launchExecutable (no PREPARING). */
+     *  installFromExe (after PREPARING) and launchExecutable (no PREPARING).
+     *  installIntoEnvironment also uses LAUNCH semantics against a preserved
+     *  activation environment prefix.
+     */
     private suspend fun runWineSession(ctx: Context, exePath: String, prefixPath: String) {
         val setup = WineSetup.ensure(ctx)
         // CRITICAL: bring up the X server on display 99 BEFORE forking
@@ -227,10 +230,14 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         // TCP port isn't listening yet it disables X11 rendering for
         // the lifetime of the subprocess.
         withContext(Dispatchers.IO) {
-            NativeBridge.nativeStartX11Server(INSTALLER_DISPLAY_NUMBER,
-                                             INSTALLER_SCREEN_W, INSTALLER_SCREEN_H)
-            NativeBridge.nativeSetX11PluginSize(INSTALLER_DISPLAY_NUMBER,
-                                               INSTALLER_SCREEN_W, INSTALLER_SCREEN_H)
+            NativeBridge.nativeStartX11Server(
+                INSTALLER_DISPLAY_NUMBER,
+                INSTALLER_SCREEN_W, INSTALLER_SCREEN_H
+            )
+            NativeBridge.nativeSetX11PluginSize(
+                INSTALLER_DISPLAY_NUMBER,
+                INSTALLER_SCREEN_W, INSTALLER_SCREEN_H
+            )
             // Freeze the framebuffer at INSTALLER_SCREEN_W×INSTALLER_SCREEN_H —
             // otherwise wine's wizard CreateWindow (typically 500x350)
             // triggers slot promotion / claim-slot in X11NativeDisplay,
@@ -274,6 +281,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
 
         _state.value = State.DISCOVERING
         val session = _session.value ?: run { reset(); return }
+        val scanPaths = VstScanPathManager.readScanPaths(ctx)
         val found = withContext(Dispatchers.IO) {
             // LAUNCH: filter against VSTs ALREADY registered for this prefix
             // (not the pre-launch snapshot) so discarded/wipe-recovered plugins
@@ -285,7 +293,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
                         .map { it.dllPath }
                         .toSet()
                 else emptySet()
-            discoverItems(session.templatePrefixPath, session.mode, alreadyRegistered)
+            discoverItems(session.templatePrefixPath, session.mode, alreadyRegistered, scanPaths)
         }
         _discovered.value = found
         if (found.isEmpty()) {
@@ -575,11 +583,11 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** Walk the prefix's drive_c/ for VST candidate files AND (in INSTALL mode)
-     *  executable candidates. Filters to PE files exporting VSTPluginMain or
-     *  GetPluginFactory (for VSTs) or PE EXEs over a small size threshold (for
-     *  executables). Skips wine builtins (in system32/syswow64 AND the named
-     *  builtins under windows\ / Program Files) plus windows\temp leftovers.
+    /** Scan configured roots inside the prefix's drive_c/ for candidate plugin files AND
+     *  (in INSTALL mode) installer candidates. Filters to PE files exporting
+     *  VSTPluginMain or GetPluginFactory (for VSTs) or PE EXEs over a small size
+     *  threshold (for executables). Skips wine builtins (in system32/syswow64 AND the
+     *  named builtins under windows\ / Program Files) plus windows\temp leftovers.
      *
      *  In LAUNCH mode: VSTs already registered for THIS prefix ([alreadyRegistered]
      *  = their dllPaths) are filtered out, so discovery surfaces "in-prefix VSTs
@@ -591,58 +599,66 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         prefixPath: String,
         mode: Mode,
         alreadyRegistered: Set<String>,
+        scanPaths: List<String>,
     ): List<DiscoveredPlugin> {
-        val driveC = File(prefixPath, "drive_c")
-        if (!driveC.exists()) return emptyList()
+        val scanRoots = VstScanPathManager.resolveScanRoots(prefixPath, scanPaths)
+        if (scanRoots.isEmpty()) return emptyList()
         val out = mutableListOf<DiscoveredPlugin>()
-        driveC.walkTopDown().forEach { f ->
-            if (!f.isFile) return@forEach
-            val lowerName = f.name.lowercase()
-            val rel = f.relativeTo(File(prefixPath)).path
-            val lowerRel = rel.lowercase()
-            if (lowerRel.contains("/system32/") || lowerRel.contains("/syswow64/")) return@forEach
-            // Installer leftovers (bootstrappers, VC_redist, extracted setup stubs,
-            // ISBEWI*.exe) accumulate under windows\temp — never the installed
-            // manager itself. Skipping them keeps the PICK list to real installs.
-            if (lowerRel.contains("/temp/")) return@forEach
+        val prefix = File(prefixPath)
+        val seen = HashSet<String>()
 
-            when {
-                lowerName.endsWith(".dll") || lowerName.endsWith(".vst3") -> {
-                    if (mode == Mode.LAUNCH && f.absolutePath in alreadyRegistered) return@forEach
-                    val flags = runCatching {
-                        NativeBridge.nativeInspectPluginExports(f.absolutePath)
-                    }.getOrDefault(0)
-                    val isValidPe = (flags and PeFlag.VALID) != 0 && (flags and PeFlag.IS_DLL) != 0
-                    val isVst2 = (flags and PeFlag.HAS_VSTPLUGINMAIN) != 0
-                    val isVst3 = (flags and PeFlag.HAS_VST3_FACTORY) != 0
-                    if (!isValidPe || (!isVst2 && !isVst3)) return@forEach
-                    out += DiscoveredPlugin(
-                        absPath = f.absolutePath,
-                        relToPrefix = rel,
-                        displayName = f.nameWithoutExtension,
-                        kind = if (isVst3) Kind.VST3 else Kind.VST2,
-                        is64Bit = (flags and PeFlag.IS_64) != 0,
-                        sizeBytes = f.length(),
-                    )
-                }
-                lowerName.endsWith(".exe") -> {
-                    if (mode == Mode.LAUNCH) return@forEach
-                    if (isLikelyHelperOrUninstaller(lowerName)) return@forEach
-                    if (f.length() < EXE_MIN_BYTES) return@forEach
-                    val flags = runCatching {
-                        NativeBridge.nativeInspectPluginExports(f.absolutePath)
-                    }.getOrDefault(0)
-                    val isValidPe = (flags and PeFlag.VALID) != 0
-                    val isExe = isValidPe && (flags and PeFlag.IS_DLL) == 0
-                    if (!isExe) return@forEach
-                    out += DiscoveredPlugin(
-                        absPath = f.absolutePath,
-                        relToPrefix = rel,
-                        displayName = f.nameWithoutExtension,
-                        kind = Kind.EXECUTABLE,
-                        is64Bit = (flags and PeFlag.IS_64) != 0,
-                        sizeBytes = f.length(),
-                    )
+        for (root in scanRoots) {
+            root.walkTopDown().forEach { f ->
+                if (!f.isFile) return@forEach
+                if (!seen.add(f.absolutePath)) return@forEach
+
+                val lowerName = f.name.lowercase()
+                val rel = f.relativeTo(prefix).path
+                val lowerRel = rel.lowercase()
+                if (lowerRel.contains("/system32/") || lowerRel.contains("/syswow64/")) return@forEach
+                // Installer leftovers (bootstrappers, VC_redist, extracted setup stubs,
+                // ISBEWI*.exe) accumulate under windows\temp — never the installed
+                // manager itself. Skipping them keeps the PICK list to real installs.
+                if (lowerRel.contains("/temp/")) return@forEach
+
+                when {
+                    lowerName.endsWith(".dll") || lowerName.endsWith(".vst3") -> {
+                        if (mode == Mode.LAUNCH && f.absolutePath in alreadyRegistered) return@forEach
+                        val flags = runCatching {
+                            NativeBridge.nativeInspectPluginExports(f.absolutePath)
+                        }.getOrDefault(0)
+                        val isValidPe = (flags and PeFlag.VALID) != 0 && (flags and PeFlag.IS_DLL) != 0
+                        val isVst2 = (flags and PeFlag.HAS_VSTPLUGINMAIN) != 0
+                        val isVst3 = (flags and PeFlag.HAS_VST3_FACTORY) != 0
+                        if (!isValidPe || (!isVst2 && !isVst3)) return@forEach
+                        out += DiscoveredPlugin(
+                            absPath = f.absolutePath,
+                            relToPrefix = rel,
+                            displayName = f.nameWithoutExtension,
+                            kind = if (isVst3) Kind.VST3 else Kind.VST2,
+                            is64Bit = (flags and PeFlag.IS_64) != 0,
+                            sizeBytes = f.length(),
+                        )
+                    }
+                    lowerName.endsWith(".exe") -> {
+                        if (mode == Mode.LAUNCH) return@forEach
+                        if (isLikelyHelperOrUninstaller(lowerName)) return@forEach
+                        if (f.length() < EXE_MIN_BYTES) return@forEach
+                        val flags = runCatching {
+                            NativeBridge.nativeInspectPluginExports(f.absolutePath)
+                        }.getOrDefault(0)
+                        val isValidPe = (flags and PeFlag.VALID) != 0
+                        val isExe = isValidPe && (flags and PeFlag.IS_DLL) == 0
+                        if (!isExe) return@forEach
+                        out += DiscoveredPlugin(
+                            absPath = f.absolutePath,
+                            relToPrefix = rel,
+                            displayName = f.nameWithoutExtension,
+                            kind = Kind.EXECUTABLE,
+                            is64Bit = (flags and PeFlag.IS_64) != 0,
+                            sizeBytes = f.length(),
+                        )
+                    }
                 }
             }
         }

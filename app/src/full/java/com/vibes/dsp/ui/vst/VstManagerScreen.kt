@@ -93,6 +93,9 @@ fun VstManagerScreen(
     var importingName by remember { mutableStateOf<String?>(null) }
 
     var blockingOperation by remember { mutableStateOf<String?>(null) }
+    var vstScanPathsText by remember {
+        mutableStateOf(VstScanPathManager.readScanPaths(context).joinToString("\n"))
+    }
 
     // Plugin-editor renderer selector. Turnip (GPU) is only offered on Adreno
     // devices; everywhere else only software lavapipe can run.
@@ -275,6 +278,65 @@ fun VstManagerScreen(
                                 "Applies to plugin editors opened after this change. Remove and re-add a plugin (or restart the app) to switch a running one."
                             else
                                 "This device has no Adreno GPU — only software rendering is available.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(16.dp))
+                    }
+                    item {
+                        Text(
+                            "VST scan paths",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Installer discovery is limited to these directories under wineprefix/drive_c. " +
+                            "VST files and manager EXE candidates in INSTALL mode are only shown " +
+                            "from listed paths. If an install path isn't listed, it won't appear for selection.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = vstScanPathsText,
+                            onValueChange = { vstScanPathsText = it },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .heightIn(min = 110.dp),
+                            label = { Text("Scan roots (one per line)") },
+                            minLines = 3,
+                            maxLines = 8
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                onClick = {
+                                    val saved = VstScanPathManager.writeScanPaths(
+                                        context,
+                                        vstScanPathsText.lines()
+                                    )
+                                    vstScanPathsText = saved.joinToString("\n")
+                                },
+                                enabled = blockingOperation == null
+                            ) {
+                                Text("Save scan paths")
+                            }
+                            OutlinedButton(
+                                onClick = {
+                                    val defaults = VstScanPathManager.writeScanPaths(
+                                        context,
+                                        VstScanPathManager.DEFAULT_PATHS
+                                    )
+                                    vstScanPathsText = defaults.joinToString("\n")
+                                },
+                                enabled = blockingOperation == null
+                            ) {
+                                Text("Reset defaults")
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Examples: Program Files, Program Files (x86), C:\\Program Files\\VST3",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
