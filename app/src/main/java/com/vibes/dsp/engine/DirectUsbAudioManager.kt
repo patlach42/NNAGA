@@ -343,7 +343,8 @@ object DirectUsbAudioManager {
                 bufferConfig.playbackTargetFrames, bufferConfig.startupPrimeFrames,
                 bufferConfig.writeHeadroomFrames, bufferConfig.captureLimitFrames,
                 bufferConfig.transferCount, bufferConfig.packetsPerTransfer,
-                bufferConfig.ringCapacityBytes
+                bufferConfig.ringCapacityBytes,
+                AudioSettingsManager.getDirectUsbThermalSafetyEnabled(context)
             )
         ) {
             val stats = runCatching { engine.getDirectUsbStats() }.getOrNull()

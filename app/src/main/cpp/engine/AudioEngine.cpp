@@ -188,18 +188,49 @@ void AudioEngine::directUsbThermalPolicyLoop() {
         std::unique_lock<std::mutex> lock(directUsbThermalPolicyMutex_);
         if (directUsbThermalPolicyCv_.wait_for(
                 lock, std::chrono::seconds(1), [this] {
-                    return directUsbThermalPolicyStop_.load(
-                        std::memory_order_acquire);
+                    return directUsbThermalPolicyStop_.load(std::memory_order_acquire);
                 })) {
             break;
         }
         lock.unlock();
         if (!directUsbSession_.load(std::memory_order_acquire)) continue;
         updateHintThreads();
-        // Queue geometry is fixed at session start. Thermal telemetry feeds
-        // performance hints only; it must never alter user-selected latency.
-        (void)monitor.sample(5);
+        const float headroom = monitor.sample(5);
+        if (!directUsbThermalSafetyEnabled_.load(std::memory_order_acquire)) {
+            if (safetyActive && directUsbOutput_) {
+                directUsbOutput_->setGraphQuantum(
+                    directUsbEffectiveQuantum_.load(std::memory_order_acquire),
+                    directUsbConfiguredMultiplier_,
+                    directUsbConfiguredWatermarkFrames_);
+                directUsbSteadyTargetFrames_.store(
+                    static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())),
+                    std::memory_order_release);
+            }
+            safetyActive = false;
+            directUsbThermalSafetyActive_ = false;
+            continue;
+        }
+        if (!std::isfinite(headroom)) continue;
+        if (!safetyActive && headroom >= 0.85f) {
+            const int32_t quantum = static_cast<int32_t>(directUsbEffectiveQuantum_.load(std::memory_order_acquire));
+            const int32_t currentTarget = static_cast<int32_t>(directUsbSteadyTargetFrames_.load(std::memory_order_acquire));
+            if (quantum > 0 && currentTarget > 0 && directUsbOutput_) {
+                directUsbOutput_->setGraphQuantum(quantum, directUsbConfiguredMultiplier_, currentTarget + 2 * quantum);
+                directUsbSteadyTargetFrames_.store(static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())), std::memory_order_release);
+                safetyActive = true;
+                directUsbThermalSafetyActive_ = true;
+            }
+        } else if (safetyActive && headroom <= 0.65f) {
+            const int32_t quantum = static_cast<int32_t>(directUsbEffectiveQuantum_.load(std::memory_order_acquire));
+            if (quantum > 0 && directUsbOutput_) {
+                directUsbOutput_->setGraphQuantum(quantum, directUsbConfiguredMultiplier_, directUsbConfiguredWatermarkFrames_);
+                directUsbSteadyTargetFrames_.store(static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())), std::memory_order_release);
+            }
+            safetyActive = false;
+            directUsbThermalSafetyActive_ = false;
+        }
     }
+    directUsbThermalSafetyActive_.store(false, std::memory_order_release);
     directUsbPerformanceHintSession_.store(nullptr, std::memory_order_release);
     directUsbPerformanceHintActive_.store(false, std::memory_order_release);
 }
@@ -209,7 +240,9 @@ bool AudioEngine::startDirectUsbSession(
         float sampleRate, int32_t bitsPerSample, int32_t subslotBytes,
         int32_t channels, int32_t outputPair, int32_t bufferFrames,
         int32_t periodMultiplier,
-        const monotrypt::usb::UserspaceBufferConfig& bufferConfig) {
+        const monotrypt::usb::UserspaceBufferConfig& bufferConfig,
+        bool thermalSafetyEnabled) {
+    directUsbThermalSafetyEnabled_.store(thermalSafetyEnabled, std::memory_order_release);
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
     if (directUsbSession_.load(std::memory_order_acquire)) {
         return true;
@@ -489,6 +522,8 @@ AudioEngine::DirectUsbRuntimeStats AudioEngine::getDirectUsbRuntimeStats() const
     out.playbackXruns = directPlaybackXruns_.load(std::memory_order_acquire);
     out.performanceHintActive =
         directUsbPerformanceHintActive_.load(std::memory_order_acquire);
+    out.thermalSafetyEnabled = directUsbThermalSafetyEnabled_.load(std::memory_order_acquire);
+    out.thermalSafetyActive = directUsbThermalSafetyActive_.load(std::memory_order_acquire);
     return out;
 }
 

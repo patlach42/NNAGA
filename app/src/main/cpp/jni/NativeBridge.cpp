@@ -431,7 +431,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         jint bytesPerSample, jint channels, jint outputPair,
         jint bufferFrames, jint periodMultiplier, jint playbackTargetFrames,
         jint startupPrimeFrames, jint writeHeadroomFrames, jint captureLimitFrames,
-        jint transferCount, jint packetsPerTransfer, jint ringCapacityBytes) {
+        jint transferCount, jint packetsPerTransfer, jint ringCapacityBytes,
+        jboolean thermalSafetyEnabled) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->audioEngine->startDirectUsbSession(
         static_cast<float>(sampleRate),
@@ -449,7 +450,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
             static_cast<int>(transferCount),
             static_cast<int>(packetsPerTransfer),
             static_cast<size_t>(std::max(0, ringCapacityBytes))
-        }
+        },
+        thermalSafetyEnabled == JNI_TRUE
     ) ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -509,7 +511,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 46;
+    constexpr jsize kStatCount = 48;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -574,6 +576,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[35] = static_cast<jlong>(stats.deadlineBudgetNanoseconds);
             values[36] = static_cast<jlong>(stats.deadlineMisses);
             values[38] = stats.performanceHintActive ? 1 : 0;
+            values[46] = stats.thermalSafetyEnabled ? 1 : 0;
+            values[47] = stats.thermalSafetyActive ? 1 : 0;
         }
     }
     jlongArray out = env->NewLongArray(kStatCount);

@@ -64,6 +64,8 @@ public:
         uint64_t captureUnderruns = 0;
         uint64_t playbackXruns = 0;
         bool performanceHintActive = false;
+        bool thermalSafetyEnabled = false;
+        bool thermalSafetyActive = false;
     };
     DirectUsbRuntimeStats getDirectUsbRuntimeStats() const noexcept;
     AudioEngine();
@@ -82,7 +84,8 @@ public:
                                int32_t subslotBytes, int32_t channels,
                                int32_t outputPair,
                                int32_t bufferFrames, int32_t periodMultiplier,
-                               const monotrypt::usb::UserspaceBufferConfig& bufferConfig);
+                               const monotrypt::usb::UserspaceBufferConfig& bufferConfig,
+                               bool thermalSafetyEnabled);
 
     void stop();
     bool openDirectUsbDevice(int fd, int driverCode = 0);
@@ -177,9 +180,10 @@ private:
     std::mutex directUsbThermalPolicyMutex_;
     std::condition_variable directUsbThermalPolicyCv_;
     std::atomic<bool> directUsbThermalPolicyStop_{false};
+    std::atomic<bool> directUsbThermalSafetyEnabled_{false};
     int32_t directUsbConfiguredWatermarkFrames_ = 0;
     int32_t directUsbConfiguredMultiplier_ = 0;
-    bool directUsbThermalSafetyActive_ = false;
+    std::atomic<bool> directUsbThermalSafetyActive_{false};
     std::atomic<int32_t> directUsbRenderTid_{0};
     std::atomic<void*> directUsbPerformanceHintSession_{nullptr};
     std::thread directUsbRenderThread_;

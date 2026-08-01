@@ -150,6 +150,14 @@ private fun AudioSettingsContent(
                 "Estimated host queue",
                 "$estimatedFrames frames / ${String.format(Locale.US, "%.2f", estimatedMs)} ms"
             )
+            InfoRow(
+                "Thermal safety",
+                when {
+                    directUsbStats.thermalSafetyActive -> "ACTIVE: target raised; restores at headroom ≤0.65"
+                    directUsbStats.thermalSafetyEnabled -> "Enabled: waiting for headroom ≥0.85"
+                    else -> "Disabled"
+                }
+            )
             Text(
                 text = "max(graph quantum ${directUsbStats.effectiveQuantum}, " +
                     "capture ring ${directUsbStats.captureRingFrames}, " +
@@ -205,6 +213,9 @@ private fun DirectUsbSessionSettings(
     var selectedTransferCount by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbTransferCount(context)) }
     var selectedPacketsPerTransfer by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)) }
     var selectedRingCapacityKiB by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRingCapacityKiB(context)) }
+    var thermalSafetyEnabled by remember {
+        mutableStateOf(AudioSettingsManager.getDirectUsbThermalSafetyEnabled(context))
+    }
     var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
     var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
     var isCalibrating by remember { mutableStateOf(false) }
@@ -626,6 +637,37 @@ private fun DirectUsbSessionSettings(
         selectedPeriodMultiplier = multiplier
         AudioSettingsManager.setDirectUsbPeriodMultiplier(context, multiplier)
     }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Thermal safety buffer policy")
+            Text(
+                "Opt-in: raises target by 2× quantum at headroom ≥0.85 and restores it at ≤0.65.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(
+            checked = thermalSafetyEnabled,
+            onCheckedChange = {
+                thermalSafetyEnabled = it
+                AudioSettingsManager.setDirectUsbThermalSafetyEnabled(context, it)
+            },
+            enabled = controlsEnabled
+        )
+    }
+    Text(
+        if (thermalSafetyEnabled) {
+            "Thermal policy is enabled for the next session; it uses 0.85/0.65 hysteresis and restores the configured target."
+        } else {
+            "Thermal policy is disabled; queue geometry remains fixed. Changes apply on the next engine start."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
     Text(
         text = "Lower values reduce the Auto reserve and latency but increase the risk of audio " +
             "dropouts. Changes apply on the next engine start.",

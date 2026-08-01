@@ -66,6 +66,8 @@ data class DirectUsbStats(
     val lifecycleFailures: Long = 0,
     val transportFailed: Boolean = false,
     val performanceHintActive: Boolean = false,
+    val thermalSafetyEnabled: Boolean = false,
+    val thermalSafetyActive: Boolean = false,
     val schemaVersion: Long = 0,
     val sessionId: Long = 0,
     val state: DirectUsbSessionState = DirectUsbSessionState.Unknown,
@@ -127,6 +129,8 @@ data class DirectUsbStats(
         private const val IMPLICIT_METADATA_OVERRUNS = 41
         private const val IMPLICIT_PENDING_TRANSFERS = 42
         private const val IMPLICIT_PENDING_HIGH_WATER = 43
+        private const val THERMAL_SAFETY_ENABLED = 46
+        private const val THERMAL_SAFETY_ACTIVE = 47
         private const val IMPLICIT_ZERO_RUNWAY_EVENTS = 44
         private const val IMPLICIT_MAX_PENDING_AGE_NS = 45
 
@@ -152,10 +156,10 @@ data class DirectUsbStats(
                 playbackXruns = at(PLAYBACK_XRUNS),
                 playbackBackpressure = at(PLAYBACK_BACKPRESSURE),
                 playbackSilentPackets = at(PLAYBACK_SILENT_PACKETS),
-                playbackSilentFrames = at(PLAYBACK_SILENT_FRAMES),
-                lifecycleFailures = at(LIFECYCLE_FAILURES),
                 transportFailed = at(TRANSPORT_FAILED) != 0L,
                 performanceHintActive = at(PERFORMANCE_HINT_ACTIVE) != 0L,
+                thermalSafetyEnabled = at(THERMAL_SAFETY_ENABLED) != 0L,
+                thermalSafetyActive = at(THERMAL_SAFETY_ACTIVE) != 0L,
                 schemaVersion = at(SCHEMA),
                 sessionId = at(SESSION),
                 state = DirectUsbSessionState.fromOrdinal(at(STATE)),
@@ -324,7 +328,8 @@ class NativeEngine private constructor() {
         captureLimitFrames: Int,
         transferCount: Int,
         packetsPerTransfer: Int,
-        ringCapacityBytes: Int
+        ringCapacityBytes: Int,
+        thermalSafetyEnabled: Boolean
     ): Boolean
 
 
