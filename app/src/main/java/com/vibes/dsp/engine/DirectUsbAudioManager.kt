@@ -113,13 +113,12 @@ object DirectUsbAudioManager {
         val transfer = transferFrames.coerceAtLeast(1)
         return greatestCommonDivisor(graph, transfer).coerceAtLeast(16)
     }
-
+    private val supportedLine6ProductIds = setOf(0x4141, 0x4150, 0x5555)
 
     private fun isSupportedLine6(device: UsbDevice): Boolean =
-        device.vendorId == 0x0e41 && device.productId in setOf(0x4141, 0x4150)
+        device.vendorId == 0x0e41 && device.productId in supportedLine6ProductIds
 
     private fun selectedDriver(context: Context) = AudioSettingsManager.getUsbAudioDriver(context)
-
     private val fallbackFormats = listOf(
         DirectUsbFormat(44_100, 16, 2),
         DirectUsbFormat(44_100, 24, 3),
