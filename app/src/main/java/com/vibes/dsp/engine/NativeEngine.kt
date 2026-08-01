@@ -318,7 +318,13 @@ class NativeEngine private constructor() {
         outputPair: Int,
         bufferFrames: Int,
         periodMultiplier: Int,
-        watermarkFrames: Int
+        playbackTargetFrames: Int,
+        startupPrimeFrames: Int,
+        writeHeadroomFrames: Int,
+        captureLimitFrames: Int,
+        transferCount: Int,
+        packetsPerTransfer: Int,
+        ringCapacityBytes: Int
     ): Boolean
 
 

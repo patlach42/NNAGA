@@ -429,7 +429,9 @@ JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         JNIEnv* env, jobject thiz, jint sampleRate, jint bitsPerSample,
         jint bytesPerSample, jint channels, jint outputPair,
-        jint bufferFrames, jint periodMultiplier, jint watermarkFrames) {
+        jint bufferFrames, jint periodMultiplier, jint playbackTargetFrames,
+        jint startupPrimeFrames, jint writeHeadroomFrames, jint captureLimitFrames,
+        jint transferCount, jint packetsPerTransfer, jint ringCapacityBytes) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->audioEngine->startDirectUsbSession(
         static_cast<float>(sampleRate),
@@ -439,7 +441,15 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         static_cast<int32_t>(outputPair),
         static_cast<int32_t>(bufferFrames),
         static_cast<int32_t>(periodMultiplier),
-        static_cast<int32_t>(watermarkFrames)
+        monotrypt::usb::UserspaceBufferConfig{
+            static_cast<int>(playbackTargetFrames),
+            static_cast<int>(startupPrimeFrames),
+            static_cast<int>(writeHeadroomFrames),
+            static_cast<int>(captureLimitFrames),
+            static_cast<int>(transferCount),
+            static_cast<int>(packetsPerTransfer),
+            static_cast<size_t>(std::max(0, ringCapacityBytes))
+        }
     ) ? JNI_TRUE : JNI_FALSE;
 }
 

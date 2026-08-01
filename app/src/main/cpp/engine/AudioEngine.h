@@ -82,7 +82,7 @@ public:
                                int32_t subslotBytes, int32_t channels,
                                int32_t outputPair,
                                int32_t bufferFrames, int32_t periodMultiplier,
-                               int32_t watermarkFrames);
+                               const monotrypt::usb::UserspaceBufferConfig& bufferConfig);
 
     void stop();
     bool openDirectUsbDevice(int fd, int driverCode = 0);

@@ -196,53 +196,20 @@ void AudioEngine::directUsbThermalPolicyLoop() {
         lock.unlock();
         if (!directUsbSession_.load(std::memory_order_acquire)) continue;
         updateHintThreads();
-        const float headroom = monitor.sample(5);
-        if (!std::isfinite(headroom)) continue;
-        if (!safetyActive && headroom >= 0.85f) {
-            const int32_t quantum = static_cast<int32_t>(
-                directUsbEffectiveQuantum_.load(std::memory_order_acquire));
-            const int32_t currentTarget = static_cast<int32_t>(
-                directUsbSteadyTargetFrames_.load(std::memory_order_acquire));
-            if (quantum > 0 && currentTarget > 0 && directUsbOutput_) {
-                directUsbOutput_->setGraphQuantum(
-                    quantum, directUsbConfiguredMultiplier_,
-                    currentTarget + 2 * quantum);
-                directUsbSteadyTargetFrames_.store(
-                    static_cast<uint32_t>(std::max(
-                        0, directUsbOutput_->playbackTargetFrames())),
-                    std::memory_order_release);
-                safetyActive = true;
-                directUsbThermalSafetyActive_ = true;
-                LOGI("Direct USB thermal safety entered (headroom=%.3f)",
-                     headroom);
-            }
-        } else if (safetyActive && headroom <= 0.65f) {
-            const int32_t quantum = static_cast<int32_t>(
-                directUsbEffectiveQuantum_.load(std::memory_order_acquire));
-            if (quantum > 0 && directUsbOutput_) {
-                directUsbOutput_->setGraphQuantum(
-                    quantum, directUsbConfiguredMultiplier_,
-                    directUsbConfiguredWatermarkFrames_);
-                directUsbSteadyTargetFrames_.store(
-                    static_cast<uint32_t>(std::max(
-                        0, directUsbOutput_->playbackTargetFrames())),
-                    std::memory_order_release);
-            }
-            safetyActive = false;
-            directUsbThermalSafetyActive_ = false;
-            LOGI("Direct USB thermal safety exited (headroom=%.3f)",
-                 headroom);
-        }
+        // Queue geometry is fixed at session start. Thermal telemetry feeds
+        // performance hints only; it must never alter user-selected latency.
+        (void)monitor.sample(5);
     }
     directUsbPerformanceHintSession_.store(nullptr, std::memory_order_release);
     directUsbPerformanceHintActive_.store(false, std::memory_order_release);
 }
 
 
-bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
-                                        int32_t subslotBytes, int32_t channels,
-                                        int32_t outputPair, int32_t bufferFrames,
-                                        int32_t periodMultiplier, int32_t watermarkFrames) {
+bool AudioEngine::startDirectUsbSession(
+        float sampleRate, int32_t bitsPerSample, int32_t subslotBytes,
+        int32_t channels, int32_t outputPair, int32_t bufferFrames,
+        int32_t periodMultiplier,
+        const monotrypt::usb::UserspaceBufferConfig& bufferConfig) {
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
     if (directUsbSession_.load(std::memory_order_acquire)) {
         return true;
@@ -255,7 +222,10 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
         subslotBytes > DirectUsbOutput::kMaxSubslotBytes ||
         channels < 2 || channels > DirectUsbOutput::kMaxDeviceChannels ||
         outputPair < 0 || outputPair * 2 + 1 >= channels ||
-        watermarkFrames < 0) {
+        bufferConfig.playbackTargetFrames < 0 ||
+        bufferConfig.startupPrimeFrames < 0 ||
+        bufferConfig.writeHeadroomFrames < 0 ||
+        bufferConfig.captureLimitFrames < 0) {
         directUsbFailureCode_.store(
             usbFailureCode(monotrypt::usb::StartError::Unknown),
             std::memory_order_release);
@@ -281,6 +251,13 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbPeakCycleNs_.store(0, std::memory_order_relaxed);
     directUsbDeadlineBudgetNs_.store(0, std::memory_order_relaxed);
     directUsbDeadlineMisses_.store(0, std::memory_order_relaxed);
+    if (!directUsbOutput_->configureUserspaceBuffers(bufferConfig)) {
+        directUsbFailureCode_.store(
+            usbFailureCode(monotrypt::usb::StartError::Unknown),
+            std::memory_order_release);
+        directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
+        return false;
+    }
     if (!directUsbOutput_->start(static_cast<int>(sampleRate), bitsPerSample,
                                  subslotBytes, channels, outputPair)) {
         const int32_t failure = directUsbOutput_->lastErrorCode();
@@ -294,8 +271,18 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
         directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
         return false;
     }
-    directUsbOutput_->setGraphQuantum(
-        renderFrames, multiplier, watermarkFrames);
+    directUsbOutput_->setUserspaceBufferConfig(
+        renderFrames, bufferConfig, multiplier);
+    if (directUsbOutput_->playbackTargetFrames() <= 0 ||
+        directUsbOutput_->startupPrimeFrames() <= 0) {
+        directUsbOutput_->requestStop();
+        directUsbOutput_->stop();
+        directUsbFailureCode_.store(
+            usbFailureCode(monotrypt::usb::StartError::Unknown),
+            std::memory_order_release);
+        directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
+        return false;
+    }
     const int32_t primeFrames = std::max(0, directUsbOutput_->startupPrimeFrames());
     const int32_t startupBlocks =
         (primeFrames + renderFrames - 1) / renderFrames;
@@ -303,7 +290,7 @@ bool AudioEngine::startDirectUsbSession(float sampleRate, int32_t bitsPerSample,
     directUsbSteadyTargetFrames_.store(
         static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())),
         std::memory_order_release);
-    directUsbConfiguredWatermarkFrames_ = watermarkFrames;
+    directUsbConfiguredWatermarkFrames_ = bufferConfig.playbackTargetFrames;
     directUsbConfiguredMultiplier_ = multiplier;
     directUsbThermalSafetyActive_ = false;
     directUsbThermalPolicyStop_.store(false, std::memory_order_release);

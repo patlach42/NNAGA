@@ -199,6 +199,12 @@ private fun DirectUsbSessionSettings(
         mutableStateOf(AudioSettingsManager.getLine6ShowAllUsbDevices(context))
     }
     var selectedWatermark by remember { mutableIntStateOf(0) }
+    var selectedStartupPrime by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbStartupPrime(context)) }
+    var selectedWriteHeadroom by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbWriteHeadroom(context)) }
+    var selectedCaptureLimit by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureLimit(context)) }
+    var selectedTransferCount by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbTransferCount(context)) }
+    var selectedPacketsPerTransfer by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)) }
+    var selectedRingCapacityKiB by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRingCapacityKiB(context)) }
     var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
     var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
     var isCalibrating by remember { mutableStateOf(false) }
@@ -503,7 +509,7 @@ private fun DirectUsbSessionSettings(
             )).distinct().sorted()
         }
         IntSelector(
-            label = "Userspace watermark",
+            label = "Playback target",
             selected = selectedWatermark,
             options = watermarkOptions,
             enabled = controlsEnabled,
@@ -513,22 +519,43 @@ private fun DirectUsbSessionSettings(
             val format = selectedFormat
             if (device != null && format != null) {
                 AudioSettingsManager.setDirectUsbWatermark(
-                    context,
-                    device.vendorId,
-                    device.productId,
-                    format.sampleRate,
-                    format.bits,
-                    format.subslotBytes,
-                    format.channels,
-                    frames,
-                    selectedBufferFrames,
-                    selectedPeriodMultiplier
+                    context, device.vendorId, device.productId, format.sampleRate,
+                    format.bits, format.subslotBytes, format.channels, frames,
+                    selectedBufferFrames, selectedPeriodMultiplier
                 )
             }
         }
         Text(
-            "Auto derives a safe transport target; manual watermark can only raise that " +
-                "Auto floor. Period multiplier affects Auto only.",
+            "Exact maximum queued userspace playback frames. Auto derives a target; " +
+                "a positive value is never raised by a device profile or thermal policy.",
+        )
+        IntSelector("Startup prime", selectedStartupPrime, watermarkOptions, controlsEnabled) {
+            selectedStartupPrime = it
+            AudioSettingsManager.setDirectUsbStartupPrime(context, it)
+        }
+        IntSelector("Write headroom", selectedWriteHeadroom, watermarkOptions, controlsEnabled) {
+            selectedWriteHeadroom = it
+            AudioSettingsManager.setDirectUsbWriteHeadroom(context, it)
+        }
+        IntSelector("Capture queue limit", selectedCaptureLimit, watermarkOptions, controlsEnabled) {
+            selectedCaptureLimit = it
+            AudioSettingsManager.setDirectUsbCaptureLimit(context, it)
+        }
+        IntSelector("Transfer count", selectedTransferCount, (0..8).toList(), controlsEnabled) {
+            selectedTransferCount = it
+            AudioSettingsManager.setDirectUsbTransferCount(context, it)
+        }
+        IntSelector("Packets per transfer", selectedPacketsPerTransfer, (0..8).toList(), controlsEnabled) {
+            selectedPacketsPerTransfer = it
+            AudioSettingsManager.setDirectUsbPacketsPerTransfer(context, it)
+        }
+        IntSelector("Ring capacity", selectedRingCapacityKiB, listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024), controlsEnabled) {
+            selectedRingCapacityKiB = it
+            AudioSettingsManager.setDirectUsbRingCapacityKiB(context, it)
+        }
+        Text(
+            "Ring capacity is a physical storage ceiling in KiB and applies on the next USB engine start. " +
+                "Transfer and packet values of Auto use the device-derived geometry.",
         )
         selectedFormat?.let { format ->
             val device = selectedDevice
@@ -646,6 +673,17 @@ private fun IntSelector(
     onSelected: (Int) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    fun display(value: Int): String = when (label) {
+        "Sample rate" -> "$value Hz"
+        "Input" -> "Input $value"
+        "Output" -> "Outputs ${value * 2 - 1}–${value * 2}"
+        "Period multiplier" -> "$value×"
+        "Playback target", "Startup prime", "Write headroom", "Capture queue limit" ->
+            if (value == 0) "Auto" else "$value frames"
+        "Transfer count", "Packets per transfer" -> if (value == 0) "Auto" else "$value"
+        "Ring capacity" -> "$value KiB (restart)"
+        else -> "$value-bit"
+    }
     Column {
         Text(label, style = MaterialTheme.typography.labelLarge)
         ExposedDropdownMenuBox(
@@ -653,14 +691,7 @@ private fun IntSelector(
             onExpandedChange = { if (enabled) expanded = it }
         ) {
             OutlinedTextField(
-                value = when (label) {
-                    "Sample rate" -> "$selected Hz"
-                    "Input" -> "Input $selected"
-                    "Output" -> "Outputs ${selected * 2 - 1}–${selected * 2}"
-                    "Period multiplier" -> "$selected×"
-                    "Userspace watermark" -> if (selected == 0) "Auto" else "$selected frames"
-                    else -> "$selected-bit"
-                },
+                value = display(selected),
                 onValueChange = {},
                 readOnly = true,
                 enabled = enabled,
@@ -671,18 +702,7 @@ private fun IntSelector(
                 options.forEach { value ->
                     DropdownMenuItem(
                         enabled = enabled,
-                        text = {
-                            Text(
-                                when (label) {
-                                    "Sample rate" -> "$value Hz"
-                                    "Input" -> "Input $value"
-                                    "Output" -> "Outputs ${value * 2 - 1}–${value * 2}"
-                                    "Period multiplier" -> "$value×"
-                                    "Userspace watermark" -> if (value == 0) "Auto" else "$value frames"
-                                    else -> "$value-bit"
-                                }
-                            )
-                        },
+                        text = { Text(display(value)) },
                         onClick = {
                             onSelected(value)
                             expanded = false

@@ -323,18 +323,15 @@ object DirectUsbAudioManager {
             val outputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
                 .coerceIn(0, (exact.channels / 2 - 1).coerceAtLeast(0))
             AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
-            val watermark = AudioSettingsManager.getDirectUsbWatermark(
-                context, device.vendorId, device.productId, exact.sampleRate,
-                exact.bits, exact.subslotBytes, exact.channels
-            )
-            startExact(context, exact, outputPair, watermark)
+            val bufferConfig = AudioSettingsManager.getDirectUsbBufferConfig(context)
+            startExact(context, exact, outputPair, bufferConfig)
         }
 
     private fun startExact(
         context: Context,
         exact: DirectUsbFormat,
         outputPair: Int,
-        watermark: Int,
+        bufferConfig: DirectUsbBufferConfig,
         bufferFrames: Int = AudioSettingsManager.getBufferSize(context),
         periodMultiplier: Int =
             AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
@@ -342,7 +339,11 @@ object DirectUsbAudioManager {
         val engine = NativeEngine.getInstance()
         if (!engine.nativeStartDirectUsbSession(
                 exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels,
-                outputPair, bufferFrames, periodMultiplier, watermark
+                outputPair, bufferFrames, periodMultiplier,
+                bufferConfig.playbackTargetFrames, bufferConfig.startupPrimeFrames,
+                bufferConfig.writeHeadroomFrames, bufferConfig.captureLimitFrames,
+                bufferConfig.transferCount, bufferConfig.packetsPerTransfer,
+                bufferConfig.ringCapacityBytes
             )
         ) {
             val stats = runCatching { engine.getDirectUsbStats() }.getOrNull()
@@ -362,6 +363,11 @@ object DirectUsbAudioManager {
         return Result.success(Unit)
     }
 
+    private fun bufferConfigWithTarget(
+        context: Context,
+        playbackTargetFrames: Int
+    ): DirectUsbBufferConfig = AudioSettingsManager.getDirectUsbBufferConfig(context)
+        .copy(playbackTargetFrames = playbackTargetFrames)
     suspend fun calibrate(
         context: Context,
         option: DirectUsbDeviceOption,
@@ -392,7 +398,8 @@ object DirectUsbAudioManager {
                         AudioSettingsManager.getDirectUsbOutputPair(context)
                             .coerceIn(0, (format.channels / 2 - 1).coerceAtLeast(0))
             startExact(
-                context, format, outputPair, 0, bufferFrames, periodMultiplier
+                context, format, outputPair, bufferConfigWithTarget(context, 0),
+                bufferFrames, periodMultiplier
             ).getOrThrow()
             delay(CALIBRATION_WARMUP_MS)
             val autoStats = NativeEngine.getInstance().getDirectUsbStats()
@@ -439,7 +446,8 @@ object DirectUsbAudioManager {
                             val valid = try {
                                 probeFormatsInternal(context, option).getOrThrow()
                                 startExact(
-                                    context, format, outputPair, candidate,
+                                    context, format, outputPair,
+                                    bufferConfigWithTarget(context, candidate),
                                     bufferFrames, periodMultiplier
                                 ).getOrThrow()
                                 delay(CALIBRATION_WARMUP_MS)

@@ -34,6 +34,16 @@ data class AudioDeviceOption(
     val type: Int
 )
 
+data class DirectUsbBufferConfig(
+    val playbackTargetFrames: Int,
+    val startupPrimeFrames: Int,
+    val writeHeadroomFrames: Int,
+    val captureLimitFrames: Int,
+    val transferCount: Int,
+    val packetsPerTransfer: Int,
+    val ringCapacityBytes: Int
+)
+
 object AudioSettingsManager {
     private const val PREFS_NAME = "audio_settings"
     private const val KEY_USB_DRIVER = "usbAudioDriver"
@@ -52,6 +62,12 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_OUTPUT_PAIR = "directUsbOutputPair"
     private const val KEY_DIRECT_USB_PERIOD_MULTIPLIER = "directUsbPeriodMultiplier"
     private const val KEY_DIRECT_USB_WATERMARK_PREFIX = "directUsbWatermark:"
+    private const val KEY_DIRECT_USB_STARTUP_PRIME = "directUsbStartupPrime"
+    private const val KEY_DIRECT_USB_WRITE_HEADROOM = "directUsbWriteHeadroom"
+    private const val KEY_DIRECT_USB_CAPTURE_LIMIT = "directUsbCaptureLimit"
+    private const val KEY_DIRECT_USB_TRANSFER_COUNT = "directUsbTransferCount"
+    private const val KEY_DIRECT_USB_PACKETS_PER_TRANSFER = "directUsbPacketsPerTransfer"
+    private const val KEY_DIRECT_USB_RING_CAPACITY_KIB = "directUsbRingCapacityKiB"
     private const val DEFAULT_BUFFER_SIZE = 16
 
     private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 3
@@ -63,6 +79,51 @@ object AudioSettingsManager {
         value.coerceIn(MIN_DIRECT_USB_PERIOD_MULTIPLIER, MAX_DIRECT_USB_PERIOD_MULTIPLIER)
 
     private fun clampWatermark(value: Int): Int = value.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+    fun getDirectUsbStartupPrime(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_STARTUP_PRIME, 0).coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+    fun setDirectUsbStartupPrime(context: Context, frames: Int) {
+        prefs(context).edit().putInt(KEY_DIRECT_USB_STARTUP_PRIME, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)).apply()
+    }
+    fun getDirectUsbWriteHeadroom(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_WRITE_HEADROOM, 0).coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+    fun setDirectUsbWriteHeadroom(context: Context, frames: Int) {
+        prefs(context).edit().putInt(KEY_DIRECT_USB_WRITE_HEADROOM, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)).apply()
+    }
+    fun getDirectUsbCaptureLimit(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_CAPTURE_LIMIT, 0).coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+    fun setDirectUsbCaptureLimit(context: Context, frames: Int) {
+        prefs(context).edit().putInt(KEY_DIRECT_USB_CAPTURE_LIMIT, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)).apply()
+    }
+    fun getDirectUsbTransferCount(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_TRANSFER_COUNT, 0).coerceIn(0, 8)
+    fun setDirectUsbTransferCount(context: Context, count: Int) {
+        prefs(context).edit().putInt(KEY_DIRECT_USB_TRANSFER_COUNT, count.coerceIn(0, 8)).apply()
+    }
+    fun getDirectUsbPacketsPerTransfer(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, 0).coerceIn(0, 8)
+    fun setDirectUsbPacketsPerTransfer(context: Context, packets: Int) {
+        prefs(context).edit().putInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, packets.coerceIn(0, 8)).apply()
+    }
+    fun getDirectUsbRingCapacityKiB(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_RING_CAPACITY_KIB, 64).takeIf { it in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024) } ?: 64
+    fun setDirectUsbRingCapacityKiB(context: Context, kib: Int) {
+        require(kib in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024))
+        prefs(context).edit().putInt(KEY_DIRECT_USB_RING_CAPACITY_KIB, kib).apply()
+    }
+    fun getDirectUsbBufferConfig(context: Context): DirectUsbBufferConfig =
+        DirectUsbBufferConfig(
+            playbackTargetFrames = getDirectUsbWatermark(
+                context, getDirectUsbVendorId(context), getDirectUsbProductId(context),
+                getDirectUsbRate(context), getDirectUsbBits(context),
+                getDirectUsbSubslot(context), getDirectUsbChannels(context)
+            ),
+            startupPrimeFrames = getDirectUsbStartupPrime(context),
+            writeHeadroomFrames = getDirectUsbWriteHeadroom(context),
+            captureLimitFrames = getDirectUsbCaptureLimit(context),
+            transferCount = getDirectUsbTransferCount(context),
+            packetsPerTransfer = getDirectUsbPacketsPerTransfer(context),
+            ringCapacityBytes = getDirectUsbRingCapacityKiB(context) * 1024
+        )
     private fun normalizeBufferSize(value: Int): Int =
         value.takeIf { candidate -> BUFFER_SIZE_OPTIONS.any { it.first == candidate } }
             ?: DEFAULT_BUFFER_SIZE
@@ -243,7 +304,10 @@ object AudioSettingsManager {
             KEY_USB_DEVICE_ID, KEY_USB_VENDOR_ID, KEY_USB_PRODUCT_ID, KEY_USB_DEVICE_NAME,
             KEY_USB_FORMATS, KEY_ENGINE_RUN_AT_START, KEY_DIRECT_USB_RATE, KEY_DIRECT_USB_BITS,
             KEY_DIRECT_USB_SUBSLOT, KEY_DIRECT_USB_CHANNELS, KEY_DIRECT_USB_OUTPUT_PAIR,
-            KEY_DIRECT_USB_PERIOD_MULTIPLIER
+            KEY_DIRECT_USB_PERIOD_MULTIPLIER, KEY_DIRECT_USB_STARTUP_PRIME,
+            KEY_DIRECT_USB_WRITE_HEADROOM, KEY_DIRECT_USB_CAPTURE_LIMIT,
+            KEY_DIRECT_USB_TRANSFER_COUNT, KEY_DIRECT_USB_PACKETS_PER_TRANSFER,
+            KEY_DIRECT_USB_RING_CAPACITY_KIB
         ).forEach(editor::remove)
         editor.apply()
     }
