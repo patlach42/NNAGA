@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.input.pointer.pointerInput
@@ -487,6 +488,31 @@ fun RackScreen(
                                     },
                                     modifier = Modifier.testTag("rack_add_plugin")
                                 )
+                                DropdownMenuItem(
+                                    text = { Text("Add track") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        viewModel.addTrack()
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Add, contentDescription = null)
+                                    },
+                                    modifier = Modifier.testTag("rack_add_track")
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Master effects") },
+                                    onClick = {
+                                        showOverflowMenu = false
+                                        viewModel.selectPath(MASTER_PATH_ID)
+                                    },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Default.Tune,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                )
                                 Divider()
                                 DropdownMenuItem(
                                     text = { Text("Settings") },
@@ -620,24 +646,42 @@ fun RackScreen(
     }
     if (selectedPathId != MASTER_PATH_ID) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             tracks.forEachIndexed { index, track ->
                 var deleteMenuExpanded by remember(track.id) { mutableStateOf(false) }
-                Box {
-                    FilterChip(
-                        selected = track.id == selectedPathId,
-                        onClick = { viewModel.selectPath(track.id) },
-                        label = { Text("Track ${index + 1}") },
-                        modifier = Modifier
-                            .heightIn(min = 44.dp)
-                            .combinedClickable(
-                                onClick = { viewModel.selectPath(track.id) },
-                                onLongClick = { deleteMenuExpanded = true }
-                            )
-                    )
+                Box(
+                    modifier = Modifier
+                        .heightIn(min = 44.dp)
+                        .combinedClickable(
+                            onClick = { viewModel.selectPath(track.id) },
+                            onLongClick = { deleteMenuExpanded = true }
+                        )
+                ) {
+                    Surface(
+                        modifier = Modifier.heightIn(min = 44.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (track.id == selectedPathId) {
+                            MaterialTheme.colorScheme.secondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surface
+                        },
+                        contentColor = if (track.id == selectedPathId) {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        },
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("Track ${index + 1}", modifier = Modifier.padding(horizontal = 16.dp))
+                        }
+                    }
                     DropdownMenu(
                         expanded = deleteMenuExpanded,
                         onDismissRequest = { deleteMenuExpanded = false }
@@ -652,15 +696,6 @@ fun RackScreen(
                         )
                     }
                 }
-            }
-            FilterChip(
-                selected = false,
-                onClick = { viewModel.selectPath(MASTER_PATH_ID) },
-                label = { Text("Master") },
-                modifier = Modifier.heightIn(min = 44.dp)
-            )
-            IconButton(onClick = { viewModel.addTrack() }, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.Default.Add, "Add track")
             }
         }
         selectedTrack?.let { track ->
@@ -901,7 +936,7 @@ fun RackScreen(
                         Icons.Default.Repeat,
                         contentDescription = null,
                         tint = if (track.looping) Color(0xFF2E7D32)
-                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 when {
@@ -1029,24 +1064,34 @@ fun RackScreen(
         }
     } else {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp)
+                .horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             tracks.forEachIndexed { index, track ->
                 var deleteMenuExpanded by remember(track.id) { mutableStateOf(false) }
-                Box {
-                    FilterChip(
-                        selected = false,
-                        onClick = { viewModel.selectPath(track.id) },
-                        label = { Text("Track ${index + 1}") },
-                        modifier = Modifier
-                            .heightIn(min = 44.dp)
-                            .combinedClickable(
-                                onClick = { viewModel.selectPath(track.id) },
-                                onLongClick = { deleteMenuExpanded = true }
-                            )
-                    )
+                Box(
+                    modifier = Modifier
+                        .heightIn(min = 44.dp)
+                        .combinedClickable(
+                            onClick = { viewModel.selectPath(track.id) },
+                            onLongClick = { deleteMenuExpanded = true }
+                        )
+                ) {
+                    Surface(
+                        modifier = Modifier.heightIn(min = 44.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text("Track ${index + 1}", modifier = Modifier.padding(horizontal = 16.dp))
+                        }
+                    }
                     DropdownMenu(
                         expanded = deleteMenuExpanded,
                         onDismissRequest = { deleteMenuExpanded = false }
@@ -1062,12 +1107,9 @@ fun RackScreen(
                     }
                 }
             }
-            FilterChip(selected = true, onClick = {}, label = { Text("Master") }, modifier = Modifier.heightIn(min = 44.dp))
-            IconButton(onClick = { viewModel.addTrack() }, modifier = Modifier.size(44.dp)) {
-                Icon(Icons.Default.Add, "Add track")
-            }
         }
-    }
+        // Master path does not show track-level transport/record controls here.
+        }
         // Drag-reorder state — use scrollable Column so all plugin cards stay in composition (no re-render when scrolling)
         val localPlugins = remember { mutableStateOf(rackPlugins.toMutableStateList()) }
         val scrollState = rememberScrollState()
