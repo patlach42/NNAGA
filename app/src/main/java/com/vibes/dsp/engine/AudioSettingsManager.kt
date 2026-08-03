@@ -68,6 +68,7 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_TRANSFER_COUNT = "directUsbTransferCount"
     private const val KEY_DIRECT_USB_PACKETS_PER_TRANSFER = "directUsbPacketsPerTransfer"
     private const val KEY_DIRECT_USB_RING_CAPACITY_KIB = "directUsbRingCapacityKiB"
+    private const val KEY_DIRECT_USB_CALIBRATION_PREFIX = "directUsbCalibration:"
     private const val KEY_DIRECT_USB_THERMAL_SAFETY = "directUsbThermalSafety"
     private const val DEFAULT_BUFFER_SIZE = 16
 
@@ -106,9 +107,10 @@ object AudioSettingsManager {
         prefs(context).edit().putInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, packets.coerceIn(0, 8)).apply()
     }
     fun getDirectUsbRingCapacityKiB(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_RING_CAPACITY_KIB, 64).takeIf { it in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024) } ?: 64
+        prefs(context).getInt(KEY_DIRECT_USB_RING_CAPACITY_KIB, 64)
+            .takeIf { it == 0 || it in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024) } ?: 64
     fun setDirectUsbRingCapacityKiB(context: Context, kib: Int) {
-        require(kib in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024))
+        require(kib == 0 || kib in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024))
         prefs(context).edit().putInt(KEY_DIRECT_USB_RING_CAPACITY_KIB, kib).apply()
     }
     fun getDirectUsbThermalSafetyEnabled(context: Context): Boolean =
@@ -304,7 +306,8 @@ object AudioSettingsManager {
     fun forgetDirectUsbInterface(context: Context) {
         val editor = prefs(context).edit()
         prefs(context).all.keys
-            .filter { it.startsWith(KEY_DIRECT_USB_WATERMARK_PREFIX) }
+            .filter { it.startsWith(KEY_DIRECT_USB_WATERMARK_PREFIX) ||
+                it.startsWith(KEY_DIRECT_USB_CALIBRATION_PREFIX) }
             .forEach(editor::remove)
         listOf(
             KEY_USB_DEVICE_ID, KEY_USB_VENDOR_ID, KEY_USB_PRODUCT_ID, KEY_USB_DEVICE_NAME,
@@ -339,5 +342,68 @@ object AudioSettingsManager {
             .putInt(KEY_DIRECT_USB_CHANNELS, channels)
             .apply()
     }
+    fun persistDirectUsbCalibrationProfile(
+        context: Context, vendorId: Int, productId: Int, profile: DirectUsbCalibrationProfile
+    ): Boolean {
+        val encode: (String) -> String = { it.replace("%", "%25").replace("|", "%7C") }
+        val c = profile.bufferConfig
+        val value = listOf(
+            profile.id, profile.format.sampleRate, profile.format.bits, profile.format.subslotBytes,
+            profile.format.channels, profile.bufferFrames, profile.periodMultiplier,
+            c.playbackTargetFrames, c.startupPrimeFrames, c.writeHeadroomFrames, c.captureLimitFrames,
+            c.transferCount, c.packetsPerTransfer, c.ringCapacityBytes, profile.experimental,
+            profile.ranAtEpochMs, profile.started, profile.stable, profile.failure ?: "",
+            profile.latencyFrames, profile.latencyMilliseconds, profile.xruns, profile.deadlineMisses,
+            profile.transferErrors, profile.deviceMinimumFrames, profile.dangerous,
+            profile.extended, profile.label
+        ).joinToString("|") { encode(it.toString()) }
+        return prefs(context).edit().putString(
+            "$KEY_DIRECT_USB_CALIBRATION_PREFIX$vendorId:$productId:${profile.id}", value
+        ).commit()
+    }
+
+    fun getDirectUsbCalibrationProfiles(
+        context: Context, vendorId: Int, productId: Int
+    ): List<DirectUsbCalibrationProfile> {
+        val decode: (String) -> String = { it.replace("%7C", "|").replace("%25", "%") }
+        return prefs(context).all.filterKeys {
+            it.startsWith("$KEY_DIRECT_USB_CALIBRATION_PREFIX$vendorId:$productId:")
+        }.values.mapNotNull { raw ->
+            runCatching {
+                val v = raw.toString().split('|').map(decode)
+                require(v.size == 24 || v.size == 26 || v.size == 28)
+                DirectUsbCalibrationProfile(v[0],
+                    DirectUsbFormat(v[1].toInt(), v[2].toInt(), v[3].toInt(), v[4].toInt()),
+                    v[5].toInt(), v[6].toInt(),
+                    DirectUsbBufferConfig(v[7].toInt(), v[8].toInt(), v[9].toInt(), v[10].toInt(),
+                        v[11].toInt(), v[12].toInt(), v[13].toInt()),
+                    v[14].toBoolean(), v[15].toLong(), v[16].toBoolean(), v[17].toBoolean(),
+                    v[18].ifEmpty { null }, v[19].toLong(), v[20].toDouble(), v[21].toLong(),
+                    v[22].toLong(), v[23].toLong(),
+                    if (v.size >= 26) v[24].toInt() else 0,
+                    if (v.size >= 26) v[25].toBoolean() else false,
+                    if (v.size >= 28) v[26].toBoolean() else false,
+                    if (v.size >= 28) v[27] else "")
+            }.getOrNull()
+        }.sortedBy { it.id }
+    }
+
+    fun applyDirectUsbCalibrationProfile(context: Context, profile: DirectUsbCalibrationProfile) {
+        setDirectUsbFormat(context, profile.format.sampleRate, profile.format.bits,
+            profile.format.subslotBytes, profile.format.channels)
+        setBufferSize(context, profile.bufferFrames)
+        setDirectUsbPeriodMultiplier(context, profile.periodMultiplier)
+        val c = profile.bufferConfig
+        setDirectUsbStartupPrime(context, c.startupPrimeFrames)
+        setDirectUsbWriteHeadroom(context, c.writeHeadroomFrames)
+        setDirectUsbCaptureLimit(context, c.captureLimitFrames)
+        setDirectUsbTransferCount(context, c.transferCount)
+        setDirectUsbPacketsPerTransfer(context, c.packetsPerTransfer)
+        setDirectUsbRingCapacityKiB(context, c.ringCapacityBytes / 1024)
+        setDirectUsbWatermark(context, getDirectUsbVendorId(context), getDirectUsbProductId(context),
+            profile.format.sampleRate, profile.format.bits, profile.format.subslotBytes,
+            profile.format.channels, c.playbackTargetFrames, profile.bufferFrames, profile.periodMultiplier)
+    }
+
 }
 

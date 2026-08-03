@@ -52,6 +52,7 @@ import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.DirectUsbDeviceOption
 import com.vibes.dsp.engine.DirectUsbFormat
 import com.vibes.dsp.engine.UsbAudioDriver
+import com.vibes.dsp.engine.DirectUsbCalibrationProfile
 import com.vibes.dsp.ui.rack.RackViewModel
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
@@ -113,7 +114,11 @@ private fun AudioSettingsContent(
         DirectUsbSessionSettings(
             selectedBufferFrames = selectedBufferSize,
             inputsEnabled = !isEngineRunning,
-            onCalibrationStateChange = { isCalibrationRunning = it }
+            onCalibrationStateChange = { isCalibrationRunning = it },
+            onBufferFramesChange = { size ->
+                selectedBufferSize = size
+                AudioSettingsManager.setBufferSize(context, size)
+            }
         )
         BufferSizeDropdown(
             selectedSize = selectedBufferSize,
@@ -183,7 +188,8 @@ private fun AudioSettingsContent(
 private fun DirectUsbSessionSettings(
     selectedBufferFrames: Int,
     inputsEnabled: Boolean,
-    onCalibrationStateChange: (Boolean) -> Unit
+    onCalibrationStateChange: (Boolean) -> Unit,
+    onBufferFramesChange: (Int) -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -211,6 +217,9 @@ private fun DirectUsbSessionSettings(
     var selectedWriteHeadroom by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbWriteHeadroom(context)) }
     var selectedCaptureLimit by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureLimit(context)) }
     var selectedTransferCount by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbTransferCount(context)) }
+    var includeExperimental by remember { mutableStateOf(false) }
+    var dangerOverride by remember { mutableStateOf(false) }
+    var savedProfiles by remember { mutableStateOf<List<DirectUsbCalibrationProfile>>(emptyList()) }
     var selectedPacketsPerTransfer by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)) }
     var selectedRingCapacityKiB by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRingCapacityKiB(context)) }
     var thermalSafetyEnabled by remember {
@@ -219,6 +228,10 @@ private fun DirectUsbSessionSettings(
     var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
     var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
     var isCalibrating by remember { mutableStateOf(false) }
+    var appliedStableBaseProfile by remember {
+        mutableStateOf<DirectUsbCalibrationProfile?>(null)
+    }
+    var isExtendedCalibration by remember { mutableStateOf(false) }
     var showUsbInterfaceLog by remember { mutableStateOf(false) }
     var usbInterfaceLog by remember { mutableStateOf("Long press the interface selector to collect diagnostics.") }
     var runAtStart by remember { mutableStateOf(AudioSettingsManager.getEngineRunAtStart(context)) }
@@ -270,6 +283,14 @@ private fun DirectUsbSessionSettings(
             ?: refreshedDevices.firstOrNull {
                 it.vendorId == preferredVendor && it.productId == preferredProduct
             }
+        dangerOverride = false
+        savedProfiles = selectedDevice?.let { device ->
+            AudioSettingsManager.getDirectUsbCalibrationProfiles(
+                context, device.vendorId, device.productId
+            )
+        } ?: emptyList()
+        calibrationResult = null
+        appliedStableBaseProfile = null
         formats = AudioSettingsManager.getDirectUsbCachedFormats(context)
         reconcileFormatSelection()
         message = null
@@ -338,6 +359,12 @@ private fun DirectUsbSessionSettings(
 
     fun loadDevice(device: DirectUsbDeviceOption) {
         selectedDevice = device
+        dangerOverride = false
+        calibrationResult = null
+        appliedStableBaseProfile = null
+        savedProfiles = AudioSettingsManager.getDirectUsbCalibrationProfiles(
+            context, device.vendorId, device.productId
+        )
         devicesExpanded = false
         scope.launch {
             DirectUsbAudioManager.probeFormats(context, device).onSuccess { available ->
@@ -348,6 +375,33 @@ private fun DirectUsbSessionSettings(
                 }
                 message = "USB interface configured"
             }.onFailure { message = it.message }
+        }
+    }
+    fun applyProfile(profile: DirectUsbCalibrationProfile) {
+        AudioSettingsManager.applyDirectUsbCalibrationProfile(context, profile)
+        selectedRate = profile.format.sampleRate
+        selectedBits = profile.format.bits
+        selectedSubslot = profile.format.subslotBytes
+        selectedChannels = profile.format.channels
+        selectedPeriodMultiplier = profile.periodMultiplier
+        selectedWatermark = profile.bufferConfig.playbackTargetFrames
+        selectedStartupPrime = profile.bufferConfig.startupPrimeFrames
+        selectedWriteHeadroom = profile.bufferConfig.writeHeadroomFrames
+        selectedCaptureLimit = profile.bufferConfig.captureLimitFrames
+        selectedTransferCount = profile.bufferConfig.transferCount
+        selectedPacketsPerTransfer = profile.bufferConfig.packetsPerTransfer
+        selectedRingCapacityKiB = profile.bufferConfig.ringCapacityBytes / 1024
+        onBufferFramesChange(profile.bufferFrames)
+        formats = (formats + profile.format).distinct()
+        formats.firstOrNull {
+            it.sampleRate == selectedRate && it.bits == selectedBits &&
+                it.subslotBytes == selectedSubslot && it.channels == selectedChannels
+        }?.let { persistFormatSelection(it) }
+        appliedStableBaseProfile = profile.takeIf { it.stable && !it.extended }
+        message = if (appliedStableBaseProfile != null) {
+            "Applied stable base profile; extended calibration is now available"
+        } else {
+            "Applied calibration profile"
         }
     }
 
@@ -560,14 +614,62 @@ private fun DirectUsbSessionSettings(
             selectedPacketsPerTransfer = it
             AudioSettingsManager.setDirectUsbPacketsPerTransfer(context, it)
         }
-        IntSelector("Ring capacity", selectedRingCapacityKiB, listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024), controlsEnabled) {
+        IntSelector(
+            "Ring capacity",
+            selectedRingCapacityKiB,
+            listOf(0, 4, 8, 16, 32, 64, 128, 256, 512, 1024),
+            controlsEnabled
+        ) {
             selectedRingCapacityKiB = it
             AudioSettingsManager.setDirectUsbRingCapacityKiB(context, it)
         }
         Text(
-            "Ring capacity is a physical storage ceiling in KiB and applies on the next USB engine start. " +
+            "Ring capacity is a physical storage ceiling in KiB (0 = Auto) and applies on the next USB engine start. " +
                 "Transfer and packet values of Auto use the device-derived geometry.",
         )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Include experimental values")
+                Text(
+                    "Also test small non-production buffer sizes.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = includeExperimental,
+                onCheckedChange = { includeExperimental = it },
+                enabled = controlsEnabled
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "DANGER: ignore device constraints",
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    "Permits graph buffers below the connected interface's negotiated " +
+                        "transfer quantum and fallback formats.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = dangerOverride,
+                onCheckedChange = { dangerOverride = it },
+                enabled = controlsEnabled
+            )
+        }
         selectedFormat?.let { format ->
             val device = selectedDevice
             OutlinedButton(
@@ -576,20 +678,21 @@ private fun DirectUsbSessionSettings(
                         message = "Select an interface first"
                     } else {
                         scope.launch {
+                            appliedStableBaseProfile = null
                             isCalibrating = true
                             onCalibrationStateChange(true)
                             calibrationResult = null
                             calibrationProgress = null
                             try {
-                                DirectUsbAudioManager.calibrate(context, device, format) {
+                                DirectUsbAudioManager.calibrate(
+                                    context, device, format, includeExperimental, dangerOverride
+                                ) {
                                     calibrationProgress = it
                                 }.also { result ->
                                     calibrationResult = result
-                                    if (selectedDevice?.id == device.id &&
-                                        selectedFormat == result.format
-                                    ) {
-                                        selectedWatermark = result.selectedFrames
-                                    }
+                                    savedProfiles = AudioSettingsManager.getDirectUsbCalibrationProfiles(
+                                        context, device.vendorId, device.productId
+                                    )
                                 }
                             } finally {
                                 isCalibrating = false
@@ -600,34 +703,175 @@ private fun DirectUsbSessionSettings(
                 },
                 enabled = device != null && controlsEnabled
             ) {
-                Text(if (isCalibrating) "Calibrating…" else "Calibrate this interface")
+                Text(
+                    if (isCalibrating && !isExtendedCalibration) {
+                        "Calibrating…"
+                    } else {
+                        "Calibrate this interface"
+                    }
+                )
             }
             Text(
-                "Stops the engine. Two measured runs per target; allow about 2–9 minutes.",
+                "Stops the engine and tests every selected format/profile. " +
+                    "Allow several minutes.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            calibrationProgress?.let {
-                Text("Candidate ${it.candidateIndex + 1}/${it.candidateCount}: ${it.candidateFrames} frames — ${it.message}")
+        }
+        val extendedBase = appliedStableBaseProfile
+        OutlinedButton(
+            onClick = {
+                val device = selectedDevice
+                val baseProfile = appliedStableBaseProfile
+                if (device == null) {
+                    message = "Select an interface first"
+                } else if (baseProfile == null) {
+                    message = "Apply a stable standard profile first"
+                } else {
+                    scope.launch {
+                        isCalibrating = true
+                        isExtendedCalibration = true
+                        onCalibrationStateChange(true)
+                        calibrationResult = null
+                        calibrationProgress = null
+                        try {
+                            DirectUsbAudioManager.calibrateExtended(
+                                context, device, baseProfile
+                            ) {
+                                calibrationProgress = it
+                            }.also { result ->
+                                calibrationResult = result
+                                savedProfiles = AudioSettingsManager.getDirectUsbCalibrationProfiles(
+                                    context, device.vendorId, device.productId
+                                )
+                            }
+                        } finally {
+                            isExtendedCalibration = false
+                            isCalibrating = false
+                            onCalibrationStateChange(false)
+                        }
+                    }
+                }
+            },
+            enabled = selectedDevice != null && extendedBase != null && controlsEnabled,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                if (isExtendedCalibration) "Extended calibration…" else "Extended calibration"
+            )
+        }
+        extendedBase?.let { base ->
+            val baseName = base.label.ifBlank {
+                "${base.format.sampleRate} Hz/${base.format.bits}-bit/${base.format.channels}ch · " +
+                    "${base.bufferFrames} frames · ${base.periodMultiplier}×"
             }
-            calibrationResult?.let {
-                val vidPid = "%04x:%04x".format(it.vendorId, it.productId)
-                val milliseconds = "%.2f".format(it.selectedMilliseconds)
-                val passedVariants = it.passedCandidates
-                    .joinToString(separator = ", ", postfix = " frames")
-                    .ifEmpty { "none" }
-                Text(
-                    "VID:PID $vidPid · ${it.format.sampleRate} Hz/${it.format.bits}-bit/" +
-                        "${it.format.subslotBytes}-byte/${it.format.channels}ch · " +
-                        "${it.message}: ${it.selectedFrames} frames ($milliseconds ms); " +
-                        "passed watermark variants: $passedVariants; " +
-                        "failed ${it.failedCandidates.joinToString()}",
-                    style = MaterialTheme.typography.bodySmall
-                )
+            Text(
+                "Applied base: $baseName",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+        Text(
+            when {
+                isExtendedCalibration ->
+                    "Extended calibration is running. The installed base profile remains unchanged."
+                isCalibrating ->
+                    "Disabled while standard calibration is running."
+                extendedBase == null ->
+                    "Disabled until you apply a stable standard calibration profile."
+                else ->
+                    "Uses the applied stable profile as an unchanged base. It varies startup prime, " +
+                        "write headroom, capture queue limit, and ring capacity one at a time, " +
+                        "then appends the named results without changing the installed base profile."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        calibrationProgress?.let {
+            val progressText = if (it.profileCount > 0) {
+                "Profile ${it.profileIndex + 1}/${it.profileCount}: " +
+                    "${it.profileLabel} — ${it.status}"
+            } else {
+                "${it.profileLabel} — ${it.status}"
+            }
+            Text(
+                progressText,
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+        val displayedProfiles = (savedProfiles + (calibrationResult?.profiles ?: emptyList()))
+            .distinctBy { it.id }
+        if (displayedProfiles.isNotEmpty()) {
+            Text("Saved calibration profiles", style = MaterialTheme.typography.labelLarge)
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 300.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                displayedProfiles.forEach { profile ->
+                    Card(modifier = Modifier.fillMaxWidth()) {
+                        Column(modifier = Modifier.padding(8.dp)) {
+                            val f = profile.format
+                            if (profile.label.isNotBlank()) {
+                                Text(
+                                    profile.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            Text(
+                                "${f.sampleRate} Hz/${f.bits}-bit/${f.channels}ch · " +
+                                    "${profile.bufferFrames} frames · ${profile.periodMultiplier}×" +
+                                    (if (profile.experimental) " · experimental" else "") +
+                                    (if (profile.dangerous) " · DANGER" else ""),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = if (profile.dangerous) {
+                                    MaterialTheme.colorScheme.error
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                            Text(
+                                if (profile.deviceMinimumFrames > 0) {
+                                    "Device minimum: ${profile.deviceMinimumFrames} graph frames"
+                                } else {
+                                    "Device minimum: unknown (legacy profile)"
+                                },
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "target ${profile.bufferConfig.playbackTargetFrames}f · " +
+                                    "latency ${profile.latencyFrames}f/" +
+                                    String.format(Locale.US, "%.2f", profile.latencyMilliseconds) +
+                                    " ms · x-runs ${profile.xruns} · " +
+                                    "transfer ${profile.transferErrors} · deadline ${profile.deadlineMisses}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Text(
+                                "started ${profile.started} · stable ${profile.stable}" +
+                                    (profile.failure?.let { " · $it" } ?: ""),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (profile.stable) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.error
+                                }
+                            )
+                            TextButton(
+                                onClick = { applyProfile(profile) },
+                                enabled = controlsEnabled
+                            ) { Text("Apply profile") }
+                        }
+                    }
+                }
             }
         }
-    }
 
+    }
     IntSelector(
         label = "Period multiplier",
         selected = selectedPeriodMultiplier,
@@ -695,6 +939,8 @@ private fun DirectUsbSessionSettings(
             AudioSettingsManager.forgetDirectUsbInterface(context)
             selectedDevice = null
             formats = emptyList()
+            savedProfiles = emptyList()
+            appliedStableBaseProfile = null
             runAtStart = false
             message = "Forgot USB interface settings"
         },
