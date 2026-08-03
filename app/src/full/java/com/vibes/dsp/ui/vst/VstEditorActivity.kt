@@ -110,6 +110,7 @@ private fun EditorScreen(displayNumber: Int, pathId: Long, pluginIndex: Int) {
             pluginWidth = s.first,
             pluginHeight = s.second,
             modifier = Modifier.fillMaxSize(),
+            isVisible = true,
         )
     } else {
         Box(

@@ -10,6 +10,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import android.view.ViewConfiguration
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
@@ -46,6 +47,7 @@ fun PluginSurface(
     pluginWidth: Int,
     pluginHeight: Int,
     modifier: Modifier = Modifier,
+    isVisible: Boolean,
     /** True = destroy the X11 display when this composable disposes
      *  (vstpoc standalone — when the user closes the editor, the wine
      *  subprocess is also being torn down). False = keep the display
@@ -82,12 +84,16 @@ fun PluginSurface(
             },
             factory = { ctx ->
                 EditorSurfaceView(ctx, displayNumber).also {
+                    it.visibility = if (isVisible) View.VISIBLE else View.INVISIBLE
                     EditorViewRegistry.register(displayNumber, it)
                 }
             },
+            update = { view ->
+                view.visibility = if (isVisible) View.VISIBLE else View.INVISIBLE
+            },
         )
-    }
 }
+    }
 
 /** Process-wide map of `displayNumber → EditorSurfaceView` so external code
  *  (e.g. GuitarRackCraft's rack chrome) can request soft-IME against the

@@ -15,6 +15,7 @@ fun VstInlineEditor(
     pathId: Long,
     pluginIndex: Int,
     isFullscreen: Boolean = false,
+    isVisible: Boolean,
     onPluginSizeKnown: (width: Int, height: Int) -> Unit = { _, _ -> },
     onFilePickerRequested: (
         sequence: Int,

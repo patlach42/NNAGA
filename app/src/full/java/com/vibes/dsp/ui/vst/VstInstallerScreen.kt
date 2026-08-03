@@ -132,6 +132,7 @@ private fun RunningOverlay(mode: VstInstallerViewModel.Mode, onCancel: () -> Uni
             pluginWidth = screenW,
             pluginHeight = screenH,
             modifier = Modifier.fillMaxSize(),
+            isVisible = true,
             // Installer display doesn't outlive this composition — destroy
             // on dispose so the next install starts from a clean slot.
             destroyOnDispose = true,

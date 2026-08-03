@@ -66,6 +66,7 @@ fun VstInlineEditor(
     pathId: Long,
     pluginIndex: Int,
     isFullscreen: Boolean = false,
+    isVisible: Boolean,
     onPluginSizeKnown: (width: Int, height: Int) -> Unit = { _, _ -> },
     onFilePickerRequested: (
         sequence: Int,
@@ -201,6 +202,7 @@ fun VstInlineEditor(
             pluginWidth   = s.first,
             pluginHeight  = s.second,
             modifier      = if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+            isVisible     = isVisible,
             // Keep the X11 display alive across activity transitions
             // (file picker, app backgrounding, etc.). The display is
             // owned by the wine subprocess that WineVstPlugin spawned

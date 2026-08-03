@@ -110,6 +110,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.layout
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vibes.dsp.engine.RackManager
 import com.vibes.dsp.engine.X11Bridge
@@ -1308,6 +1309,7 @@ fun RackScreen(
                         val nativeIndex = plugin.index
                         val isThisPluginFullscreen = fullscreenPluginIndex == nativeIndex
                         val hideThisPlugin = isFullscreenActive && !isThisPluginFullscreen
+                        var isCardExpanded by rememberSaveable(plugin.instanceId) { mutableStateOf(true) }
 
                         // Displacement animation for non-dragged items during reorder
                         val offsetAnim = remember { Animatable(0f) }
@@ -1332,7 +1334,20 @@ fun RackScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .then(if (isThisPluginFullscreen) Modifier.fillMaxHeight() else Modifier)
+                                .then(
+                                    when {
+                                        isThisPluginFullscreen -> Modifier.fillMaxHeight()
+                                        !isCardExpanded -> Modifier.height(52.dp)
+                                        else -> Modifier
+                                    }
+                                )
+                                .then(
+                                    if (!isCardExpanded && !isThisPluginFullscreen) {
+                                        Modifier.clipToBounds()
+                                    } else {
+                                        Modifier
+                                    }
+                                )
                                 .then(if (hideThisPlugin) Modifier.height(0.dp) else Modifier)
                                 .onGloballyPositioned { coords ->
                                     if (index < itemPositions.size) {
@@ -1351,6 +1366,8 @@ fun RackScreen(
                                 viewModel = viewModel,
                                 onRemove = { viewModel.removePlugin(selectedPathId, nativeIndex) },
                                 onReplace = { onReplacePlugin(selectedPathId, nativeIndex) },
+                                expanded = isCardExpanded,
+                                onExpandedChange = { isCardExpanded = it },
                                 isFullscreen = isThisPluginFullscreen,
                                 isAnyPluginFullscreen = isFullscreenActive,
                                 isRackVisible = isVisible,
@@ -1558,6 +1575,8 @@ fun PluginCard(
     viewModel: RackViewModel,
     onRemove: () -> Unit,
     onReplace: () -> Unit = {},
+    expanded: Boolean = true,
+    onExpandedChange: (Boolean) -> Unit = {},
     isFullscreen: Boolean = false,
     isAnyPluginFullscreen: Boolean = false,
     isRackVisible: Boolean = true,
@@ -1568,7 +1587,6 @@ fun PluginCard(
     modifier: Modifier = Modifier.fillMaxWidth()
 ) {
     val selectedPathId = pathId
-    var expanded by rememberSaveable { mutableStateOf(true) }
     val uiInstanceId = remember { System.nanoTime() }
     val pluginInfoState = produceState<PluginInfo?>(
         initialValue = null,
@@ -1706,7 +1724,7 @@ fun PluginCard(
                     )
                     // Collapse
                     IconButton(
-                        onClick = { expanded = !expanded },
+                        onClick = { onExpandedChange(!expanded) },
                         modifier = Modifier.size(44.dp).testTag("plugin_card_expand")
                     ) {
                         Icon(
@@ -1805,7 +1823,15 @@ fun PluginCard(
                 val contentModifier = when {
                     isFullscreen -> Modifier.fillMaxWidth().weight(1f)
                     expanded -> Modifier
-                    else -> Modifier.height(0.dp).clipToBounds().alpha(0f)
+                    else -> Modifier
+                        .clipToBounds()
+                        .alpha(0f)
+                        .layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints.copy(minHeight = 0))
+                            layout(placeable.width, 0) {
+                                placeable.place(0, 0)
+                            }
+                        }
                 }
                 Column(modifier = contentModifier) {
 
@@ -2189,6 +2215,7 @@ fun PluginCard(
                                 pathId,
                                 pluginIndex,
                                 isFullscreen = isFullscreen,
+                                isVisible = expanded || isFullscreen,
                                 onPluginSizeKnown = { w, h ->
                                     x11PluginNaturalW = w
                                     x11PluginNaturalH = h
@@ -2400,7 +2427,8 @@ fun PluginCard(
                     )
                 }
 
-                if (!isFullscreen) when (currentUiMode) {
+                if (!isFullscreen && (expanded || currentUiMode != UiType.SLIDERS)) {
+                    when (currentUiMode) {
                     UiType.X11 -> {
                         // X11 view is always present above, just show it
                         LaunchedEffect(pluginIndex, pluginInfo) {
@@ -2483,6 +2511,7 @@ fun PluginCard(
                             )
                         }
                       }
+                    }
                     }
                 }
                 } // end contentModifier Column
