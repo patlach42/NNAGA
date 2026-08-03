@@ -70,7 +70,7 @@ object X11Bridge {
         native.destroyPluginUI(pathId, pluginInstanceId, uiInstanceId)
     fun idlePluginUIs(): Boolean = native.idlePluginUIs()
 
-    fun pollFileRequest(): Array<String>? = native.nativePollFileRequest()
+    fun pollFileRequest(pathId: Long): Array<String>? = native.nativePollFileRequest(pathId)
     fun deliverFileToPluginUI(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String) =
         native.nativeDeliverFileToPluginUI(pathId, pluginIndex, propertyUri, filePath)
 }

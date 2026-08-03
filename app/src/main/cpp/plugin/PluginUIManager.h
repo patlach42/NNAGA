@@ -22,6 +22,7 @@
 #include <memory>
 #include <mutex>
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include "lv2/LV2PluginUI.h"
@@ -33,8 +34,10 @@ class PluginChain;
 class PluginUIManager {
 public:
     PluginUIManager() = default;
-    ~PluginUIManager() = default;
+    ~PluginUIManager();
 
+
+    void setPathId(int64_t pathId) { pathId_ = pathId; }
     void setChain(PluginChain* chain) { chain_ = chain; }
 
     bool createPluginUI(int pluginIndex, int displayNumber,
@@ -62,8 +65,9 @@ public:
     /** Get UI entry for a plugin (for checking if UI exists). */
     bool hasUIForPlugin(int pluginIndex) const;
 
-    /** Result of polling for a pending file request from any plugin UI. */
+    /** Result of polling a pending request, including its originating rack path. */
     struct FileRequest {
+        int64_t pathId;
         int pluginIndex;
         std::string propertyUri;
     };
@@ -97,6 +101,7 @@ private:
     PluginChain* chain_ = nullptr;
     std::vector<UIEntry> uiEntries_;
     mutable std::mutex uiMutex_;
+    int64_t pathId_ = 0;
     std::atomic<bool> paused_{false};
 };
 

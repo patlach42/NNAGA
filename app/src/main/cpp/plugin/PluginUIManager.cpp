@@ -30,6 +30,14 @@
 
 namespace guitarrackcraft {
 
+PluginUIManager::~PluginUIManager() {
+    // Clear every display callback and perform the same graceful X11 cleanup
+    // used for an explicit destroy before this path manager is discarded.
+    for (size_t i = 0; i < uiEntries_.size(); ++i) {
+        destroyPluginUI(static_cast<int>(i));
+    }
+}
+
 bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
                                      unsigned long parentWindowId,
                                      const std::string& nativeLibDir,
@@ -345,9 +353,9 @@ bool PluginUIManager::pollFileRequest(FileRequest& out) {
         if (entry.ui && entry.ui->isValid()) {
             std::string uri = entry.ui->getPendingFileRequest();
             if (!uri.empty()) {
+                out.pathId = pathId_;
                 out.pluginIndex = i;
                 out.propertyUri = std::move(uri);
-                LOGI("pollFileRequest: found request from plugin %d uri=%s", i, out.propertyUri.c_str());
                 return true;
             }
         }

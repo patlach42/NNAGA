@@ -489,7 +489,7 @@ class NativeEngine private constructor() {
     external fun nativeCreatePluginUI(pathId: Long, pluginIndex: Int, pluginInstanceId: Long, uiInstanceId: Long, displayNumber: Int, parentWindowId: Long): Boolean
     external fun nativeDestroyPluginUI(pathId: Long, pluginInstanceId: Long, uiInstanceId: Long)
     external fun nativeIdlePluginUIs(): Boolean
-    external fun nativePollFileRequest(): Array<String>?
+    external fun nativePollFileRequest(pathId: Long): Array<String>?
     external fun nativeDeliverFileToPluginUI(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String)
     external fun nativePollVstFilePickerRequest(pathId: Long, pluginIndex: Int): Array<String>?
     external fun nativeRespondVstFilePicker(pathId: Long, pluginIndex: Int, sequence: Int, cancelled: Boolean, windowsPath: String)

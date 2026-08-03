@@ -1610,6 +1610,12 @@ fun PluginCard(
         ) {
             // Parameter controls / plugin UI — always in composition to avoid re-renders
             if (pluginInfo != null) {
+                val isVstPlugin = pluginInfo.format == "VST2" || pluginInfo.format == "VST3"
+                var x11DisplayNumber by remember(pluginInfo.fullId) {
+                    mutableStateOf(
+                        if (pluginInfo.hasX11Ui && !isVstPlugin) X11DisplayManager.allocateDisplay() else -1
+                    )
+                }
                 // Determine which UI modes are available
                 val availableUiTypes = remember(pluginInfo) {
                     buildList {
@@ -1837,16 +1843,6 @@ fun PluginCard(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                // Allocate X11 display number for this plugin — always kept alive while in rack.
-                // Display is only released when plugin is removed from rack (onDispose).
-                // VST plugins have their OWN X11 server inside vsthost_lib (different display
-                // number range) — they don't borrow from :app's X11DisplayManager.
-                val isVstPlugin = pluginInfo.format == "VST2" || pluginInfo.format == "VST3"
-                var x11DisplayNumber by remember {
-                    mutableStateOf(
-                        if (pluginInfo.hasX11Ui && !isVstPlugin) X11DisplayManager.allocateDisplay() else -1
-                    )
-                }
 
                 // Cleanup X11 display when plugin is removed from rack
                 DisposableEffect(Unit) {
@@ -1866,7 +1862,7 @@ fun PluginCard(
                 // --- X11 UI file picker (ui:requestValue) ---
                 val context = LocalContext.current
                 val scope = rememberCoroutineScope()
-                var x11FileRequestPending by remember { mutableStateOf<Pair<Int, String>?>(null) }
+                var x11FileRequestPending by remember { mutableStateOf<Triple<Long, Int, String>?>(null) }
                 var showX11FilePicker by remember { mutableStateOf(false) }
 
                 val x11FilePicker = rememberLauncherForActivityResult(
@@ -1875,7 +1871,7 @@ fun PluginCard(
                     val req = x11FileRequestPending ?: return@rememberLauncherForActivityResult
                     if (uri != null) {
                         scope.launch(Dispatchers.IO) {
-                            val pickerConfig = getX11FilePickerConfig(req.second)
+                            val pickerConfig = getX11FilePickerConfig(req.third)
                             val fileName = resolvePickedFileName(
                                 context,
                                 uri,
@@ -1890,8 +1886,8 @@ fun PluginCard(
                                 destFile.outputStream().use { output -> input.copyTo(output) }
                             }
                             withContext(Dispatchers.Main) {
-                                viewModel.setPluginFilePath(pathId, req.first, req.second, destFile.absolutePath)
-                                X11Bridge.deliverFileToPluginUI(pathId, req.first, req.second, destFile.absolutePath)
+                                viewModel.setPluginFilePath(req.first, req.second, req.third, destFile.absolutePath)
+                                X11Bridge.deliverFileToPluginUI(req.first, req.second, req.third, destFile.absolutePath)
                             }
                         }
                     }
@@ -1900,14 +1896,12 @@ fun PluginCard(
 
                 // Poll for X11 UI file requests when X11 UI is visible
                 val x11UiActive = currentUiMode == UiType.X11
-                val x11DisplayNumber = -1
                 LaunchedEffect(x11UiActive, x11DisplayNumber) {
                     if (x11UiActive && x11DisplayNumber >= 0) {
                         while (isActive) {
-                            val req = X11Bridge.pollFileRequest()
-                            if (req != null && req.size == 2) {
-                                x11FileRequestPending = Pair(req[0].toInt(), req[1])
-                                showX11FilePicker = true
+                            val req = X11Bridge.pollFileRequest(pathId)
+                            if (req != null && req.size == 3 && req[0].toLong() == pathId) {
+                                x11FileRequestPending = Triple(req[0].toLong(), req[1].toInt(), req[2])
                             }
                             delay(100)
                         }
@@ -1917,15 +1911,15 @@ fun PluginCard(
                 // X11 file picker dialog
                 if (showX11FilePicker && x11FileRequestPending != null) {
                     val req = x11FileRequestPending!!
-                    val pickerConfig = remember(req.second) { getX11FilePickerConfig(req.second) }
+                    val pickerConfig = remember(req.third) { getX11FilePickerConfig(req.third) }
                     X11FilePickerDialog(
                         config = pickerConfig,
-                        sourcePluginIndex = req.first,
-                        sourcePropertyUri = req.second,
+                        sourcePluginIndex = req.second,
+                        sourcePropertyUri = req.third,
                         onFileSelected = { path ->
                             showX11FilePicker = false
-                            viewModel.setPluginFilePath(pathId, req.first, req.second, path)
-                            X11Bridge.deliverFileToPluginUI(pathId, req.first, req.second, path)
+                            viewModel.setPluginFilePath(req.first, req.second, req.third, path)
+                            X11Bridge.deliverFileToPluginUI(req.first, req.second, req.third, path)
                             x11FileRequestPending = null
                         },
                         onBrowseFiles = {
@@ -2193,7 +2187,6 @@ fun PluginCard(
                 // destroyOnDispose=false so the wine subprocess + X11 server
                 // stay alive on mode switch; only the SurfaceView is recreated.
                 // attachSurface drains any prior render thread on re-attach.
-                val isVstPlugin = pluginInfo.format == "VST2" || pluginInfo.format == "VST3"
                 if (isVstPlugin && com.vibes.dsp.BuildConfig.HAS_VST_HOST &&
                     currentUiMode == UiType.X11) {
                     var vstUiReady by remember { mutableStateOf(false) }

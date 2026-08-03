@@ -2431,6 +2431,18 @@ bool X11NativeDisplay::signalDetach() {
     
     LOGI("X11Debug: X11 signalDetach ENTER display=%d tid=%ld clientFd=%d (initiating graceful teardown)",
          displayNumber_, getTid(), impl_->clientFd);
+
+    // With no active X client, serverLoop is blocked in accept().  There is
+    // nothing to drain gracefully, so wake it before detachSurface joins it.
+    if (impl_->clientFd < 0) {
+        impl_->running = false;
+        if (impl_->serverFd >= 0) {
+            shutdown(impl_->serverFd, SHUT_RDWR);
+            close(impl_->serverFd);
+            impl_->serverFd = -1;
+        }
+        return false;
+    }
     
     // Mark as closing gracefully - server thread will handle the rest
     impl_->closingGracefully.store(true);

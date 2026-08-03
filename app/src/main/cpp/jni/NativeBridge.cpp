@@ -31,6 +31,7 @@
 #include <string>
 #include <pthread.h>
 #include <unistd.h>
+#include <unordered_map>
 #include <vector>
 
 #include "../engine/AudioEngine.h"
@@ -58,14 +59,13 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 using namespace guitarrackcraft;
-
 struct NativeContext {
     // Destruction order matters: AudioEngine holds a non-owning pointer to
     // directUsbOutput_, so it must be destroyed first.
     std::unique_ptr<DirectUsbOutput> directUsbOutput;
     std::unique_ptr<AudioEngine> audioEngine;
     std::unique_ptr<PluginRegistry> pluginRegistry;
-    std::unique_ptr<PluginUIManager> pluginUIManager;
+    std::unordered_map<jlong, std::unique_ptr<PluginUIManager>> pluginUIManagers;
     std::mutex rackControlMutex;
     std::string lv2Path;
     std::string nativeLibDir;
@@ -86,6 +86,18 @@ static NativeContext* ensureCtx() {
         g_ctx = new NativeContext();
     });
     return g_ctx;
+}
+
+static PluginUIManager* getPluginUIManagerLocked(NativeContext& ctx, jlong pathId,
+                                                  PluginChain* chain) {
+    auto it = ctx.pluginUIManagers.find(pathId);
+    if (it != ctx.pluginUIManagers.end()) return it->second.get();
+    auto manager = std::make_unique<PluginUIManager>();
+    manager->setPathId(static_cast<int64_t>(pathId));
+    manager->setChain(chain);
+    auto* result = manager.get();
+    ctx.pluginUIManagers.emplace(pathId, std::move(manager));
+    return result;
 }
 
 // Serialize initialization independently of the JNI caller threads.  This
@@ -303,7 +315,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
 
     std::lock_guard<std::mutex> initLock(g_nativeInitMutex);
     NativeContext* ctx = ensureCtx();
-    if (ctx->audioEngine && ctx->pluginRegistry && ctx->pluginUIManager) {
+    if (ctx->audioEngine && ctx->pluginRegistry && !ctx->pluginUIManagers.empty()) {
         LOGI("Native engine already initialized; preserving live state");
         return JNI_TRUE;
     }
@@ -350,15 +362,19 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
         return JNI_FALSE;
     }
 
+
     // Create audio engine
     g_ctx->directUsbOutput = std::make_unique<DirectUsbOutput>();
     g_ctx->audioEngine = std::make_unique<AudioEngine>();
     g_ctx->audioEngine->setDirectUsbOutput(g_ctx->directUsbOutput.get());
 
-    // Plugin UI manager follows the master until path-aware editor migration.
-    g_ctx->pluginUIManager = std::make_unique<guitarrackcraft::PluginUIManager>();
-    auto masterChain = g_ctx->audioEngine->getRackGraph().getChain(kMasterPathId);
-    g_ctx->pluginUIManager->setChain(masterChain.get());
+    // Managers are created lazily per rack path so plugin indices cannot collide.
+    // Initialize the master manager here to preserve existing behavior.
+    {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        auto masterChain = g_ctx->audioEngine->getRackGraph().getChain(kMasterPathId);
+        if (masterChain) getPluginUIManagerLocked(*g_ctx, kMasterPathId, masterChain.get());
+    }
 
     // Start the X11Worker thread for single-threaded X11 operations
     // This prevents xcb_xlib_threads_sequence_lost crashes by ensuring
@@ -821,7 +837,13 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRemovePluginFromRack(
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
-    return chain && chain->removePlugin(position) ? JNI_TRUE : JNI_FALSE;
+    if (!chain || position < 0 || static_cast<size_t>(position) >= chain->getSize()) return JNI_FALSE;
+    auto managerIt = g_ctx->pluginUIManagers.find(pathId);
+    if (managerIt != g_ctx->pluginUIManagers.end()) {
+        managerIt->second->destroyPluginUI(position);
+        managerIt->second->detachAndShiftForRemoval(position);
+    }
+    return chain->removePlugin(position) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -830,7 +852,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeReorderRack(
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
-    return chain && chain->reorderPlugins(fromPos, toPos) ? JNI_TRUE : JNI_FALSE;
+    if (!chain) return JNI_FALSE;
+    const bool ok = chain->reorderPlugins(fromPos, toPos);
+    if (ok) {
+        auto managerIt = g_ctx->pluginUIManagers.find(pathId);
+        if (managerIt != g_ctx->pluginUIManagers.end())
+            managerIt->second->reorderUIs(fromPos, toPos);
+    }
+    return ok ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT void JNICALL
@@ -879,6 +908,10 @@ JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeRemoveTrack(JNIEnv*, jobject, jlong trackId) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     std::lock_guard lock(g_ctx->rackControlMutex);
+    auto pathIt = g_ctx->pluginUIManagers.find(trackId);
+    if (pathIt != g_ctx->pluginUIManagers.end()) {
+        g_ctx->pluginUIManagers.erase(pathIt);
+    }
     return g_ctx->audioEngine->getRackGraph().removeTrack(trackId) ? JNI_TRUE : JNI_FALSE;
 }
 
@@ -1107,16 +1140,20 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeCreatePluginUI(
          (unsigned long)parentWindowId);
     auto chain = g_ctx && g_ctx->audioEngine
         ? g_ctx->audioEngine->getRackGraph().getChain(pathId) : nullptr;
-    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->pluginUIManager ||
-        !chain || pluginIndex < 0 ||
-        static_cast<size_t>(pluginIndex) >= chain->getSize() ||
-        static_cast<jlong>(chain->getPluginInstanceId(pluginIndex)) != pluginInstanceId) {
+    PluginUIManager* manager = nullptr;
+    std::unique_lock<std::mutex> rackLock;
+    if (g_ctx && g_ctx->audioEngine && chain && pluginIndex >= 0 &&
+        static_cast<size_t>(pluginIndex) < chain->getSize() &&
+        static_cast<jlong>(chain->getPluginInstanceId(pluginIndex)) == pluginInstanceId) {
+        rackLock = std::unique_lock<std::mutex>(g_ctx->rackControlMutex);
+        manager = getPluginUIManagerLocked(*g_ctx, pathId, chain.get());
+    }
+    if (!manager) {
         setDisplayPhase(displayNumber, DisplayState::Phase::None);
         setCreatingPluginUI(false);
         return JNI_FALSE;
     }
-    
-    bool result = g_ctx->pluginUIManager->createPluginUI(
+    bool result = manager->createPluginUI(
         pluginIndex,
         displayNumber,
         (unsigned long)parentWindowId,
@@ -1140,10 +1177,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeCreatePluginUI(
     }
     
     if (detachPending && result) {
-        /* Surface was destroyed while we were creating the UI.
-         * Destroy the plugin UI now that creation is complete. */
         LOGI("nativeCreatePluginUI: deferred detach detected, destroying plugin UI");
-        g_ctx->pluginUIManager->destroyPluginUI(pluginIndex);
+        manager->destroyPluginUI(pluginIndex);
         setDisplayPhase(displayNumber, DisplayState::Phase::None);
     }
     
@@ -1153,30 +1188,33 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeCreatePluginUI(
     LOGI("nativeCreatePluginUI EXIT tid=%ld result=%s", getTid(), result ? "true" : "false");
     return result ? JNI_TRUE : JNI_FALSE;
 }
-
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeDestroyPluginUI(
     JNIEnv*, jobject, jlong pathId, jlong pluginInstanceId, jlong uiInstanceId) {
     (void)uiInstanceId;
-    auto chain = g_ctx && g_ctx->audioEngine
-        ? g_ctx->audioEngine->getRackGraph().getChain(pathId) : nullptr;
-    if (!chain) return;
+    if (!g_ctx || !g_ctx->audioEngine) return;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    auto managerIt = g_ctx->pluginUIManagers.find(pathId);
+    if (!chain || managerIt == g_ctx->pluginUIManagers.end()) return;
     const int pluginIndex = [&]() {
         for (size_t i = 0; i < chain->getSize(); ++i)
             if (static_cast<jlong>(chain->getPluginInstanceId(static_cast<int>(i))) == pluginInstanceId)
                 return static_cast<int>(i);
         return -1;
     }();
-    if (pluginIndex < 0) return;
-    g_ctx->pluginUIManager->destroyPluginUI(pluginIndex);
+    if (pluginIndex >= 0) managerIt->second->destroyPluginUI(pluginIndex);
 }
 
 JNIEXPORT jboolean JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeIdlePluginUIs(JNIEnv* env, jobject thiz) {
-    if (g_ctx->audioEngine) {
-        return g_ctx->pluginUIManager->idleAllUIs() ? JNI_TRUE : JNI_FALSE;
+Java_com_vibes_dsp_engine_NativeEngine_nativeIdlePluginUIs(JNIEnv*, jobject) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    bool result = false;
+    for (auto& entry : g_ctx->pluginUIManagers) {
+        result = entry.second->idleAllUIs() || result;
     }
-    return JNI_FALSE;
+    return result ? JNI_TRUE : JNI_FALSE;
 }
 
 // --- X11 native display (EGL + ANativeWindow) ---
@@ -1359,25 +1397,34 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetX11PluginSize(JNIEnv* env, jobje
 }
 
 JNIEXPORT jfloat JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeGetX11UIScale(JNIEnv* env, jobject thiz, jint displayNumber) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetX11UIScale(JNIEnv*, jobject, jint displayNumber) {
     return withDisplayGetUIScale(displayNumber);
 }
 
 JNIEXPORT jobjectArray JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativePollFileRequest(JNIEnv* env, jobject thiz) {
-    if (!g_ctx || !g_ctx->pluginUIManager) return nullptr;
-
+Java_com_vibes_dsp_engine_NativeEngine_nativePollFileRequest(JNIEnv* env, jobject, jlong pathId) {
+    if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     guitarrackcraft::PluginUIManager::FileRequest req;
-    if (!g_ctx->pluginUIManager->pollFileRequest(req)) return nullptr;
+    {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        auto it = g_ctx->pluginUIManagers.find(pathId);
+        if (it == g_ctx->pluginUIManagers.end() || !it->second->pollFileRequest(req)) {
+            return nullptr;
+        }
+    }
+
 
     jclass stringClass = env->FindClass("java/lang/String");
-    jobjectArray result = env->NewObjectArray(2, stringClass, nullptr);
+    jobjectArray result = env->NewObjectArray(3, stringClass, nullptr);
     if (!result) return nullptr;
 
+    jstring pathStr = env->NewStringUTF(std::to_string(req.pathId).c_str());
     jstring indexStr = env->NewStringUTF(std::to_string(req.pluginIndex).c_str());
     jstring uriStr = env->NewStringUTF(req.propertyUri.c_str());
-    env->SetObjectArrayElement(result, 0, indexStr);
-    env->SetObjectArrayElement(result, 1, uriStr);
+    env->SetObjectArrayElement(result, 0, pathStr);
+    env->SetObjectArrayElement(result, 1, indexStr);
+    env->SetObjectArrayElement(result, 2, uriStr);
+    env->DeleteLocalRef(pathStr);
     env->DeleteLocalRef(indexStr);
     env->DeleteLocalRef(uriStr);
     env->DeleteLocalRef(stringClass);
@@ -1389,16 +1436,17 @@ JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeDeliverFileToPluginUI(
     JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jstring propertyUri, jstring filePath)
 {
-    if (!g_ctx || !g_ctx->pluginUIManager) return;
-    auto chain = g_ctx->audioEngine
-        ? g_ctx->audioEngine->getRackGraph().getChain(pathId) : nullptr;
-    if (!chain || pluginIndex < 0 ||
+    if (!g_ctx || !g_ctx->audioEngine || !propertyUri || !filePath) return;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    auto managerIt = g_ctx->pluginUIManagers.find(pathId);
+    if (!chain || managerIt == g_ctx->pluginUIManagers.end() || pluginIndex < 0 ||
         static_cast<size_t>(pluginIndex) >= chain->getSize()) return;
 
     const char* propStr = env->GetStringUTFChars(propertyUri, nullptr);
     const char* pathStr = env->GetStringUTFChars(filePath, nullptr);
     if (propStr && pathStr) {
-        g_ctx->pluginUIManager->deliverFileToUI(
+        managerIt->second->deliverFileToUI(
             pluginIndex, std::string(propStr), std::string(pathStr));
     }
     if (propStr) env->ReleaseStringUTFChars(propertyUri, propStr);
