@@ -94,6 +94,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
@@ -848,24 +849,27 @@ fun RackScreen(
                             .size(48.dp)
                             .alpha(if (playEnabled) 1f else 0.38f)
                             .combinedClickable(
-                                enabled = playEnabled,
+                                // Keep the gesture surface active for long-press quantization access,
+                                // while guarding normal taps below when no audio is loaded.
                                 onClick = {
-                                    when {
-                                        track.playing || launchPending -> {
-                                            pendingTrackLaunches.remove(track.id)
-                                            viewModel.setTrackTransportPlaying(
-                                                track.id,
-                                                false,
-                                                launchQuantization
-                                            )
-                                        }
-                                        else -> {
-                                            pendingTrackLaunches[track.id] = true
-                                            viewModel.launchTrackTransport(
-                                                track.id,
-                                                launchQuantization,
-                                                startGlobal = !transport.playing
-                                            )
+                                    if (playEnabled) {
+                                        when {
+                                            track.playing || launchPending -> {
+                                                pendingTrackLaunches.remove(track.id)
+                                                viewModel.setTrackTransportPlaying(
+                                                    track.id,
+                                                    false,
+                                                    launchQuantization
+                                                )
+                                            }
+                                            else -> {
+                                                pendingTrackLaunches[track.id] = true
+                                                viewModel.launchTrackTransport(
+                                                    track.id,
+                                                    launchQuantization,
+                                                    startGlobal = !transport.playing
+                                                )
+                                            }
                                         }
                                     }
                                 },
@@ -875,6 +879,7 @@ fun RackScreen(
                                 }
                             )
                             .semantics {
+                                if (!playEnabled) disabled()
                                 contentDescription = when {
                                     !playEnabled -> "Track play unavailable until audio is loaded"
                                     track.playing -> "Pause selected track"
@@ -913,6 +918,7 @@ fun RackScreen(
                                 TrackLaunchQuantization.Quarter -> "1/4"
                                 TrackLaunchQuantization.Eighth -> "1/8"
                                 TrackLaunchQuantization.Sixteenth -> "1/16"
+                                TrackLaunchQuantization.None -> "None (Immediate)"
                             }
                             DropdownMenuItem(
                                 text = { Text(label) },
@@ -990,6 +996,8 @@ fun RackScreen(
                                     modifier = Modifier.alpha(recordIconAlpha)
                                 )
                             }
+                            val enterOnPunchEnabled =
+                                !transport.playing || launchQuantization == TrackLaunchQuantization.None
                             DropdownMenu(
                                 expanded = recordMenuExpanded,
                                 onDismissRequest = {
@@ -1003,12 +1011,12 @@ fun RackScreen(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Enter on punch") },
-                                    enabled = !transport.playing,
+                                    enabled = enterOnPunchEnabled,
                                     leadingIcon = {
                                         Checkbox(
                                             checked = track.punchArmed,
                                             onCheckedChange = null,
-                                            enabled = !transport.playing
+                                            enabled = enterOnPunchEnabled
                                         )
                                     },
                                     onClick = {

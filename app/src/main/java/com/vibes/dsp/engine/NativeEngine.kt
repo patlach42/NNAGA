@@ -192,7 +192,8 @@ enum class TrackLaunchQuantization {
     Bar,
     Quarter,
     Eighth,
-    Sixteenth
+    Sixteenth,
+    None
 }
 
 data class RackTrackInfo(

@@ -18,7 +18,7 @@ namespace guitarrackcraft {
 using RackPathId = uint64_t;
 constexpr RackPathId kMasterPathId = 0;
 
-enum class LaunchQuantization : uint8_t { Bar, Quarter, Eighth, Sixteenth };
+enum class LaunchQuantization : uint8_t { Bar, Quarter, Eighth, Sixteenth, None };
 struct WavClip {
     std::vector<float> left;
     std::vector<float> right;
