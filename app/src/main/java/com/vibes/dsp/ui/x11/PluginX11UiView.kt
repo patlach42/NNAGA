@@ -375,7 +375,10 @@ fun PluginX11UiView(
             surfaceViewRef = surfaceView
             surfaceView
         },
-        update = { surfaceViewRef = it },
+        update = {
+            surfaceViewRef = it
+            it.visibility = if (isVisible) View.VISIBLE else View.INVISIBLE
+        },
         modifier = modifier.fillMaxSize()
     )
     }

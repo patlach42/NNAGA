@@ -25,6 +25,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.view.View
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -369,6 +370,7 @@ fun InlineModguiView(
                 }
             },
             update = { webView ->
+                webView.visibility = if (isVisible) View.VISIBLE else View.INVISIBLE
                 // Scale content to fill container
                 if (contentWidth > 0 && contentHeight > 0) {
                     webView.evaluateJavascript(

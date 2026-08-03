@@ -86,6 +86,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -337,6 +338,7 @@ fun RackScreen(
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
+            if (!isFullscreenActive) {
             // Keep high-frequency meter/status invalidations inside the top bar
             // restart scope instead of recomposing the complete rack screen.
             val meterState by viewModel.meterState.collectAsState()
@@ -534,6 +536,7 @@ fun RackScreen(
                     }
                 }
             }
+            }
         }
         ) { padding ->
 
@@ -542,6 +545,7 @@ fun RackScreen(
                     .fillMaxSize()
                     .padding(if (isFullscreenActive) PaddingValues(0.dp) else padding)
             ) {
+    if (!isFullscreenActive) {
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -583,6 +587,7 @@ fun RackScreen(
                 style = MaterialTheme.typography.bodySmall
             )
         }
+    }
     }
     if (showTempoDialog) {
         val enteredTempo = tempoInput.toDoubleOrNull()
@@ -645,6 +650,7 @@ fun RackScreen(
             }
         )
     }
+    if (!isFullscreenActive) {
     if (selectedPathId != MASTER_PATH_ID) {
         Row(
             Modifier
@@ -1118,6 +1124,7 @@ fun RackScreen(
         }
         // Master path does not show track-level transport/record controls here.
         }
+    }
         // Drag-reorder state — use scrollable Column so all plugin cards stay in composition (no re-render when scrolling)
         val localPlugins = remember { mutableStateOf(rackPlugins.toMutableStateList()) }
         val scrollState = rememberScrollState()
@@ -1215,7 +1222,11 @@ fun RackScreen(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(if (isDragging) Modifier.height(contentHeight) else Modifier.wrapContentHeight())
+                        .then(
+                            if (isFullscreenActive) Modifier.fillMaxHeight()
+                            else if (isDragging) Modifier.height(contentHeight)
+                            else Modifier.wrapContentHeight()
+                        )
                         .graphicsLayer {
                             scaleX = listScale
                             scaleY = listScale
@@ -1225,7 +1236,10 @@ fun RackScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .wrapContentHeight()
+                            .then(
+                                if (isFullscreenActive) Modifier.fillMaxHeight()
+                                else Modifier.wrapContentHeight()
+                            )
                     ) {
             if (!isFullscreenActive) {
             Spacer(modifier = Modifier.height(16.dp))
@@ -1574,7 +1588,7 @@ fun PluginCard(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth()
+            modifier = if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth()
         ) {
             // Parameter controls / plugin UI — always in composition to avoid re-renders
             if (pluginInfo != null) {
@@ -1789,9 +1803,9 @@ fun PluginCard(
                 }
 
                 val contentModifier = when {
-                    isFullscreen -> Modifier.fillMaxSize()
+                    isFullscreen -> Modifier.fillMaxWidth().weight(1f)
                     expanded -> Modifier
-                    else -> Modifier.height(0.dp).alpha(0f)
+                    else -> Modifier.height(0.dp).clipToBounds().alpha(0f)
                 }
                 Column(modifier = contentModifier) {
 
@@ -2058,7 +2072,15 @@ fun PluginCard(
                 var x11UiReady by rememberSaveable { mutableStateOf(false) }
                 var x11OnScreen by remember { mutableStateOf(true) }
                 if (pluginInfo.format == "LV2") {
-                Box(modifier = if (isFullscreen && currentUiMode == UiType.X11) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = when {
+                        isFullscreen && currentUiMode == UiType.X11 ->
+                            Modifier.fillMaxWidth().height(screenHeight)
+                        currentUiMode != UiType.X11 ->
+                            Modifier.fillMaxWidth().height(0.dp)
+                        else -> Modifier.fillMaxWidth()
+                    }
+                ) {
                     BoxWithConstraints(
                         modifier = if (isFullscreen && currentUiMode == UiType.X11) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
                         contentAlignment = Alignment.Center
@@ -2096,7 +2118,8 @@ fun PluginCard(
                                     uiInstanceId = uiInstanceId,
                                     pluginIndex = pluginIndex,
                                     displayNumber = x11DisplayNumber,
-                                    isVisible = expanded && currentUiMode == UiType.X11 && (!isAnyPluginFullscreen || isFullscreen),
+                                    isVisible = (expanded || isFullscreen) && currentUiMode == UiType.X11 &&
+                                        (!isAnyPluginFullscreen || isFullscreen),
                                     shouldDestroyOnDispose = true,
                                     modifier = Modifier.fillMaxSize(),
                                     onPluginSizeKnown = { w, h, scale ->
@@ -2149,7 +2172,11 @@ fun PluginCard(
                     currentUiMode == UiType.X11) {
                     var vstUiReady by remember { mutableStateOf(false) }
                     Box(
-                        modifier = if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth(),
+                        modifier = if (isFullscreen) {
+                            Modifier.fillMaxWidth().height(screenHeight)
+                        } else {
+                            Modifier.fillMaxWidth()
+                        },
                         contentAlignment = Alignment.Center
                     ) {
                         // Mirror the LV2 X11 scale machinery: auto-scale tall/stompbox editors
@@ -2262,9 +2289,15 @@ fun PluginCard(
                     var modguiOnScreen by remember { mutableStateOf(true) }
                     @Suppress("NAME_SHADOWING") val density = LocalDensity.current
                     val modguiModeActive = currentUiMode == UiType.MODGUI
-                    val modguiVisible = modguiModeActive && modguiReady
+                    val modguiVisible = modguiModeActive
                     val modguiFullscreen = isFullscreen && modguiModeActive
-                    Box(modifier = if (modguiFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth()) {
+                    Box(
+                        modifier = if (modguiFullscreen) {
+                            Modifier.fillMaxWidth().height(screenHeight)
+                        } else {
+                            Modifier.fillMaxWidth()
+                        }
+                    ) {
                         BoxWithConstraints(
                             modifier = Modifier
                                 .then(if (modguiFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth())
@@ -2293,7 +2326,8 @@ fun PluginCard(
                                 pathId = pathId,
                                 pluginIndex = pluginIndex,
                                 pluginInfo = pluginInfo,
-                                isVisible = expanded && modguiOnScreen && (!isAnyPluginFullscreen || isFullscreen),
+                                isVisible = (expanded || modguiFullscreen) && modguiOnScreen &&
+                                    (!isAnyPluginFullscreen || isFullscreen),
                                 modifier = Modifier
                                     .then(if (modguiFullscreen) Modifier.fillMaxWidth() else Modifier.fillMaxWidth(fraction = effectiveScale))
                                     .height(heightDp),
