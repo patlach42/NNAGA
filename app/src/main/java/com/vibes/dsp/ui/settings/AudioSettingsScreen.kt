@@ -218,6 +218,7 @@ private fun DirectUsbSessionSettings(
     var selectedCaptureLimit by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureLimit(context)) }
     var selectedTransferCount by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbTransferCount(context)) }
     var includeExperimental by remember { mutableStateOf(false) }
+    var fixedSampleRateCalibration by remember { mutableStateOf(false) }
     var dangerOverride by remember { mutableStateOf(false) }
     var savedProfiles by remember { mutableStateOf<List<DirectUsbCalibrationProfile>>(emptyList()) }
     var selectedPacketsPerTransfer by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)) }
@@ -227,11 +228,15 @@ private fun DirectUsbSessionSettings(
     }
     var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
     var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
+    var autoCalibrationResult by remember {
+        mutableStateOf<com.vibes.dsp.engine.DirectUsbAutoCalibrationResult?>(null)
+    }
     var isCalibrating by remember { mutableStateOf(false) }
     var appliedStableBaseProfile by remember {
         mutableStateOf<DirectUsbCalibrationProfile?>(null)
     }
     var isExtendedCalibration by remember { mutableStateOf(false) }
+    var isAutoCalibration by remember { mutableStateOf(false) }
     var showUsbInterfaceLog by remember { mutableStateOf(false) }
     var usbInterfaceLog by remember { mutableStateOf("Long press the interface selector to collect diagnostics.") }
     var runAtStart by remember { mutableStateOf(AudioSettingsManager.getEngineRunAtStart(context)) }
@@ -290,6 +295,7 @@ private fun DirectUsbSessionSettings(
             )
         } ?: emptyList()
         calibrationResult = null
+        autoCalibrationResult = null
         appliedStableBaseProfile = null
         formats = AudioSettingsManager.getDirectUsbCachedFormats(context)
         reconcileFormatSelection()
@@ -361,6 +367,7 @@ private fun DirectUsbSessionSettings(
         selectedDevice = device
         dangerOverride = false
         calibrationResult = null
+        autoCalibrationResult = null
         appliedStableBaseProfile = null
         savedProfiles = AudioSettingsManager.getDirectUsbCalibrationProfiles(
             context, device.vendorId, device.productId
@@ -652,6 +659,27 @@ private fun DirectUsbSessionSettings(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Column(modifier = Modifier.weight(1f)) {
+                Text("Restrict calibration to selected sample rate")
+                Text(
+                    "Restricts measurement to the rate captured when calibration begins. " +
+                        "All advertised bit depth, subslot, and channel variants at exactly " +
+                        "that rate remain eligible.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Checkbox(
+                checked = fixedSampleRateCalibration,
+                onCheckedChange = { fixedSampleRateCalibration = it },
+                enabled = controlsEnabled
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     "DANGER: ignore device constraints",
                     color = MaterialTheme.colorScheme.error,
@@ -677,6 +705,8 @@ private fun DirectUsbSessionSettings(
                     if (device == null) {
                         message = "Select an interface first"
                     } else {
+                        val fixedSampleRate =
+                            selectedRate.takeIf { fixedSampleRateCalibration }
                         scope.launch {
                             appliedStableBaseProfile = null
                             isCalibrating = true
@@ -685,10 +715,14 @@ private fun DirectUsbSessionSettings(
                             calibrationProgress = null
                             try {
                                 DirectUsbAudioManager.calibrate(
-                                    context, device, format, includeExperimental, dangerOverride
-                                ) {
-                                    calibrationProgress = it
-                                }.also { result ->
+                                    context = context,
+                                    option = device,
+                                    format = format,
+                                    includeExperimental = includeExperimental,
+                                    dangerOverride = dangerOverride,
+                                    fixedSampleRate = fixedSampleRate,
+                                    onProgress = { calibrationProgress = it }
+                                ).also { result ->
                                     calibrationResult = result
                                     savedProfiles = AudioSettingsManager.getDirectUsbCalibrationProfiles(
                                         context, device.vendorId, device.productId
@@ -704,7 +738,7 @@ private fun DirectUsbSessionSettings(
                 enabled = device != null && controlsEnabled
             ) {
                 Text(
-                    if (isCalibrating && !isExtendedCalibration) {
+                    if (isCalibrating && !isExtendedCalibration && !isAutoCalibration) {
                         "Calibrating…"
                     } else {
                         "Calibrate this interface"
@@ -775,6 +809,8 @@ private fun DirectUsbSessionSettings(
             when {
                 isExtendedCalibration ->
                     "Extended calibration is running. The installed base profile remains unchanged."
+                isAutoCalibration ->
+                    "Disabled while auto calibration is running."
                 isCalibrating ->
                     "Disabled while standard calibration is running."
                 extendedBase == null ->
@@ -787,6 +823,174 @@ private fun DirectUsbSessionSettings(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Button(
+            onClick = {
+                val device = selectedDevice
+                if (device == null) {
+                    message = "Select an interface first"
+                } else {
+                    val fixedSampleRate =
+                        selectedRate.takeIf { fixedSampleRateCalibration }
+                    scope.launch {
+                        isCalibrating = true
+                        isAutoCalibration = true
+                        onCalibrationStateChange(true)
+                        autoCalibrationResult = null
+                        calibrationResult = null
+                        calibrationProgress = null
+                        message = null
+                        try {
+                            val result = DirectUsbAudioManager.autoCalibrate(
+                                context = context,
+                                option = device,
+                                includeExperimental = includeExperimental,
+                                dangerOverride = dangerOverride,
+                                fixedSampleRate = fixedSampleRate,
+                                onProgress = { calibrationProgress = it }
+                            )
+                            if (selectedDevice?.id == device.id) {
+                                autoCalibrationResult = result
+                                message = result.message
+                                savedProfiles =
+                                    AudioSettingsManager.getDirectUsbCalibrationProfiles(
+                                        context,
+                                        device.vendorId,
+                                        device.productId
+                                    )
+                            } else {
+                                autoCalibrationResult = null
+                                message = "USB interface changed; proposal was discarded"
+                            }
+                        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                            throw cancelled
+                        } catch (error: Throwable) {
+                            message = error.message ?: "Auto calibration failed"
+                        } finally {
+                            isAutoCalibration = false
+                            isCalibrating = false
+                            onCalibrationStateChange(false)
+                        }
+                    }
+                }
+            },
+            enabled = selectedDevice != null && controlsEnabled,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (isAutoCalibration) "Auto calibration…" else "Auto calibration")
+        }
+        Text(
+            "Runs every ordinary candidate five times, selects the best aggregate, then " +
+                "runs extended candidates twice from that base. Results are saved, but no " +
+                "settings change until you apply the proposal.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (isAutoCalibration) {
+            calibrationProgress?.let { progress ->
+                if (progress.profileCount > 0) {
+                    LinearProgressIndicator(
+                        progress = ((progress.profileIndex + 1).toFloat() /
+                            progress.profileCount.toFloat()).coerceIn(0f, 1f),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+            } ?: LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+        autoCalibrationResult?.let { result ->
+            val proposal = result.finalProfile
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        "Auto-calibration proposal",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        result.message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (proposal == null) {
+                        Text(
+                            "No stable proposal is available. Review the saved aggregate profiles.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    } else {
+                        val format = proposal.format
+                        val config = proposal.bufferConfig
+                        val selectedStage = if (result.selectedExtended?.id == proposal.id) {
+                            "Extended winner"
+                        } else {
+                            "Primary winner (extended stage had no stable candidate)"
+                        }
+                        Text(
+                            selectedStage,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "${format.sampleRate} Hz · ${format.bits}-bit · " +
+                                "${format.subslotBytes}-byte subslot · ${format.channels} channels",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            "Buffer ${proposal.bufferFrames} frames · " +
+                                "period multiplier ${proposal.periodMultiplier}×",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "Playback target ${config.playbackTargetFrames}f · " +
+                                "startup prime ${config.startupPrimeFrames}f · " +
+                                "write headroom ${config.writeHeadroomFrames}f",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Text(
+                            "Capture limit ${config.captureLimitFrames}f · " +
+                                "transfer count ${config.transferCount} · " +
+                                "packets/transfer ${config.packetsPerTransfer} · " +
+                                "ring ${config.ringCapacityBytes / 1024} KiB",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Divider()
+                        AutoCalibrationEvidence(
+                            title = if (proposal.extended) {
+                                "Extended aggregate evidence"
+                            } else {
+                                "Primary aggregate evidence"
+                            },
+                            profile = proposal
+                        )
+                        if (proposal.extended) {
+                            result.selectedPrimary?.let { primary ->
+                                AutoCalibrationEvidence(
+                                    title = "Winning primary base evidence",
+                                    profile = primary
+                                )
+                            }
+                        }
+                        Button(
+                            onClick = { applyProfile(proposal) },
+                            enabled = controlsEnabled,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Apply auto-calibration result")
+                        }
+                        Text(
+                            "The proposal is not active until you press Apply.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
         calibrationProgress?.let {
             val progressText = if (it.profileCount > 0) {
                 "Profile ${it.profileIndex + 1}/${it.profileCount}: " +
@@ -799,8 +1003,12 @@ private fun DirectUsbSessionSettings(
                 style = MaterialTheme.typography.bodySmall
             )
         }
-        val displayedProfiles = (savedProfiles + (calibrationResult?.profiles ?: emptyList()))
-            .distinctBy { it.id }
+        val autoProfiles = autoCalibrationResult?.let {
+            it.primaryProfiles + it.extendedProfiles
+        } ?: emptyList()
+        val displayedProfiles =
+            (savedProfiles + (calibrationResult?.profiles ?: emptyList()) + autoProfiles)
+                .distinctBy { it.id }
         if (displayedProfiles.isNotEmpty()) {
             Text("Saved calibration profiles", style = MaterialTheme.typography.labelLarge)
             Column(
@@ -851,9 +1059,21 @@ private fun DirectUsbSessionSettings(
                                     "transfer ${profile.transferErrors} · deadline ${profile.deadlineMisses}",
                                 style = MaterialTheme.typography.bodySmall
                             )
+                            if (profile.autoGenerated) {
+                                Text(
+                                    "Auto aggregate · ${profile.attemptedRuns} attempted · " +
+                                        "${profile.successfulRuns} successful · score ${profile.score}/7",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                             Text(
-                                "started ${profile.started} · stable ${profile.stable}" +
-                                    (profile.failure?.let { " · $it" } ?: ""),
+                                if (profile.autoGenerated) {
+                                    "stable across every run ${profile.stable}"
+                                } else {
+                                    "started ${profile.started} · stable ${profile.stable}" +
+                                        (profile.failure?.let { " · $it" } ?: "")
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = if (profile.stable) {
                                     MaterialTheme.colorScheme.primary
@@ -941,6 +1161,7 @@ private fun DirectUsbSessionSettings(
             formats = emptyList()
             savedProfiles = emptyList()
             appliedStableBaseProfile = null
+            autoCalibrationResult = null
             runAtStart = false
             message = "Forgot USB interface settings"
         },
@@ -948,6 +1169,46 @@ private fun DirectUsbSessionSettings(
     ) { Text("Forget USB interface") }
     message?.let {
         Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun AutoCalibrationEvidence(
+    title: String,
+    profile: DirectUsbCalibrationProfile
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            title,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            "${profile.attemptedRuns} runs attempted · " +
+                "${profile.successfulRuns} started successfully · " +
+                if (profile.stable) "stable across every run" else "not stable across every run",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (profile.stable) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.error
+            }
+        )
+        Text(
+            "Average latency ${profile.latencyFrames} frames / " +
+                "${String.format(Locale.US, "%.2f", profile.latencyMilliseconds)} ms",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            "Accumulated x-runs ${profile.xruns} · deadline misses ${profile.deadlineMisses} · " +
+                "transfer errors ${profile.transferErrors}",
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text(
+            "Score ${profile.score}/7 (stability 4 + latency 2 + buffer 1)",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.Medium
+        )
     }
 }
 
