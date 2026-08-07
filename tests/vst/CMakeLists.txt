@@ -5,6 +5,16 @@ add_executable(vst_transport_tests
     TestVstTransport.cpp
     ${VSTHOST_CPP_DIR}/ipc/SharedRing.cpp
 )
+add_executable(wine_plugin_path_tests
+    TestWinePluginPath.cpp
+)
+
+target_include_directories(wine_plugin_path_tests PRIVATE
+    ${VSTHOST_CPP_DIR}
+)
+
+target_link_libraries(wine_plugin_path_tests PRIVATE GTest::gtest_main pthread)
+
 
 target_include_directories(vst_transport_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -18,3 +28,4 @@ target_link_libraries(vst_transport_tests PRIVATE GTest::gtest_main pthread)
 
 include(GoogleTest)
 gtest_discover_tests(vst_transport_tests)
+gtest_discover_tests(wine_plugin_path_tests)

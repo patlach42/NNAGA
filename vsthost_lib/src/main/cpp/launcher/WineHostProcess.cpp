@@ -1,4 +1,5 @@
 #include "WineHostProcess.h"
+#include "WinePluginPath.h"
 #include "../util/log.h"
 
 #include <cerrno>
@@ -876,22 +877,22 @@ bool WineHostProcess::start() {
         cfg_.primaryExe,
     };
     if (!cfg_.shmPath.empty()) argv_owned.push_back(cfg_.shmPath);
-    /* vstpoc 2026-06-25: stage user plugins onto the C: drive (drive_c) and pass a
-     * C:\ path instead of the unix path wine otherwise sees as Z:. A plugin that
-     * probes its own volume — GetVolumeInformationA(<drive root>) — FAILS on Android's
-     * Z: because Z: maps to the real root "/", which the untrusted_app SELinux sandbox
-     * cannot open (NtOpenFile("/")→denied → GVI returns 0); the plugin then self-
-     * disables (6505Red: skips constructing its core singleton → VSTPluginMain+0x3c
-     * NULL deref → c0000005). C: maps to the app-owned drive_c, which IS openable, so
-     * GVI succeeds (device-validated). Hardlink (same fs → no copy) into
-     * drive_c/vstplugins/<uid>/; fall back to a copy across fs, or to the raw Z: path
-     * if staging fails. Per-<uid> subdir avoids collisions in a chain (every imported
-     * plugin is named "plugin.dll"). Stages the DLL only (current import flow is
-     * single-DLL); a multi-file plugin would need its whole dir. Harmless for
-     * non-probing plugins. See reference_6505red_copy_protected. */
+    /* Plugins installed by an EXE already live below this prefix's drive_c.
+     * Pass their original C:\ path to preserve module-relative presets,
+     * resources, and VST3 bundle contents. This also keeps the volume probe
+     * that motivated C: staging working without relocating the DLL.
+     *
+     * Plugins imported from outside the prefix still need staging because
+     * Wine otherwise sees them on sandboxed Z:. That legacy fallback remains
+     * DLL-only until the direct import flow gains directory/bundle imports. */
     for (const auto& p : cfg_.pluginPaths) {
         std::string arg = p;
-        if (!cfg_.winePrefix.empty() && p.size() > 1 && p[0] == '/') {
+        if (const auto prefixLocal =
+                vsthost::prefixLocalPluginWindowsPath(cfg_.winePrefix, p)) {
+            arg = *prefixLocal;
+            LOGI("WineHostProcess: using prefix-local plugin path %s -> %s",
+                 p.c_str(), arg.c_str());
+        } else if (!cfg_.winePrefix.empty() && p.size() > 1 && p[0] == '/') {
             const auto sl = p.find_last_of('/');
             const std::string base   = p.substr(sl + 1);
             const std::string parent = p.substr(0, sl);
