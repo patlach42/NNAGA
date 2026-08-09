@@ -1,20 +1,20 @@
 /*
  * Copyright (C) 2026 Kamil Lulko <kamil.lulko@gmail.com>
  *
- * This file is part of Guitar RackCraft.
+ * This file is part of NNAGA.
  *
- * Guitar RackCraft is free software: you can redistribute it and/or modify
+ * NNAGA is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Guitar RackCraft is distributed in the hope that it will be useful,
+ * NNAGA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Guitar RackCraft. If not, see <https://www.gnu.org/licenses/>.
+ * along with NNAGA. If not, see <https://www.gnu.org/licenses/>.
  */
 
 package com.vibes.dsp
@@ -41,7 +41,7 @@ import com.vibes.dsp.engine.EngineInitHelper
 import com.vibes.dsp.engine.NativeEngine
 import com.vibes.dsp.ui.loading.PluginExtractScreen
 import com.vibes.dsp.ui.navigation.AppNavigation
-import com.vibes.dsp.ui.theme.GuitarRackCraftTheme
+import com.vibes.dsp.ui.theme.NNAGATheme
 import com.vibes.dsp.ui.tone3000.Tone3000CallbackHandler
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -124,7 +124,7 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            GuitarRackCraftTheme {
+            NNAGATheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

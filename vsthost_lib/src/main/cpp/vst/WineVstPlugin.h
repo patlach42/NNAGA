@@ -16,7 +16,7 @@ namespace vsthost {
 
 /**
  * Wraps a single wine subprocess hosting one user-imported VST as a
- * GuitarRackCraft IPlugin. Audio thread calls process() → frames flow
+ * NNAGA IPlugin. Audio thread calls process() → frames flow
  * through SysV shm rings to vst_host.exe (running under wine-arm64ec with
  * FEX-Emu translating x86_64 PE code) and back.
  *

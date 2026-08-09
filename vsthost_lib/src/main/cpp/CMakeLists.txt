@@ -30,7 +30,7 @@ add_library(vsthost SHARED
     ahbspike/AhbSpike.cpp
     # Phase 2 AHB side-channel synthetic client (throwaway diagnostic)
     ahbspike/AhbChannelTest.cpp
-    # GuitarRackCraft IPlugin bridge (consumed by :app via prefab)
+    # NNAGA IPlugin bridge (consumed by :app via prefab)
     vst/VstFactory.cpp
     vst/WineVstPlugin.cpp
 )

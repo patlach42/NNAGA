@@ -1,20 +1,20 @@
 /*
  * Copyright (C) 2026 Kamil Lulko <kamil.lulko@gmail.com>
  *
- * This file is part of Guitar RackCraft.
+ * This file is part of NNAGA.
  *
- * Guitar RackCraft is free software: you can redistribute it and/or modify
+ * NNAGA is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Guitar RackCraft is distributed in the hope that it will be useful,
+ * NNAGA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Guitar RackCraft. If not, see <https://www.gnu.org/licenses/>.
+ * along with NNAGA. If not, see <https://www.gnu.org/licenses/>.
  */
 
 package com.vibes.dsp.engine
@@ -122,6 +122,59 @@ fun scoreAutoCalibrationProfiles(profiles: List<DirectUsbCalibrationProfile>): D
         .sortedWith(compareByDescending<DirectUsbCalibrationProfile> { it.score }
             .thenBy { it.latencyMilliseconds }.thenBy { it.bufferFrames }.thenBy { it.id })
         .firstOrNull()
+data class DirectUsbCalibrationCandidate(
+    val bufferFrames: Int,
+    val periodMultiplier: Int
+)
+
+/**
+ * Candidate order is ascending buffer frames, then ascending multiplier.
+ * Once a candidate is stable, all later candidates for that format are skipped.
+ */
+fun shouldAttemptDirectUsbCalibrationCandidate(
+    candidate: DirectUsbCalibrationCandidate,
+    stableCandidate: DirectUsbCalibrationCandidate?,
+    stopAfterFirstStable: Boolean = true
+): Boolean {
+    if (!stopAfterFirstStable || stableCandidate == null) return true
+    return candidate.bufferFrames < stableCandidate.bufferFrames ||
+        (candidate.bufferFrames == stableCandidate.bufferFrames &&
+            candidate.periodMultiplier < stableCandidate.periodMultiplier)
+}
+/**
+ * Returns the candidates evaluated for each format, stopping independently after
+ * the first stable candidate for that format.
+ */
+fun sequenceDirectUsbCalibrationCandidates(
+    formats: List<DirectUsbFormat>,
+    bufferFrames: Iterable<Int>,
+    periodMultipliers: Iterable<Int>,
+    isStable: (DirectUsbFormat, DirectUsbCalibrationCandidate) -> Boolean
+): List<Pair<DirectUsbFormat, DirectUsbCalibrationCandidate>> {
+    val frames = bufferFrames.sorted()
+    val multipliers = periodMultipliers.sorted()
+    return buildList {
+        for (format in formats) {
+            var stableCandidate: DirectUsbCalibrationCandidate? = null
+            for (bufferFrame in frames) {
+                for (periodMultiplier in multipliers) {
+                    val candidate = DirectUsbCalibrationCandidate(bufferFrame, periodMultiplier)
+                    if (!shouldAttemptDirectUsbCalibrationCandidate(candidate, stableCandidate)) break
+                    add(format to candidate)
+                    if (isStable(format, candidate)) stableCandidate = candidate
+                }
+            }
+        }
+    }
+}
+
+fun filterDirectUsbFormatsForSampleRate(
+    formats: Iterable<DirectUsbFormat>,
+    fixedSampleRate: Int?
+): List<DirectUsbFormat> =
+    fixedSampleRate?.let { rate -> formats.filter { it.sampleRate == rate } } ?: formats.toList()
+
+
 data class DirectUsbCalibrationProgress(
     val profileIndex: Int,
     val profileCount: Int,
@@ -507,7 +560,8 @@ object DirectUsbAudioManager {
         includeExperimental: Boolean = false,
         dangerOverride: Boolean = false,
         fixedSampleRate: Int? = null,
-        onProgress: (DirectUsbCalibrationProgress) -> Unit = {}
+        onProgress: (DirectUsbCalibrationProgress) -> Unit = {},
+        stopAfterFirstStable: Boolean = true
     ): DirectUsbCalibrationResult {
         val calibrationJob = requireNotNull(coroutineContext[Job])
         check(activeCalibrationJob.compareAndSet(null, calibrationJob)) { "USB calibration is already running" }
@@ -527,9 +581,7 @@ object DirectUsbAudioManager {
                     val advertised: List<DirectUsbFormat>
                     if (discovered.isSuccess) {
                         val discoveredFormats = discovered.getOrThrow()
-                        advertised = fixedSampleRate?.let { rate ->
-                            discoveredFormats.filter { it.sampleRate == rate }
-                        } ?: discoveredFormats
+                        advertised = filterDirectUsbFormatsForSampleRate(discoveredFormats, fixedSampleRate)
                         if (fixedSampleRate != null && advertised.isEmpty()) {
                             val failure = diagnostic(
                                 fallbackFormat,
@@ -613,8 +665,16 @@ object DirectUsbAudioManager {
                     var index = 0
                     for ((candidateFormat, minFrames) in minimums) {
                         val frames = requestedFrames.filter { dangerOverride || it >= minFrames }
-                        for (bufferFrames in frames) for (multiplier in calibrationMultipliers) {
-                            coroutineContext.ensureActive()
+                        var stableCandidate: DirectUsbCalibrationCandidate? = null
+                        candidateFrames@ for (bufferFrames in frames) {
+                            for (multiplier in calibrationMultipliers) {
+                                val candidate = DirectUsbCalibrationCandidate(bufferFrames, multiplier)
+                                if (!shouldAttemptDirectUsbCalibrationCandidate(
+                                        candidate, stableCandidate, stopAfterFirstStable
+                                    )
+                                ) {
+                                    break@candidateFrames
+                                }
                             val label = "${candidateFormat.label} · ${bufferFrames} frames · ×$multiplier"
                             withContext(Dispatchers.Main) { onProgress(DirectUsbCalibrationProgress(index, total, label, "Starting")) }
                             val ranAt = System.currentTimeMillis()
@@ -664,7 +724,9 @@ object DirectUsbAudioManager {
                                     profile.latencyFrames.toInt(), index - 1, total, profile.stable, profile.failure ?: "Failed"))
                             }
                             AudioSettingsManager.persistDirectUsbCalibrationProfile(context, option.vendorId, option.productId, profile)
+                            if (profile.stable) stableCandidate = candidate
                         }
+                    }
                     }
                     DirectUsbCalibrationResult(profiles, profiles.any { it.stable },
                         if (profiles.any { it.stable }) "Calibration complete" else "No stable profiles",
@@ -799,10 +861,12 @@ object DirectUsbAudioManager {
         val format = AudioSettingsManager.getDirectUsbCachedFormats(context).firstOrNull()
             ?: DirectUsbFormat(48_000, 32, 4)
         val initialPrimary = calibrate(
-            context, option, format, includeExperimental, dangerOverride, fixedSampleRate
-        ) { p ->
-            onProgress(p.copy(profileCount = p.profileCount * 5, candidateCount = p.candidateCount * 5))
-        }
+            context, option, format, includeExperimental, dangerOverride, fixedSampleRate,
+            onProgress = { p ->
+                onProgress(p.copy(profileCount = p.profileCount * 5, candidateCount = p.candidateCount * 5))
+            },
+            stopAfterFirstStable = false
+        )
         val primaryProfiles = initialPrimary.profiles.toMutableList()
         val initialPrimaryProfiles = initialPrimary.profiles
         initialPrimaryProfiles.forEachIndexed { index, initial ->

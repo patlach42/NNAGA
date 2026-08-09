@@ -1,4 +1,4 @@
-# Guitar RackCraft UI Specification
+# NNAGA UI Specification
 
 ## Intent
 

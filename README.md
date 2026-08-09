@@ -1,86 +1,80 @@
-# Guitar RackCraft
+# NNAGA (NNAGA Not Android Guitar App)
 
-[![CI](https://github.com/Varcain/GuitarRackCraft/actions/workflows/ci.yml/badge.svg)](https://github.com/Varcain/GuitarRackCraft/actions/workflows/ci.yml)
+[![NNAGA logo](logo.png)](https://github.com/patlach42)
 
-A real-time guitar effects processor for Android. Hosts 120+ LV2 audio plugins in a chainable rack interface with low-latency audio via Oboe and native plugin UIs rendered through a custom X11/EGL emulation layer.
-
-It also includes **experimental** support for hosting Windows VST2/VST3 plugins (x86/x64) directly on-device via Wine + FEX emulation (see [Windows VST plugins](#windows-vst-plugins)).
-
-![Screenshot](screenshot.png)
+NNAGA means **NNAGA Not Android Guitar App**. It is an open-source Android guitar effects host with a chainable rack for LV2 effects, neural amp models, audio-file playback, recording, presets, and plugin editors rendered through the Android UI. The project is maintained by [patlach42 on GitHub](https://github.com/patlach42).
 
 ## Features
 
-- Chain multiple LV2 plugins with drag-and-drop reordering
-- Real-time audio processing with low-latency Oboe I/O
-- Native X11 plugin UIs rendered on Android via custom X11 server + EGL
-- Host Windows VST2/VST3 plugins (x86/x64) via Wine + FEX emulation - see [Windows VST plugins](#windows-vst-plugins)
-- Neural amp modeling (NAM, AIDA-X)
-- WAV file playback through the effects chain
-- Audio recording (raw input + processed output)
-- Preset save/restore
+- Chain LV2 effects and reorder them in the rack
+- Neural amp modeling (NAM and AIDA-X)
+- WAV playback through the effects chain
+- Raw-input and processed-output recording
+- Preset save and restore
+- Native plugin editors displayed through the Android X11/EGL compatibility layer
+- Optional Windows VST2/VST3 hosting in the `full` flavor through Wine and FEX emulation
+
+## Direct USB audio
+
+NNAGA includes a direct USB Audio Class (UAC) path for supported, user-authorized USB audio interfaces. The Android layer discovers the device and obtains permission; the native C++ driver then uses the borrowed `UsbDeviceConnection` file descriptor and the bundled USBFS/libusb backend. It claims the required UAC interfaces and alternate settings, negotiates a supported PCM format, and transfers audio with preallocated isochronous buffers.
+
+For devices with implicit feedback, capture starts before playback and capture-derived packet metadata is paired with output transfers. The transport uses bounded rings and explicit stop/reap/join ordering. Buffer size, period multiplier, format, channels, and output pair are configurable, and the app reports transport state and xrun diagnostics. Scheduling, CPU affinity, and Android performance hints are best effort; device behavior and measured results depend on the interface, phone, format, and configuration. This documentation makes no universal latency or performance claim.
+
+The direct path owns the USB interfaces for the session; it must not be combined with Android `AudioTrack`/`AudioRecord` routing on the same interface. Keep the Java USB connection alive until native stop and close have completed.
 
 ## Requirements
 
-- Android 8.0+ (API 26), arm64-v8a
+- Android 8.0 (API 26) or newer, on `arm64-v8a`
 - JDK 17
-- Android SDK (API 35, NDK 27.2.12479018, CMake 3.22.1)
-- System packages: `ninja-build meson python3 python3-mako pkg-config autoconf automake libtool gettext patch cmake flex bison ocaml ocamlbuild ocaml-findlib libnum-ocaml-dev`
+- Android SDK Platform 35
+- Android NDK `27.2.12479018`
+- CMake `3.22.1`
+- Host packages: `ninja-build meson python3 python3-mako pkg-config autoconf automake libtool gettext patch cmake flex bison ocaml ocamlbuild ocaml-findlib libnum-ocaml-dev`
 
-## Build
+Initialize the repository and its pinned dependencies before building:
 
-```bash
-# Initialize submodules
+```sh
 git submodule update --init --recursive
-
-# Build native libraries
-./build.sh
-
-# Build and install debug APK
-./run.sh debug
-
-# Build release APK + AAB
-./run.sh release
-
-# Build Play Store AAB with asset packs
-./run.sh playstore
 ```
 
-### Build flavors
+## Build with Make
 
-| Flavor | Description |
-|--------|-------------|
-| **full** | All plugins bundled in a single APK |
-| **playstore** | Plugins split into asset packs (gxplugins, neural, brummer) for Play Store delivery |
+Run `make help` for the same list from the command line. Native builds invoke `build.sh`; Android packaging uses the repository's Gradle wrapper. `build.sh` and `run.sh` remain the authoritative build scripts.
+
+| Target | Command delegated to | Purpose |
+| --- | --- | --- |
+| `native` | `./build.sh` | Build native libraries using the default (`full`) setup |
+| `full` | `./build.sh full` | Build native libraries for the full flavor, including the optional VST host stack |
+| `playstore` | `./build.sh playstore` | Build native libraries and asset-pack layout for Play Store packaging |
+| `debug` | `./run.sh debug` | Build and (when a device is available) install/start the full debug app |
+| `release` | `./run.sh release` | Build the full release APK and AAB, then optionally install/start the APK |
+| `assemble-full-debug` | `./gradlew assembleFullDebug` | Assemble the full debug APK only |
+| `assemble-full-release` | `./gradlew assembleFullRelease` | Assemble the signed full release APK |
+| `assemble-playstore-debug` | `./gradlew assemblePlaystoreDebug` | Assemble the Play Store debug APK |
+| `assemble-playstore-release` | `./gradlew assemblePlaystoreRelease` | Assemble the signed Play Store release APK |
+
+Before any Android packaging target, configure all four signing properties privately in `~/.gradle/gradle.properties` (not in this repository):
+
+```properties
+RELEASE_STORE_FILE=/private/path/to/upload.keystore
+RELEASE_STORE_PASSWORD=...
+RELEASE_KEY_ALIAS=...
+RELEASE_KEY_PASSWORD=...
+```
+
+Keep the keystore and passwords private. Every Android build variant uses this one signing key, and packaging cannot proceed until all four `RELEASE_*` values are configured. The `playstore` run path additionally uses the upload credentials supplied through its private environment configuration when it installs split APKs locally.
 
 ## Architecture
 
-- **Kotlin/Compose** - Android UI layer
-- **C++17** - Audio engine, LV2 host, X11 server
-- **Oboe** - Low-latency audio I/O
-- **lilv** - LV2 plugin loading and management
-- **Cairo/Mesa** - 2D/3D rendering for plugin UIs
-- **X11 emulation** - Custom minimal X11 server bridging native plugin UIs to Android surfaces
+- **Kotlin and Jetpack Compose:** Android UI, settings, USB permission/device management, and lifecycle
+- **C++17 audio engine:** rack processing, LV2 host integration, recording/playback, and JNI bridge
+- **Direct USB transport:** the standalone `liblowlatencyaudio` C++17 component (`LibusbUacDriver`, `UsbScheduling`, and `DirectUsbOutput`)
+- **LV2 stack:** lilv and bundled LV2 plugin content
+- **Plugin UI compatibility:** Cairo/Mesa and the project's minimal X11/EGL bridge
+- **Optional Windows VST host:** Wine, FEX, and related components in the `full` flavor; omitted from `playstore`
 
-See [3rd_party/README.md](3rd_party/README.md) for the full list of dependencies.
+The application owns the Android engine, rack, plugins, JNI, Kotlin/UI, and VST integration. The standalone direct-USB component owns its transport, scheduling, rings, lifecycle, and diagnostics. See [`liblowlatencyaudio/README.md`](liblowlatencyaudio/README.md) and [`liblowlatencyaudio/AGENTS.md`](liblowlatencyaudio/AGENTS.md) for its detailed contract. Third-party dependency inventory and notices are in [`3rd_party/README.md`](3rd_party/README.md).
 
-## Windows VST plugins
+## Licensing and attribution
 
-In addition to the bundled LV2 plugins, the **full** flavor can host **Windows VST2/VST3**
-plugins (32-bit x86 and 64-bit x64) directly on Android - no PC required. Each plugin runs inside
-a bundled Windows compatibility layer:
-
-- **[Wine](https://www.winehq.org/)** provides the Win32 API and PE loader, so the plugin's `.dll` / `.vst3` loads unmodified.
-- **[FEX-Emu](https://fex-emu.com/)** JIT-translates the plugin's x86/x64 machine code to ARM64.
-- The plugin editor is bridged through the same custom X11 server onto an Android surface; **DXVK → Turnip** (Mesa Vulkan on Adreno) translates Direct3D 11 plugin GUIs.
-
-Import a plugin with the in-app VST manager (point it at a `.dll` or `.vst3`). Imported plugins
-appear under the **Windows VST** group in the plugin browser - tagged with format (VST2/VST3) and
-architecture (x86/x64) badges - and chain alongside LV2 plugins like any other effect.
-
-> Windows VSTs run under emulation, so they use more CPU than native LV2 plugins, and plugins that
-> require online or hardware DRM activation may not work. The Windows VST host is built only in the
-> `full` flavor (`HAS_VST_HOST=true`); the `playstore` flavor omits it.
-
-## License
-
-GPLv3 - see [LICENSE](LICENSE).
+The application and project-owned code are distributed under GPL-3.0-or-later; see [`LICENSE`](LICENSE). `liblowlatencyaudio/LICENSE` is the component's GPL-3.0 license text and remains applicable to that component. Third-party code is not relicensed by NNAGA: retain each dependency's original copyright notices and license terms, including the bundled libusb LGPL-2.1-or-later notices and the licenses in `3rd_party/`. Refer to the corresponding source directory and notice files when redistributing binaries.

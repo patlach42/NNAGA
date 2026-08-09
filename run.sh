@@ -55,11 +55,36 @@ check_device() {
     echo "$count"
 }
 
-# Upload keystore — loaded from .env (not committed)
+# Release keystore — loaded from .env only when an equivalent environment
+# variable is absent (the private .env file is not committed).
 ENV_FILE="$PROJECT_ROOT/.env"
 if [ -f "$ENV_FILE" ]; then
-    set -a; source "$ENV_FILE"; set +a
+    if [ -z "${RELEASE_STORE_FILE:-}" ]; then
+        RELEASE_STORE_FILE="$(set -a; source "$ENV_FILE"; printf '%s' "${RELEASE_STORE_FILE:-}")"
+    fi
+    if [ -z "${RELEASE_STORE_PASSWORD:-}" ]; then
+        RELEASE_STORE_PASSWORD="$(set -a; source "$ENV_FILE"; printf '%s' "${RELEASE_STORE_PASSWORD:-}")"
+    fi
+    if [ -z "${RELEASE_KEY_ALIAS:-}" ]; then
+        RELEASE_KEY_ALIAS="$(set -a; source "$ENV_FILE"; printf '%s' "${RELEASE_KEY_ALIAS:-}")"
+    fi
+    if [ -z "${RELEASE_KEY_PASSWORD:-}" ]; then
+        RELEASE_KEY_PASSWORD="$(set -a; source "$ENV_FILE"; printf '%s' "${RELEASE_KEY_PASSWORD:-}")"
+    fi
 fi
+export RELEASE_STORE_FILE RELEASE_STORE_PASSWORD RELEASE_KEY_ALIAS RELEASE_KEY_PASSWORD
+
+require_release_credentials() {
+    local missing=()
+    [ -n "${RELEASE_STORE_FILE:-}" ] || missing+=(RELEASE_STORE_FILE)
+    [ -n "${RELEASE_STORE_PASSWORD:-}" ] || missing+=(RELEASE_STORE_PASSWORD)
+    [ -n "${RELEASE_KEY_ALIAS:-}" ] || missing+=(RELEASE_KEY_ALIAS)
+    [ -n "${RELEASE_KEY_PASSWORD:-}" ] || missing+=(RELEASE_KEY_PASSWORD)
+    if [ "${#missing[@]}" -gt 0 ]; then
+        echo "ERROR: missing release signing credential(s): ${missing[*]}" >&2
+        exit 1
+    fi
+}
 
 # ── Mode dispatch ─────────────────────────────────────────────────────────────
 
@@ -69,7 +94,7 @@ case "$MODE" in
 # DEBUG
 # ══════════════════════════════════════════════════════════════════════════════
 debug)
-    echo "Guitar RackCraft - Debug Build"
+    echo "NNAGA - Debug Build"
     echo "========================="
     echo ""
 
@@ -101,7 +126,7 @@ debug)
 # RELEASE
 # ══════════════════════════════════════════════════════════════════════════════
 release)
-    echo "Guitar RackCraft - Release Build"
+    echo "NNAGA - Release Build"
     echo "==========================="
     echo ""
 
@@ -148,7 +173,7 @@ release)
 # PLAYSTORE
 # ══════════════════════════════════════════════════════════════════════════════
 playstore)
-    echo "Guitar RackCraft - Play Store Build"
+    echo "NNAGA - Play Store Build"
     echo "=============================="
     echo ""
 
@@ -175,8 +200,9 @@ playstore)
         echo "ERROR: AAB not found"
         exit 1
     fi
+    require_release_credentials
     echo "AAB: $AAB ($(du -sh "$AAB" | cut -f1))"
-    echo "  Signed with upload key — ready for Google Play."
+    echo "  Signed with release key — ready for Google Play."
     echo ""
 
     if [ "$(check_device)" -eq 0 ]; then
@@ -184,9 +210,9 @@ playstore)
         echo ""
         echo "To install manually:"
         echo "  java -jar bundletool.jar build-apks \\"
-        echo "    --bundle=$AAB --output=out.apks --local-testing \\"
-        echo "    --ks=$UPLOAD_KS --ks-pass=pass:$UPLOAD_KS_PASS \\"
-        echo "    --ks-key-alias=$UPLOAD_KEY_ALIAS --key-pass=pass:$UPLOAD_KEY_PASS"
+        echo '    --bundle="$AAB" --output=out.apks --local-testing \'
+        echo '    --ks="$RELEASE_STORE_FILE" --ks-pass=pass:"$RELEASE_STORE_PASSWORD" \'
+        echo '    --ks-key-alias="$RELEASE_KEY_ALIAS" --key-pass=pass:"$RELEASE_KEY_PASSWORD"'
         echo "  java -jar bundletool.jar install-apks --apks=out.apks"
         exit 1
     fi
@@ -201,10 +227,10 @@ playstore)
         --bundle="$AAB" \
         --output="$APKS" \
         --local-testing \
-        --ks="$UPLOAD_KS" \
-        --ks-pass=pass:"$UPLOAD_KS_PASS" \
-        --ks-key-alias="$UPLOAD_KEY_ALIAS" \
-        --key-pass=pass:"$UPLOAD_KEY_PASS"
+        --ks="$RELEASE_STORE_FILE" \
+        --ks-pass=pass:"$RELEASE_STORE_PASSWORD" \
+        --ks-key-alias="$RELEASE_KEY_ALIAS" \
+        --key-pass=pass:"$RELEASE_KEY_PASSWORD"
     echo ""
 
     echo "Installing on device..."

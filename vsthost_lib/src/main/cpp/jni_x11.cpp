@@ -1,7 +1,7 @@
 // JNI surface for the in-process X11 server.
 //
 // The server itself lives in app/src/main/cpp/x11/ (ported from
-// GuitarRackCraft). It listens on TCP 127.0.0.1:6000+N per display number
+// NNAGA). It listens on TCP 127.0.0.1:6000+N per display number
 // and renders X11 client output to an Android Surface via EGL/GLES2.
 //
 // These bindings only expose what we currently need from Kotlin —

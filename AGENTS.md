@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Guitar RackCraft is an Android real-time guitar-effects rack. It hosts LV2 effects through a native Oboe audio engine, renders plugin UIs through sliders, Modgui WebView, or a custom X11/EGL surface, and the `full` flavor optionally hosts x86/x64 Windows VST2/VST3 plug-ins through Wine/FEX.
+NNAGA is an Android real-time guitar-effects rack. It hosts LV2 effects through a native Oboe audio engine, renders plugin UIs through sliders, Modgui WebView, or a custom X11/EGL surface, and the `full` flavor optionally hosts x86/x64 Windows VST2/VST3 plug-ins through Wine/FEX.
 
 ## Architecture & Data Flow
 
@@ -16,7 +16,7 @@ Guitar RackCraft is an Android real-time guitar-effects rack. It hosts LV2 effec
 
 ## Key Directories
 
-- `app/src/main/java/com/varcain/guitarrackcraft/` — Compose UI, ViewModels, Android lifecycle, JNI facades.
+- `app/src/main/java/com/vibes/dsp/` — Compose UI, ViewModels, Android lifecycle, JNI facades.
 - `app/src/main/cpp/` — Oboe engine, LV2 host, plugin chain/registry, JNI bridge, custom X11 server.
 - `vsthost_lib/` — optional Wine/FEX VST host library, native IPC/X11/Wine launcher, VST executables/assets, build scripts.
 - `cmake/` — standalone Android cross-build of X11, LV2, and plugin ecosystem; Ninja preset is `android-arm64`.

@@ -1,20 +1,20 @@
 /*
  * Copyright (C) 2026 Kamil Lulko <kamil.lulko@gmail.com>
  *
- * This file is part of Guitar RackCraft.
+ * This file is part of NNAGA.
  *
- * Guitar RackCraft is free software: you can redistribute it and/or modify
+ * NNAGA is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Guitar RackCraft is distributed in the hope that it will be useful,
+ * NNAGA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Guitar RackCraft. If not, see <https://www.gnu.org/licenses/>.
+ * along with NNAGA. If not, see <https://www.gnu.org/licenses/>.
  */
 
 import java.text.SimpleDateFormat
@@ -71,21 +71,30 @@ android {
     }
 
     signingConfigs {
+        fun requiredSigningProperty(name: String): String =
+            project.findProperty(name)?.toString()?.takeIf { it.isNotBlank() }
+                ?: error("Missing required signing property: $name")
+
         create("release") {
-            val ksFile = findProperty("RELEASE_STORE_FILE")?.toString().orEmpty()
-            val ksPass = findProperty("RELEASE_STORE_PASSWORD")?.toString().orEmpty()
-            val kAlias = findProperty("RELEASE_KEY_ALIAS")?.toString().orEmpty()
-            val kPass  = findProperty("RELEASE_KEY_PASSWORD")?.toString().orEmpty()
-            if (ksFile.isNotEmpty()) {
-                storeFile = file(ksFile)
-                storePassword = ksPass
-                keyAlias = kAlias
-                keyPassword = kPass
+            val ksFile = requiredSigningProperty("RELEASE_STORE_FILE")
+            val ksPass = requiredSigningProperty("RELEASE_STORE_PASSWORD")
+            val kAlias = requiredSigningProperty("RELEASE_KEY_ALIAS")
+            val kPass = requiredSigningProperty("RELEASE_KEY_PASSWORD")
+            val keystore = file(ksFile)
+            require(keystore.isFile) {
+                "Keystore specified by RELEASE_STORE_FILE does not exist: ${keystore.absolutePath}"
             }
+            storeFile = keystore
+            storePassword = ksPass
+            keyAlias = kAlias
+            keyPassword = kPass
         }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(

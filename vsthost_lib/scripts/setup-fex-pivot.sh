@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Bootstraps the vsthost_lib FEX-pivot build tree.
 #
-# Sources are managed as git submodules in the parent GuitarRackCraft repo:
+# Sources are managed as git submodules in the parent NNAGA repo:
 #   - Wine          external/wine-upstream      (github.com/wine-mirror/wine @ wine-11.14)
 #   - FEX-Emu       external/fex-upstream       (github.com/FEX-Emu/FEX @ FEX-2607)
 #   - llvm-mingw    external/llvm-mingw         (github.com/mstorsjo/llvm-mingw @ 20260616)
@@ -28,7 +28,7 @@ require_submodule() {
     local label="$1" path="$2"
     if [ ! -d "$path/.git" ] && [ ! -f "$path/.git" ]; then
         echo "error: $label submodule not initialized at $path" >&2
-        echo "  run from the GuitarRackCraft root: git submodule update --init --recursive $path" >&2
+        echo "  run from the NNAGA root: git submodule update --init --recursive $path" >&2
         return 1
     fi
     local head

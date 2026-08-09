@@ -1,20 +1,20 @@
 /*
  * Copyright (C) 2026 Kamil Lulko <kamil.lulko@gmail.com>
  *
- * This file is part of Guitar RackCraft.
+ * This file is part of NNAGA.
  *
- * Guitar RackCraft is free software: you can redistribute it and/or modify
+ * NNAGA is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Guitar RackCraft is distributed in the hope that it will be useful,
+ * NNAGA is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Guitar RackCraft. If not, see <https://www.gnu.org/licenses/>.
+ * along with NNAGA. If not, see <https://www.gnu.org/licenses/>.
  */
 
 package com.vibes.dsp.ui.rack
@@ -1628,7 +1628,7 @@ fun PluginCard(
                     mutableStateOf(viewModel.getPreferredUiTypeForPlugin(pluginInfo))
                 }
                 LaunchedEffect(pluginIndex, pluginInfo, currentUiMode) {
-                    Log.i("GuitarRackCraft.UI", "Plugin[$pluginIndex] ${pluginInfo.name}: chosen UI mode=$currentUiMode (preferred=${pluginInfo.preferredUiType}, available=${pluginInfo.guiTypes})")
+                    Log.i("NNAGA.UI", "Plugin[$pluginIndex] ${pluginInfo.name}: chosen UI mode=$currentUiMode (preferred=${pluginInfo.preferredUiType}, available=${pluginInfo.guiTypes})")
                 }
 
                 var x11UserScale by rememberSaveable { mutableStateOf(Float.NaN) }
@@ -1848,7 +1848,7 @@ fun PluginCard(
                 DisposableEffect(Unit) {
                     onDispose {
                         if (x11DisplayNumber >= 0) {
-                            Log.i("GuitarRackCraft.UI", "Plugin[$pluginIndex]: Releasing X11 display $x11DisplayNumber (removed from rack)")
+                            Log.i("NNAGA.UI", "Plugin[$pluginIndex]: Releasing X11 display $x11DisplayNumber (removed from rack)")
                             val dispNum = x11DisplayNumber
                             x11DisplayNumber = -1
                             X11Bridge.destroyPluginUI(pathId, plugin.instanceId, uiInstanceId)
@@ -1965,7 +1965,7 @@ fun PluginCard(
                             runCatching {
                                 copyExistingFileForVstWinePicker(event.filePath, request)
                             }.getOrElse { error ->
-                                Log.e("GuitarRackCraft.UI", "VST Tone3000 picker copy failed", error)
+                                Log.e("NNAGA.UI", "VST Tone3000 picker copy failed", error)
                                 ""
                             }
                         }
@@ -2018,7 +2018,7 @@ fun PluginCard(
                         val windowsPath = runCatching {
                             copySafUriForVstWinePicker(context, uri, request)
                         }.getOrElse { error ->
-                            Log.e("GuitarRackCraft.UI", "VST picker copy failed", error)
+                            Log.e("NNAGA.UI", "VST picker copy failed", error)
                             ""
                         }
                         withContext(Dispatchers.Main) {
@@ -2045,7 +2045,7 @@ fun PluginCard(
                                 val windowsPath = runCatching {
                                     copyExistingFileForVstWinePicker(path, request)
                                 }.getOrElse { error ->
-                                    Log.e("GuitarRackCraft.UI", "VST picker existing-file copy failed", error)
+                                    Log.e("NNAGA.UI", "VST picker existing-file copy failed", error)
                                     ""
                                 }
                                 withContext(Dispatchers.Main) {
@@ -2425,7 +2425,7 @@ fun PluginCard(
                     UiType.X11 -> {
                         // X11 view is always present above, just show it
                         LaunchedEffect(pluginIndex, pluginInfo) {
-                            Log.i("GuitarRackCraft.UI", "Plugin[$pluginIndex] ${pluginInfo.name}: showing X11 UI (portrait)")
+                            Log.i("NNAGA.UI", "Plugin[$pluginIndex] ${pluginInfo.name}: showing X11 UI (portrait)")
                         }
                     }
                     UiType.MODGUI -> {

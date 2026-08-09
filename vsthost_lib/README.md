@@ -1,6 +1,6 @@
 # vsthost_lib
 
-In-process Windows VST2/VST3 plugin host for GuitarRackCraft. Built on
+In-process Windows VST2/VST3 plugin host for NNAGA (NNAGA Not Android Guitar App). Built on
 native wine-arm64ec + FEX-Emu for x86_64 plugin translation. Ships as
 an Android library module consumed by `:app`'s `full` flavor (sideload
 distribution, targetSdk=28). The `playstore` flavor (targetSdk=35)
@@ -49,7 +49,7 @@ pip3 install --user meson
 
 ### One-time submodule fetch
 
-From the GuitarRackCraft root:
+From the NNAGA root:
 
 ```bash
 git submodule update --init --recursive vsthost_lib/external/wine-upstream \

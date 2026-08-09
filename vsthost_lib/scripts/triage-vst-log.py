@@ -5,10 +5,10 @@ Triage a vst_host_<uuid>.log into a 1-page health report.
 Streaming parser (line-by-line) so a 500 MB log finishes in <5 s without
 loading the whole file. Recognises ~20 known signatures for plugin
 lifecycle, DXVK/D3D11 init, VEH events, exceptions, JUCE event-loop
-patterns, and X11 paint activity. Cross-references the agent memory
-index at /home/varcain/.claude/projects/-home-varcain-projects-private-vstpoc/memory/MEMORY.md
-to surface relevant [[memory-name]] links in the diagnosis line.
-
+patterns, and X11 paint activity. Cross-references the agent memory index at
+the configured project-local path (`VST_TRIAGE_MEMORY_INDEX`, defaulting to
+`.claude/memory/MEMORY.md`) to surface relevant [[memory-name]] links in the
+diagnosis line.
 Usage:
   triage-vst-log.py <local-log-path>
   triage-vst-log.py --adb <uuid>           # auto-pull via run-as
@@ -33,8 +33,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
 MEMORY_INDEX = Path(
-    "/home/varcain/.claude/projects/-home-varcain-projects-private-vstpoc/memory/MEMORY.md"
+    os.environ.get("VST_TRIAGE_MEMORY_INDEX", REPO_ROOT / ".claude/memory/MEMORY.md")
 )
 APP_PACKAGE = "com.vibes.dsp"
 CACHE_LOG_PREFIX = "cache/vst_host_v"

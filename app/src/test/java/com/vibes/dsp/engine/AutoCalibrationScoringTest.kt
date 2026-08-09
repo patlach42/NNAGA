@@ -6,6 +6,100 @@ import org.junit.Test
 
 class AutoCalibrationScoringTest {
     @Test
+    fun standardCalibrationAttemptsAllCandidatesWhenEveryMeasurementFails() {
+        val format = DirectUsbFormat(sampleRate = 44_100, bits = 32, subslotBytes = 4)
+
+        val attempted = sequenceDirectUsbCalibrationCandidates(
+            formats = listOf(format),
+            bufferFrames = listOf(256, 64, 128),
+            periodMultipliers = listOf(2, 1)
+        ) { _, _ -> false }
+
+        assertEquals(
+            listOf(
+                DirectUsbCalibrationCandidate(64, 1),
+                DirectUsbCalibrationCandidate(64, 2),
+                DirectUsbCalibrationCandidate(128, 1),
+                DirectUsbCalibrationCandidate(128, 2),
+                DirectUsbCalibrationCandidate(256, 1),
+                DirectUsbCalibrationCandidate(256, 2)
+            ),
+            attempted.map { it.second }
+        )
+    }
+    @Test
+    fun automaticCalibrationContinuesAfterStableCandidateWhenEarlyStoppingIsDisabled() {
+        val stableCandidate = DirectUsbCalibrationCandidate(128, 1)
+        val laterCandidates = listOf(
+            DirectUsbCalibrationCandidate(128, 2),
+            DirectUsbCalibrationCandidate(256, 1)
+        )
+
+        assertEquals(
+            listOf(true, true),
+            laterCandidates.map { candidate ->
+                shouldAttemptDirectUsbCalibrationCandidate(
+                    candidate = candidate,
+                    stableCandidate = stableCandidate,
+                    stopAfterFirstStable = false
+                )
+            }
+        )
+    }
+
+
+    @Test
+    fun standardCalibrationStopsAfterFirstStableCandidatePerFormat() {
+        val firstFormat = DirectUsbFormat(sampleRate = 44_100, bits = 32, subslotBytes = 4)
+        val secondFormat = DirectUsbFormat(sampleRate = 48_000, bits = 32, subslotBytes = 4)
+        val stableCandidates = mapOf(
+            firstFormat to DirectUsbCalibrationCandidate(128, 1),
+            secondFormat to DirectUsbCalibrationCandidate(256, 2)
+        )
+
+        val attempted = sequenceDirectUsbCalibrationCandidates(
+            formats = listOf(firstFormat, secondFormat),
+            bufferFrames = listOf(256, 64, 128),
+            periodMultipliers = listOf(2, 1)
+        ) { format, candidate -> candidate == stableCandidates[format] }
+
+        assertEquals(
+            listOf(
+                firstFormat to DirectUsbCalibrationCandidate(64, 1),
+                firstFormat to DirectUsbCalibrationCandidate(64, 2),
+                firstFormat to DirectUsbCalibrationCandidate(128, 1),
+                secondFormat to DirectUsbCalibrationCandidate(64, 1),
+                secondFormat to DirectUsbCalibrationCandidate(64, 2),
+                secondFormat to DirectUsbCalibrationCandidate(128, 1),
+                secondFormat to DirectUsbCalibrationCandidate(128, 2),
+                secondFormat to DirectUsbCalibrationCandidate(256, 1),
+                secondFormat to DirectUsbCalibrationCandidate(256, 2)
+            ),
+            attempted
+        )
+    }
+
+    @Test
+    fun fixedSampleRateFilterKeepsOnlyAdvertisedFormatsAtRequestedRate() {
+        val formats = listOf(
+            DirectUsbFormat(sampleRate = 44_100, bits = 32, subslotBytes = 4),
+            DirectUsbFormat(sampleRate = 48_000, bits = 24, subslotBytes = 3),
+            DirectUsbFormat(sampleRate = 96_000, bits = 32, subslotBytes = 4)
+        )
+
+        assertEquals(
+            listOf(formats[1]),
+            filterDirectUsbFormatsForSampleRate(formats, fixedSampleRate = 48_000)
+        )
+        assertEquals(
+            emptyList<DirectUsbFormat>(),
+            filterDirectUsbFormatsForSampleRate(formats, fixedSampleRate = 192_000)
+        )
+    }
+
+
+
+    @Test
     fun assignsFourTwoOnePriorityAndSelectsSevenPointWinner() {
         val profiles = listOf(
             profile(id = "latency-and-buffer", latencyMs = 10.0, bufferFrames = 128),

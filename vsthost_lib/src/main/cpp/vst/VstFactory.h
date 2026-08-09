@@ -27,8 +27,8 @@ struct RegistryEntry {
 /**
  * Factory for imported user VST2/VST3 plugins. Reads
  * <filesDir>/vst_plugins/registry.json which is written by the Manage VST
- * UI (Phase D). Each entry becomes one plugin in GuitarRackCraft's browser
- * grouped under author "Varcain" via the runtime metadata overlay.
+ * UI (Phase D). Each entry becomes one plugin in NNAGA's browser
+ * grouped under author "patlach42" via the runtime metadata overlay.
  */
 class VstFactory : public guitarrackcraft::IPluginFactory {
 public:

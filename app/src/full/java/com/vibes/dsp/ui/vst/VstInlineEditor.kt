@@ -52,7 +52,7 @@ private data class VstFilePickerRequest(
 
 /**
  * Embed a wine-rendered VST editor inline in the rack row. The displayNumber
- * is owned by the WineVstPlugin (vsthost_lib) — NOT GuitarRackCraft's
+ * is owned by the WineVstPlugin (vsthost_lib) — NOT NNAGA's
  * X11DisplayManager — so we go directly through vsthost_lib's NativeBridge
  * for surface attach and touch routing.
  *

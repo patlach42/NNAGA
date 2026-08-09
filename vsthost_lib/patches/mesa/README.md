@@ -26,9 +26,9 @@ as built.)
 - `0001-zink-android-desktop-gl-via-turnip.patch` — the 4 Mesa source fixes
   (dri_target kopper/swrast, eglcurrent EGL_OPENGL_API, zink_screen HW-pdev
   guard, detect_os escape hatch). Applies on the pinned `3rd_party/mesa` HEAD.
-- `build-files/android-aarch64.ini` — meson cross-file (NDK r26 / API 28, Bionic
-  arm64). ⚠️ absolute NDK + repo paths are hardcoded for this machine
-  (`/home/varcain/...`) — adjust if building elsewhere.
+- `build-files/android-aarch64.ini` — portable Meson cross-file (NDK r26 / API
+  28, Bionic arm64). It resolves NDK tools from `PATH` and its private
+  dependency tree relative to the copied cross-file location.
 - `build-files/android-deps-include/` — hand-authored stubs for Android-private
   headers the NDK lacks (`cutils/*.h`, `log/log.h`).
 - `build-files/android-deps-data/` — Termux `libdrm`(+dev) headers/.so/.pc that

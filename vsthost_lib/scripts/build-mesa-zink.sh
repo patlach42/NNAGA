@@ -11,9 +11,9 @@
 # Self-contained + machine-portable: applies patches/mesa/0001, drops the
 # captured header stubs (cutils/log) into the submodule, links the SOURCE libdrm
 # (toolchain/drm-android, built by build-libdrm-android.sh — no checked-in blob), and
-# GENERATES the meson cross-file with this machine's NDK + repo paths (the
-# committed build-files/android-aarch64.ini has hardcoded paths, used only as a
-# reference). Run after `git submodule update --init --recursive 3rd_party/mesa`.
+# GENERATES a machine-local meson cross-file with the active NDK + repo paths.
+# The committed build-files/android-aarch64.ini is portable documentation for
+# manual builds. Run after `git submodule update --init --recursive 3rd_party/mesa`.
 #
 # Called by scripts/build-all.sh (step "build-mesa-zink"); also runnable alone.
 # See patches/mesa/README.md and project_zink_layer3_state for the full history.
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"            # vsthost_lib/
-top="$(cd "$repo_root/.." && pwd)"                       # GuitarRackCraft/
+top="$(cd "$repo_root/.." && pwd)"                       # NNAGA/
 M="$top/3rd_party/mesa"
 PATCHES="$repo_root/patches/mesa"
 OUT="$repo_root/toolchain/mesa-zink-libs"
