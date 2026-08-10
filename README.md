@@ -11,10 +11,11 @@ NNAGA is a native, low-latency Android audio-effects rack and host for building,
 
 ## Capabilities
 
+- Run independent effect chains on parallel tracks, then process their mix through a dedicated master chain
+- Record and loop tempo-quantized track takes with independent input arming, channel selection, gain, playback, and loop controls
+- Load WAV files into tracks and synchronize their playback through the shared transport
 - Chain and reorder LV2 effects in a rack
 - Load neural amp models through NAM and AIDA-X plugins
-- Play WAV files through the processing chain
-- Record raw input and processed output
 - Save and restore presets
 - Open plugin editors through Android UI, WebView, or the native X11/EGL compatibility layer
 - Host Windows VST2/VST3 plugins through Wine/FEX in the `full` flavor
@@ -71,9 +72,13 @@ The flavor boundary is intentional: `full` includes the VST host dependency, whi
 
 ## Direct USB audio
 
-NNAGA can use the standalone [`liblowlatencyaudio`](liblowlatencyaudio/README.md) component for direct USB Audio Class (UAC) transport. Android grants permission and supplies the `UsbDeviceConnection`; the native driver borrows its file descriptor and manages the claimed UAC interfaces.
+NNAGA's core fork feature is direct USB Audio Class (UAC) transport through [`liblowlatencyaudio`](https://github.com/patlach42/liballa), a standalone C++17 driver also included as this repository's `liblowlatencyaudio/` submodule. Android grants permission and supplies the `UsbDeviceConnection`; the driver borrows its file descriptor and manages the claimed UAC interfaces.
 
-This path owns the USB interfaces for the session. Do not route the same interface through Android `AudioTrack`/`AudioRecord`, and keep the Java `UsbDeviceConnection` alive until native stop and close finish. Device behavior, scheduling, and measured latency depend on the interface, phone, format, and configuration; NNAGA makes no universal latency or performance guarantee.
+On the documented Audient iD4 MKII profile — 48 kHz, 16-frame buffer, period multiplier 3 — the driver observed **6.52–7.21 ms** of host-queue latency across eight 30-second runs: roughly **6–8 ms**. This is not end-to-end latency: ADC/DAC conversion, device FIFO, analog loopback, and acoustic latency are excluded. Other interfaces use conservative defaults until measured and calibrated.
+
+The rack is a parallel audio graph: every track has its own effect chain, input arm/channel, volume, file/loop playback, and transport state; their mix then runs through a separate master-effects chain. The built-in looper records a selectable number of bars, enters on a quantized transport boundary, and can start playback at bar, quarter-note, or eighth-note boundaries.
+
+The direct-USB path owns the USB interfaces for the session. Do not route the same interface through Android `AudioTrack`/`AudioRecord`, and keep the Java `UsbDeviceConnection` alive until native stop and close finish.
 
 ## Architecture and project map
 
