@@ -715,12 +715,17 @@ jobs:
             exit 1
           fi
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
+          CHECKSUM="${APK}.sha256"
+          sha256sum "$APK" > "$CHECKSUM"
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
 
-      - name: Upload APK artifact
+      - name: Upload NNAGA full APK and checksum artifact
         uses: actions/upload-artifact@v4
         with:
-          name: guitarrackcraft-vst-${{ inputs.version_name }}-apk
-          path: ${{ steps.artifacts.outputs.apk }}
+          name: nnaga-full-${{ inputs.version_name }}-apk
+          path: |
+            ${{ steps.artifacts.outputs.apk }}
+            ${{ steps.artifacts.outputs.checksum }}
 
       # ── 13. GitHub Release ───────────────────────────────────────────────
       - name: Create GitHub Release
@@ -729,7 +734,9 @@ jobs:
         with:
           tag_name: v${{ inputs.version_name }}
           name: NNAGA v${{ inputs.version_name }}
-          files: ${{ steps.artifacts.outputs.apk }}
+          files: |
+            ${{ steps.artifacts.outputs.apk }}
+            ${{ steps.artifacts.outputs.checksum }}
           prerelease: ${{ contains(inputs.version_name, 'beta') || contains(inputs.version_name, 'alpha') || contains(inputs.version_name, 'rc') }}
           generate_release_notes: true
 
