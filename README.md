@@ -9,6 +9,8 @@ NNAGA is a native, low-latency Android audio-effects rack and host for building,
 > presets, and validate every audio/device workflow on your own hardware before
 > relying on it in a production or live setting.
 
+Русскоязычное сообщество: [Telegram чат NNAGA](https://t.me/nnaga_chat).
+
 ## Capabilities
 
 - Run independent effect chains on parallel tracks, then process their mix through a dedicated master chain
