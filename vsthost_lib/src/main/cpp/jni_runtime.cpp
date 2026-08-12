@@ -317,6 +317,38 @@ Java_com_varcain_vsthost_NativeBridge_nativeStartInstaller(
     return static_cast<jint>(pid);
 }
 
+JNIEXPORT jint JNICALL
+Java_com_varcain_vsthost_NativeBridge_nativeStartExplorer(
+    JNIEnv* env, jobject /*thiz*/, jstring jPrefixPath, jint displayNumber,
+    jstring jWineBinary, jstring jWineserverBinary, jstring jWineDllPath,
+    jstring jNativeLibDir, jstring jCacheDir) {
+    std::lock_guard<std::mutex> lock(installer_mutex);
+    if (g_installer && g_installer->isRunning()) return -1;
+    auto jstr = [&](jstring s) -> std::string {
+        if (!s) return {};
+        const char* c = env->GetStringUTFChars(s, nullptr);
+        if (!c) return {};
+        std::string r(c);
+        env->ReleaseStringUTFChars(s, c);
+        return r;
+    };
+    WineHostProcess::Config cfg{
+        .nativeLibDir = jstr(jNativeLibDir), .cacheDir = jstr(jCacheDir),
+        .wineBinary = jstr(jWineBinary), .wineserverBinary = jstr(jWineserverBinary),
+        .wineDllPath = jstr(jWineDllPath), .winePrefix = jstr(jPrefixPath),
+        .primaryExe = jstr(jWineDllPath) + "/explorer.exe",
+        .shmPath = {}, .pickerShmPath = {}, .pluginPaths = {},
+        .extraArgs = {"S:\\"}, .displayNumber = static_cast<int>(displayNumber),
+        .logSuffix = "explorer",
+    };
+    auto proc = std::make_unique<WineHostProcess>(std::move(cfg));
+    if (!proc->start()) return -1;
+    pid_t pid = proc->pid();
+    g_installer = std::move(proc);
+    LOGI("nativeStartExplorer: launched pid=%d", (int)pid);
+    return static_cast<jint>(pid);
+}
+
 // Non-blocking wait. Returns:
 //   -1  no installer registered / pid mismatch / waitpid reports ECHILD
 //   -2  still running, caller should retry

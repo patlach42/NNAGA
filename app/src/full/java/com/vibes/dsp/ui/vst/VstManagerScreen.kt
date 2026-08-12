@@ -5,6 +5,7 @@
 
 package com.vibes.dsp.ui.vst
 
+import java.io.File
 import android.content.Context
 import android.net.Uri
 import android.widget.Toast
@@ -38,12 +39,12 @@ import com.vibes.dsp.engine.Renderer
 import com.vibes.dsp.engine.RendererPreferenceManager
 import com.vibes.dsp.engine.WineEnvFile
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.material.icons.filled.Folder
 import com.varcain.vsthost.NativeBridge
 import com.varcain.vsthost.PeFlag
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.UUID
 
 /** One imported VST as persisted in filesDir/vst_plugins/registry.json. */
@@ -107,6 +108,13 @@ fun VstManagerScreen(
 
     // Installer flow: full-screen overlay while installerVm.state != IDLE.
     val installerVm: VstInstallerViewModel = viewModel()
+    val sharedManager = remember { WineSharedFolderManager.from(context) }
+    var sharedSelected by remember { mutableStateOf(sharedManager.hasSelection) }
+    val sharedPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null && sharedManager.setSelectedTreeUri(uri)) sharedSelected = true
+    }
     val installerState by installerVm.state.collectAsState()
     val installerError by installerVm.errorMessage.collectAsState()
     LaunchedEffect(installerError) {
@@ -455,6 +463,37 @@ fun VstManagerScreen(
                 ) {
                     Text("Import VST…")
                 }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { sharedPicker.launch(null) },
+                    enabled = blockingOperation == null,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Icon(Icons.Default.Folder, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (sharedSelected) "Change Wine shared folder" else "Choose Wine shared folder")
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (sharedSelected) "Wine Explorer will browse this folder as S:\\"
+                    else "Choose a folder to make it visible to Wine as drive S:.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        scope.launch(Dispatchers.IO) {
+                            val ok = sharedManager.refreshAndMount(listOf(File(context.filesDir, "wineprefix")))
+                            withContext(Dispatchers.Main) {
+                                if (ok) installerVm.launchExplorer(File(context.filesDir, "wineprefix").absolutePath)
+                                else Toast.makeText(context, "Couldn't prepare shared folder", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    },
+                    enabled = sharedSelected && blockingOperation == null,
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("Open Wine Explorer") }
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { exePickerLauncher.launch(arrayOf("*/*")) },

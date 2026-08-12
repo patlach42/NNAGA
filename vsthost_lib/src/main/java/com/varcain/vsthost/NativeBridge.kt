@@ -41,6 +41,17 @@ object NativeBridge {
         cacheDir: String,
     ): Int
 
+    /** Launch the in-prefix Wine Explorer targeting the shared S: drive. */
+    external fun nativeStartExplorer(
+        prefixPath: String,
+        displayNumber: Int,
+        wineBinary: String,
+        wineserverBinary: String,
+        wineDllPath: String,
+        nativeLibDir: String,
+        cacheDir: String,
+    ): Int
+
     /** Non-blocking poll for the installer started via [nativeStartInstaller].
      *    -1   no installer is registered / pid mismatch
      *    -2   still running — call again later

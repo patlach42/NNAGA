@@ -50,7 +50,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
 
     enum class State { IDLE, PREPARING, RUNNING, DRAINING, DISCOVERING, PICK }
 
-    enum class Mode { INSTALL, LAUNCH }
+    enum class Mode { INSTALL, LAUNCH, EXPLORER }
 
     /** What kind of artifact the user can pick at the end of a session.
      *  EXECUTABLEs are only ever produced in INSTALL mode (managers are
@@ -175,6 +175,40 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
             Log.i(TAG, "launch: starting manager '${exe.displayName}' uuid=${exe.uuid} " +
                        "prefix=${exe.prefixPath}")
             runWineSession(ctx, exe.exePath, exe.prefixPath)
+        }
+    }
+
+    fun launchExplorer(prefixPath: String) {
+        if (_state.value != State.IDLE) return
+        val ctx = getApplication<Application>()
+        _session.value = Session(
+            mode = Mode.EXPLORER, id = "explorer", displayName = "Wine Explorer",
+            stagedExePath = "", templatePrefixPath = prefixPath,
+            displayNumber = INSTALLER_DISPLAY_NUMBER
+        )
+        _state.value = State.PREPARING
+        watchJob = viewModelScope.launch {
+            val basePrefix = File(ctx.filesDir, "wineprefix")
+            val shared = withContext(Dispatchers.IO) {
+                WineSharedFolderManager.from(ctx).refreshAndMount(listOf(basePrefix))
+            }
+            if (!shared) { bailOut("Couldn't prepare shared folder."); return@launch }
+            val setup = WineSetup.ensure(ctx)
+            val pid = withContext(Dispatchers.IO) {
+                NativeBridge.nativeStartExplorer(prefixPath, INSTALLER_DISPLAY_NUMBER,
+                    setup.wineBinary.absolutePath, setup.wineServer.absolutePath,
+                    setup.wineDllPath.absolutePath, setup.nativeLibraryDir.absolutePath,
+                    ctx.cacheDir.absolutePath)
+            }
+            if (pid <= 0) { bailOut("Failed to launch Wine Explorer."); return@launch }
+            _session.value = _session.value?.copy(winePid = pid)
+            _state.value = State.RUNNING
+            while (true) {
+                val r = withContext(Dispatchers.IO) { NativeBridge.nativeWaitInstaller(pid) }
+                if (r != -2) break
+                delay(500)
+            }
+            reset()
         }
     }
 
@@ -487,6 +521,13 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         val currentState = _state.value
         Log.i(TAG, "cancel: pid=${s.winePid} mode=${s.mode} state=$currentState")
         when {
+            s.mode == Mode.EXPLORER -> {
+                watchJob?.cancel()
+                if (s.winePid > 0) viewModelScope.launch(Dispatchers.IO) {
+                    NativeBridge.nativeKillInstaller(s.winePid)
+                }
+                reset()
+            }
             s.mode == Mode.LAUNCH && currentState == State.RUNNING -> {
                 // Ask wine to exit; runWineSession's poll loop handles the rest.
                 if (s.winePid > 0) {
@@ -576,6 +617,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
              * to answer GetVersionEx() / RtlGetVersion() and to gate the
              * PE loader's version check. */
             WineSetup.seedWindowsVersion(dst)
+            WineSharedFolderManager.from(ctx).mountIntoPrefix(dst)
             true
         }.getOrElse {
             Log.e(TAG, "prepareTemplate failed", it)

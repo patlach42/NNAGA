@@ -55,6 +55,8 @@ object VstHostSetup {
             // Virtual-desktop registry: required before any wine process spawns
             // so winex11.drv sizes the desktop window properly.
             WineSetup.applyVirtualDesktopRegistry(context)
+            // Keep the selected SAF folder available in the base environment.
+            WineSharedFolderManager.from(context).mountIntoPrefix(File(context.filesDir, "wineprefix"))
             true
         } catch (t: Throwable) {
             Log.e(TAG, "WineSetup.ensure failed", t)
@@ -109,6 +111,7 @@ object VstHostSetup {
             }
             WineSetup.seedActivatableClasses(prefix)
             WineSetup.seedCommonControlsManifests(prefix)
+            WineSharedFolderManager.from(context).mountIntoPrefix(prefix)
             WineSetup.seedProgramFilesDirs(prefix)
             WineSetup.installUiHostStub(context, prefix)
             stamp.writeText(System.currentTimeMillis().toString())
@@ -239,6 +242,7 @@ object VstHostSetup {
         }
         WineSetup.seedActivatableClasses(prefix)
         WineSetup.seedCommonControlsManifests(prefix)
+        WineSharedFolderManager.from(context).mountIntoPrefix(prefix)
         WineSetup.seedProgramFilesDirs(prefix)
         WineSetup.installUiHostStub(context, prefix)
     }

@@ -169,7 +169,11 @@ private fun PhaseHeader(
     installerName: String,
     onCancel: (() -> Unit)?,
 ) {
-    val verb = if (mode == VstInstallerViewModel.Mode.LAUNCH) "Running" else "Installing"
+    val verb = when (mode) {
+        VstInstallerViewModel.Mode.LAUNCH -> "Running"
+        VstInstallerViewModel.Mode.EXPLORER -> "Browsing"
+        else -> "Installing"
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
