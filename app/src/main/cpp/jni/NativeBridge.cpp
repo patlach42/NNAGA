@@ -25,6 +25,8 @@
 #include <cstring>
 #include <signal.h>
 #include <dlfcn.h>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -186,6 +188,39 @@ static void setDisplayPhase(int displayNumber, DisplayState::Phase phase) {
 }
 
 }  // namespace guitarrackcraft
+static bool parseMidiFile(const std::string& path, const std::string& name, std::shared_ptr<MidiClip>& out) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file) return false;
+    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), {});
+    if (bytes.size() < 14 || std::memcmp(bytes.data(), "MThd", 4) != 0) return false;
+    auto u16=[&](size_t p)->uint16_t{return static_cast<uint16_t>((bytes[p]<<8)|bytes[p+1]);};
+    auto u32=[&](size_t p)->uint32_t{return (static_cast<uint32_t>(bytes[p])<<24)|(static_cast<uint32_t>(bytes[p+1])<<16)|(static_cast<uint32_t>(bytes[p+2])<<8)|bytes[p+3];};
+    const uint16_t format=u16(8), tracks=u16(10), division=u16(12);
+    if ((format!=0&&format!=1)||tracks==0||(division&0x8000)||division==0) return false;
+    struct Raw { uint64_t tick; MidiEvent ev; }; struct Tempo { uint64_t tick; uint32_t us; };
+    std::vector<Raw> raw; std::vector<Tempo> tempos{{0,500000}}; size_t pos=14;
+    for (uint16_t tr=0;tr<tracks;++tr) {
+        if (pos+8>bytes.size()||std::memcmp(bytes.data()+pos,"MTrk",4)!=0) return false;
+        const uint32_t len=u32(pos+4); pos+=8; if (len>bytes.size()-pos) return false; const size_t end=pos+len;
+        uint64_t tick=0; uint8_t running=0;
+        while (pos<end) {
+            uint32_t delta=0; int n=0; uint8_t b;
+            do { if(pos>=end||n++>=4)return false; b=bytes[pos++]; delta=(delta<<7)|(b&0x7f); } while(b&0x80);
+            tick+=delta; if(pos>=end)return false; uint8_t status=bytes[pos++]; if(status<0x80){if(!running)return false;--pos;status=running;} else if(status<0xf0) running=status;
+            if(status==0xff){if(pos>=end)return false;uint8_t meta=bytes[pos++];uint32_t ml=0;n=0;do{if(pos>=end||n++>=4)return false;b=bytes[pos++];ml=(ml<<7)|(b&0x7f);}while(b&0x80);if(ml>end-pos)return false;if(meta==0x51&&ml==3)tempos.push_back({tick,(uint32_t(bytes[pos])<<16)|(uint32_t(bytes[pos+1])<<8)|bytes[pos+2]});pos+=ml;continue;}
+            if(status==0xf0||status==0xf7){uint32_t sl=0;n=0;do{if(pos>=end||n++>=4)return false;b=bytes[pos++];sl=(sl<<7)|(b&0x7f);}while(b&0x80);if(sl>end-pos)return false;pos+=sl;continue;}
+            const uint8_t type=status&0xf0; if(type!=0x80&&type!=0x90&&type!=0xa0&&type!=0xb0&&type!=0xc0&&type!=0xd0&&type!=0xe0)return false;
+            if(pos>=end)return false; uint8_t d1=bytes[pos++]; uint8_t d2=0; if(type!=0xc0&&type!=0xd0){if(pos>=end)return false;d2=bytes[pos++];}
+            raw.push_back({tick,{0,status,d1,d2}});
+        }
+        pos=end;
+    }
+    std::sort(tempos.begin(),tempos.end(),[](auto&a,auto&b){return a.tick<b.tick;}); std::sort(raw.begin(),raw.end(),[](auto&a,auto&b){return a.tick<b.tick;});
+    auto clip=std::make_shared<MidiClip>(); clip->displayName=name; uint64_t lastTick=0, micros=0; uint32_t tempo=500000; size_t ti=0;
+    for(const auto& r:raw){while(ti+1<tempos.size()&&tempos[ti+1].tick<=r.tick){micros+=(tempos[ti+1].tick-lastTick)*tempo/division;lastTick=tempos[++ti].tick;tempo=tempos[ti].us;} micros+=(r.tick-lastTick)*tempo/division;lastTick=r.tick; MidiTimedEvent e; e.frame=static_cast<uint64_t>(micros*48/1000); e.event=r.ev; clip->events.push_back(e); clip->durationFrames=std::max(clip->durationFrames,e.frame+1);}
+    out=std::move(clip); return true;
+}
+
 
 // Minimal SIGABRT handler: log to stderr (async-signal-safe) then re-raise so tombstone is still generated.
 static void sigabrt_handler(int signum) {
@@ -948,6 +983,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeLoadTrackWav(
     if (name) env->ReleaseStringUTFChars(displayName, name);
     return ok ? JNI_TRUE : JNI_FALSE;
 }
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeLoadTrackMidi(JNIEnv* env, jobject, jlong trackId, jstring path, jstring displayName) {
+    if (!g_ctx || !g_ctx->audioEngine || !path || !displayName) return JNI_FALSE;
+    const char* p=env->GetStringUTFChars(path,nullptr); const char* n=env->GetStringUTFChars(displayName,nullptr);
+    std::shared_ptr<MidiClip> clip; const bool parsed=p&&n&&parseMidiFile(p,n,clip);
+    if (p) env->ReleaseStringUTFChars(path,p); if (n) env->ReleaseStringUTFChars(displayName,n);
+    return parsed && g_ctx->audioEngine->getRackGraph().attachTrackMidi(static_cast<RackPathId>(trackId),std::move(clip)) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeUnloadTrackMidi(JNIEnv*, jobject, jlong trackId) {
+    return g_ctx&&g_ctx->audioEngine&&g_ctx->audioEngine->getRackGraph().unloadTrackMidi(static_cast<RackPathId>(trackId))?JNI_TRUE:JNI_FALSE;
+}
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeUnloadTrackWav(JNIEnv*, jobject, jlong trackId) {
@@ -1075,7 +1122,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     const auto tracks = g_ctx->audioEngine->getRackGraph().getTracks();
     jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
     if (!clazz) return nullptr;
-    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;DZZDJZZZI)V");
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;DZZDJZZZIZZ)V");
     if (!ctor) return nullptr;
     jobjectArray result = env->NewObjectArray(static_cast<jsize>(tracks.size()), clazz, nullptr);
     for (size_t index = 0; index < tracks.size(); ++index) {
@@ -1090,7 +1137,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
             track.recordPending ? JNI_TRUE : JNI_FALSE,
             track.recording ? JNI_TRUE : JNI_FALSE,
             track.punchArmed ? JNI_TRUE : JNI_FALSE,
-            static_cast<jint>(track.inputChannel));
+            static_cast<jint>(track.inputChannel),
+            track.midiLoaded ? JNI_TRUE : JNI_FALSE,
+            track.midiPlaying ? JNI_TRUE : JNI_FALSE);
         env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         env->DeleteLocalRef(name);
         env->DeleteLocalRef(item);

@@ -23,12 +23,23 @@
 #define VSTPOC_MAX_PARAMS          128    /* bumped from 8 — Lecto and other deeper plugins expose 20+ params */
 #define VSTPOC_PARAM_NAME_LEN      32     /* per-name buffer including NUL */
 
-#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435334) /* "VSTPOCS4" */
-#define VSTPOC_SHARED_LAYOUT_VERSION 4u
+#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435336) /* "VSTPOCS6" */
+#define VSTPOC_SHARED_LAYOUT_VERSION 6u
 #define VSTPOC_TRANSPORT_QUEUE_CAPACITY 1024u
 #define VSTPOC_FEATURE_PLANAR_AUDIO (UINT64_C(1) << 0)
 #define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1)
+#define VSTPOC_FEATURE_MIDI_EVENTS (UINT64_C(1) << 2)
+#define VSTPOC_FEATURE_MIDI_OUTPUT (UINT64_C(1) << 3)
 #define VSTPOC_MAX_BLOCK_FRAMES 2048u
+#define VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK 128u
+
+typedef struct {
+    uint32_t frame_offset;
+    uint8_t status;
+    uint8_t data1;
+    uint8_t data2;
+    uint8_t reserved;
+} VstpocMidiEvent;
 
 /* Native file-picker channel sizes. Wine-side GetOpenFileNameA hook writes
  * the request, Android-side SAF listener writes the response. */
@@ -64,6 +75,8 @@ typedef struct {
     double beats_per_minute;
     uint32_t flags;
     uint32_t block_frames;
+    uint32_t midi_event_count;
+    VstpocMidiEvent midi_events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
 } VstpocTransportBlock;
 
 /* Single mmap region. Atomics laid out one-per-cacheline so producer and
@@ -221,6 +234,10 @@ typedef struct {
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_head;
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_tail;
     _Alignas(VSTPOC_CACHELINE) VstpocTransportBlock transport_queue[VSTPOC_TRANSPORT_QUEUE_CAPACITY];
+    /* Guest-produced MIDI for the most recently processed audio block. */
+    _Alignas(VSTPOC_CACHELINE) uint64_t midi_output_seq;
+    uint32_t midi_output_count;
+    VstpocMidiEvent midi_output_events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_dropped;
 } VstpocShared;
 

@@ -33,6 +33,18 @@
 #include "vst2.h"
 #include "shared_layout.h"
 
+typedef struct {
+    int32_t type, byteSize, deltaFrames, flags;
+    int32_t noteLength, noteOffset, detune, noteOffVelocity;
+    uint8_t midiData[4];
+    uint8_t reserved[16];
+} VstMidiEvent;
+typedef struct {
+    int32_t numEvents, reserved;
+    VstMidiEvent* events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
+} VstEventsMidi;
+static void dispatch_midi(AEffect* effect);
+
 /* Vectored exception handler + setjmp/longjmp form a more robust crash
  * recovery path than __try/__except across the FEX-Emu ARM64EC ↔ x86_64
  * boundary: __C_specific_handler doesn't seem to honour the filter's
@@ -267,9 +279,46 @@ typedef struct {
     uint64_t sample_position, transport_frame, loop_end_frame;
     double sample_rate, tempo;
     uint32_t flags, block_frames;
+    uint32_t midi_event_count;
+    VstpocMidiEvent midi_events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
     int valid;
 } HostTransport;
-static HostTransport g_transport = {0, 0, 0, 0.0, 120.0, 0, 0, 0};
+static HostTransport g_transport = {0};
+static VstpocMidiEvent g_chain_midi[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
+static uint32_t g_chain_midi_count = 0;
+static uint32_t g_chain_midi_capacity = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+
+static void publish_midi_output(void) {
+    if (!g_shm) return;
+    uint64_t seq = __atomic_load_n(&g_shm->midi_output_seq, __ATOMIC_RELAXED);
+    uint32_t count = g_chain_midi_count;
+    if (count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) count = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+    for (uint32_t i = 0; i < count; ++i) g_shm->midi_output_events[i] = g_chain_midi[i];
+    g_shm->midi_output_count = count;
+    __atomic_store_n((uint64_t*)&g_shm->midi_output_seq, seq + 1u, __ATOMIC_RELEASE);
+}
+
+
+static void dispatch_midi(AEffect* effect) {
+    if (!effect || !effect->dispatcher || g_transport.midi_event_count == 0) return;
+    VstMidiEvent midi[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
+    VstEventsMidi events;
+    memset(&events, 0, sizeof(events));
+    events.numEvents = (int32_t)g_transport.midi_event_count;
+    for (uint32_t i = 0; i < g_transport.midi_event_count; ++i) {
+        const VstpocMidiEvent* in = &g_transport.midi_events[i];
+        VstMidiEvent* out = &midi[i];
+        memset(out, 0, sizeof(*out));
+        out->type = 1;
+        out->byteSize = sizeof(*out);
+        out->deltaFrames = (int32_t)in->frame_offset;
+        out->midiData[0] = in->status;
+        out->midiData[1] = in->data1;
+        out->midiData[2] = in->data2;
+        events.events[i] = out;
+    }
+    effect->dispatcher(effect, effProcessEvents, 0, 0, &events, 0.0f);
+}
 static double g_configured_rate = 0.0;
 static int g_configured_block = 0;
 static int g_transport_pending = 0;
@@ -288,6 +337,10 @@ static int read_transport(const VstpocShared* shm) {
     g_transport.loop_end_frame = b.loop_end_frame;
     g_transport.sample_rate = b.sample_rate;
     g_transport.tempo = b.beats_per_minute;
+    g_transport.midi_event_count = b.midi_event_count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK
+                                  ? VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK : b.midi_event_count;
+    for (uint32_t i = 0; i < g_transport.midi_event_count; ++i)
+        g_transport.midi_events[i] = b.midi_events[i];
     g_transport.flags = b.flags;
     g_transport.block_frames = b.block_frames;
     g_transport.valid = b.block_frames != 0 && b.block_frames <= VSTPOC_MAX_BLOCK_FRAMES;
@@ -694,6 +747,22 @@ static VST_CALL intptr_t host_callback(AEffect* eff, int32_t opcode,
         }
         case audioMasterGetProductString: {            /* (33) */
             if (ptr) strncpy((char*)ptr, "vst_host", 64);
+            return 1;
+        }
+        case audioMasterProcessEvents: {
+            const VstEventsMidi* ev = (const VstEventsMidi*)ptr;
+            if (!ev || ev->numEvents <= 0) return 1;
+            uint32_t n = (uint32_t)ev->numEvents;
+            if (n > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) n = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+            for (uint32_t i = 0; i < n; ++i) {
+                const VstMidiEvent* m = ev->events[i];
+                if (!m || g_chain_midi_count >= g_chain_midi_capacity) break;
+                VstpocMidiEvent* out = &g_chain_midi[g_chain_midi_count++];
+                out->frame_offset = (m->deltaFrames < 0) ? 0u :
+                    ((uint32_t)m->deltaFrames < g_transport.block_frames
+                        ? (uint32_t)m->deltaFrames : g_transport.block_frames - 1u);
+                out->status = m->midiData[0]; out->data1 = m->midiData[1]; out->data2 = m->midiData[2]; out->reserved = 0;
+            }
             return 1;
         }
         case audioMasterGetTime: {
@@ -1633,11 +1702,13 @@ int main(int argc, char** argv) {
          * but should NOT modify the input buffers — so ping-ponging
          * between two distinct pairs is safe. */
         {
+            g_chain_midi_count = 0;
             float* cur_in[2]  = { in_l,  in_r  };
             float* cur_out[2] = { out_l, out_r };
             for (int p = 0; p < g_pluginCount; p++) {
                 AEffect* pe = g_plugins[p].eff;
                 if (!pe) continue;
+                dispatch_midi(pe);
                 pe->processReplacing(pe, cur_in, cur_out, blockFrames);
                 /* Swap: this plugin's output becomes next plugin's input. */
                 float* tmp;
@@ -1654,6 +1725,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        publish_midi_output();
         g_transport_pending = 0;
 
         /* push output, dropping samples if ring full */

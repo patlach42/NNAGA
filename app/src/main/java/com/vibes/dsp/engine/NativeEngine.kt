@@ -210,7 +210,9 @@ data class RackTrackInfo(
     val recordPending: Boolean,
     val recording: Boolean,
     val punchArmed: Boolean,
-    val inputChannel: Int
+    val inputChannel: Int,
+    val midiLoaded: Boolean = false,
+    val midiPlaying: Boolean = false
 )
 
 data class TransportInfo(
@@ -540,6 +542,8 @@ class NativeEngine private constructor() {
     external fun nativeSetTrackInputArmed(trackId: Long, armed: Boolean): Boolean
     external fun nativeSetTrackInputChannel(trackId: Long, inputChannel: Int): Boolean
     external fun nativeLoadTrackWav(trackId: Long, path: String, displayName: String): Boolean
+    external fun nativeLoadTrackMidi(trackId: Long, path: String, displayName: String): Boolean
+    external fun nativeUnloadTrackMidi(trackId: Long): Boolean
     external fun nativeUnloadTrackWav(trackId: Long): Boolean
     external fun nativeClearTrackWavs(): Boolean
     external fun nativeSetTransportPlaying(playing: Boolean): Boolean
@@ -611,6 +615,8 @@ class NativeEngine private constructor() {
     fun setTrackInputChannel(trackId: Long, inputChannel: Int): Boolean =
         nativeSetTrackInputChannel(trackId, inputChannel)
     fun loadTrackWav(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackWav(trackId, path, displayName)
+    fun loadTrackMidi(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackMidi(trackId, path, displayName)
+    fun unloadTrackMidi(trackId: Long): Boolean = nativeUnloadTrackMidi(trackId)
     fun unloadTrackWav(trackId: Long): Boolean = nativeUnloadTrackWav(trackId)
     fun clearTrackWavs(): Boolean = nativeClearTrackWavs()
     fun setTransportBpm(bpm: Double): Boolean = nativeSetTransportBpm(bpm.coerceIn(20.0, 400.0))

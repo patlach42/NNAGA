@@ -53,6 +53,7 @@ extern "C" {
 #include "pluginterfaces/vst/ivsteditcontroller.h"
 #include "pluginterfaces/vst/ivsthostapplication.h"
 #include "pluginterfaces/vst/ivstprocesscontext.h"
+#include "pluginterfaces/vst/ivstmidicontrollers.h"
 #include "pluginterfaces/vst/vsttypes.h"
 #include "pluginterfaces/gui/iplugview.h"
 #include "pluginterfaces/gui/iplugviewcontentscalesupport.h"
@@ -93,10 +94,12 @@ struct HostTransport {
     double sampleRate = 0.0, tempo = 120.0;
     uint32 flags = 0;
     uint32 blockFrames = 0;
+    uint32 midiEventCount = 0;
+    VstpocMidiEvent midiEvents[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK] = {};
     bool valid = false;
 };
-static HostTransport g_transport;
 static bool g_transport_pending = false;
+static HostTransport g_transport{};
 static bool read_transport(const VstpocShared* shm) {
     if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
@@ -112,6 +115,10 @@ static bool read_transport(const VstpocShared* shm) {
     g_transport.transportFrame = b.transport_frame;
     g_transport.tempo = b.beats_per_minute;
     g_transport.flags = b.flags;
+    g_transport.midiEventCount = std::min<uint32>(b.midi_event_count,
+                                                   VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK);
+    for (uint32 i = 0; i < g_transport.midiEventCount; ++i)
+        g_transport.midiEvents[i] = b.midi_events[i];
     g_transport.blockFrames = b.block_frames;
     g_transport.valid = b.block_frames != 0 && b.block_frames <= VSTPOC_MAX_BLOCK_FRAMES;
     return g_transport.valid;
@@ -2130,7 +2137,50 @@ static void process_block(IAudioProcessor* processor,
         }
         g_pendingParamFlags[index] = 0;
     }
-    EventList noEvents;
+    EventList events;
+    for (uint32 i = 0; i < g_transport.midiEventCount; ++i) {
+        const VstpocMidiEvent& m = g_transport.midiEvents[i];
+        const uint8 status = m.status & 0xF0u;
+        Event e{};
+        e.sampleOffset = (int32)std::min<uint32>(m.frame_offset, (uint32)nFrames - 1u);
+        const int16 channel = (int16)(m.status & 0x0Fu);
+        if (status == 0x90u && m.data2 != 0) {
+            e.type = Event::kNoteOnEvent;
+            e.noteOn.channel = channel;
+            e.noteOn.pitch = m.data1;
+            e.noteOn.velocity = m.data2 / 127.0f;
+            events.addEvent(e);
+        } else if (status == 0x80u || (status == 0x90u && m.data2 == 0)) {
+            e.type = Event::kNoteOffEvent;
+            e.noteOff.channel = channel;
+            e.noteOff.pitch = m.data1;
+            e.noteOff.velocity = m.data2 / 127.0f;
+            events.addEvent(e);
+        } else if (status == 0xB0u || status == 0xA0u ||
+                   status == 0xC0u || status == 0xD0u || status == 0xE0u) {
+            e.type = Event::kLegacyMIDICCOutEvent;
+            e.midiCCOut.channel = channel;
+            if (status == 0xB0u) {
+                e.midiCCOut.controlNumber = m.data1;
+                e.midiCCOut.value = m.data2;
+            } else if (status == 0xA0u) {
+                e.midiCCOut.controlNumber = kCtrlPolyPressure;
+                e.midiCCOut.value = m.data1;
+                e.midiCCOut.value2 = m.data2;
+            } else if (status == 0xC0u) {
+                e.midiCCOut.controlNumber = kCtrlProgramChange;
+                e.midiCCOut.value = m.data1;
+            } else if (status == 0xD0u) {
+                e.midiCCOut.controlNumber = kAfterTouch;
+                e.midiCCOut.value = m.data1;
+            } else {
+                e.midiCCOut.controlNumber = kPitchBend;
+                e.midiCCOut.value = m.data1;
+                e.midiCCOut.value2 = m.data2;
+            }
+            events.addEvent(e);
+        }
+    }
 
     ProcessData data;
     data.processMode          = kRealtime;
@@ -2170,8 +2220,9 @@ static void process_block(IAudioProcessor* processor,
     data.outputs              = &outBus;
     data.inputParameterChanges  = &g_paramChanges;
     data.outputParameterChanges = nullptr;
-    data.inputEvents          = &noEvents;
-    data.outputEvents         = nullptr;
+    data.inputEvents          = &events;
+    EventList outputEvents;
+    data.outputEvents         = &outputEvents;
     data.processContext       = &processContext;
 
     if (!enter_process_call()) {
@@ -2182,6 +2233,48 @@ static void process_block(IAudioProcessor* processor,
         return;
     }
     processor->process(data);
+    if (g_shm) {
+        __atomic_add_fetch((uint64_t*)&g_shm->midi_output_seq, 1u, __ATOMIC_RELEASE);
+        uint32_t written = 0;
+        const uint32_t count = std::min<uint32_t>(
+            static_cast<uint32_t>(outputEvents.getEventCount()),
+            VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK);
+        for (uint32_t i = 0; i < count; ++i) {
+            Event event{};
+            if (outputEvents.getEvent(static_cast<int32>(i), event) != kResultOk) continue;
+            VstpocMidiEvent midi{};
+            midi.frame_offset = event.sampleOffset < nFrames
+                ? static_cast<uint32_t>(event.sampleOffset)
+                : static_cast<uint32_t>(nFrames - 1);
+            if (event.type == Event::kNoteOnEvent) {
+                midi.status = static_cast<uint8_t>(0x90u | (event.noteOn.channel & 0x0Fu));
+                midi.data1 = static_cast<uint8_t>(event.noteOn.pitch);
+                midi.data2 = static_cast<uint8_t>(std::min<int>(127, static_cast<int>(event.noteOn.velocity * 127.0f)));
+            } else if (event.type == Event::kNoteOffEvent) {
+                midi.status = static_cast<uint8_t>(0x80u | (event.noteOff.channel & 0x0Fu));
+                midi.data1 = static_cast<uint8_t>(event.noteOff.pitch);
+                midi.data2 = static_cast<uint8_t>(std::min<int>(127, static_cast<int>(event.noteOff.velocity * 127.0f)));
+            } else if (event.type == Event::kLegacyMIDICCOutEvent) {
+                const uint16 control = event.midiCCOut.controlNumber;
+                if (control == kCtrlProgramChange) midi.status = static_cast<uint8_t>(0xC0u | (event.midiCCOut.channel & 0x0Fu));
+                else if (control == kAfterTouch) midi.status = static_cast<uint8_t>(0xD0u | (event.midiCCOut.channel & 0x0Fu));
+                else if (control == kPitchBend) midi.status = static_cast<uint8_t>(0xE0u | (event.midiCCOut.channel & 0x0Fu));
+                else midi.status = static_cast<uint8_t>(0xB0u | (event.midiCCOut.channel & 0x0Fu));
+                midi.data1 = static_cast<uint8_t>(event.midiCCOut.value);
+                midi.data2 = static_cast<uint8_t>(event.midiCCOut.value2);
+            } else {
+                continue;
+            }
+            volatile VstpocMidiEvent* destination =
+                &g_shm->midi_output_events[written++];
+            destination->frame_offset = midi.frame_offset;
+            destination->status = midi.status;
+            destination->data1 = midi.data1;
+            destination->data2 = midi.data2;
+        }
+        g_shm->midi_output_count = written;
+        __atomic_add_fetch((uint64_t*)&g_shm->midi_output_seq, 1u, __ATOMIC_RELEASE);
+    }
     leave_process_call();
 
     /* Fan a mono plugin's single output out to both ring channels so the stereo

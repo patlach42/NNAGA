@@ -36,6 +36,7 @@
 #include <lv2/atom/forge.h>
 #include <lv2/patch/patch.h>
 #include <lv2/time/time.h>
+#include <lv2/midi/midi.h>
 #include <lv2/buf-size/buf-size.h>
 #include <lv2/state/state.h>
 #include <thread>
@@ -66,8 +67,10 @@ public:
     // IPlugin interface
     void activate(float sampleRate, uint32_t bufferSize = 0) override;
     void deactivate() override;
-    void process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                 const AudioProcessContext& context) override;
+    uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                     const AudioProcessContext& context,
+                     const MidiEvent* inputEvents, uint32_t inputCount,
+                     MidiEvent* outputEvents, uint32_t outputCapacity) override;
     PluginInfo getInfo() const override;
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
@@ -151,6 +154,7 @@ private:
     struct AtomPortInfo {
         uint32_t portIndex;
         bool isInput;
+        bool supportsMidi;
         size_t bufferIdx;
     };
     std::vector<std::vector<uint8_t>> atomPortBuffers_;
@@ -172,6 +176,7 @@ private:
     LV2_URID time_barBeat_ = 0;
     LV2_URID atom_Long_ = 0;
     LV2_URID atom_Double_ = 0;
+    LV2_URID midi_MidiEvent_ = 0;
     LV2_URID atom_Sequence_ = 0;
     LV2_URID atom_Chunk_ = 0;
 

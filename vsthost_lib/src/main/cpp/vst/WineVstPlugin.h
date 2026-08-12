@@ -37,8 +37,12 @@ public:
 
     void activate(float sampleRate, uint32_t bufferSize) override;
     void deactivate() override;
-    void process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                 const guitarrackcraft::AudioProcessContext& context) override;
+    uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext& context,
+                     const guitarrackcraft::MidiEvent* midiEvents,
+                     uint32_t midiEventCount,
+                     guitarrackcraft::MidiEvent* outputEvents,
+                     uint32_t outputCapacity) override;
 
     guitarrackcraft::PluginInfo getInfo() const override;
     void setParameter(uint32_t portIndex, float value) override;

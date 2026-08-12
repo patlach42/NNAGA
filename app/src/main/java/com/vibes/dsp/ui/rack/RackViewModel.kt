@@ -248,6 +248,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = withBlockingOperation("Loading WAV") { withContext(Dispatchers.IO) { RackManager.loadTrackWav(trackId, path, displayName) } }.also { if (!it) _errorMessage.value = "Failed to load WAV"; refreshRack() }
     fun loadTrackWavAsync(trackId: RackPathId, path: String, displayName: String) { viewModelScope.launch { loadTrackWav(trackId, path, displayName) } }
     fun unloadTrackWav(trackId: RackPathId) { viewModelScope.launch { val ok = withBlockingOperation("Unloading WAV") { withContext(Dispatchers.IO) { RackManager.unloadTrackWav(trackId) } }; if (!ok) _errorMessage.value = "Failed to unload WAV"; refreshRack() } }
+    fun unloadTrackMidi(trackId: RackPathId) { viewModelScope.launch { val ok = withBlockingOperation("Unloading MIDI") { withContext(Dispatchers.IO) { RackManager.unloadTrackMidi(trackId) } }; if (!ok) _errorMessage.value = "Failed to unload MIDI"; refreshRack() } }
     fun clearTrackWavs() { viewModelScope.launch(Dispatchers.IO) { RackManager.clearTrackWavs(); refreshRackNow() } }
     fun transportPlay() { setTransportPlaying(true) }
     fun transportPause() { setTransportPlaying(false) }
@@ -318,24 +319,31 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     suspend fun importTrackAudio(trackId: RackPathId, uri: Uri, displayName: String): Boolean {
+        val midi = uri.lastPathSegment?.substringBefore('?')?.lowercase()?.let { it.endsWith(".mid") || it.endsWith(".midi") } == true ||
+            getApplication<Application>().contentResolver.getType(uri)?.lowercase() in setOf("audio/midi", "audio/x-midi", "application/x-midi")
         val result = runCatching {
-            withBlockingOperation("Importing audio") {
+            withBlockingOperation(if (midi) "Importing MIDI" else "Importing audio") {
                 withContext(Dispatchers.IO) {
-                    val cacheFile = File.createTempFile("track_import_", ".wav", getApplication<Application>().cacheDir)
+                    val ext = if (midi) ".mid" else ".wav"
+                    val cacheFile = File.createTempFile("track_import_", ext, getApplication<Application>().cacheDir)
                     try {
-                        AudioImportDecoder.copyOrDecode(getApplication(), uri, cacheFile)
-                        RackManager.loadTrackWav(trackId, cacheFile.absolutePath, displayName)
-                    } finally {
-                        cacheFile.delete()
-                    }
+                        getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                            cacheFile.outputStream().use { output -> input.copyTo(output) }
+                        } ?: error("Unable to open selected media")
+                        if (midi) RackManager.loadTrackMidi(trackId, cacheFile.absolutePath, displayName)
+                        else {
+                            val wav = File.createTempFile("track_import_decoded_", ".wav", getApplication<Application>().cacheDir)
+                            try { AudioImportDecoder.copyOrDecode(getApplication(), uri, wav); RackManager.loadTrackWav(trackId, wav.absolutePath, displayName) }
+                            finally { wav.delete() }
+                        }
+                    } finally { cacheFile.delete() }
                 }
             }
         }.getOrElse { error ->
-            _errorMessage.value = error.message?.takeIf { it.isNotBlank() }
-                ?: "Unable to import audio; choose a supported audio file"
+            _errorMessage.value = error.message?.takeIf { it.isNotBlank() } ?: "Unable to import selected media"
             false
         }
-        if (!result) _errorMessage.value = _errorMessage.value ?: "Unable to load imported audio"
+        if (!result) _errorMessage.value = _errorMessage.value ?: "Unable to load imported media"
         refreshRack()
         return result
     }

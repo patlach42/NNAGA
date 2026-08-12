@@ -766,14 +766,14 @@ fun RackScreen(
                     modifier = Modifier.weight(1f)
                 )
             }
-            if (track.wavLoaded) {
+            if (track.wavLoaded || track.midiLoaded) {
                 Row(
                     Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(track.wavDisplayName, Modifier.weight(1f), maxLines = 1)
-                    Text("WAV → FX", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(if (track.midiLoaded) "MIDI → FX" else "WAV → FX", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             Row(
@@ -850,7 +850,7 @@ fun RackScreen(
                     }
                 }
                 Box {
-                    val playEnabled = track.wavLoaded
+                    val playEnabled = track.wavLoaded || track.midiLoaded
                     Box(
                         modifier = Modifier
                             .size(48.dp)
@@ -953,9 +953,9 @@ fun RackScreen(
                     )
                 }
                 when {
-                    track.wavLoaded -> {
-                        IconButton(onClick = { viewModel.unloadTrackWav(track.id) }) {
-                            Icon(Icons.Default.Close, contentDescription = "Unload audio from selected track")
+                    track.wavLoaded || track.midiLoaded -> {
+                        IconButton(onClick = { if (track.midiLoaded) viewModel.unloadTrackMidi(track.id) else viewModel.unloadTrackWav(track.id) }) {
+                            Icon(Icons.Default.Close, contentDescription = "Unload media from selected track")
                         }
                     }
                     track.punchArmed || (track.inputArmed && track.looping) -> {
@@ -1067,7 +1067,7 @@ fun RackScreen(
                             onClick = {
                                 pendingAudioTargetId = track.id
                                 audioFilePickerLauncher.launch(
-                                    arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a")
+                                    arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a", "application/x-midi", "audio/midi")
                                 )
                             }
                         ) {

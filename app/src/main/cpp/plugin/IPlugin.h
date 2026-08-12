@@ -114,6 +114,14 @@ struct AudioProcessContext {
     int64_t bar = 0;
     double barBeat = 0.0;
 };
+/** A raw MIDI short message scheduled within the current audio block. */
+struct MidiEvent {
+    uint32_t frameOffset;
+    uint8_t status;
+    uint8_t data1;
+    uint8_t data2;
+};
+
 
 /**
  * Abstract interface for audio plugins.
@@ -134,16 +142,22 @@ public:
      * Deactivate the plugin (called after processing stops).
      */
     virtual void deactivate() = 0;
-
     /**
-     * Process audio through the plugin.
+     * Process audio and transform MIDI through the plugin.
      * @param inputs Array of input audio buffers (one per input port)
      * @param outputs Array of output audio buffers (one per output port)
      * @param numFrames Number of audio frames to process
      * @param context Immutable block timing and transport state
+     * @param inputEvents MIDI events scheduled in this block (may be null)
+     * @param inputCount Number of entries in inputEvents
+     * @param outputEvents Destination MIDI buffer (may be null)
+     * @param outputCapacity Capacity of outputEvents
+     * @return Number of MIDI events written to outputEvents
      */
-    virtual void process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                         const AudioProcessContext& context) = 0;
+    virtual uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                             const AudioProcessContext& context,
+                             const MidiEvent* inputEvents, uint32_t inputCount,
+                             MidiEvent* outputEvents, uint32_t outputCapacity) = 0;
 
     /**
      * Get plugin metadata.

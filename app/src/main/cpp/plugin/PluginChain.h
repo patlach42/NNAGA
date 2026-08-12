@@ -20,6 +20,7 @@
 #ifndef GUITARRACKCRAFT_PLUGIN_CHAIN_H
 #define GUITARRACKCRAFT_PLUGIN_CHAIN_H
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <condition_variable>
@@ -47,8 +48,10 @@ public:
     bool removePlugin(int index);
     bool reorderPlugins(int fromIndex, int toIndex);
 
-    void process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                 const AudioProcessContext& context);
+    uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                     const AudioProcessContext& context,
+                     const MidiEvent* inputEvents, uint32_t inputCount,
+                     MidiEvent* outputEvents, uint32_t outputCapacity);
     bool isEmptyForAudio() const noexcept {
         return pluginCount_.load(std::memory_order_acquire) == 0;
     }
@@ -87,6 +90,9 @@ private:
     uint32_t bufferSize_ = 0;
 
     // Render-owned scratch buffers are sized only during lifecycle setup. Structural
+    static constexpr uint32_t kMaxMidiEvents = 128;
+    std::array<MidiEvent, kMaxMidiEvents> midiScratchA_{};
+    std::array<MidiEvent, kMaxMidiEvents> midiScratchB_{};
     // control mutations never resize or otherwise touch these buffers.
     std::vector<std::vector<float>> intermediateBuffers_;
     uint32_t renderBufferSize_ = 0;

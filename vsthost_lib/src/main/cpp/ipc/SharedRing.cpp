@@ -35,7 +35,9 @@ SharedRing::SharedRing(const std::string& path) {
     std::memset(data_, 0, sizeof(VstpocShared));
     data_->shared_layout_magic = VSTPOC_SHARED_LAYOUT_MAGIC;
     data_->shared_layout_version = VSTPOC_SHARED_LAYOUT_VERSION;
-    data_->shared_feature_bits = VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET;
+    data_->shared_feature_bits = VSTPOC_FEATURE_PLANAR_AUDIO |
+                                 VSTPOC_FEATURE_WAKE_SOCKET |
+                                 VSTPOC_FEATURE_MIDI_EVENTS;
     wakePath_ = path + ".wake";
     if (wakePath_.size() < sizeof(sockaddr_un::sun_path)) {
         wakeListener_ = ::socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -128,8 +130,10 @@ bool SharedRing::inputWritable(uint32_t frames) const {
 bool SharedRing::publishTransport(uint64_t samplePosition, uint64_t transportFrame,
                                    uint64_t loopEndFrame, double sampleRate,
                                    double beatsPerMinute, bool playing, bool looping,
-                                   uint32_t blockFrames) {
-    if (!data_) return false;
+                                   uint32_t blockFrames,
+                                   const guitarrackcraft::MidiEvent* midiEvents,
+                                   uint32_t midiEventCount) {
+    if (!data_ || blockFrames == 0 || blockFrames > VSTPOC_MAX_BLOCK_FRAMES) return false;
     uint64_t qh = __atomic_load_n(&data_->transport_queue_head, __ATOMIC_RELAXED);
     uint64_t qt = __atomic_load_n(&data_->transport_queue_tail, __ATOMIC_ACQUIRE);
     if (qh - qt >= VSTPOC_TRANSPORT_QUEUE_CAPACITY) {
@@ -144,10 +148,38 @@ bool SharedRing::publishTransport(uint64_t samplePosition, uint64_t transportFra
     b.beats_per_minute = beatsPerMinute;
     b.flags = (playing ? 1u : 0u) | (looping ? 2u : 0u);
     b.block_frames = blockFrames;
+    const uint32_t count = (midiEvents && midiEventCount < VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK)
+                             ? midiEventCount : (midiEvents ? VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK : 0u);
+    b.midi_event_count = count;
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto& e = midiEvents[i];
+        VstpocMidiEvent& out = b.midi_events[i];
+        out.frame_offset = e.frameOffset < blockFrames ? e.frameOffset : blockFrames - 1u;
+        out.status = e.status; out.data1 = e.data1; out.data2 = e.data2; out.reserved = 0;
+    }
     __atomic_store_n(&data_->transport_queue_head, qh + 1u, __ATOMIC_RELEASE);
     __atomic_store_n(&data_->transport_seq, qh + 2u, __ATOMIC_RELEASE);
     if (qh == qt) notifyWake();
     return true;
+}
+
+uint32_t SharedRing::readMidiOutput(guitarrackcraft::MidiEvent* outputEvents,
+                                    uint32_t outputCapacity) const {
+    if (!data_ || !outputEvents || outputCapacity == 0) return 0;
+    const uint64_t seq = __atomic_load_n(&data_->midi_output_seq, __ATOMIC_ACQUIRE);
+    uint32_t count = data_->midi_output_count;
+    if (count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) count = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+    if (count > outputCapacity) count = outputCapacity;
+    for (uint32_t i = 0; i < count; ++i) {
+        const VstpocMidiEvent& in = data_->midi_output_events[i];
+        outputEvents[i].frameOffset = in.frame_offset;
+        outputEvents[i].status = in.status;
+        outputEvents[i].data1 = in.data1;
+        outputEvents[i].data2 = in.data2;
+    }
+    __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    if (__atomic_load_n(&data_->midi_output_seq, __ATOMIC_ACQUIRE) != seq) return 0;
+    return count;
 }
 
 int32_t SharedRing::pushInput(const float* left, const float* right, int32_t numFrames) {

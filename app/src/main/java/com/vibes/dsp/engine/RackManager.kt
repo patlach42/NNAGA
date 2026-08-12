@@ -40,6 +40,9 @@ object RackManager {
     fun setTrackInputChannel(trackId: RackPathId, inputChannel: Int): Boolean =
         native.setTrackInputChannel(trackId, inputChannel)
     fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = native.loadTrackWav(trackId, path, displayName)
+    fun loadTrackMidi(trackId: RackPathId, path: String, displayName: String): Boolean =
+        native.loadTrackMidi(trackId, path, displayName)
+    fun unloadTrackMidi(trackId: RackPathId): Boolean = native.unloadTrackMidi(trackId)
     fun unloadTrackWav(trackId: RackPathId): Boolean = native.unloadTrackWav(trackId)
     fun clearTrackWavs(): Boolean = native.clearTrackWavs()
     fun setTrackTransportPlaying(

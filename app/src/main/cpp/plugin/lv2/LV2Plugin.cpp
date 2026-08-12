@@ -151,6 +151,7 @@ void LV2Plugin::buildFeatures() {
     atom_Long_ = uridMap.map(LV2_ATOM__Long);
     atom_Double_ = uridMap.map(LV2_ATOM__Double);
     atom_Sequence_ = uridMap.map(LV2_ATOM__Sequence);
+    midi_MidiEvent_ = uridMap.map(LV2_MIDI__MidiEvent);
     atom_Chunk_ = uridMap.map(LV2_ATOM__Chunk);
 
     // Options: provide buffer size info
@@ -347,9 +348,21 @@ void LV2Plugin::deactivate() {
     }
 }
 
-void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                        const AudioProcessContext& context) {
+uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                            const AudioProcessContext& context,
+                            const MidiEvent* inputEvents, uint32_t inputCount,
+                            MidiEvent* outputEvents, uint32_t outputCapacity) {
     processing_.store(true, std::memory_order_seq_cst);
+    auto passthroughMidi = [&]() -> uint32_t {
+        if (!outputEvents || outputCapacity == 0 || !inputEvents) return 0;
+        uint32_t written = 0;
+        const uint32_t limit = std::min(inputCount, outputCapacity);
+        for (uint32_t i = 0; i < limit; ++i) {
+            if (inputEvents[i].frameOffset < numFrames) outputEvents[written++] = inputEvents[i];
+        }
+        return written;
+    };
+    uint32_t midiOutputCount = 0;
     const size_t maxCopy = std::min(static_cast<size_t>(numFrames), kMaxLv2BufferFrames);
     auto passthrough = [&]() {
         if (!inputs || !outputs) return;
@@ -360,7 +373,7 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
     if (!isActive_.load(std::memory_order_acquire) || !instance_ || maxCopy == 0) {
         passthrough();
         processing_.store(false, std::memory_order_seq_cst);
-        return;
+        return passthroughMidi();
     }
     for (size_t i = 0; i < audioInputPorts_.size() && i < 2; ++i) {
         if (inputs[i] && audioInputPorts_[i]) std::memcpy(audioInputPorts_[i], inputs[i], maxCopy * sizeof(float));
@@ -370,6 +383,40 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
         seq->atom.type = ap.isInput ? atom_Sequence_ : atom_Chunk_;
         seq->atom.size = ap.isInput ? sizeof(LV2_Atom_Sequence_Body)
                                     : kAtomBufferSize - sizeof(LV2_Atom);
+    }
+    // Append preallocated short MIDI events to MIDI-capable atom sequences.
+    if (inputEvents && inputCount > 0) {
+        for (auto& ap : atomPorts_) {
+            if (!ap.isInput || !ap.supportsMidi) continue;
+            auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(
+                atomPortBuffers_[ap.bufferIdx].data());
+            uint32_t used = seq->atom.size;
+            for (uint32_t i = 0; i < inputCount; ++i) {
+                const MidiEvent& midi = inputEvents[i];
+                if (midi.frameOffset >= maxCopy) continue;
+                constexpr uint32_t kMidiBytes = 3;
+                const uint32_t eventBytes = sizeof(LV2_Atom_Event) + kMidiBytes;
+                const uint32_t padded = (eventBytes + 7u) & ~uint32_t(7u);
+                if (used > kAtomBufferSize - sizeof(LV2_Atom_Sequence_Body) ||
+                    padded > kAtomBufferSize - sizeof(LV2_Atom_Sequence_Body) - used) {
+                    break;
+                }
+                auto* event = reinterpret_cast<LV2_Atom_Event*>(
+                    reinterpret_cast<uint8_t*>(&seq->body) + used);
+                event->time.frames = midi.frameOffset;
+                event->body.type = midi_MidiEvent_;
+                event->body.size = kMidiBytes;
+                uint8_t* data = reinterpret_cast<uint8_t*>(event) + sizeof(LV2_Atom_Event);
+                data[0] = midi.status;
+                data[1] = midi.data1;
+                data[2] = midi.data2;
+                if (padded > eventBytes) {
+                    std::memset(data + kMidiBytes, 0, padded - eventBytes);
+                }
+                used += padded;
+            }
+            seq->atom.size = used;
+        }
     }
     // UI atom mailbox: bounded copy, dropped when full or malformed.
     while (pendingAtoms_.consume([&](const AtomMessage& atomMsg) {
@@ -457,42 +504,31 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
         }
         break;
     }
-    if (!instance_) { passthrough(); processing_.store(false, std::memory_order_seq_cst); return; }
-    lilv_instance_run(instance_, static_cast<uint32_t>(maxCopy));
-    if (workerInterface_ && workerInterface_->work_response) {
-        LV2_Handle handle = lilv_instance_get_handle(instance_);
-        while (workResponses_.consume([&](const WorkerMessage& response) {
-            workerInterface_->work_response(
-                handle, response.size, response.data);
-        })) {}
-    }
-    if (workerInterface_ && workerInterface_->end_run)
-        workerInterface_->end_run(lilv_instance_get_handle(instance_));
+    if (!instance_) { passthrough(); processing_.store(false, std::memory_order_seq_cst); return passthroughMidi(); }
     for (auto& ap : atomPorts_) {
         if (ap.isInput) continue;
-        auto* seq = reinterpret_cast<const LV2_Atom_Sequence*>(atomPortBuffers_[ap.bufferIdx].data());
-        if (seq->atom.type != atom_Sequence_) continue;
-        if (seq->atom.size <= sizeof(LV2_Atom_Sequence_Body) ||
-            seq->atom.size > kAtomBufferSize - sizeof(LV2_Atom)) continue;
-        LV2_ATOM_SEQUENCE_FOREACH(seq, ev) {
-            const uint64_t size64 =
-                sizeof(LV2_Atom) + static_cast<uint64_t>(ev->body.size);
-            if (size64 > kUiPayloadSize) continue;
-            const uint8_t* body =
-                reinterpret_cast<const uint8_t*>(&ev->body);
-            const uint8_t* bufEnd =
-                atomPortBuffers_[ap.bufferIdx].data() + kAtomBufferSize;
-            if (body > bufEnd ||
-                size64 > static_cast<uint64_t>(bufEnd - body)) break;
-            const uint32_t size = static_cast<uint32_t>(size64);
-            if (!pendingOutputAtoms_.tryEmplace(
-                    [&](OutputMessage& out) {
-                        out.portIndex = ap.portIndex;
-                        out.size = size;
-                        std::memcpy(out.data, &ev->body, size);
-                    })) {
-                outputAtomDrops_.fetch_add(1, std::memory_order_relaxed);
+        const auto* base = atomPortBuffers_[ap.bufferIdx].data();
+        const uint32_t total = reinterpret_cast<const LV2_Atom*>(base)->size;
+        if (reinterpret_cast<const LV2_Atom*>(base)->type != atom_Sequence_ ||
+            total < sizeof(LV2_Atom_Sequence_Body) ||
+            total > kAtomBufferSize - sizeof(LV2_Atom)) continue;
+        const uint8_t* pos = base + sizeof(LV2_Atom) + sizeof(LV2_Atom_Sequence_Body);
+        const uint8_t* end = base + sizeof(LV2_Atom) + total;
+        while (pos + sizeof(LV2_Atom_Event) <= end) {
+            const auto* ev = reinterpret_cast<const LV2_Atom_Event*>(pos);
+            const uint64_t padded = (sizeof(LV2_Atom_Event) + static_cast<uint64_t>(ev->body.size) + 7u) & ~uint64_t(7u);
+            if (padded < sizeof(LV2_Atom_Event) || padded > static_cast<uint64_t>(end - pos)) break;
+            if (ev->body.type == midi_MidiEvent_ && ev->body.size >= 2 && ev->body.size <= 3 &&
+                outputEvents && midiOutputCount < outputCapacity) {
+                const auto* data = reinterpret_cast<const uint8_t*>(&ev->body) + sizeof(LV2_Atom);
+                const uint8_t status = data[0];
+                if ((status & 0x80u) != 0) {
+                    outputEvents[midiOutputCount++] = MidiEvent{
+                        static_cast<uint32_t>(ev->time.frames), status, data[1],
+                        static_cast<uint8_t>(ev->body.size == 3 ? data[2] : 0)};
+                }
             }
+            pos += padded;
         }
     }
     for (size_t i = 0; i < audioOutputPorts_.size() && i < 2; ++i) {
@@ -505,6 +541,8 @@ void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint3
             if (inputs[ch] && outputs[ch]) std::memcpy(outputs[ch] + maxCopy, inputs[ch] + maxCopy, (numFrames - maxCopy) * sizeof(float));
     }
     processing_.store(false, std::memory_order_seq_cst);
+    if (midiOutputCount == 0) midiOutputCount = passthroughMidi();
+    return midiOutputCount;
 }
 
 PluginInfo LV2Plugin::getInfo() const {
@@ -780,6 +818,8 @@ void LV2Plugin::initializePorts() {
     LilvNode* controlClass = lilv_new_uri(world_, LILV_URI_CONTROL_PORT);
     LilvNode* atomClass = lilv_new_uri(world_, LILV_URI_ATOM_PORT);
     LilvNode* inputClass = lilv_new_uri(world_, LILV_URI_INPUT_PORT);
+    LilvNode* atomSupports = lilv_new_uri(world_, LV2_ATOM__supports);
+    LilvNode* midiEventNode = lilv_new_uri(world_, LV2_MIDI__MidiEvent);
 
     for (uint32_t i = 0; i < numPorts; ++i) {
         const LilvPort* port = lilv_plugin_get_port_by_index(plugin_, i);
@@ -813,13 +853,26 @@ void LV2Plugin::initializePorts() {
                 audioOutputPorts_.push_back(audioOutputBuffers_.back().data());
             }
         } else if (isAtom) {
+            bool supportsMidi = false;
+            LilvNodes* supported = lilv_port_get_value(plugin_, port, atomSupports);
+            if (supported) {
+                LILV_FOREACH(nodes, si, supported) {
+                    if (lilv_node_equals(lilv_nodes_get(supported, si), midiEventNode)) {
+                        supportsMidi = true;
+                        break;
+                    }
+                }
+                lilv_nodes_free(supported);
+            }
             size_t bufIdx = atomPortBuffers_.size();
             atomPortBuffers_.emplace_back(kAtomBufferSize, 0);
-            atomPorts_.push_back({i, isInput, bufIdx});
+            atomPorts_.push_back({i, isInput, supportsMidi, bufIdx});
         }
     }
 
     lilv_node_free(audioClass);
+    lilv_node_free(atomSupports);
+    lilv_node_free(midiEventNode);
     lilv_node_free(controlClass);
     lilv_node_free(atomClass);
     lilv_node_free(inputClass);
@@ -1097,14 +1150,21 @@ void LV2Plugin::deactivate() {
     isActive_ = false;
 }
 
-void LV2Plugin::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                        const AudioProcessContext& /*context*/) {
+uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                            const AudioProcessContext& /*context*/,
+                            const MidiEvent* inputEvents, uint32_t inputCount,
+                            MidiEvent* outputEvents, uint32_t outputCapacity) {
     if (inputs && outputs && numFrames > 0) {
         for (uint32_t ch = 0; ch < 2; ++ch) {
             if (inputs[ch] && outputs[ch])
                 std::memcpy(outputs[ch], inputs[ch], numFrames * sizeof(float));
         }
     }
+    if (!outputEvents || !inputEvents) return 0;
+    uint32_t count = 0;
+    for (uint32_t i = 0; i < inputCount && count < outputCapacity; ++i)
+        if (inputEvents[i].frameOffset < numFrames) outputEvents[count++] = inputEvents[i];
+    return count;
 }
 PluginInfo LV2Plugin::getInfo() const {
     PluginInfo info;

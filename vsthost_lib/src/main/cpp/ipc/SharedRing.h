@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../../../../../app/src/main/cpp/plugin/IPlugin.h"
 #include <cstdint>
 #include <string>
 #include <thread>
@@ -32,7 +33,13 @@ public:
     bool publishTransport(uint64_t samplePosition, uint64_t transportFrame,
                           uint64_t loopEndFrame, double sampleRate,
                           double beatsPerMinute, bool playing, bool looping,
-                          uint32_t blockFrames);
+                          uint32_t blockFrames,
+                          const guitarrackcraft::MidiEvent* midiEvents,
+                          uint32_t midiEventCount);
+    // Host (audio thread): read guest-produced MIDI for the latest block.
+    // Returns bounded count; events are copied without allocation.
+    uint32_t readMidiOutput(guitarrackcraft::MidiEvent* outputEvents,
+                            uint32_t outputCapacity) const;
 
     // Host (UI thread): enqueue a parameter change for the guest.
     // Drops the message silently if the param ring is full.

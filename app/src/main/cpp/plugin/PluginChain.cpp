@@ -220,73 +220,73 @@ bool PluginChain::reorderPlugins(int fromIndex, int toIndex) {
     return true;
 }
 
-void PluginChain::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                          const AudioProcessContext& context) {
-    // Structural control must never block the callback. On contention, keep
-    // live audio flowing directly; do not touch buffers owned by the writer.
+uint32_t PluginChain::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                              const AudioProcessContext& context,
+                              const MidiEvent* inputEvents, uint32_t inputCount,
+                              MidiEvent* outputEvents, uint32_t outputCapacity) {
+    auto copyMidi = [&](const MidiEvent* src, uint32_t count, MidiEvent* dst, uint32_t cap) -> uint32_t {
+        if (!dst || cap == 0 || !src) return 0;
+        uint32_t written = 0;
+        const uint32_t limit = std::min(count, kMaxMidiEvents);
+        for (uint32_t i = 0; i < limit && written < cap; ++i) {
+            if (src[i].frameOffset < numFrames) dst[written++] = src[i];
+        }
+        return written;
+    };
     std::shared_lock lock(chainMutex_, std::try_to_lock);
     if (!lock.owns_lock()) {
         copyInputChannels(inputs, outputs, numFrames);
-        return;
+        return copyMidi(inputEvents, inputCount, outputEvents, outputCapacity);
     }
-
-    // An oversized callback cannot be processed by lifecycle-sized buffers.
-    // Preserve the allocation-free dry passthrough behavior.
-    if (numFrames == 0) {
-        return;
-    }
+    if (numFrames == 0) return 0;
     if (numFrames > renderBufferSize_) {
         copyInputChannels(inputs, outputs, numFrames);
-        return;
+        return copyMidi(inputEvents, inputCount, outputEvents, outputCapacity);
     }
     if (!outputs || !outputs[0] || !outputs[1]) {
         clearOutputs(outputs, numFrames);
-        return;
+        return copyMidi(inputEvents, inputCount, outputEvents, outputCapacity);
     }
-
     if (plugins_.empty()) {
         if (inputs && inputs[0] && inputs[1]) {
-            if (outputs[0] != inputs[0]) {
-                std::memcpy(
-                    outputs[0], inputs[0], numFrames * sizeof(float));
-            }
-            if (outputs[1] != inputs[1]) {
-                std::memcpy(
-                    outputs[1], inputs[1], numFrames * sizeof(float));
-            }
-        } else {
-            clearOutputs(outputs, numFrames);
-        }
-    } else {
-        // Process through chain. Intermediate storage was allocated by
-        // setSampleRate and is immutable for the lifetime of this render.
-        if (!inputs || !inputs[0] || !inputs[1] ||
-            intermediateBuffers_.size() < 2 ||
-            intermediateBuffers_[0].size() < numFrames ||
-            intermediateBuffers_[1].size() < numFrames) {
-            clearOutputs(outputs, numFrames);
-            return;
-        }
-
-        const float* currentInputs[2] = {inputs[0], inputs[1]};
-        float* currentOutputs[2] = {nullptr, nullptr};
-        for (size_t i = 0; i < plugins_.size(); ++i) {
-            auto& plugin = plugins_[i].plugin;
-            if (i == plugins_.size() - 1) {
-                currentOutputs[0] = outputs[0];
-                currentOutputs[1] = outputs[1];
-            } else {
-                currentOutputs[0] = intermediateBuffers_[0].data();
-                currentOutputs[1] = intermediateBuffers_[1].data();
-            }
-            plugin->process(currentInputs, currentOutputs, numFrames, context);
-            if (i < plugins_.size() - 1) {
-                currentInputs[0] = intermediateBuffers_[0].data();
-                currentInputs[1] = intermediateBuffers_[1].data();
-            }
-        }
+            if (outputs[0] != inputs[0]) std::memcpy(outputs[0], inputs[0], numFrames * sizeof(float));
+            if (outputs[1] != inputs[1]) std::memcpy(outputs[1], inputs[1], numFrames * sizeof(float));
+        } else clearOutputs(outputs, numFrames);
+        return copyMidi(inputEvents, inputCount, outputEvents, outputCapacity);
     }
-
+    if (!inputs || !inputs[0] || !inputs[1] || intermediateBuffers_.size() < 2 ||
+        intermediateBuffers_[0].size() < numFrames || intermediateBuffers_[1].size() < numFrames) {
+        clearOutputs(outputs, numFrames);
+        return copyMidi(inputEvents, inputCount, outputEvents, outputCapacity);
+    }
+    const MidiEvent* currentMidi = inputEvents;
+    uint32_t currentCount = std::min(inputCount, kMaxMidiEvents);
+    MidiEvent* currentOut = midiScratchA_.data();
+    const float* currentInputs[2] = {inputs[0], inputs[1]};
+    float* currentOutputs[2] = {nullptr, nullptr};
+    for (size_t i = 0; i < plugins_.size(); ++i) {
+        auto& plugin = plugins_[i].plugin;
+        currentOutputs[0] = (i + 1 == plugins_.size()) ? outputs[0] : intermediateBuffers_[0].data();
+        currentOutputs[1] = (i + 1 == plugins_.size()) ? outputs[1] : intermediateBuffers_[1].data();
+        MidiEvent* stageOut = (i + 1 == plugins_.size()) ? outputEvents : currentOut;
+        uint32_t stageCap = (i + 1 == plugins_.size()) ? outputCapacity : kMaxMidiEvents;
+        uint32_t produced = plugin->process(currentInputs, currentOutputs, numFrames, context,
+                                            currentMidi, currentCount, stageOut, stageCap);
+        if (produced == 0) {
+            produced = copyMidi(currentMidi, currentCount, stageOut, stageCap);
+        } else {
+            produced = std::min(produced, stageCap);
+            for (uint32_t j = 0; j < produced; ++j)
+                if (stageOut[j].frameOffset >= numFrames) stageOut[j].frameOffset = numFrames ? numFrames - 1 : 0;
+        }
+        if (i + 1 == plugins_.size()) return produced;
+        currentMidi = stageOut;
+        currentCount = produced;
+        currentOut = (currentOut == midiScratchA_.data()) ? midiScratchB_.data() : midiScratchA_.data();
+        currentInputs[0] = intermediateBuffers_[0].data();
+        currentInputs[1] = intermediateBuffers_[1].data();
+    }
+    return 0;
 }
 
 void PluginChain::setSampleRate(float sampleRate, uint32_t bufferSize) {

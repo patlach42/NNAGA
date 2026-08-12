@@ -300,49 +300,55 @@ void WineVstPlugin::deactivate() {
          entry_.displayName.c_str(), underruns_.load(std::memory_order_relaxed));
 }
 
-void WineVstPlugin::process(const float* const* inputs,
-                            float* const* outputs,
-                            uint32_t numFrames,
-                            const guitarrackcraft::AudioProcessContext& context) {
+uint32_t WineVstPlugin::process(const float* const* inputs,
+                                float* const* outputs,
+                                uint32_t numFrames,
+                                const guitarrackcraft::AudioProcessContext& context,
+                                const guitarrackcraft::MidiEvent* midiEvents,
+                                uint32_t midiEventCount,
+                                guitarrackcraft::MidiEvent* outputEvents,
+                                uint32_t outputCapacity) {
     if (!ring_ || !inputs || !outputs) {
-        // Not active or no ring: silence outputs. Don't pass-through —
-        // that would mask the underlying failure to the audio chain.
         if (outputs) {
-            for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch) {
+            for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch)
                 if (outputs[ch]) std::memset(outputs[ch], 0, numFrames * sizeof(float));
-            }
         }
-        return;
+        return 0;
     }
     if (numFrames > VSTPOC_MAX_BLOCK_FRAMES) {
-        // Oversize callbacks cannot be represented by the guest ABI. Preserve
-        // continuity with an allocation-free dry pass-through and count drop.
         for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch) {
             if (!outputs[ch]) continue;
-            const float* src = (inputs && inputs[ch]) ? inputs[ch] :
-                               ((inputs && inputs[0]) ? inputs[0] : nullptr);
+            const float* src = inputs[ch] ? inputs[ch] : inputs[0];
             if (src) std::memcpy(outputs[ch], src, numFrames * sizeof(float));
             else std::memset(outputs[ch], 0, numFrames * sizeof(float));
         }
+        uint32_t count = std::min(midiEventCount, outputCapacity);
+        if (outputEvents && midiEvents) std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
         underruns_.fetch_add(1, std::memory_order_relaxed);
-        return;
+        return count;
     }
 
     if (!ring_->inputWritable(numFrames)) {
         for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch)
             if (outputs[ch]) std::memset(outputs[ch], 0, numFrames * sizeof(float));
+        const uint32_t count = std::min(midiEventCount, outputCapacity);
+        if (outputEvents && midiEvents) {
+            std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
+        }
         underruns_.fetch_add(1, std::memory_order_relaxed);
-        return;
+        return count;
     }
     if (!ring_->publishTransport(context.samplePosition, context.transportFrame,
                                  context.loopEndFrame, context.sampleRate,
                                  context.beatsPerMinute, context.playing,
-                                 context.looping, numFrames)) {
-        for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch)
-            if (outputs[ch]) std::memset(outputs[ch], 0, numFrames * sizeof(float));
-
+                                 context.looping, numFrames,
+                                 midiEvents, midiEventCount)) {
+        const uint32_t count = std::min(midiEventCount, outputCapacity);
+        if (outputEvents && midiEvents) {
+            std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
+        }
         underruns_.fetch_add(1, std::memory_order_relaxed);
-        return;
+        return count;
     }
     // 1) push planar input into wine (mono input is duplicated).
     const float* inL = (inputs && inputs[0]) ? inputs[0] : silentInput_.data();
@@ -362,8 +368,13 @@ void WineVstPlugin::process(const float* const* inputs,
         }
         underruns_.fetch_add(1, std::memory_order_relaxed);
     }
+    uint32_t outCount = ring_->readMidiOutput(outputEvents, outputCapacity);
+    if (outCount == 0 && outputEvents && midiEvents) {
+        outCount = std::min(midiEventCount, outputCapacity);
+        std::memcpy(outputEvents, midiEvents, outCount * sizeof(*outputEvents));
+    }
+    return outCount;
 }
-
 int32_t WineVstPlugin::getEditorWidth() const {
     return (ring_ && ring_->raw()) ? ring_->raw()->editor_width : 0;
 }
