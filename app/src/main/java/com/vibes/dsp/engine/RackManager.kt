@@ -45,6 +45,17 @@ object RackManager {
     fun unloadTrackMidi(trackId: RackPathId): Boolean = native.unloadTrackMidi(trackId)
     fun unloadTrackWav(trackId: RackPathId): Boolean = native.unloadTrackWav(trackId)
     fun clearTrackWavs(): Boolean = native.clearTrackWavs()
+    fun getTrackWaveformPeaks(trackId: RackPathId, maxBuckets: Int = 256): FloatArray =
+        native.nativeGetTrackWaveformPeaks(trackId, maxBuckets)
+    fun getTrackClipSlots(trackId: RackPathId): Array<ClipSlotInfo> = native.nativeGetTrackClipSlots(trackId)
+    fun getTrackClipMidiNotes(trackId: RackPathId, slot: Int): Array<MidiNoteInfo> =
+        native.nativeGetTrackClipMidiNotes(trackId, slot)
+    fun loadTrackClipWav(trackId: RackPathId, slot: Int, path: String, displayName: String): Boolean =
+        native.nativeLoadTrackClipWav(trackId, slot, path, displayName)
+    fun loadTrackClipMidi(trackId: RackPathId, slot: Int, path: String, displayName: String): Boolean =
+        native.nativeLoadTrackClipMidi(trackId, slot, path, displayName)
+    fun selectTrackClipSlot(trackId: RackPathId, slot: Int): Boolean =
+        native.nativeSelectTrackClipSlot(trackId, slot)
     fun setTrackTransportPlaying(
         trackId: RackPathId,
         playing: Boolean,

@@ -1,0 +1,23 @@
+From: Guitar RackCraft <build@guitarrackcraft.local>
+Subject: [PATCH] SPIRV: include cstdint for uint32_t declarations
+
+GCC 16 no longer reaches the fixed-width integer declarations through the
+transitive standard-library includes used by this older glslang source.
+
+---
+ SPIRV/SpvBuilder.h | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/SPIRV/SpvBuilder.h b/SPIRV/SpvBuilder.h
+--- a/SPIRV/SpvBuilder.h
++++ b/SPIRV/SpvBuilder.h
+@@ -58,8 +58,9 @@ namespace spv {
+ #include <algorithm>
++#include <cstdint>
+ #include <map>
+ #include <memory>
+ #include <set>
+ #include <sstream>
+ #include <stack>
+ #include <unordered_map>
+ #include <map>

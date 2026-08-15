@@ -1,0 +1,30 @@
+From: Guitar RackCraft <build@guitarrackcraft.local>
+Subject: [PATCH] build-openmp: pass the Clang resource directory major
+
+OpenMP is configured as a standalone runtime without an LLVM package, so its
+CMake configuration has no PACKAGE_VERSION. Derive the Clang resource version
+from the newly built toolchain and provide it explicitly.
+
+---
+ build-openmp.sh | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/build-openmp.sh b/build-openmp.sh
+--- a/build-openmp.sh
++++ b/build-openmp.sh
+@@ -40,6 +40,8 @@ fi
+ mkdir -p "$PREFIX"
+ PREFIX="$(cd "$PREFIX" && pwd)"
+ 
++CLANG_RESOURCE_DIR="$("$PREFIX/bin/clang" --print-resource-dir)"
++
+ export PATH="$PREFIX/bin:$PATH"
+ 
+ : ${ARCHS:=${TOOLCHAIN_ARCHS-i686 x86_64 armv7 aarch64 arm64ec}}
+@@ -96,5 +98,6 @@ for arch in $ARCHS; do
+         -DLIBOMP_ENABLE_SHARED=TRUE \
+         -DCMAKE_C_FLAGS_INIT="$CFGUARD_CFLAGS" \
+         -DCMAKE_CXX_FLAGS_INIT="$CFGUARD_CFLAGS" \
++        -DCLANG_VERSION_MAJOR="${CLANG_RESOURCE_DIR##*/}" \
+         $CMAKEFLAGS \
+         ..

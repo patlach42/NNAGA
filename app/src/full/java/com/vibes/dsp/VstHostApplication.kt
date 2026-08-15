@@ -12,11 +12,13 @@ import com.vibes.dsp.engine.RendererPreferenceManager
 import com.vibes.dsp.engine.WineEnvFile
 import com.vibes.dsp.ui.vst.VstHostSetup
 import com.vibes.dsp.ui.vst.VstRegistry
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
-
+import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineStart
 /**
  * Full-flavor Application that eagerly runs VstHostSetup.ensureWineRoot()
  * on a background thread at process start. Without this, the wine binaries
@@ -30,8 +32,11 @@ import kotlinx.coroutines.launch
  * Also re-applies any per-plugin prefixes for plugins that were previously
  * imported, in case the user deleted them or the setup version bumped.
  */
-class VstHostApplication : Application() {
+class VstHostApplication : Application(), StartupPrerequisite {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val wineSetup: Deferred<Boolean> = scope.async(start = CoroutineStart.LAZY) {
+        runWineSetup()
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -46,31 +51,38 @@ class VstHostApplication : Application() {
             return
         }
         Log.i(TAG, "VstHostApplication.onCreate — staging wine on background thread")
-        scope.launch {
+        wineSetup.start()
+    }
+
+    override suspend fun awaitStartupPrerequisite(): Boolean = wineSetup.await()
+
+    private suspend fun runWineSetup(): Boolean {
+        return try {
             val t0 = System.currentTimeMillis()
-            val ok = VstHostSetup.ensureWineRoot(this@VstHostApplication)
+            val ok = VstHostSetup.ensureWineRoot(this)
             Log.i(TAG, "ensureWineRoot ok=$ok in ${System.currentTimeMillis() - t0} ms")
-            if (!ok) return@launch
+            if (!ok) return false
             // Sync the chosen plugin-editor renderer into cache/wine_env.txt BEFORE
             // any plugin can be activated (the wine subprocess is forked at
-            // activate() and reads the file then). Defaults to Turnip on Adreno,
-            // lavapipe elsewhere; preserves any other dev lines in the file.
+            // activate() and reads the file then).
             WineEnvFile.applyRenderer(
-                this@VstHostApplication,
-                RendererPreferenceManager.getRenderer(this@VstHostApplication)
+                this,
+                RendererPreferenceManager.getRenderer(this)
             )
-            // Re-seed each existing imported VST's prefix (idempotent).
-            val entries = VstRegistry.read(this@VstHostApplication)
+            val entries = VstRegistry.read(this)
             for (e in entries) {
-                VstHostSetup.ensurePluginPrefix(this@VstHostApplication, e.uuid)
+                if (!VstHostSetup.ensurePluginPrefix(this, e.uuid)) return false
             }
-            // Once setup is done, refresh the plugin registry so VstFactory
-            // re-reads registry.json and the imported plugins show up in
-            // the browser without an engine restart.
             if (entries.isNotEmpty()) {
                 runCatching { NativeEngine.getInstance().nativeRefreshPluginRegistry() }
             }
             Log.i(TAG, "VstHost background setup complete (${entries.size} VST(s))")
+            true
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (t: Throwable) {
+            Log.e(TAG, "VstHost background setup failed", t)
+            false
         }
     }
 

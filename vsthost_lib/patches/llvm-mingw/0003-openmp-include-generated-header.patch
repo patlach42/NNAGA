@@ -1,0 +1,31 @@
+From: Guitar RackCraft <build@guitarrackcraft.local>
+Subject: [PATCH] build-openmp: include generated OpenMP headers while building
+
+The standalone runtimes build creates omp.h under its binary Clang resource
+directory, while the compiler still searches the installed resource directory.
+Add the generated directory during the build; installation remains unchanged.
+
+---
+ build-openmp.sh | 5 +++--
+ 1 file changed, 3 insertions(+), 2 deletions(-)
+
+diff --git a/build-openmp.sh b/build-openmp.sh
+--- a/build-openmp.sh
++++ b/build-openmp.sh
+@@ -81,5 +81,6 @@ for arch in $ARCHS; do
+     [ -z "$CLEAN" ] || rm -rf build-openmp-$arch
+     mkdir -p build-openmp-$arch
+     cd build-openmp-$arch
+     [ -n "$NO_RECONF" ] || rm -rf CMake*
++    OPENMP_HEADER_DIR="$PWD/lib/clang/${CLANG_RESOURCE_DIR##*/}/include"
+ 
+@@ -97,7 +98,7 @@ for arch in $ARCHS; do
+         -DLLVM_ENABLE_RUNTIMES="openmp" \
+         -DLIBOMP_ENABLE_SHARED=TRUE \
+-        -DCMAKE_C_FLAGS_INIT="$CFGUARD_CFLAGS" \
+-        -DCMAKE_CXX_FLAGS_INIT="$CFGUARD_CFLAGS" \
++        -DCMAKE_C_FLAGS_INIT="$CFGUARD_CFLAGS -I$OPENMP_HEADER_DIR" \
++        -DCMAKE_CXX_FLAGS_INIT="$CFGUARD_CFLAGS -I$OPENMP_HEADER_DIR" \
+         -DCLANG_VERSION_MAJOR="${CLANG_RESOURCE_DIR##*/}" \
+         $CMAKEFLAGS \
+         ..

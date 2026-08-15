@@ -75,6 +75,22 @@ fi
 GLSLANG_DIR="$repo_root/external/glslang"
 GLSLANG_BUILD="$GLSLANG_DIR/build"
 GLSLANG_BIN="$GLSLANG_BUILD/StandAlone/glslang"
+
+GLSLANG_PATCH_DIR="$repo_root/patches/glslang"
+if [ -d "$GLSLANG_PATCH_DIR" ]; then
+    for p in "$GLSLANG_PATCH_DIR"/[0-9]*.patch; do
+        [ -f "$p" ] || continue
+        if git -C "$GLSLANG_DIR" apply --check "$p" 2>/dev/null; then
+            git -C "$GLSLANG_DIR" apply "$p"
+            echo "[+] glslang patch: $(basename "$p")"
+        elif git -C "$GLSLANG_DIR" apply --reverse --check "$p" 2>/dev/null; then
+            echo "[=] glslang patch already applied: $(basename "$p")"
+        else
+            echo "error: glslang patch no longer applies: $(basename "$p")" >&2
+            exit 1
+        fi
+    done
+fi
 if [ ! -x "$GLSLANG_BIN" ]; then
     if [ ! -d "$GLSLANG_DIR/External" ]; then
         echo "error: glslang submodule not initialized at $GLSLANG_DIR" >&2

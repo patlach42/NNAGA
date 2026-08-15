@@ -196,6 +196,23 @@ enum class TrackLaunchQuantization {
     None
 }
 
+data class ClipSlotInfo(
+    val trackId: RackPathId,
+    val slot: Int,
+    val wavLoaded: Boolean,
+    val midiLoaded: Boolean,
+    val displayName: String,
+    val durationSec: Double,
+    val active: Boolean
+)
+
+data class MidiNoteInfo(
+    val startFrame: Long,
+    val durationFrames: Long,
+    val pitch: Int,
+    val velocity: Int
+)
+
 data class RackTrackInfo(
     val id: RackPathId,
     val volume: Float,
@@ -546,6 +563,7 @@ class NativeEngine private constructor() {
     external fun nativeUnloadTrackMidi(trackId: Long): Boolean
     external fun nativeUnloadTrackWav(trackId: Long): Boolean
     external fun nativeClearTrackWavs(): Boolean
+    external fun nativeGetTrackWaveformPeaks(trackId: Long, maxBuckets: Int): FloatArray
     external fun nativeSetTransportPlaying(playing: Boolean): Boolean
     external fun nativeSetTransportBpm(bpm: Double): Boolean
     external fun nativeRestartTransport(): Boolean
@@ -562,6 +580,11 @@ class NativeEngine private constructor() {
         enterOnPunch: Boolean
     ): Boolean
     external fun nativeCancelTrackLoopRecording(trackId: Long): Boolean
+    external fun nativeGetTrackClipSlots(trackId: Long): Array<ClipSlotInfo>
+    external fun nativeGetTrackClipMidiNotes(trackId: Long, slot: Int): Array<MidiNoteInfo>
+    external fun nativeLoadTrackClipWav(trackId: Long, slot: Int, path: String, displayName: String): Boolean
+    external fun nativeLoadTrackClipMidi(trackId: Long, slot: Int, path: String, displayName: String): Boolean
+    external fun nativeSelectTrackClipSlot(trackId: Long, slot: Int): Boolean
     external fun nativeGetTransportInfo(): TransportInfo
 
 

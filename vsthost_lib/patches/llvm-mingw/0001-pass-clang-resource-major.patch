@@ -1,0 +1,21 @@
+From: Guitar RackCraft <build@guitarrackcraft.local>
+Subject: [PATCH] build-compiler-rt: pass the Clang resource directory major
+
+Compiler-RT's standalone CMake configuration has no LLVM package and therefore
+no PACKAGE_VERSION. GetClangResourceDir.cmake needs CLANG_VERSION_MAJOR to
+choose the resource directory; derive it from clang --print-resource-dir.
+
+---
+ build-compiler-rt.sh | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/build-compiler-rt.sh b/build-compiler-rt.sh
+--- a/build-compiler-rt.sh
++++ b/build-compiler-rt.sh
+@@ -161,5 +161,6 @@ for arch in $ARCHS; do
+         -DSANITIZER_CXX_ABI=libc++ \
+         -DCMAKE_C_FLAGS_INIT="$CFGUARD_CFLAGS" \
+         -DCMAKE_CXX_FLAGS_INIT="$CFGUARD_CFLAGS" \
++        -DCLANG_VERSION_MAJOR="${CLANG_RESOURCE_DIR##*/}" \
+         $SRC_DIR
+     cmake --build . ${CORES:+-j${CORES}}

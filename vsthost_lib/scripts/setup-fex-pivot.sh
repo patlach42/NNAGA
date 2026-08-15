@@ -16,10 +16,74 @@
 
 set -euo pipefail
 
+# On development hosts with a DOS/PE binfmt handler, Autoconf can execute
+# arm64ec conftest.exe through host Wine instead of recognizing it as a cross
+# binary. A crashing guest then opens winedbg and blocks the whole toolchain
+# build. Re-exec in a private mount namespace with an empty binfmt registry;
+# output paths stay on the host filesystem and the global handler is unchanged.
+if [[ -e /proc/sys/fs/binfmt_misc/DOSWin && -z "${GRC_ISOLATED_BINFMT:-}" ]]; then
+    if ! command -v unshare >/dev/null || ! command -v mount >/dev/null; then
+        echo "error: active DOSWin binfmt handler would run foreign PE configure probes" >&2
+        echo "install util-linux with unshare/mount or disable the handler for this build" >&2
+        exit 1
+    fi
+    exec unshare --user --map-root-user --mount --fork -- /bin/bash -c '
+        set -euo pipefail
+        mount --make-rprivate /
+        mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc
+        export GRC_ISOLATED_BINFMT=1
+        exec "$@"
+    ' _ "$0" "$@"
+fi
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
 # Submodule paths within this lib (relative to repo_root which is vsthost_lib).
+
+patch_is_applied() {
+    local patch_name="$1"
+    case "$patch_name" in
+        0001-pass-clang-resource-major.patch)
+            grep -Fqx -- '        -DCLANG_VERSION_MAJOR="${CLANG_RESOURCE_DIR##*/}" \' \
+                "$LLVM_MINGW_DIR/build-compiler-rt.sh"
+            ;;
+        0002-openmp-pass-clang-resource-major.patch)
+            grep -Fqx -- 'CLANG_RESOURCE_DIR="$("$PREFIX/bin/clang" --print-resource-dir)"' \
+                "$LLVM_MINGW_DIR/build-openmp.sh" &&
+                grep -Fqx -- '        -DCLANG_VERSION_MAJOR="${CLANG_RESOURCE_DIR##*/}" \' \
+                    "$LLVM_MINGW_DIR/build-openmp.sh"
+            ;;
+        0003-openmp-include-generated-header.patch)
+            grep -Fqx -- '    OPENMP_HEADER_DIR="$PWD/lib/clang/${CLANG_RESOURCE_DIR##*/}/include"' \
+                "$LLVM_MINGW_DIR/build-openmp.sh" &&
+                grep -Fqx -- '        -DCMAKE_C_FLAGS_INIT="$CFGUARD_CFLAGS -I$OPENMP_HEADER_DIR" \' \
+                    "$LLVM_MINGW_DIR/build-openmp.sh" &&
+                grep -Fqx -- '        -DCMAKE_CXX_FLAGS_INIT="$CFGUARD_CFLAGS -I$OPENMP_HEADER_DIR" \' \
+                    "$LLVM_MINGW_DIR/build-openmp.sh"
+            ;;
+        *) return 1 ;;
+    esac
+}
+
+apply_llvm_mingw_patches() {
+    local patch_dir="$repo_root/patches/llvm-mingw"
+    local patch
+    for patch in "$patch_dir"/*.patch; do
+        [[ -e "$patch" ]] || continue
+        if git -C "$LLVM_MINGW_DIR" apply --check "$patch" 2>/dev/null; then
+            git -C "$LLVM_MINGW_DIR" apply "$patch"
+            echo "[+] applied llvm-mingw patch: $(basename "$patch")"
+        elif patch_is_applied "$(basename "$patch")" ||
+            git -C "$LLVM_MINGW_DIR" apply --reverse --check "$patch" 2>/dev/null; then
+            echo "[=] llvm-mingw patch already applied: $(basename "$patch")"
+        else
+            echo "error: llvm-mingw patch no longer applies: $patch" >&2
+            exit 1
+        fi
+    done
+}
+
 WINE_DIR="external/wine-upstream"
 FEX_DIR="external/fex-upstream"
 LLVM_MINGW_DIR="external/llvm-mingw"
@@ -40,6 +104,7 @@ require_submodule() {
 require_submodule "wine"        "$WINE_DIR"
 require_submodule "fex"         "$FEX_DIR"
 require_submodule "llvm-mingw"  "$LLVM_MINGW_DIR"
+apply_llvm_mingw_patches
 
 # --- build llvm-mingw locally (one-shot, ~30-60 min first run) --------------
 # Output goes to external/llvm-mingw/install/. The source-revision marker

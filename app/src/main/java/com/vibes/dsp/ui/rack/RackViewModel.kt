@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -43,6 +44,12 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     val directUsbState: StateFlow<DirectUsbSessionState> = _directUsbState.asStateFlow()
     private val _selectedPathPlugins = MutableStateFlow<List<RackPlugin>>(emptyList()); val selectedPathPlugins = _selectedPathPlugins.asStateFlow()
     private val _transport = MutableStateFlow(TransportInfo(false, 0.0, 120.0, 0L, 0L)); val transport = _transport.asStateFlow()
+    private val _waveformPeaks = MutableStateFlow<Map<RackPathId, List<Float>>>(emptyMap())
+    val waveformPeaks: StateFlow<Map<RackPathId, List<Float>>> = _waveformPeaks.asStateFlow()
+    private val _clipSlots = MutableStateFlow<Map<RackPathId, List<ClipSlotInfo>>>(emptyMap())
+    val clipSlots: StateFlow<Map<RackPathId, List<ClipSlotInfo>>> = _clipSlots.asStateFlow()
+    private val _midiNotes = MutableStateFlow<Map<Pair<RackPathId, Int>, List<MidiNoteInfo>>>(emptyMap())
+    val midiNotes: StateFlow<Map<Pair<RackPathId, Int>, List<MidiNoteInfo>>> = _midiNotes.asStateFlow()
     private val _errorMessage = MutableStateFlow<String?>(null); val errorMessage = _errorMessage.asStateFlow()
     private val _blockingOperation = MutableStateFlow<String?>(null); val blockingOperation = _blockingOperation.asStateFlow()
     private var lastUsbSignature: List<Long>? = null
@@ -248,6 +255,69 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     suspend fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = withBlockingOperation("Loading WAV") { withContext(Dispatchers.IO) { RackManager.loadTrackWav(trackId, path, displayName) } }.also { if (!it) _errorMessage.value = "Failed to load WAV"; refreshRack() }
     fun loadTrackWavAsync(trackId: RackPathId, path: String, displayName: String) { viewModelScope.launch { loadTrackWav(trackId, path, displayName) } }
     fun unloadTrackWav(trackId: RackPathId) { viewModelScope.launch { val ok = withBlockingOperation("Unloading WAV") { withContext(Dispatchers.IO) { RackManager.unloadTrackWav(trackId) } }; if (!ok) _errorMessage.value = "Failed to unload WAV"; refreshRack() } }
+    fun loadTrackWaveform(trackId: RackPathId) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val peaks = runCatching {
+                RackManager.getTrackWaveformPeaks(trackId).toList()
+            }.getOrDefault(emptyList())
+            _waveformPeaks.update { current ->
+                current.toMutableMap().apply {
+                    if (peaks.isEmpty()) remove(trackId) else put(trackId, peaks)
+                }
+            }
+        }
+    }
+    fun refreshTrackClipSlots(trackId: RackPathId) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val slots = runCatching { RackManager.getTrackClipSlots(trackId).toList() }
+                .getOrDefault(emptyList())
+            _clipSlots.update { current -> current + (trackId to slots) }
+        }
+    }
+    fun loadTrackClipMedia(trackId: RackPathId, slot: Int, uri: Uri, displayName: String) {
+        viewModelScope.launch {
+            val midi = uri.lastPathSegment?.substringBefore('?')?.lowercase()?.let {
+                it.endsWith(".mid") || it.endsWith(".midi")
+            } == true || getApplication<Application>().contentResolver.getType(uri)?.lowercase() in
+                setOf("audio/midi", "audio/x-midi", "application/x-midi")
+            val loaded = withBlockingOperation(if (midi) "Importing MIDI clip" else "Importing audio clip") {
+                withContext(Dispatchers.IO) {
+                    val extension = if (midi) ".mid" else ".wav"
+                    val source = File.createTempFile("clip_import_", extension, getApplication<Application>().cacheDir)
+                    try {
+                        getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                            source.outputStream().use(input::copyTo)
+                        } ?: return@withContext false
+                        if (midi) RackManager.loadTrackClipMidi(trackId, slot, source.absolutePath, displayName)
+                        else {
+                            val wav = File.createTempFile("clip_import_decoded_", ".wav", getApplication<Application>().cacheDir)
+                            try {
+                                AudioImportDecoder.copyOrDecode(getApplication(), uri, wav)
+                                RackManager.loadTrackClipWav(trackId, slot, wav.absolutePath, displayName)
+                            } finally { wav.delete() }
+                        }
+                    } finally { source.delete() }
+                }
+            }
+            if (!loaded) _errorMessage.value = "Unable to load clip media"
+            refreshTrackClipSlots(trackId)
+            if (!midi) loadTrackWaveform(trackId)
+        }
+    }
+    fun selectTrackClipSlot(trackId: RackPathId, slot: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!RackManager.selectTrackClipSlot(trackId, slot)) _errorMessage.value = "Unable to select clip"
+            refreshTrackClipSlots(trackId)
+            refreshTrackTransport()
+        }
+    }
+    fun loadTrackClipMidiNotes(trackId: RackPathId, slot: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val notes = runCatching { RackManager.getTrackClipMidiNotes(trackId, slot).toList() }
+                .getOrDefault(emptyList())
+            _midiNotes.update { current -> current + ((trackId to slot) to notes) }
+        }
+    }
     fun unloadTrackMidi(trackId: RackPathId) { viewModelScope.launch { val ok = withBlockingOperation("Unloading MIDI") { withContext(Dispatchers.IO) { RackManager.unloadTrackMidi(trackId) } }; if (!ok) _errorMessage.value = "Failed to unload MIDI"; refreshRack() } }
     fun clearTrackWavs() { viewModelScope.launch(Dispatchers.IO) { RackManager.clearTrackWavs(); refreshRackNow() } }
     fun transportPlay() { setTransportPlaying(true) }

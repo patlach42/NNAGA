@@ -287,6 +287,52 @@ android {
     }
 }
 
+// Full releases must never package without the staged Wine/FEX runtime payload.
+// Debug builds intentionally remain lightweight and are not gated here.
+val verifyFullReleaseRuntimePayload = tasks.register("verifyFullReleaseRuntimePayload") {
+    doLast {
+        val jniLibDir = rootProject.file("vsthost_lib/src/main/jniLibs/arm64-v8a")
+        val assetsDir = rootProject.file("vsthost_lib/src/main/assets")
+        val missing = mutableListOf<String>()
+
+        if (jniLibDir.listFiles()?.none {
+                it.isFile && it.name.matches(Regex("libwine_.*\\.so"))
+            } != false) {
+            missing += "${jniLibDir.relativeTo(rootProject.projectDir).path}/libwine_*.so"
+        }
+        if (!assetsDir.resolve("wine-fex-manifest.json").isFile) {
+            missing += "${assetsDir.relativeTo(rootProject.projectDir).path}/wine-fex-manifest.json"
+        }
+        if (!assetsDir.resolve("wine-fex-nls.tar").isFile &&
+            !assetsDir.resolve("wine-fex-nls.tar.gz").isFile
+        ) {
+            missing += "${assetsDir.relativeTo(rootProject.projectDir).path}/wine-fex-nls.tar[.gz]"
+        }
+        for (rendererArchive in listOf("turnip-libs.tar.gz", "mesa-zink-libs.tar.gz")) {
+            if (!assetsDir.resolve(rendererArchive).isFile) {
+                missing += "${assetsDir.relativeTo(rootProject.projectDir).path}/$rendererArchive"
+            }
+        }
+
+        if (missing.isNotEmpty()) {
+            throw GradleException(
+                "Full release Wine/FEX runtime payload verification failed. " +
+                    "Missing required staged files/categories:\n" +
+                    missing.joinToString(separator = "\n") { " - $it" }
+            )
+        }
+        logger.lifecycle("Full release Wine/FEX runtime payload verified.")
+    }
+}
+
+// Wire lazily because Android Gradle Plugin creates variant tasks after this script
+// is evaluated. Debug and playstore tasks are intentionally untouched.
+tasks.configureEach {
+    if (name == "assembleFullRelease" || name == "bundleFullRelease") {
+        dependsOn(verifyFullReleaseRuntimePayload)
+    }
+}
+
 dependencies {
     // X11 plugin UIs: native EGL + ANativeWindow (see app/src/main/cpp/x11/)
 

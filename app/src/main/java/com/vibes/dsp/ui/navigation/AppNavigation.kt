@@ -19,12 +19,12 @@
 
 package com.vibes.dsp.ui.navigation
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -32,18 +32,17 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vibes.dsp.ui.browser.PluginBrowserScreen
+import com.vibes.dsp.ui.live.LiveScreen
 import com.vibes.dsp.ui.modgui.ModguiScreen
-import com.vibes.dsp.ui.rack.RackScreen
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.settings.SettingsScreen
 import com.vibes.dsp.ui.settings.SettingsTab
-import com.vibes.dsp.ui.tone3000.ToneDetailScreen
 import com.vibes.dsp.ui.tone3000.Tone
+import com.vibes.dsp.ui.tone3000.ToneDetailScreen
 
 sealed class Screen(val route: String) {
-    object Rack : Screen("rack")
+    object Live : Screen("live")
     object Browser : Screen("browser?pathId={pathId}&replaceIndex={replaceIndex}") {
         fun route(pathId: Long, replaceIndex: Int = -1) = "browser?pathId=$pathId&replaceIndex=$replaceIndex"
     }
@@ -90,51 +89,41 @@ fun AppNavigation(
     engineReady: Boolean,
     navController: NavHostController = rememberNavController()
 ) {
-    val backStackEntry by navController.currentBackStackEntryAsState()
     val rackViewModel: RackViewModel = viewModel()
     LaunchedEffect(engineReady) {
         if (engineReady) rackViewModel.onNativeEngineReady()
     }
-    val currentRoute = backStackEntry?.destination?.route
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        // RackScreen is ALWAYS composed — kept alive so X11/modgui UIs don't re-render.
-        val isRackVisible = currentRoute == null || currentRoute == Screen.Rack.route
-        RackScreen(
-            isVisible = isRackVisible,
-            onNavigateToBrowser = { pathId -> navController.navigate(Screen.Browser.route(pathId)) },
-            onNavigateToSettings = { navController.navigate(Screen.Settings.route()) },
-            onNavigateToTone3000 = { tag, gear, platform, sourcePluginIndex, sourceSlot ->
-                navController.navigate(
-                    Screen.Settings.route(
-                        tab = SettingsTab.Tone3000,
-                        tag = tag,
-                        gear = gear,
-                        platform = platform,
-                        sourcePluginIndex = sourcePluginIndex,
-                        sourceSlot = sourceSlot
+    NavHost(
+        navController = navController,
+        startDestination = Screen.Live.route,
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        composable(Screen.Live.route) {
+            LiveScreen(
+                viewModel = rackViewModel,
+                onNavigateToBrowser = { pathId, replaceIndex ->
+                    navController.navigate(Screen.Browser.route(pathId, replaceIndex))
+                },
+                onNavigateToSettings = {
+                    navController.navigate(Screen.Settings.route())
+                },
+                onNavigateToTone3000 = { tag, gear, platform, sourcePluginIndex, sourceSlot ->
+                    navController.navigate(
+                        Screen.Settings.route(
+                            tab = SettingsTab.Tone3000,
+                            tag = tag,
+                            gear = gear,
+                            platform = platform,
+                            sourcePluginIndex = sourcePluginIndex,
+                            sourceSlot = sourceSlot
+                        )
                     )
-                )
-            },
-            onReplacePlugin = { pathId, replaceIndex ->
-                navController.navigate(Screen.Browser.route(pathId, replaceIndex))
-            },
-            viewModel = rackViewModel
-        )
-
-        // NavHost is always composed (navController needs its graph).
-        // The rack route is an empty placeholder; the real RackScreen lives above.
-        // Other screens overlay on top of the rack when navigated to.
-        NavHost(
-            navController = navController,
-            startDestination = Screen.Rack.route,
-            modifier = Modifier.fillMaxSize()
-        ) {
-            composable(Screen.Rack.route) {
-                // Empty — RackScreen is always composed above
-            }
-            composable(
-                route = Screen.Settings.route,
+                }
+            )
+        }
+        composable(
+            route = Screen.Settings.route,
                 arguments = listOf(
                     navArgument("tab") { type = NavType.StringType; defaultValue = SettingsTab.Driver.argument },
                     navArgument("tag") { type = NavType.StringType; nullable = true; defaultValue = null },
@@ -233,4 +222,3 @@ fun AppNavigation(
             }
         }
     }
-}

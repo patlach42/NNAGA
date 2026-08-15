@@ -24,14 +24,23 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -43,6 +52,7 @@ import com.vibes.dsp.ui.loading.PluginExtractScreen
 import com.vibes.dsp.ui.navigation.AppNavigation
 import com.vibes.dsp.ui.theme.NNAGATheme
 import com.vibes.dsp.ui.tone3000.Tone3000CallbackHandler
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -53,7 +63,13 @@ import java.io.InputStream
 
 class MainActivity : ComponentActivity() {
 
-    private var engineReady by mutableStateOf(false)
+    private sealed interface StartupState {
+        data object Initializing : StartupState
+        data object Ready : StartupState
+        data class Failed(val message: String) : StartupState
+    }
+
+    private var startupState by mutableStateOf<StartupState>(StartupState.Initializing)
     private var extractedCount by mutableIntStateOf(0)
     private var extractTotalCount by mutableIntStateOf(0)
 
@@ -112,16 +128,7 @@ class MainActivity : ComponentActivity() {
         controller.systemBarsBehavior =
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
-        // Initialize engine asynchronously. For playstore flavor, plugin .so extraction
-        // may take 15-30s on first launch; show a progress screen in the meantime.
-        lifecycleScope.launch {
-            withContext(Dispatchers.IO) {
-                prepareLv2AndInitEngine()
-            }
-            engineReady = true
-            maybeRunAhbSpike()
-            maybeAutostartEditor()
-        }
+        startEngineInitialization()
 
         setContent {
             NNAGATheme {
@@ -129,11 +136,88 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    AppNavigation(engineReady = engineReady)
+                    when (val state = startupState) {
+                        StartupState.Initializing -> PluginExtractScreen(
+                            extracted = extractedCount.takeIf { extractTotalCount > 0 },
+                            total = extractTotalCount.takeIf { it > 0 }
+                        )
+                        StartupState.Ready -> AppNavigation(engineReady = true)
+                        is StartupState.Failed -> StartupFailureScreen(
+                            message = state.message,
+                            onRetry = { startEngineInitialization() }
+                        )
+                    }
                 }
             }
         }
     }
+    private fun startEngineInitialization() {
+        lifecycleScope.launch {
+            startupState = StartupState.Initializing
+            extractedCount = 0
+            extractTotalCount = 0
+            try {
+                val initialized = withContext(Dispatchers.IO) {
+                    // VST/Wine staging is optional background work. It can be slow
+                    // on first launch or while repairing an imported prefix, but
+                    // must never prevent the core rack UI and audio engine starting.
+                    prepareLv2AndInitEngine()
+                }
+                if (initialized) {
+                    startupState = StartupState.Ready
+                    refreshPluginRegistryAfterBackgroundSetup()
+                    maybeRunAhbSpike()
+                    maybeAutostartEditor()
+                } else {
+                    startupState = StartupState.Failed(
+                        "Native audio engine failed to initialize. Check the setup logs and retry."
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                android.util.Log.e("MainActivity", "Startup initialization failed", t)
+                startupState = StartupState.Failed(
+                    "Startup failed: ${t.message ?: "unexpected initialization error"}. Retry."
+                )
+            }
+        }
+    }
+
+    /**
+     * A full-flavor VST setup starts from Application.onCreate. Wait for it only
+     * after the native engine exists, then refresh its plugin factories. This
+     * keeps a corrupt VST prefix or long first-run extraction from blocking the
+     * core UI forever.
+     */
+    private fun refreshPluginRegistryAfterBackgroundSetup() {
+        val prerequisite = applicationContext as? StartupPrerequisite ?: return
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                if (prerequisite.awaitStartupPrerequisite()) {
+                    NativeEngine.getInstance().nativeRefreshPluginRegistry()
+                    android.util.Log.i(
+                        "MainActivity",
+                        "Refreshed plugin registry after background VST setup"
+                    )
+                } else {
+                    android.util.Log.w(
+                        "MainActivity",
+                        "Background VST setup failed; core engine remains available"
+                    )
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (t: Throwable) {
+                android.util.Log.e(
+                    "MainActivity",
+                    "Background VST setup failed; core engine remains available",
+                    t
+                )
+            }
+        }
+    }
+
 
     private fun extractLV2Assets() {
         // Extract LV2 plugins from assets to internal storage (use applicationContext for consistency with native path)
@@ -305,7 +389,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
-            // Also open its X11 editor (the BIAS FX 2 black-editor repro).
             android.util.Log.i("Autostart", "opening editor for ${match.name} (${match.fullId})")
             startActivity(
                 android.content.Intent(this@MainActivity, X11PluginUIActivity::class.java)
@@ -316,16 +399,35 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun prepareLv2AndInitEngine() {
+    private fun prepareLv2AndInitEngine(): Boolean {
         if (EngineInitHelper.isInitialized) {
             android.util.Log.d("MainActivity", "Native engine already initialized; skipping LV2 extraction")
-            return
+            return true
         }
         EngineInitHelper.preloadLilv(applicationInfo.nativeLibraryDir)
         extractLV2Assets()
-        EngineInitHelper.initEngine(this) { extracted, total ->
+        return EngineInitHelper.initEngine(this) { extracted, total ->
             extractedCount = extracted
             extractTotalCount = total
+        }
+    }
+
+    @Composable
+    private fun StartupFailureScreen(message: String, onRetry: () -> Unit) {
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.padding(24.dp)
+            ) {
+                Text(message, color = MaterialTheme.colorScheme.onBackground)
+                Button(onClick = onRetry) {
+                    Text("Retry")
+                }
+            }
         }
     }
 
