@@ -32,18 +32,27 @@ if(EXISTS "${_patches_dir}/x11_egl.c")
     configure_file("${_patches_dir}/x11_egl.c" "${_pugl_extra}/x11_egl.c" COPYONLY)
 endif()
 
-if(EXISTS "${_patches_dir}/0001-dpf-egl-gles2-android-backend.patch")
-    execute_process(COMMAND patch -p1 --forward --no-backup-if-mismatch INPUT_FILE "${_patches_dir}/0001-dpf-egl-gles2-android-backend.patch" WORKING_DIRECTORY "${_aidax_full_src}" RESULT_VARIABLE _patch_result ERROR_QUIET OUTPUT_QUIET)
-endif()
-
-set(_fb_cpp "${_aidax_full_src}/modules/dpf/distrho/extra/FileBrowserDialogImpl.cpp")
-if(EXISTS "${_fb_cpp}")
-    file(READ "${_fb_cpp}" _fb_content)
-    if(NOT _fb_content MATCHES "__ANDROID__")
-        string(REPLACE "x11display = XOpenDisplay(nullptr);" "#ifndef __ANDROID__\n        x11display = XOpenDisplay(nullptr);\n#endif" _fb_content "${_fb_content}")
-        file(WRITE "${_fb_cpp}" "${_fb_content}")
+file(GLOB _aidax_patches "${_patches_dir}/*.patch")
+list(SORT _aidax_patches)
+foreach(_patch IN LISTS _aidax_patches)
+    execute_process(
+        COMMAND patch -p1 --forward --dry-run
+        INPUT_FILE "${_patch}"
+        WORKING_DIRECTORY "${_aidax_full_src}"
+        RESULT_VARIABLE _patch_check
+        OUTPUT_QUIET ERROR_QUIET)
+    if(_patch_check EQUAL 0)
+        execute_process(
+            COMMAND patch -p1 --forward --no-backup-if-mismatch
+            INPUT_FILE "${_patch}"
+            WORKING_DIRECTORY "${_aidax_full_src}"
+            RESULT_VARIABLE _patch_result
+            OUTPUT_QUIET ERROR_QUIET)
+        if(NOT _patch_result EQUAL 0)
+            message(FATAL_ERROR "Failed to apply AIDA-X patch: ${_patch}")
+        endif()
     endif()
-endif()
+endforeach()
 
 # ─── Phase 1: Generate TTL via native host build ─────────────────────────────
 set(_native_build "${_aidax_full_build}/native")

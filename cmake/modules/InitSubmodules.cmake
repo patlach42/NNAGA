@@ -39,12 +39,22 @@ function(setup_submodules)
                 get_filename_component(_patch_name "${_patch}" NAME)
                 message(STATUS "  Applying ${_patch_name} to 3rd_party/${_submod_rel}")
                 execute_process(
-                    COMMAND patch -p1 --forward --no-backup-if-mismatch
+                    COMMAND patch -p1 --forward --dry-run
                     INPUT_FILE "${_patch}"
                     WORKING_DIRECTORY "${_submod_dir}"
-                    RESULT_VARIABLE _result
+                    RESULT_VARIABLE _check_result
                     OUTPUT_QUIET ERROR_QUIET)
-            endif()
+                if(_check_result EQUAL 0)
+                    execute_process(
+                        COMMAND patch -p1 --forward --no-backup-if-mismatch
+                        INPUT_FILE "${_patch}"
+                        WORKING_DIRECTORY "${_submod_dir}"
+                        RESULT_VARIABLE _apply_result
+                        OUTPUT_QUIET ERROR_QUIET)
+                    if(NOT _apply_result EQUAL 0)
+                        message(FATAL_ERROR "Failed to apply ${_patch}")
+                    endif()
+                endif()
         endforeach()
     ]=])
 

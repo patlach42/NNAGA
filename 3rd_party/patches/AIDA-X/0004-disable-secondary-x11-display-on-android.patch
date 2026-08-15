@@ -1,0 +1,14 @@
+diff --git a/modules/dpf/distrho/extra/FileBrowserDialogImpl.cpp b/modules/dpf/distrho/extra/FileBrowserDialogImpl.cpp
+index bb431ab7..40906677 100644
+--- a/modules/dpf/distrho/extra/FileBrowserDialogImpl.cpp
++++ b/modules/dpf/distrho/extra/FileBrowserDialogImpl.cpp
+@@ -380,7 +380,9 @@ struct FileBrowserData {
+             dbus_connection_set_exit_on_disconnect(dbuscon, false);
+ #endif
+ #ifdef HAVE_X11
++        #ifndef __ANDROID__
+         x11display = XOpenDisplay(nullptr);
++#endif
+ #endif
+ 
+         // maybe unused
