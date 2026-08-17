@@ -37,6 +37,9 @@ object RackManager {
     fun getTracks(): Array<RackTrackInfo> = native.getTracks()
     fun setTrackVolume(trackId: RackPathId, volume: Float): Boolean = native.setTrackVolume(trackId, volume)
     fun setTrackInputArmed(trackId: RackPathId, armed: Boolean): Boolean = native.setTrackInputArmed(trackId, armed)
+    fun setTrackInputArmLocked(trackId: RackPathId, locked: Boolean): Boolean =
+        native.setTrackInputArmLocked(trackId, locked)
+    fun armTrackExclusively(trackId: RackPathId): Boolean = native.armTrackExclusively(trackId)
     fun setTrackInputChannel(trackId: RackPathId, inputChannel: Int): Boolean =
         native.setTrackInputChannel(trackId, inputChannel)
     fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = native.loadTrackWav(trackId, path, displayName)

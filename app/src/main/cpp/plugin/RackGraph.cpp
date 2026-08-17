@@ -49,7 +49,7 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
             (wav ? wav->displayName : (recorded ? recorded->displayName : std::string()));
         const double duration = midi ? static_cast<double>(midi->durationFrames) / rate :
             (wav ? clipDuration(*wav) : (recorded ? clipDuration(*recorded) : 0.0));
-        result.push_back({node.id, node.volume.load(), node.inputArmed.load(), wavLoaded,
+        result.push_back({node.id, node.volume.load(), node.inputArmed.load(), node.inputArmLocked.load(), wavLoaded,
             name, duration, node.statusPlaying.load(), node.statusLooping.load(),
             static_cast<double>(frame) / rate, frame, node.recordPending.load(),
             node.recording.load(), node.punchArmed.load(), node.inputChannel.load(),
@@ -66,6 +66,8 @@ bool RackGraph::attachTrackMidiSlot(RackPathId id,uint32_t slot,std::shared_ptr<
 bool RackGraph::unloadTrackMidiSlot(RackPathId id,uint32_t slot){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;auto ms=midiSlots_;const size_t i=static_cast<size_t>(it-tracks_.begin());if(i>=ms.size()||slot>=ms[i].size())return false;ms[i][slot].reset();auto old=midiSlots_;midiSlots_=ms;if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){midiSlots_=std::move(old);return false;}return true;}
 bool RackGraph::setTrackVolume(RackPathId id,float value){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->volume.store(std::clamp(value,0.f,1.f));return true;}
 bool RackGraph::setTrackInputArmed(RackPathId id,bool armed){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->inputArmed.store(armed);return true;}
+bool RackGraph::setTrackInputArmLocked(RackPathId id,bool locked){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->inputArmLocked.store(locked);return true;}
+bool RackGraph::setTrackInputArmedExclusive(RackPathId id){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;for(auto& node:tracks_)if(node.get()==it->get())node->inputArmed.store(true,std::memory_order_release);else if(!node->inputArmLocked.load(std::memory_order_acquire))node->inputArmed.store(false,std::memory_order_release);return true;}
 bool RackGraph::setTrackInputChannel(RackPathId id, int32_t channel) {
     constexpr int32_t kMaxInputChannels = 8;
     std::lock_guard lock(controlMutex_);

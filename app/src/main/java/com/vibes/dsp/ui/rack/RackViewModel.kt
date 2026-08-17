@@ -234,6 +234,38 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+    fun setTrackInputArmLocked(trackId: RackPathId, locked: Boolean) {
+        _tracks.value = _tracks.value.map { track ->
+            if (track.id == trackId) track.copy(inputArmLocked = locked) else track
+        }
+        viewModelScope.launch {
+            rackControlMutex.withLock {
+                val ok = withContext(Dispatchers.IO) {
+                    RackManager.setTrackInputArmLocked(trackId, locked)
+                }
+                if (!ok) {
+                    _errorMessage.value = "Failed to ${if (locked) "lock" else "unlock"} track arm"
+                    refreshRackNow()
+                }
+            }
+        }
+    }
+    fun armTrackExclusively(trackId: RackPathId) {
+        _tracks.value = _tracks.value.map { track ->
+            track.copy(inputArmed = track.id == trackId)
+        }
+        viewModelScope.launch {
+            rackControlMutex.withLock {
+                val ok = withContext(Dispatchers.IO) {
+                    RackManager.armTrackExclusively(trackId)
+                }
+                if (!ok) {
+                    _errorMessage.value = "Failed to arm selected track exclusively; please try again"
+                    refreshRackNow()
+                }
+            }
+        }
+    }
     fun setTrackInputChannel(trackId: RackPathId, inputChannel: Int) {
         _tracks.value = _tracks.value.map { track ->
             if (track.id == trackId) track.copy(inputChannel = inputChannel) else track

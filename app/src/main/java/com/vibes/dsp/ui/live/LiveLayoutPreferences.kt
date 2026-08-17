@@ -9,6 +9,7 @@ object LiveLayoutPreferences {
     private const val KEY_VISIBLE_TILES = "visible_tiles"
     private const val KEY_INSPECTOR_TOGGLE_MIGRATED = "inspector_toggle_migrated"
     private const val KEY_FIT_TILES_ON_SCREEN = "fit_tiles_on_screen"
+    private const val KEY_ARM_EXCLUSIVE_ON_TRACK_SELECTION = "arm_exclusive_on_track_selection"
     private const val TILE_HEIGHT_PREFIX = "tile_height_"
     private const val TRACK_COLOR_PREFIX = "track_color_"
     private const val MIN_UNKNOWN_TILE_HEIGHT = 96f
@@ -34,6 +35,15 @@ object LiveLayoutPreferences {
 
     fun setFitTilesOnScreen(context: Context, enabled: Boolean) {
         preferences(context).edit().putBoolean(KEY_FIT_TILES_ON_SCREEN, enabled).apply()
+    }
+
+    fun getArmExclusiveOnTrackSelection(context: Context): Boolean =
+        preferences(context).getBoolean(KEY_ARM_EXCLUSIVE_ON_TRACK_SELECTION, false)
+
+    fun setArmExclusiveOnTrackSelection(context: Context, enabled: Boolean) {
+        preferences(context).edit()
+            .putBoolean(KEY_ARM_EXCLUSIVE_ON_TRACK_SELECTION, enabled)
+            .apply()
     }
 
     fun getTrackColor(context: Context, trackId: Long, fallbackArgb: Int): Int {

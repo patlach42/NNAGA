@@ -1220,3 +1220,102 @@ TEST(RackGraphInputChannelTest, PunchUsesSelectedChannelPerTrack) {
     EXPECT_FALSE(trackSnapshot(graph, second, tracks).punchArmed);
     EXPECT_TRUE(trackSnapshot(graph, second, tracks).recording);
 }
+TEST(RackGraphInputArmingTest, ExclusiveSelectionLeavesOnlySelectedTrackArmed) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId first = graph.getTracks().front().id;
+    const RackPathId second = graph.addTrack();
+    const RackPathId third = graph.addTrack();
+
+    ASSERT_TRUE(graph.setTrackInputArmed(first, true));
+    ASSERT_TRUE(graph.setTrackInputArmed(second, true));
+    ASSERT_TRUE(graph.setTrackInputArmed(third, true));
+
+    ASSERT_TRUE(graph.setTrackInputArmedExclusive(second));
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    EXPECT_FALSE(trackSnapshot(graph, first, tracks).inputArmed);
+    EXPECT_TRUE(trackSnapshot(graph, second, tracks).inputArmed);
+    EXPECT_FALSE(trackSnapshot(graph, third, tracks).inputArmed);
+}
+
+TEST(RackGraphInputArmingTest, ExclusiveSelectionRejectsInvalidTrackAndPreservesArmState) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId first = graph.getTracks().front().id;
+    const RackPathId second = graph.addTrack();
+    const RackPathId third = graph.addTrack();
+
+    ASSERT_TRUE(graph.setTrackInputArmed(first, true));
+    ASSERT_TRUE(graph.setTrackInputArmed(second, true));
+    ASSERT_TRUE(graph.setTrackInputArmed(third, false));
+
+    EXPECT_FALSE(graph.setTrackInputArmedExclusive(guitarrackcraft::kMasterPathId));
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    EXPECT_TRUE(trackSnapshot(graph, first, tracks).inputArmed);
+    EXPECT_TRUE(trackSnapshot(graph, second, tracks).inputArmed);
+    EXPECT_FALSE(trackSnapshot(graph, third, tracks).inputArmed);
+}
+
+TEST(RackGraphInputArmingTest, LockedTrackSurvivesExclusiveSelectionAndUnlockAllowsDisarm) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId first = graph.getTracks().front().id;
+    const RackPathId second = graph.addTrack();
+    const RackPathId third = graph.addTrack();
+
+    ASSERT_TRUE(graph.setTrackInputArmed(first, true));
+    ASSERT_TRUE(graph.setTrackInputArmed(second, true));
+    ASSERT_TRUE(graph.setTrackInputArmed(third, true));
+    ASSERT_TRUE(graph.setTrackInputArmLocked(first, true));
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    const auto& locked = trackSnapshot(graph, first, tracks);
+    EXPECT_TRUE(locked.inputArmed);
+    EXPECT_TRUE(locked.inputArmLocked);
+
+    ASSERT_TRUE(graph.setTrackInputArmedExclusive(second));
+
+    EXPECT_TRUE(trackSnapshot(graph, first, tracks).inputArmed);
+    EXPECT_TRUE(trackSnapshot(graph, first, tracks).inputArmLocked);
+    EXPECT_TRUE(trackSnapshot(graph, second, tracks).inputArmed);
+    EXPECT_FALSE(trackSnapshot(graph, second, tracks).inputArmLocked);
+    EXPECT_FALSE(trackSnapshot(graph, third, tracks).inputArmed);
+    EXPECT_FALSE(trackSnapshot(graph, third, tracks).inputArmLocked);
+
+    ASSERT_TRUE(graph.setTrackInputArmLocked(first, false));
+    EXPECT_FALSE(trackSnapshot(graph, first, tracks).inputArmLocked);
+    EXPECT_TRUE(trackSnapshot(graph, first, tracks).inputArmed);
+
+    ASSERT_TRUE(graph.setTrackInputArmedExclusive(third));
+
+    EXPECT_FALSE(trackSnapshot(graph, first, tracks).inputArmed);
+    EXPECT_FALSE(trackSnapshot(graph, second, tracks).inputArmed);
+    EXPECT_TRUE(trackSnapshot(graph, third, tracks).inputArmed);
+}
+
+TEST(RackGraphInputArmingTest, InvalidArmLockIdReturnsFalseWithoutMutatingTrackState) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId first = graph.getTracks().front().id;
+    const RackPathId second = graph.addTrack();
+    const RackPathId third = graph.addTrack();
+
+    ASSERT_TRUE(graph.setTrackInputArmed(first, true));
+    ASSERT_TRUE(graph.setTrackInputArmLocked(first, true));
+    ASSERT_TRUE(graph.setTrackInputArmed(second, false));
+    ASSERT_TRUE(graph.setTrackInputArmLocked(second, false));
+    ASSERT_TRUE(graph.setTrackInputArmed(third, true));
+    ASSERT_TRUE(graph.setTrackInputArmLocked(third, false));
+
+    EXPECT_FALSE(graph.setTrackInputArmLocked(guitarrackcraft::kMasterPathId, false));
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    EXPECT_TRUE(trackSnapshot(graph, first, tracks).inputArmed);
+    EXPECT_TRUE(trackSnapshot(graph, first, tracks).inputArmLocked);
+    EXPECT_FALSE(trackSnapshot(graph, second, tracks).inputArmed);
+    EXPECT_FALSE(trackSnapshot(graph, second, tracks).inputArmLocked);
+    EXPECT_TRUE(trackSnapshot(graph, third, tracks).inputArmed);
+    EXPECT_FALSE(trackSnapshot(graph, third, tracks).inputArmLocked);
+}

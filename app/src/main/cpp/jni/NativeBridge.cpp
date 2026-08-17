@@ -963,6 +963,20 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputArmed(
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     return g_ctx->audioEngine->getRackGraph().setTrackInputArmed(trackId, armed == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
 }
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputArmLocked(
+    JNIEnv*, jobject, jlong trackId, jboolean locked) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setTrackInputArmLocked(
+        static_cast<RackPathId>(trackId), locked == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeArmTrackExclusively(
+    JNIEnv*, jobject, jlong trackId) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setTrackInputArmedExclusive(
+        static_cast<RackPathId>(trackId)) ? JNI_TRUE : JNI_FALSE;
+}
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputChannel(
@@ -1198,7 +1212,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     const auto tracks = g_ctx->audioEngine->getRackGraph().getTracks();
     jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
     if (!clazz) return nullptr;
-    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZLjava/lang/String;DZZDJZZZIZZ)V");
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIZZ)V");
     if (!ctor) return nullptr;
     jobjectArray result = env->NewObjectArray(static_cast<jsize>(tracks.size()), clazz, nullptr);
     for (size_t index = 0; index < tracks.size(); ++index) {
@@ -1207,6 +1221,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
         jobject item = env->NewObject(
             clazz, ctor, static_cast<jlong>(track.id), track.volume,
             track.inputArmed ? JNI_TRUE : JNI_FALSE,
+            track.inputArmLocked ? JNI_TRUE : JNI_FALSE,
             track.wavLoaded ? JNI_TRUE : JNI_FALSE, name, track.wavDurationSec,
             track.playing ? JNI_TRUE : JNI_FALSE, track.looping ? JNI_TRUE : JNI_FALSE,
             track.positionSec, static_cast<jlong>(track.transportFrame),

@@ -38,7 +38,7 @@ struct MidiClip {
 
 struct MidiNoteInfo { uint64_t startFrame{}; uint64_t durationFrames{}; int32_t pitch{}; int32_t velocity{}; };
 struct TrackClipSlotInfo { RackPathId trackId{}; uint32_t slot{}; bool wavLoaded{}; bool midiLoaded{}; std::string displayName; double durationSec{}; bool active{}; };
-struct TrackSnapshot { RackPathId id; float volume; bool inputArmed; bool wavLoaded; std::string wavDisplayName; double wavDurationSec; bool playing; bool looping; double positionSec; uint64_t transportFrame; bool recordPending; bool recording; bool punchArmed; int32_t inputChannel; bool midiLoaded; bool midiPlaying; };
+struct TrackSnapshot { RackPathId id; float volume; bool inputArmed; bool inputArmLocked; bool wavLoaded; std::string wavDisplayName; double wavDurationSec; bool playing; bool looping; double positionSec; uint64_t transportFrame; bool recordPending; bool recording; bool punchArmed; int32_t inputChannel; bool midiLoaded; bool midiPlaying; };
 struct TransportSnapshot { bool playing; double positionSec; double beatsPerMinute; uint64_t samplePosition; uint64_t transportFrame; };
 
 class RackGraph {
@@ -55,7 +55,8 @@ public:
     };
     RackGraph(); ~RackGraph();
     RackPathId addTrack(); bool removeTrack(RackPathId); std::vector<TrackSnapshot> getTracks() const; std::vector<TrackClipSlotInfo> getTrackClipSlots(RackPathId) const; std::vector<MidiNoteInfo> getTrackClipMidiNotes(RackPathId,uint32_t) const;
-    bool setTrackVolume(RackPathId, float); bool setTrackInputArmed(RackPathId, bool); bool setTrackInputChannel(RackPathId, int32_t); void setAvailableInputChannelCount(int32_t) noexcept;
+    bool setTrackVolume(RackPathId, float); bool setTrackInputArmed(RackPathId, bool); bool setTrackInputArmLocked(RackPathId, bool); bool setTrackInputChannel(RackPathId, int32_t); void setAvailableInputChannelCount(int32_t) noexcept;
+    bool setTrackInputArmedExclusive(RackPathId);
     bool attachTrackWav(RackPathId, std::shared_ptr<const WavClip>); bool unloadTrackWav(RackPathId); bool clearTrackWavs();
     bool attachTrackWavSlot(RackPathId, uint32_t, std::shared_ptr<const WavClip>); bool unloadTrackWavSlot(RackPathId, uint32_t);
     bool attachTrackMidi(RackPathId, std::shared_ptr<const MidiClip>); bool unloadTrackMidi(RackPathId);
@@ -74,6 +75,7 @@ private:
         RackPathId id{};
         std::atomic<float> volume{1.0f};
         std::atomic<bool> inputArmed{false};
+        std::atomic<bool> inputArmLocked{false};
         std::atomic<int32_t> inputChannel{0};
         std::shared_ptr<PluginChain> chain;
         std::vector<float> sourceLeft, sourceRight, outputLeft, outputRight;

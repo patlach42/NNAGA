@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -156,12 +157,13 @@ private object LiveDimensions {
     val toolbar = 44.dp
     val transport = 44.dp
     val trackWidth = 120.dp
-    val trackHeader = 44.dp
+    val trackHeader = 40.dp
     val slotHeight = 48.dp
     val mixerChannel = 64.dp
     val pluginMinWidth = 216.dp
     val pluginMaxWidth = 288.dp
     val icon = 18.dp
+    val indicatorIcon = 12.dp
     val gap = 8.dp
     val smallGap = 4.dp
     val hairline = 1.dp
@@ -223,6 +225,12 @@ fun LiveScreen(
     val launcherVerticalScrollState = rememberScrollState()
     val mixerScrollState = rememberScrollState()
     val contentScrollState = rememberScrollState()
+    fun armTrackExclusivelyIfEnabled(trackId: Long) {
+        if (LiveLayoutPreferences.getArmExclusiveOnTrackSelection(context)) {
+            viewModel.armTrackExclusively(trackId)
+        }
+    }
+
 
     fun toggleTile(id: String) {
         visibleTiles = if (id in visibleTiles) visibleTiles - id else visibleTiles + id
@@ -493,12 +501,14 @@ fun LiveScreen(
                                             ?.slot
                                             ?: 0
                                         selectedTrackId = track.id
+                                        armTrackExclusivelyIfEnabled(track.id)
                                         selectedSlot = slot
                                         viewModel.selectPath(track.id)
                                         viewModel.selectTrackClipSlot(track.id, slot)
                                     },
                                     onSelect = { track, slot ->
                                         selectedTrackId = track.id
+                                        armTrackExclusivelyIfEnabled(track.id)
                                         selectedSlot = slot
                                         viewModel.selectPath(track.id)
                                         viewModel.selectTrackClipSlot(track.id, slot)
@@ -509,6 +519,7 @@ fun LiveScreen(
                                     },
                                     onLaunch = { track, slot ->
                                         selectedTrackId = track.id
+                                        armTrackExclusivelyIfEnabled(track.id)
                                         selectedSlot = slot
                                         viewModel.selectTrackClipSlot(track.id, slot)
                                         val active = track.playing &&
@@ -521,6 +532,7 @@ fun LiveScreen(
                                     },
                                     onRecordClip = { track, slot ->
                                         selectedTrackId = track.id
+                                        armTrackExclusivelyIfEnabled(track.id)
                                         selectedSlot = slot
                                         viewModel.selectPath(track.id)
                                         viewModel.startTrackClipRecording(
@@ -549,6 +561,9 @@ fun LiveScreen(
                                 onTrackArm = { track ->
                                     viewModel.setTrackInputArmed(track.id, !track.inputArmed)
                                 },
+                                onTrackArmLock = { track ->
+                                    viewModel.setTrackInputArmLocked(track.id, !track.inputArmLocked)
+                                },
                                 onTrackDelete = { track -> viewModel.removeTrack(track.id) },
                                 onTrackRecordMenu = { recordMenuTrack = it },
                                 launchQuantization = launchQuantization,
@@ -569,6 +584,7 @@ fun LiveScreen(
                                 scrollState = mixerScrollState,
                                 onSelect = { track ->
                                     selectedTrackId = track.id
+                                    armTrackExclusivelyIfEnabled(track.id)
                                     selectedSlot = slotsByTrack[track.id]?.firstOrNull { it.active }?.slot ?: 0
                                     viewModel.selectPath(track.id)
                                     viewModel.selectTrackClipSlot(track.id, selectedSlot)
@@ -1009,32 +1025,44 @@ private fun Launcher(
     onTrackColor: (RackTrackInfo, Int) -> Unit,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .verticalScroll(verticalScrollState)
-        ) {
-            Row(modifier = Modifier.horizontalScroll(horizontalScrollState)) {
-                tracks.forEachIndexed { index, track ->
-                    TrackSlots(
-                        track = track,
+        Row(modifier = Modifier.fillMaxWidth().horizontalScroll(horizontalScrollState)) {
+            tracks.forEachIndexed { index, track ->
+                Box(
+                    Modifier.requiredWidth(LiveDimensions.trackWidth)
+                        .background(LiveColors.divider)
+                        .padding(end = LiveDimensions.hairline),
+                ) {
+                    TrackHeader(
                         index = index,
-                        slots = slotsByTrack[track.id].orEmpty(),
                         selected = track.id == selectedTrack?.id,
-                        selectedSlot = selectedSlot,
                         trackColor = trackColors[track.id]
                             ?: AppearancePreferences.palettes[
                                 index % AppearancePreferences.palettes.size
                             ].argb,
-                        onSelectTrack = { onSelectTrack(track) },
-                        onSelect = { onSelect(track, it) },
-                        onLoad = { onLoad(track, it) },
-                        onLaunch = { onLaunch(track, it) },
-                        onRecordClip = { onRecordClip(track, it) },
-                        onTrackColor = { onTrackColor(track, it) },
+                        onSelect = { onSelectTrack(track) },
+                        onColorSelected = { onTrackColor(track, it) },
                     )
                 }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .verticalScroll(verticalScrollState)
+                .horizontalScroll(horizontalScrollState),
+        ) {
+            tracks.forEach { track ->
+                TrackSlots(
+                    track = track,
+                    slots = slotsByTrack[track.id].orEmpty(),
+                    selected = track.id == selectedTrack?.id,
+                    selectedSlot = selectedSlot,
+                    onSelect = { onSelect(track, it) },
+                    onLoad = { onLoad(track, it) },
+                    onLaunch = { onLaunch(track, it) },
+                    onRecordClip = { onRecordClip(track, it) },
+                )
             }
         }
     }
@@ -1043,17 +1071,13 @@ private fun Launcher(
 @Composable
 private fun TrackSlots(
     track: RackTrackInfo,
-    index: Int,
     slots: List<ClipSlotInfo>,
     selected: Boolean,
     selectedSlot: Int,
-    trackColor: Int,
-    onSelectTrack: () -> Unit,
     onSelect: (Int) -> Unit,
     onLoad: (Int) -> Unit,
     onLaunch: (Int) -> Unit,
     onRecordClip: (Int) -> Unit,
-    onTrackColor: (Int) -> Unit,
 ) {
     val visibleCount = maxOf(8, (slots.maxOfOrNull { it.slot + 1 } ?: 0) + 4)
     val bySlot = slots.associateBy { it.slot }
@@ -1062,7 +1086,6 @@ private fun TrackSlots(
             .padding(end = LiveDimensions.hairline),
     ) {
         Column(Modifier.fillMaxWidth().background(LiveColors.panel)) {
-            TrackHeader(index, selected, trackColor, onSelectTrack, onTrackColor)
             repeat(visibleCount) { slotIndex ->
                 val slot = bySlot[slotIndex] ?: ClipSlotInfo(track.id, slotIndex, false, false, "", 0.0, false)
                 ClipCard(
@@ -1286,6 +1309,7 @@ private fun ClipInspector(
     onTrackVolume: (RackTrackInfo, Float) -> Unit,
     onTrackInput: (RackTrackInfo) -> Unit,
     onTrackArm: (RackTrackInfo) -> Unit,
+    onTrackArmLock: (RackTrackInfo) -> Unit,
     onTrackDelete: (RackTrackInfo) -> Unit,
     onTrackRecordMenu: (RackTrackInfo) -> Unit,
     launchQuantization: TrackLaunchQuantization,
@@ -1329,6 +1353,7 @@ private fun ClipInspector(
                         onVolumeChange = { value -> track?.let { onTrackVolume(it, value) } },
                         onInputClick = { track?.let(onTrackInput) },
                         onArmClick = { track?.let(onTrackArm) },
+                        onArmLockClick = { track?.let(onTrackArmLock) },
                         onDeleteClick = { track?.let(onTrackDelete) },
                         onRecordOptionsClick = { track?.let(onTrackRecordMenu) },
                         launchQuantization = launchQuantization,
@@ -1341,11 +1366,13 @@ private fun ClipInspector(
 }
 
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun TrackInspectorControls(
     track: RackTrackInfo?,
     onVolumeChange: (Float) -> Unit,
     onInputClick: () -> Unit,
     onArmClick: () -> Unit,
+    onArmLockClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onRecordOptionsClick: () -> Unit,
     launchQuantization: TrackLaunchQuantization,
@@ -1362,30 +1389,65 @@ private fun TrackInspectorControls(
         TrackLaunchQuantization.Sixteenth -> "1/16"
         TrackLaunchQuantization.None -> "OFF"
     }
+    var showArmLockMenu by remember { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxSize().padding(horizontal = LiveDimensions.smallGap),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(LiveDimensions.smallGap),
     ) {
-        TextButton(
-            onClick = onArmClick,
-            modifier = Modifier.height(40.dp).semantics {
-                stateDescription = if (track.inputArmed) "Armed" else "Disarmed"
-            },
-        ) {
-            Icon(
-                Icons.Default.Mic,
-                contentDescription = if (track.inputArmed) "Disarm track input" else "Arm track input",
-                tint = if (track.inputArmed) LiveColors.record else LiveColors.textDim,
-                modifier = Modifier.size(LiveDimensions.icon),
-            )
-            Text(
-                if (track.inputArmed) "ARMED" else "ARM",
-                color = if (track.inputArmed) LiveColors.record else LiveColors.textMuted,
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(start = LiveDimensions.smallGap),
-            )
+        Box {
+            Box(
+                modifier = Modifier
+                    .size(LiveDimensions.hitTarget)
+                    .combinedClickable(
+                        role = Role.Button,
+                        onClick = onArmClick,
+                        onLongClickLabel = if (track.inputArmLocked) "Unlock arm" else "Lock arm",
+                        onLongClick = { showArmLockMenu = true },
+                    )
+                    .semantics {
+                        contentDescription =
+                            if (track.inputArmed) "Disarm track input" else "Arm track input"
+                        stateDescription = when {
+                            track.inputArmed && track.inputArmLocked -> "Armed, arm locked"
+                            track.inputArmed -> "Armed, arm unlocked"
+                            track.inputArmLocked -> "Disarmed, arm locked"
+                            else -> "Disarmed, arm unlocked"
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.Mic,
+                    contentDescription = null,
+                    tint = if (track.inputArmed) LiveColors.record else LiveColors.textDim,
+                    modifier = Modifier.size(LiveDimensions.icon),
+                )
+                if (track.inputArmLocked) {
+                    Icon(
+                        Icons.Default.Lock,
+                        contentDescription = null,
+                        tint = LiveColors.text,
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(LiveDimensions.smallGap)
+                            .size(LiveDimensions.indicatorIcon),
+                    )
+                }
+            }
+            DropdownMenu(
+                expanded = showArmLockMenu,
+                onDismissRequest = { showArmLockMenu = false },
+            ) {
+                DropdownMenuItem(
+                    text = { Text(if (track.inputArmLocked) "Unlock arm" else "Lock arm") },
+                    onClick = {
+                        showArmLockMenu = false
+                        onArmLockClick()
+                    },
+                )
+            }
         }
         TextButton(
             onClick = onInputClick,

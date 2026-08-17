@@ -48,6 +48,9 @@ fun InterfaceSettingsScreen() {
     val context = LocalContext.current
     var horizontalPlugins by remember { mutableStateOf(LiveLayoutPreferences.getHorizontalPlugins(context)) }
     var fitTilesOnScreen by remember { mutableStateOf(LiveLayoutPreferences.getFitTilesOnScreen(context)) }
+    var armExclusiveOnTrackSelection by remember {
+        mutableStateOf(LiveLayoutPreferences.getArmExclusiveOnTrackSelection(context))
+    }
     var selectedPaletteId by remember { mutableStateOf(AppearancePreferences.selectedPaletteId(context)) }
 
     Column(
@@ -175,6 +178,39 @@ fun InterfaceSettingsScreen() {
                     LiveLayoutPreferences.setFitTilesOnScreen(context, enabled)
                 },
                 modifier = Modifier.semantics { contentDescription = "Fit all tiles on screen" }
+            )
+        }
+        Divider(
+            thickness = SettingsDimensions.divider,
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = SettingsDimensions.touchTarget),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Arm exclusive on track selection",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Selecting a track arms it and disarms every other track.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = armExclusiveOnTrackSelection,
+                onCheckedChange = { enabled ->
+                    armExclusiveOnTrackSelection = enabled
+                    LiveLayoutPreferences.setArmExclusiveOnTrackSelection(context, enabled)
+                },
+                modifier = Modifier.semantics {
+                    contentDescription = "Arm exclusive on track selection"
+                }
             )
         }
     }

@@ -217,6 +217,7 @@ data class RackTrackInfo(
     val id: RackPathId,
     val volume: Float,
     val inputArmed: Boolean,
+    val inputArmLocked: Boolean,
     val wavLoaded: Boolean,
     val wavDisplayName: String,
     val wavDurationSec: Double,
@@ -557,6 +558,8 @@ class NativeEngine private constructor() {
     external fun nativeGetTracks(): Array<RackTrackInfo>
     external fun nativeSetTrackVolume(trackId: Long, volume: Float): Boolean
     external fun nativeSetTrackInputArmed(trackId: Long, armed: Boolean): Boolean
+    external fun nativeSetTrackInputArmLocked(trackId: Long, locked: Boolean): Boolean
+    external fun nativeArmTrackExclusively(trackId: Long): Boolean
     external fun nativeSetTrackInputChannel(trackId: Long, inputChannel: Int): Boolean
     external fun nativeLoadTrackWav(trackId: Long, path: String, displayName: String): Boolean
     external fun nativeLoadTrackMidi(trackId: Long, path: String, displayName: String): Boolean
@@ -642,6 +645,9 @@ class NativeEngine private constructor() {
     fun getTracks(): Array<RackTrackInfo> = nativeGetTracks()
     fun setTrackVolume(trackId: Long, volume: Float): Boolean = nativeSetTrackVolume(trackId, volume.coerceIn(0f, 1f))
     fun setTrackInputArmed(trackId: Long, armed: Boolean): Boolean = nativeSetTrackInputArmed(trackId, armed)
+    fun setTrackInputArmLocked(trackId: Long, locked: Boolean): Boolean =
+        nativeSetTrackInputArmLocked(trackId, locked)
+    fun armTrackExclusively(trackId: Long): Boolean = nativeArmTrackExclusively(trackId)
     fun setTrackInputChannel(trackId: Long, inputChannel: Int): Boolean =
         nativeSetTrackInputChannel(trackId, inputChannel)
     fun loadTrackWav(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackWav(trackId, path, displayName)
