@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.LocalOverscrollConfiguration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -64,6 +65,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -576,6 +578,7 @@ fun LiveScreen(
                                 viewModel = viewModel,
                                 horizontal = horizontalPlugins,
                                 onBrowser = { path -> onNavigateToBrowser(path, -1) },
+                                onNavigateToTone3000 = onNavigateToTone3000,
                                 modifier = Modifier.fillMaxSize(),
                             )
                             "mixer" -> Mixer(
@@ -842,6 +845,7 @@ private fun DevicesTile(
     horizontal: Boolean,
     onBrowser: (Long) -> Unit,
     modifier: Modifier,
+    onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit,
 ) {
     val horizontalScrollState = rememberScrollState()
     val verticalScrollState = rememberScrollState()
@@ -905,6 +909,7 @@ private fun DevicesTile(
                                         onReplace = { onBrowser(pathId) },
                                         expanded = expanded,
                                         onExpandedChange = { expanded = it },
+                                        onNavigateToTone3000 = onNavigateToTone3000,
                                         compact = true,
                                         modifier = Modifier.widthIn(
                                             min = LiveDimensions.pluginMinWidth,
@@ -934,6 +939,7 @@ private fun DevicesTile(
                                     onReplace = { onBrowser(pathId) },
                                     expanded = expanded,
                                     onExpandedChange = { expanded = it },
+                                    onNavigateToTone3000 = onNavigateToTone3000,
                                     compact = true,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
@@ -1007,6 +1013,7 @@ private fun TransportBar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Launcher(
     tracks: List<RackTrackInfo>,
@@ -1024,6 +1031,7 @@ private fun Launcher(
     onRecordClip: (RackTrackInfo, Int) -> Unit,
     onTrackColor: (RackTrackInfo, Int) -> Unit,
 ) {
+    CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
     Column(modifier = modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth().horizontalScroll(horizontalScrollState)) {
             tracks.forEachIndexed { index, track ->
@@ -1065,6 +1073,7 @@ private fun Launcher(
                 )
             }
         }
+    }
     }
 }
 
