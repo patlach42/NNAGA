@@ -90,6 +90,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -97,6 +98,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -1566,6 +1568,52 @@ private fun VuMeter(
     }
 }
 
+@Composable
+private fun PluginChromeButton(
+    compact: Boolean,
+    onClick: () -> Unit,
+    icon: ImageVector,
+    contentDescription: String,
+    modifier: Modifier = Modifier
+) {
+    if (compact) {
+        Box(
+            modifier = modifier
+                .size(44.dp)
+                .clickable(
+                    role = Role.Button,
+                    onClick = onClick
+                )
+                .semantics(mergeDescendants = true) {
+                    this.contentDescription = contentDescription
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier.size(32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+    } else {
+        IconButton(
+            onClick = onClick,
+            modifier = modifier.size(44.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PluginCard(
@@ -1584,6 +1632,7 @@ fun PluginCard(
     onOpenFullscreen: (pluginIndex: Int, uiType: UiType, width: Int, height: Int) -> Unit = { _, _, _, _ -> },
     onExitFullscreen: () -> Unit = {},
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit = { _, _, _, _, _ -> },
+    compact: Boolean = false,
     modifier: Modifier = Modifier.fillMaxWidth()
 ) {
     val selectedPathId = pathId
@@ -1640,24 +1689,28 @@ fun PluginCard(
                 var x11UIScale by remember { mutableStateOf(1f) }
                 var modguiContentWidth by remember { mutableStateOf(0) }
                 var modguiContentHeight by remember { mutableStateOf(0) }
+                val chromeIconSize = if (compact) 16.dp else 20.dp
+                val chromeHorizontalPadding = if (compact) 0.dp else 4.dp
+                val chromeVerticalPadding = if (compact) 0.dp else 4.dp
+                val contentTopSpacer = if (compact) 0.dp else 8.dp
 
                 // Top bar: context menu + plugin name + expand/remove — hidden in fullscreen
                 if (!isFullscreen) Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.surface)
-                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                        .padding(horizontal = chromeHorizontalPadding, vertical = chromeVerticalPadding),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Context menu button
                     var showContextMenu by remember { mutableStateOf(false) }
                     Box {
-                        IconButton(
+                        PluginChromeButton(
+                            compact = compact,
                             onClick = { showContextMenu = true },
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Options", modifier = Modifier.size(20.dp))
-                        }
+                            icon = Icons.Default.MoreVert,
+                            contentDescription = "Options"
+                        )
                         DropdownMenu(
                             expanded = showContextMenu,
                             onDismissRequest = { showContextMenu = false }
@@ -1684,7 +1737,7 @@ fun PluginCard(
                                             showContextMenu = false
                                         },
                                         leadingIcon = {
-                                            Icon(icon, contentDescription = null, modifier = Modifier.size(20.dp))
+                                            Icon(icon, contentDescription = null, modifier = Modifier.size(chromeIconSize))
                                         },
                                         modifier = if (uiType == UiType.X11) Modifier.testTag("plugin_native_ui_button") else Modifier
                                     )
@@ -1719,26 +1772,45 @@ fun PluginCard(
                                 }
                                 Divider()
                             }
+                            if (compact) {
+                                DropdownMenuItem(
+                                    text = { Text("Replace") },
+                                    onClick = {
+                                        showContextMenu = false
+                                        onReplace()
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(chromeIconSize))
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Remove") },
+                                    onClick = {
+                                        showContextMenu = false
+                                        onRemove()
+                                    },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(chromeIconSize))
+                                    }
+                                )
+                            }
                         }
                     }
 
                     Text(
                         text = plugin.name,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
+                        style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleSmall,
+                        fontWeight = if (compact) FontWeight.Medium else FontWeight.Bold,
                         modifier = Modifier.weight(1f)
                     )
                     // Collapse
-                    IconButton(
+                    PluginChromeButton(
+                        compact = compact,
                         onClick = { onExpandedChange(!expanded) },
-                        modifier = Modifier.size(44.dp).testTag("plugin_card_expand")
-                    ) {
-                        Icon(
-                            if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                            contentDescription = if (expanded) "Collapse" else "Expand",
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
+                        icon = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = if (expanded) "Collapse" else "Expand",
+                        modifier = Modifier.testTag("plugin_card_expand")
+                    )
                     // Fullscreen button:
                     //   - LV2 X11 / Modgui: shown when those modes are active (uses LV2 dims)
                     //   - VST: always shown in LANDSCAPE so users can pop the wine editor
@@ -1752,7 +1824,8 @@ fun PluginCard(
                     val showFullscreenButton = currentUiMode == UiType.X11 || currentUiMode == UiType.MODGUI ||
                         isVstFsCandidate
                     if (showFullscreenButton) {
-                        IconButton(
+                        PluginChromeButton(
+                            compact = compact,
                             onClick = {
                                 if (isVstFsCandidate && currentUiMode != UiType.X11) {
                                     // Auto-switch into X11 so the fullscreen layout renders
@@ -1776,52 +1849,35 @@ fun PluginCard(
                                 }
                                 onOpenFullscreen(pluginIndex, UiType.X11, w, h)
                             },
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Fullscreen,
-                                contentDescription = "Fullscreen",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
+                            icon = Icons.Default.Fullscreen,
+                            contentDescription = "Fullscreen"
+                        )
                     }
                     // Keyboard — VST plugins in X11 mode (wine editor is on-screen)
                     val isVstPluginChrome = pluginInfo.format == "VST2" || pluginInfo.format == "VST3"
                     if (isVstPluginChrome && com.vibes.dsp.BuildConfig.HAS_VST_HOST &&
                         currentUiMode == UiType.X11) {
-                        IconButton(
+                        PluginChromeButton(
+                            compact = compact,
                             onClick = {
                                 com.vibes.dsp.ui.vst.VstKeyboardAction.showKeyboard(pathId, pluginIndex)
                             },
-                            modifier = Modifier.size(44.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Keyboard,
-                                contentDescription = "Keyboard",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
-                    // Replace
-                    IconButton(
-                        onClick = onReplace,
-                        modifier = Modifier.size(44.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.SwapHoriz,
-                            contentDescription = "Replace",
-                            modifier = Modifier.size(20.dp)
+                            icon = Icons.Default.Keyboard,
+                            contentDescription = "Keyboard"
                         )
                     }
-                    // Remove
-                    IconButton(
-                        onClick = onRemove,
-                        modifier = Modifier.size(44.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Remove",
-                            modifier = Modifier.size(20.dp)
+                    if (!compact) {
+                        PluginChromeButton(
+                            compact = false,
+                            onClick = onReplace,
+                            icon = Icons.Default.SwapHoriz,
+                            contentDescription = "Replace"
+                        )
+                        PluginChromeButton(
+                            compact = false,
+                            onClick = onRemove,
+                            icon = Icons.Default.Close,
+                            contentDescription = "Remove"
                         )
                     }
                 }
@@ -1841,7 +1897,7 @@ fun PluginCard(
                 }
                 Column(modifier = contentModifier) {
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(contentTopSpacer))
 
 
                 // Cleanup X11 display when plugin is removed from rack

@@ -69,6 +69,13 @@ object RackManager {
         quantization: TrackLaunchQuantization,
         enterOnPunch: Boolean
     ): Boolean = native.startTrackLoopRecording(trackId, bars, quantization, enterOnPunch)
+    fun startTrackClipRecording(
+        trackId: RackPathId,
+        slot: Int,
+        bars: Double,
+        quantization: TrackLaunchQuantization,
+        enterOnPunch: Boolean
+    ): Boolean = native.startTrackClipRecording(trackId, slot, bars, quantization, enterOnPunch)
     fun cancelTrackLoopRecording(trackId: RackPathId): Boolean =
         native.cancelTrackLoopRecording(trackId)
     fun setTransportBpm(bpm: Double): Boolean = native.setTransportBpm(bpm)

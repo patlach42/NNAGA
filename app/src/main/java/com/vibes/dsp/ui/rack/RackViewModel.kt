@@ -274,6 +274,12 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             _clipSlots.update { current -> current + (trackId to slots) }
         }
     }
+    private suspend fun refreshTrackClipSlotsNow(trackId: RackPathId) {
+        val slots = runCatching { RackManager.getTrackClipSlots(trackId).toList() }
+            .getOrDefault(emptyList())
+        _clipSlots.update { current -> current + (trackId to slots) }
+    }
+
     fun loadTrackClipMedia(trackId: RackPathId, slot: Int, uri: Uri, displayName: String) {
         viewModelScope.launch {
             val midi = uri.lastPathSegment?.substringBefore('?')?.lowercase()?.let {
@@ -311,6 +317,27 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             refreshTrackTransport()
         }
     }
+    fun startTrackClipRecording(
+        trackId: RackPathId,
+        slot: Int,
+        bars: Double,
+        quantization: TrackLaunchQuantization,
+        startGlobal: Boolean
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                if (startGlobal) RackManager.setTransportPlaying(true)
+                val recorded = RackManager.startTrackClipRecording(
+                    trackId, slot, bars, quantization, false
+                )
+                if (!recorded) _errorMessage.value = "Failed to start clip recording"
+                refreshTrackClipSlotsNow(trackId)
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
     fun loadTrackClipMidiNotes(trackId: RackPathId, slot: Int) {
         viewModelScope.launch(Dispatchers.IO) {
             val notes = runCatching { RackManager.getTrackClipMidiNotes(trackId, slot).toList() }

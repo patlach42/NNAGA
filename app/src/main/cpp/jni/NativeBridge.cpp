@@ -1117,6 +1117,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartTrackLoopRecording(
         static_cast<RackPathId>(trackId), static_cast<double>(bars),
         static_cast<LaunchQuantization>(value), enterOnPunch == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
 }
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeStartTrackClipRecording(
+    JNIEnv*, jobject, jlong trackId, jint slot, jdouble bars, jint quantization, jboolean enterOnPunch) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    const auto value = static_cast<uint8_t>(std::clamp(quantization, 0, 4));
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().startTrackClipRecording(
+        static_cast<RackPathId>(trackId), static_cast<uint32_t>(std::max(0, slot)),
+        static_cast<double>(bars), static_cast<LaunchQuantization>(value),
+        enterOnPunch == JNI_TRUE) ? JNI_TRUE : JNI_FALSE;
+}
+
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeCancelTrackLoopRecording(

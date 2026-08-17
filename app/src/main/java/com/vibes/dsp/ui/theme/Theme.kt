@@ -7,16 +7,7 @@
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
- *
- * NNAGA is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with NNAGA. If not, see <https://www.gnu.org/licenses/>.
  */
-
 package com.vibes.dsp.ui.theme
 
 import android.app.Activity
@@ -24,46 +15,61 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.runtime.collectAsState
 import androidx.core.view.WindowCompat
 
-private val AmoledColorScheme = darkColorScheme(
-    primary = Color(0xFFB6F43B),
-    onPrimary = Color(0xFF182000),
-    primaryContainer = Color(0xFF344900),
-    onPrimaryContainer = Color(0xFFD0FF75),
-    inversePrimary = Color(0xFF4F6500),
-    secondary = Color(0xFFC4D7A0),
-    onSecondary = Color(0xFF29351B),
-    secondaryContainer = Color(0xFF3D4B29),
-    onSecondaryContainer = Color(0xFFDFF5B9),
-    tertiary = Color(0xFFB9CCE8),
-    onTertiary = Color(0xFF233143),
-    tertiaryContainer = Color(0xFF39495C),
-    onTertiaryContainer = Color(0xFFD5E3FC),
-    background = Color(0xFF000000),
-    onBackground = Color(0xFFF5F5F5),
-    surface = Color(0xFF0A0A0A),
-    onSurface = Color(0xFFF5F5F5),
-    surfaceVariant = Color(0xFF121212),
-    onSurfaceVariant = Color(0xFFC5C8BD),
-    outline = Color(0xFF8F9387),
-    outlineVariant = Color(0xFF44473F),
-    inverseSurface = Color(0xFFE2E3D8),
-    inverseOnSurface = Color(0xFF2F312B),
-    error = Color(0xFFFFB4AB),
-    onError = Color(0xFF690005),
-    errorContainer = Color(0xFF93000A),
-    onErrorContainer = Color(0xFFFFDAD6)
-)
+private fun amoledColorScheme(accentArgb: Int) : androidx.compose.material3.ColorScheme {
+    val accent = Color(accentArgb)
+    val surface = Color(0xFF090909)
+    val accentContainer = accent.copy(alpha = 0.28f).compositeOver(surface)
+    val onAccent = Color(AppearancePreferences.contentArgbForAccent(accentArgb))
+    return darkColorScheme(
+        primary = accent,
+        onPrimary = onAccent,
+        primaryContainer = accentContainer,
+        onPrimaryContainer = Color(AppearancePreferences.contentArgbForAccent(accentContainer.toArgb())),
+        inversePrimary = accent,
+        secondary = accent,
+        onSecondary = onAccent,
+        secondaryContainer = accent.copy(alpha = 0.20f).compositeOver(surface),
+        onSecondaryContainer = Color(0xFFF4F4F4),
+        tertiary = Color(0xFFB8C7D9),
+        onTertiary = Color(0xFF1A2028),
+        tertiaryContainer = Color(0xFF29313A),
+        onTertiaryContainer = Color(0xFFD9E5F2),
+        background = Color.Black,
+        onBackground = Color(0xFFF5F5F5),
+        surface = surface,
+        onSurface = Color(0xFFF5F5F5),
+        surfaceVariant = Color(0xFF121212),
+        onSurfaceVariant = Color(0xFFC5C5C5),
+        outline = Color(0xFF8C8C8C),
+        outlineVariant = Color(0xFF414141),
+        inverseSurface = Color(0xFFE5E5E5),
+        inverseOnSurface = Color(0xFF202020),
+        error = Color(0xFFFFB4AB),
+        onError = Color(0xFF690005),
+        errorContainer = Color(0xFF93000A),
+        onErrorContainer = Color(0xFFFFDAD6)
+    )
+}
 
 @Composable
 fun NNAGATheme(
     @Suppress("UNUSED_PARAMETER") darkTheme: Boolean = true,
     content: @Composable () -> Unit
 ) {
+    val context = LocalContext.current
+    AppearancePreferences.initialize(context)
+    val accentArgb by AppearancePreferences.accentArgb.collectAsState()
+    val colorScheme = remember(accentArgb) { amoledColorScheme(accentArgb) }
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
@@ -76,9 +82,8 @@ fun NNAGATheme(
             }
         }
     }
-
     MaterialTheme(
-        colorScheme = AmoledColorScheme,
+        colorScheme = colorScheme,
         typography = androidx.compose.material3.Typography(),
         content = content
     )

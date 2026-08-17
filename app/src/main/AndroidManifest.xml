@@ -44,7 +44,7 @@
             android:screenOrientation="portrait"
             android:configChanges="orientation|screenSize|screenLayout"
             android:theme="@style/Theme.NNAGA"
-            android:windowLayoutInDisplayCutoutMode="never">
+            android:windowLayoutInDisplayCutoutMode="shortEdges">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

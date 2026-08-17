@@ -579,6 +579,13 @@ class NativeEngine private constructor() {
         quantization: Int,
         enterOnPunch: Boolean
     ): Boolean
+    external fun nativeStartTrackClipRecording(
+        trackId: Long,
+        slot: Int,
+        bars: Double,
+        quantization: Int,
+        enterOnPunch: Boolean
+    ): Boolean
     external fun nativeCancelTrackLoopRecording(trackId: Long): Boolean
     external fun nativeGetTrackClipSlots(trackId: Long): Array<ClipSlotInfo>
     external fun nativeGetTrackClipMidiNotes(trackId: Long, slot: Int): Array<MidiNoteInfo>
@@ -652,6 +659,13 @@ class NativeEngine private constructor() {
     ): Boolean = nativeSetTrackTransportPlaying(trackId, playing, quantization.ordinal)
     fun setTrackTransportLooping(trackId: Long, looping: Boolean): Boolean =
         nativeSetTrackTransportLooping(trackId, looping)
+    fun startTrackClipRecording(
+        trackId: Long,
+        slot: Int,
+        bars: Double,
+        quantization: TrackLaunchQuantization,
+        enterOnPunch: Boolean
+    ): Boolean = nativeStartTrackClipRecording(trackId, slot, bars, quantization.ordinal, enterOnPunch)
     fun startTrackLoopRecording(
         trackId: Long,
         bars: Double,

@@ -21,6 +21,7 @@ namespace {
 using guitarrackcraft::RackGraph;
 using guitarrackcraft::RackPathId;
 using guitarrackcraft::WavClip;
+using guitarrackcraft::TrackClipSlotInfo;
 
 constexpr float kTestSampleRate = 60.0f;
 constexpr double kTestBpm = 60.0;
@@ -76,6 +77,13 @@ const guitarrackcraft::TrackSnapshot& trackSnapshot(const RackGraph& graph,
     }
     ADD_FAILURE() << "missing track " << id;
     return storage.front();
+}
+const TrackClipSlotInfo* findClipSlot(const std::vector<TrackClipSlotInfo>& slots,
+                                      uint32_t slot) {
+    for (const auto& info : slots) {
+        if (info.slot == slot) return &info;
+    }
+    return nullptr;
 }
 
 } // namespace
@@ -437,6 +445,129 @@ TEST(RackGraphTransportTest, NoneStartsLoopRecordingAtCurrentTransportFrame) {
     EXPECT_TRUE(recording.recording);
 }
 
+
+TEST(RackGraphTransportTest, ClipRecordingKeepsRequestedSlotAcrossSelectionAndCompletion) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    ASSERT_TRUE(graph.startTrackClipRecording(
+        track, 2, 0.25, guitarrackcraft::LaunchQuantization::None, false));
+
+    std::vector<TrackClipSlotInfo> slots = graph.getTrackClipSlots(track);
+    ASSERT_GE(slots.size(), 3u);
+    const auto* reserved = findClipSlot(slots, 2);
+    ASSERT_NE(reserved, nullptr);
+    EXPECT_TRUE(reserved->wavLoaded);
+    EXPECT_FALSE(reserved->midiLoaded);
+    EXPECT_TRUE(reserved->active);
+    EXPECT_DOUBLE_EQ(reserved->durationSec, 1.0);
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    const auto& pending = trackSnapshot(graph, track, tracks);
+    EXPECT_TRUE(pending.wavLoaded);
+    EXPECT_TRUE(pending.recordPending);
+    EXPECT_FALSE(pending.recording);
+
+    // The first frame starts the immediate recording and is written to slot 2.
+    clearBuffers(buffers);
+    buffers.left[0] = 1.0f;
+    buffers.right[0] = 1.0f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    EXPECT_TRUE(trackSnapshot(graph, track, tracks).recording);
+
+    // Changing the selected slot must not redirect the in-flight recording.
+    ASSERT_TRUE(graph.selectTrackClipSlot(track, 0));
+    slots = graph.getTrackClipSlots(track);
+    reserved = findClipSlot(slots, 2);
+    const auto* selected = findClipSlot(slots, 0);
+    ASSERT_NE(reserved, nullptr);
+    ASSERT_NE(selected, nullptr);
+    EXPECT_TRUE(reserved->wavLoaded);
+    EXPECT_FALSE(reserved->active);
+    EXPECT_TRUE(selected->active);
+    EXPECT_FALSE(selected->wavLoaded);
+
+    clearBuffers(buffers);
+    for (uint32_t frame = 0; frame < 59; ++frame) {
+        const float sample = 2.0f + static_cast<float>(frame);
+        buffers.left[frame] = sample;
+        buffers.right[frame] = sample;
+    }
+    graph.process(buffers.inputs, 2, buffers.outputs, 59);
+
+    slots = graph.getTrackClipSlots(track);
+    reserved = findClipSlot(slots, 2);
+    ASSERT_NE(reserved, nullptr);
+    EXPECT_TRUE(reserved->wavLoaded);
+    EXPECT_FALSE(reserved->active);
+    EXPECT_DOUBLE_EQ(reserved->durationSec, 1.0);
+    const auto& completedOnOtherSlot = trackSnapshot(graph, track, tracks);
+    EXPECT_FALSE(completedOnOtherSlot.recordPending);
+    EXPECT_FALSE(completedOnOtherSlot.recording);
+
+    ASSERT_TRUE(graph.selectTrackClipSlot(track, 2));
+    slots = graph.getTrackClipSlots(track);
+    reserved = findClipSlot(slots, 2);
+    ASSERT_NE(reserved, nullptr);
+    EXPECT_TRUE(reserved->wavLoaded);
+    EXPECT_TRUE(reserved->active);
+    const auto& completed = trackSnapshot(graph, track, tracks);
+    EXPECT_TRUE(completed.wavLoaded);
+    EXPECT_TRUE(completed.looping);
+
+    // The captured samples are still observable through the requested slot.
+    const auto peaks = graph.getTrackWaveformPeaks(track, 4);
+    ASSERT_EQ(peaks.size(), 4u);
+    EXPECT_FLOAT_EQ(peaks[0], 15.0f);
+    EXPECT_FLOAT_EQ(peaks[1], 30.0f);
+    EXPECT_FLOAT_EQ(peaks[2], 45.0f);
+    EXPECT_FLOAT_EQ(peaks[3], 60.0f);
+}
+
+TEST(RackGraphTransportTest, CancelClipRecordingRemovesReservedSlot) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    ASSERT_TRUE(graph.startTrackClipRecording(
+        track, 3, 0.25, guitarrackcraft::LaunchQuantization::None, false));
+
+    std::vector<TrackClipSlotInfo> slots = graph.getTrackClipSlots(track);
+    ASSERT_GE(slots.size(), 4u);
+    const auto* reserved = findClipSlot(slots, 3);
+    ASSERT_NE(reserved, nullptr);
+    EXPECT_TRUE(reserved->wavLoaded);
+    EXPECT_DOUBLE_EQ(reserved->durationSec, 1.0);
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    const auto& armed = trackSnapshot(graph, track, tracks);
+    EXPECT_TRUE(armed.wavLoaded);
+    EXPECT_TRUE(armed.recordPending);
+    EXPECT_FALSE(armed.recording);
+
+    ASSERT_TRUE(graph.cancelTrackLoopRecording(track));
+
+    slots = graph.getTrackClipSlots(track);
+    reserved = findClipSlot(slots, 3);
+    ASSERT_NE(reserved, nullptr);
+    EXPECT_FALSE(reserved->wavLoaded);
+    EXPECT_FALSE(reserved->midiLoaded);
+    EXPECT_TRUE(reserved->displayName.empty());
+    EXPECT_DOUBLE_EQ(reserved->durationSec, 0.0);
+
+    const auto& cancelled = trackSnapshot(graph, track, tracks);
+    EXPECT_FALSE(cancelled.wavLoaded);
+    EXPECT_FALSE(cancelled.recordPending);
+    EXPECT_FALSE(cancelled.recording);
+    EXPECT_FALSE(cancelled.punchArmed);
+    EXPECT_FALSE(graph.cancelTrackLoopRecording(track));
+}
 
 TEST(RackGraphTransportTest, LoopRecordingCapturesOneBarMonitorsAndLoopsImmediately) {
     RackGraph graph;

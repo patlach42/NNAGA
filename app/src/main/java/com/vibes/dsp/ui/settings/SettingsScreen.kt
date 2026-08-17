@@ -12,6 +12,7 @@
 package com.vibes.dsp.ui.settings
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.semantics.Role
@@ -24,11 +25,12 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Divider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.TabRow
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,10 +47,59 @@ import com.vibes.dsp.ui.tone3000.Tone
 import com.vibes.dsp.ui.tone3000.Tone3000Screen
 import com.vibes.dsp.ui.vst.VstManagerTab
 
+internal object SettingsDimensions {
+    val appBarHeight = 48.dp
+    val tabHeight = 44.dp
+    val touchTarget = 48.dp
+    val icon = 18.dp
+    val swatch = 32.dp
+    val spacing = 4.dp
+    val contentPadding = 8.dp
+    val divider = 1.dp
+    val selectedIndicator = 2.dp
+}
+
+@Composable
+private fun CompactSettingsTopBar(onNavigateBack: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.background) {
+        Column(
+            modifier = Modifier.windowInsetsPadding(
+                WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
+            )
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(SettingsDimensions.appBarHeight),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = onNavigateBack,
+                    modifier = Modifier.size(SettingsDimensions.touchTarget)
+                ) {
+                    Icon(
+                        Icons.Default.ArrowBack,
+                        contentDescription = "Back",
+                        modifier = Modifier.size(SettingsDimensions.icon)
+                    )
+                }
+                Text(
+                    text = "Settings",
+                    style = MaterialTheme.typography.titleMedium
+                )
+            }
+            Divider(
+                thickness = SettingsDimensions.divider,
+                color = MaterialTheme.colorScheme.outlineVariant
+            )
+        }
+    }
+}
 enum class SettingsTab(val argument: String, val label: String) {
     Driver("driver", "Driver"),
     Tone3000("tone3000", "TONE3000"),
-    Vst("vst", "Manage VST");
+    Vst("vst", "Manage VST"),
+    Interface("interface", "Interface");
 
     companion object {
         fun fromArgument(argument: String?): SettingsTab =
@@ -74,6 +125,7 @@ fun SettingsScreen(
             add(SettingsTab.Driver)
             add(SettingsTab.Tone3000)
             if (BuildConfig.HAS_VST_HOST) add(SettingsTab.Vst)
+            add(SettingsTab.Interface)
         }
     }
     var selectedTab by remember(initialTab, availableTabs) {
@@ -97,43 +149,60 @@ fun SettingsScreen(
     }
 
     Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        }
+        topBar = { CompactSettingsTopBar(onNavigateBack) }
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            TabRow(selectedTabIndex = availableTabs.indexOf(selectedTab)) {
-                availableTabs.forEach { tab ->
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(48.dp)
-                            .semantics {
-                                selected = selectedTab == tab
-                                role = Role.Tab
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(SettingsDimensions.tabHeight)
+                ) {
+                    availableTabs.forEach { tab ->
+                        val isSelected = selectedTab == tab
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .semantics {
+                                    selected = isSelected
+                                    role = Role.Tab
+                                }
+                                .combinedClickable(
+                                    onClick = { selectedTab = tab },
+                                    onLongClick = if (tab == SettingsTab.Driver) {
+                                        { showDriverDialog = true }
+                                    } else null,
+                                    onLongClickLabel = if (tab == SettingsTab.Driver) "Choose USB driver" else null,
+                                    role = Role.Tab
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = tab.label,
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1
+                            )
+                            if (isSelected) {
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.BottomCenter)
+                                        .fillMaxWidth()
+                                        .height(SettingsDimensions.selectedIndicator)
+                                        .background(MaterialTheme.colorScheme.primary)
+                                )
                             }
-                            .combinedClickable(
-                                onClick = { selectedTab = tab },
-                                onLongClick = if (tab == SettingsTab.Driver) {
-                                    { showDriverDialog = true }
-                                } else null,
-                                onLongClickLabel = if (tab == SettingsTab.Driver) "Choose USB driver" else null,
-                                role = Role.Tab
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) { Text(tab.label) }
+                        }
+                    }
                 }
+                Divider(
+                    thickness = SettingsDimensions.divider,
+                    color = MaterialTheme.colorScheme.outlineVariant
+                )
             }
             when (selectedTab) {
                 SettingsTab.Driver -> AudioSettingsScreen(
@@ -152,6 +221,7 @@ fun SettingsScreen(
                     embedded = true
                 )
                 SettingsTab.Vst -> VstManagerTab()
+                SettingsTab.Interface -> InterfaceSettingsScreen()
             }
         }
     }
