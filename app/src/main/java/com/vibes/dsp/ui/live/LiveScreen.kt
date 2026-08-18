@@ -1,7 +1,10 @@
 package com.vibes.dsp.ui.live
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
@@ -66,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -112,6 +116,7 @@ import com.vibes.dsp.engine.RackTrackInfo
 import com.vibes.dsp.engine.TrackLaunchQuantization
 import com.vibes.dsp.ui.rack.PluginCard
 import com.vibes.dsp.ui.rack.RackViewModel
+import com.vibes.dsp.ui.rack.RackPlugin
 import com.vibes.dsp.ui.theme.AppearancePreferences
 import kotlin.math.roundToInt
 
@@ -171,6 +176,23 @@ private object LiveDimensions {
     val hairline = 1.dp
 }
 
+internal data class LiveFullscreenRequest(
+    val instanceId: Long,
+    val pathId: Long,
+    val width: Int,
+    val height: Int,
+)
+
+internal fun resolveLiveFullscreenPlugin(
+    request: LiveFullscreenRequest,
+    selectedPathId: Long,
+    plugins: List<RackPlugin>,
+): RackPlugin? = if (request.pathId == selectedPathId) {
+    plugins.firstOrNull { it.instanceId == request.instanceId }
+} else {
+    null
+}
+
 @Composable
 @OptIn(ExperimentalFoundationApi::class)
 fun LiveScreen(
@@ -218,6 +240,25 @@ fun LiveScreen(
     val fitTilesOnScreen = remember { LiveLayoutPreferences.getFitTilesOnScreen(context) }
     var tileHeights by remember {
         mutableStateOf(tileOrder.associateWith { id -> LiveLayoutPreferences.getTileHeight(context, id) })
+    }
+    var fullscreenPluginInstanceId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var fullscreenPluginPathId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var fullscreenPluginWidth by rememberSaveable { mutableStateOf<Int?>(null) }
+    var fullscreenPluginHeight by rememberSaveable { mutableStateOf<Int?>(null) }
+    val fullscreenRequest = fullscreenPluginInstanceId?.let { instanceId ->
+        fullscreenPluginPathId?.let { pathId ->
+            fullscreenPluginWidth?.let { width ->
+                fullscreenPluginHeight?.let { height ->
+                    LiveFullscreenRequest(instanceId, pathId, width, height)
+                }
+            }
+        }
+    }
+    fun exitFullscreen() {
+        fullscreenPluginInstanceId = null
+        fullscreenPluginPathId = null
+        fullscreenPluginWidth = null
+        fullscreenPluginHeight = null
     }
     val supportedLoopLengths = listOf(
         0.25 to "1/4", 1.0 to "1 bar", 2.0 to "2 bars", 4.0 to "4 bars",
@@ -275,6 +316,66 @@ fun LiveScreen(
     }
     LaunchedEffect(tracks) {
         tracks.forEach { viewModel.refreshTrackClipSlots(it.id) }
+    }
+
+    val fullscreenPlugin = fullscreenRequest?.let { request ->
+        resolveLiveFullscreenPlugin(request, selectedPath, selectedPlugins)
+    }
+    val activity = context as? Activity
+    LaunchedEffect(fullscreenRequest) {
+        if (fullscreenRequest != null &&
+            fullscreenRequest.width > 0 &&
+            fullscreenRequest.height > 0
+        ) {
+            if (fullscreenRequest.width > fullscreenRequest.height * 1.3) {
+                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
+            }
+        } else if (fullscreenRequest == null) {
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
+    }
+    BackHandler(enabled = fullscreenRequest != null) {
+        exitFullscreen()
+    }
+    LaunchedEffect(fullscreenRequest, fullscreenPlugin) {
+        if (fullscreenRequest != null && fullscreenPlugin == null) {
+            exitFullscreen()
+        }
+    }
+
+    if (fullscreenRequest != null) {
+        BoxWithConstraints(
+            modifier = Modifier.fillMaxSize().background(Color.Black),
+        ) {
+            fullscreenPlugin?.let { plugin ->
+                key(plugin.instanceId) {
+                    PluginCard(
+                        plugin = plugin,
+                        pluginIndex = plugin.index,
+                        pathId = fullscreenRequest.pathId,
+                        viewModel = viewModel,
+                        onRemove = {
+                            viewModel.removePlugin(fullscreenRequest.pathId, plugin.index)
+                        },
+                        onReplace = {
+                            onNavigateToBrowser(fullscreenRequest.pathId, plugin.index)
+                        },
+                        isFullscreen = true,
+                        isAnyPluginFullscreen = true,
+                        isRackVisible = true,
+                        screenHeight = maxHeight,
+                        onExitFullscreen = ::exitFullscreen,
+                        onNavigateToTone3000 = onNavigateToTone3000,
+                        compact = true,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+            }
+        }
+        return
     }
 
     val selectedTrack = tracks.firstOrNull { it.id == selectedTrackId } ?: tracks.firstOrNull()
@@ -578,6 +679,12 @@ fun LiveScreen(
                                 viewModel = viewModel,
                                 horizontal = horizontalPlugins,
                                 onBrowser = { path -> onNavigateToBrowser(path, -1) },
+                                onOpenFullscreen = { plugin, width, height ->
+                                    fullscreenPluginInstanceId = plugin.instanceId
+                                    fullscreenPluginPathId = selectedPath
+                                    fullscreenPluginWidth = width
+                                    fullscreenPluginHeight = height
+                                },
                                 onNavigateToTone3000 = onNavigateToTone3000,
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -844,6 +951,7 @@ private fun DevicesTile(
     viewModel: RackViewModel,
     horizontal: Boolean,
     onBrowser: (Long) -> Unit,
+    onOpenFullscreen: (RackPlugin, Int, Int) -> Unit,
     modifier: Modifier,
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit,
 ) {
@@ -909,12 +1017,21 @@ private fun DevicesTile(
                                         onReplace = { onBrowser(pathId) },
                                         expanded = expanded,
                                         onExpandedChange = { expanded = it },
+                                        onOpenFullscreen = { _, _, width, height ->
+                                            onOpenFullscreen(plugin, width, height)
+                                        },
                                         onNavigateToTone3000 = onNavigateToTone3000,
                                         compact = true,
-                                        modifier = Modifier.widthIn(
-                                            min = LiveDimensions.pluginMinWidth,
-                                            max = LiveDimensions.pluginMaxWidth,
-                                        ),
+                                        modifier = Modifier
+                                            .widthIn(
+                                                min = LiveDimensions.pluginMinWidth,
+                                                max = LiveDimensions.pluginMaxWidth,
+                                            )
+                                            .then(
+                                                if (expanded) Modifier else Modifier
+                                                    .height(LiveDimensions.hitTarget)
+                                                    .clipToBounds()
+                                            ),
                                     )
                                 }
                             }
@@ -939,9 +1056,18 @@ private fun DevicesTile(
                                     onReplace = { onBrowser(pathId) },
                                     expanded = expanded,
                                     onExpandedChange = { expanded = it },
+                                    onOpenFullscreen = { _, _, width, height ->
+                                        onOpenFullscreen(plugin, width, height)
+                                    },
                                     onNavigateToTone3000 = onNavigateToTone3000,
                                     compact = true,
-                                    modifier = Modifier.fillMaxWidth(),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .then(
+                                            if (expanded) Modifier else Modifier
+                                                .height(LiveDimensions.hitTarget)
+                                                .clipToBounds()
+                                        ),
                                 )
                             }
                         }
