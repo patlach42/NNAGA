@@ -122,7 +122,6 @@ import com.vibes.dsp.ui.rack.RackPlugin
 import com.vibes.dsp.ui.theme.AppearancePreferences
 import kotlin.math.roundToInt
 
-private enum class InspectorTab { Clips, Track }
 
 private data class TopCutoutBounds(
     val left: Int = 0,
@@ -226,7 +225,6 @@ fun LiveScreen(
     var tempoInput by rememberSaveable { mutableStateOf("") }
     var selectedTrackId by rememberSaveable { mutableLongStateOf(0L) }
     var selectedSlot by rememberSaveable { mutableIntStateOf(0) }
-    var tab by rememberSaveable { mutableIntStateOf(InspectorTab.Clips.ordinal) }
     var importTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
     var inputMenuTrack by remember { mutableStateOf<RackTrackInfo?>(null) }
     var recordMenuTrack by remember { mutableStateOf<RackTrackInfo?>(null) }
@@ -390,6 +388,7 @@ fun LiveScreen(
     val selectedClip = selectedTrack?.let { track ->
         slotsByTrack[track.id]?.firstOrNull { it.slot == selectedSlot }
     }
+    val inspectorHasClip = selectedClip?.wavLoaded == true || selectedClip?.midiLoaded == true
 
     LaunchedEffect(selectedTrack?.id, selectedSlot, selectedClip?.midiLoaded, selectedClip?.wavLoaded) {
         selectedTrack ?: return@LaunchedEffect
@@ -558,12 +557,16 @@ fun LiveScreen(
                         ?: LiveLayoutPreferences.defaultTileHeight(tileId)
                     val smallerHeight = LiveLayoutPreferences.clampTileHeight(tileId, currentHeight - 32f)
                     val largerHeight = LiveLayoutPreferences.clampTileHeight(tileId, currentHeight + 32f)
+                    val inspectorCollapsed =
+                        tileId == "inspector" && !inspectorHasClip && !editTiles
                     TileContainer(
                         id = tileId,
-                        modifier = if (fitTilesOnScreen) {
-                            Modifier.weight(currentHeight.coerceAtLeast(1f))
-                        } else {
-                            Modifier.height(currentHeight.dp)
+                        modifier = when {
+                            inspectorCollapsed -> Modifier.height(
+                                LiveDimensions.hitTarget + LiveDimensions.gap + LiveDimensions.hairline,
+                            )
+                            fitTilesOnScreen -> Modifier.weight(currentHeight.coerceAtLeast(1f))
+                            else -> Modifier.height(currentHeight.dp)
                         },
                         editMode = editTiles,
                         currentHeight = currentHeight,
@@ -657,8 +660,6 @@ fun LiveScreen(
                                 clip = selectedClip,
                                 peaks = peaksByTrack[selectedTrack?.id].orEmpty(),
                                 notes = notesByClip[selectedTrack?.id to selectedSlot].orEmpty(),
-                                tab = InspectorTab.entries.getOrElse(tab) { InspectorTab.Clips },
-                                onTab = { tab = it.ordinal },
                                 onTrackVolume = { track, volume -> viewModel.setTrackVolume(track.id, volume) },
                                 onTrackInput = { inputMenuTrack = it },
                                 onTrackArm = { track ->
@@ -1494,8 +1495,6 @@ private fun ClipInspector(
     clip: ClipSlotInfo?,
     peaks: List<Float>,
     notes: List<MidiNoteInfo>,
-    tab: InspectorTab,
-    onTab: (InspectorTab) -> Unit,
     onTrackVolume: (RackTrackInfo, Float) -> Unit,
     onTrackInput: (RackTrackInfo) -> Unit,
     onTrackArm: (RackTrackInfo) -> Unit,
@@ -1508,47 +1507,28 @@ private fun ClipInspector(
 ) {
     Surface(color = LiveColors.panel, modifier = modifier.fillMaxWidth()) {
         Column {
-            Row(Modifier.fillMaxWidth().height(36.dp).background(LiveColors.raised)) {
-                InspectorTab.entries.forEach { item ->
-                    val selected = tab == item
-                    Box(
-                        modifier = Modifier.weight(1f).fillMaxHeight()
-                            .semantics { this.selected = selected }
-                            .clickable(role = Role.Tab) { onTab(item) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            item.name.uppercase(),
-                            color = if (selected) MaterialTheme.colorScheme.primary else LiveColors.textMuted,
-                            style = MaterialTheme.typography.labelSmall,
-                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        )
-                        if (selected) {
-                            Box(
-                                Modifier.align(Alignment.BottomCenter).fillMaxWidth()
-                                    .height(2.dp).background(MaterialTheme.colorScheme.primary),
-                            )
-                        }
-                    }
-                }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(LiveDimensions.hitTarget + LiveDimensions.gap),
+            ) {
+                TrackInspectorControls(
+                    track = track,
+                    onVolumeChange = { value -> track?.let { onTrackVolume(it, value) } },
+                    onInputClick = { track?.let(onTrackInput) },
+                    onArmClick = { track?.let(onTrackArm) },
+                    onArmLockClick = { track?.let(onTrackArmLock) },
+                    onDeleteClick = { track?.let(onTrackDelete) },
+                    onRecordOptionsClick = { track?.let(onTrackRecordMenu) },
+                    launchQuantization = launchQuantization,
+                    onLaunchQuantizationClick = onLaunchQuantizationClick,
+                )
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                when (tab) {
-                    InspectorTab.Clips -> when {
-                        clip?.midiLoaded == true -> PianoRoll(clip, notes)
-                        else -> Waveform(track, clip, peaks)
-                    }
-                    InspectorTab.Track -> TrackInspectorControls(
-                        track = track,
-                        onVolumeChange = { value -> track?.let { onTrackVolume(it, value) } },
-                        onInputClick = { track?.let(onTrackInput) },
-                        onArmClick = { track?.let(onTrackArm) },
-                        onArmLockClick = { track?.let(onTrackArmLock) },
-                        onDeleteClick = { track?.let(onTrackDelete) },
-                        onRecordOptionsClick = { track?.let(onTrackRecordMenu) },
-                        launchQuantization = launchQuantization,
-                        onLaunchQuantizationClick = onLaunchQuantizationClick,
-                    )
+                if (clip?.midiLoaded == true) {
+                    PianoRoll(clip, notes)
+                } else {
+                    Waveform(track, clip, peaks)
                 }
             }
         }
@@ -1767,10 +1747,7 @@ private fun InspectorMessage(message: String) {
 
 @Composable
 private fun Waveform(track: RackTrackInfo?, clip: ClipSlotInfo?, peaks: List<Float>) {
-    if (track == null || clip?.wavLoaded != true) {
-        InspectorMessage("Select an audio or MIDI clip to inspect it")
-        return
-    }
+    if (track == null || clip?.wavLoaded != true) return
     val accent = MaterialTheme.colorScheme.primary
     Canvas(modifier = Modifier.fillMaxSize().padding(horizontal = LiveDimensions.smallGap)) {
         val mid = size.height / 2
