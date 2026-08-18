@@ -521,10 +521,9 @@ fun LiveScreen(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButtonPosition = androidx.compose.material3.FabPosition.Center,
         floatingActionButton = {
-            EngineControlButton(
-                engineRunning = engineRunning,
-                onClick = { if (engineRunning) viewModel.stopEngine() else viewModel.startEngine() },
-            )
+            if (!engineRunning) {
+                EngineControlButton(onClick = viewModel::startEngine)
+            }
         },
     ) { contentPadding ->
         Column(Modifier.fillMaxSize().padding(contentPadding)) {
@@ -1154,25 +1153,22 @@ private fun TransportBar(
 }
 
 @Composable
-private fun EngineControlButton(
-    engineRunning: Boolean,
-    onClick: () -> Unit,
-) {
+private fun EngineControlButton(onClick: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
     Box(
         modifier = Modifier
             .width(116.dp)
             .height(LiveDimensions.hitTarget)
             .semantics {
-                stateDescription = if (engineRunning) "Audio engine active" else "Audio engine inactive"
+                stateDescription = "Audio engine inactive"
             }
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
         Surface(
             modifier = Modifier.fillMaxWidth().height(32.dp),
-            color = if (engineRunning) accent else LiveColors.raised,
-            contentColor = if (engineRunning) MaterialTheme.colorScheme.onPrimary else accent,
+            color = LiveColors.raised,
+            contentColor = accent,
             shape = RoundedCornerShape(16.dp),
             shadowElevation = 4.dp,
         ) {
@@ -1182,13 +1178,10 @@ private fun EngineControlButton(
                 horizontalArrangement = Arrangement.Center,
             ) {
                 Box(
-                    modifier = Modifier.size(6.dp).background(
-                        if (engineRunning) MaterialTheme.colorScheme.onPrimary else accent,
-                        CircleShape,
-                    ),
+                    modifier = Modifier.size(6.dp).background(accent, CircleShape),
                 )
                 Text(
-                    text = if (engineRunning) "AUDIO ON" else "ACTIVATE AUDIO",
+                    text = "ACTIVATE AUDIO",
                     modifier = Modifier.padding(start = 6.dp),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold,
