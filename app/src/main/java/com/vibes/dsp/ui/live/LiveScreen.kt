@@ -107,6 +107,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.vibes.dsp.engine.ClipSlotInfo
 import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.DirectUsbSessionState
@@ -533,9 +534,6 @@ fun LiveScreen(
             StatusStrip(
                 engineRunning = engineRunning,
                 meterState = meterState,
-                latencyMs = latencyMs,
-                cpuLoad = cpuLoad,
-                xRunCount = xRunCount,
                 usbState = directUsbState,
                 usbStats = directUsbStats,
                 errorMessage = errorMessage,
@@ -678,6 +676,9 @@ fun LiveScreen(
                                 pathId = selectedPath,
                                 viewModel = viewModel,
                                 horizontal = horizontalPlugins,
+                                latencyMs = latencyMs,
+                                cpuLoad = cpuLoad,
+                                xRunCount = xRunCount,
                                 onBrowser = { path -> onNavigateToBrowser(path, -1) },
                                 onOpenFullscreen = { plugin, width, height ->
                                     fullscreenPluginInstanceId = plugin.instanceId
@@ -950,6 +951,9 @@ private fun DevicesTile(
     pathId: Long,
     viewModel: RackViewModel,
     horizontal: Boolean,
+    latencyMs: Double,
+    cpuLoad: Float,
+    xRunCount: Int,
     onBrowser: (Long) -> Unit,
     onOpenFullscreen: (RackPlugin, Int, Int) -> Unit,
     modifier: Modifier,
@@ -981,6 +985,18 @@ private fun DevicesTile(
                 )
                 Text("ADD", modifier = Modifier.padding(start = LiveDimensions.smallGap))
             }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().height(16.dp)
+                .padding(horizontal = LiveDimensions.gap),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                "${latencyMs.roundToInt()}ms · CPU ${(cpuLoad * 100).roundToInt()}% · XR $xRunCount",
+                color = LiveColors.textMuted,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+            )
         }
         Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             when {
@@ -1767,9 +1783,6 @@ private fun PianoRoll(clip: ClipSlotInfo, notes: List<MidiNoteInfo>) {
 private fun StatusStrip(
     engineRunning: Boolean,
     meterState: com.vibes.dsp.ui.rack.MeterState,
-    latencyMs: Double,
-    cpuLoad: Float,
-    xRunCount: Int,
     usbState: DirectUsbSessionState,
     usbStats: com.vibes.dsp.engine.DirectUsbStats,
     errorMessage: String?,
@@ -1820,11 +1833,6 @@ private fun StatusStrip(
                 TextButton(onClick = onResetClipping, modifier = Modifier.height(LiveDimensions.hitTarget)) {
                     Text("RESET", style = MaterialTheme.typography.labelSmall)
                 }
-                Text(
-                    "${latencyMs.roundToInt()}ms · CPU ${(cpuLoad * 100).roundToInt()}% · XR $xRunCount",
-                    color = LiveColors.textMuted,
-                    style = MaterialTheme.typography.labelSmall,
-                )
                 Text(
                     "USB ${usbState.name} · ${usbStats.sampleRateHz}Hz",
                     color = LiveColors.textDim,
