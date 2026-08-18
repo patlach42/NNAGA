@@ -112,6 +112,7 @@ import com.vibes.dsp.engine.ClipSlotInfo
 import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.DirectUsbSessionState
 import com.vibes.dsp.engine.MidiNoteInfo
+import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.engine.RackPathId
 import com.vibes.dsp.engine.RackTrackInfo
 import com.vibes.dsp.engine.TrackLaunchQuantization
@@ -691,8 +692,9 @@ fun LiveScreen(
                             )
                             "mixer" -> Mixer(
                                 tracks = tracks,
-                                selected = selectedTrack?.id,
+                                selected = selectedPath,
                                 scrollState = mixerScrollState,
+                                onSelectMaster = { viewModel.selectPath(MASTER_PATH_ID) },
                                 onSelect = { track ->
                                     selectedTrackId = track.id
                                     armTrackExclusivelyIfEnabled(track.id)
@@ -1874,34 +1876,40 @@ private fun Mixer(
     tracks: List<RackTrackInfo>,
     selected: RackPathId?,
     onSelect: (RackTrackInfo) -> Unit,
+    onSelectMaster: () -> Unit,
     onVolume: (RackTrackInfo, Float) -> Unit,
     onAdd: () -> Unit,
     modifier: Modifier,
     scrollState: androidx.compose.foundation.ScrollState,
 ) {
     Surface(color = LiveColors.raised, modifier = modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxSize().horizontalScroll(scrollState),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            tracks.forEachIndexed { index, track ->
-                MixerChannel(
-                    track = track,
-                    index = index,
-                    selected = track.id == selected,
-                    onSelect = { onSelect(track) },
-                    onVolume = { onVolume(track, it) },
-                )
+        Row(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.weight(1f).fillMaxHeight().horizontalScroll(scrollState),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                tracks.forEachIndexed { index, track ->
+                    MixerChannel(
+                        track = track,
+                        index = index,
+                        selected = track.id == selected,
+                        onSelect = { onSelect(track) },
+                        onVolume = { onVolume(track, it) },
+                    )
+                }
+                IconButton(onClick = onAdd, modifier = Modifier.size(LiveDimensions.hitTarget)) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = "Add track",
+                        tint = LiveColors.textMuted,
+                        modifier = Modifier.size(LiveDimensions.icon),
+                    )
+                }
             }
-            MasterChannel()
-            IconButton(onClick = onAdd, modifier = Modifier.size(LiveDimensions.hitTarget)) {
-                Icon(
-                    Icons.Default.Add,
-                    contentDescription = "Add track",
-                    tint = LiveColors.textMuted,
-                    modifier = Modifier.size(LiveDimensions.icon),
-                )
-            }
+            MasterChannel(
+                selected = selected == MASTER_PATH_ID,
+                onSelect = onSelectMaster,
+            )
         }
     }
 }
@@ -1961,24 +1969,30 @@ private fun MixerChannel(
 }
 
 @Composable
-private fun MasterChannel() {
+private fun MasterChannel(
+    selected: Boolean,
+    onSelect: () -> Unit,
+) {
+    val accent = MaterialTheme.colorScheme.primary
     Column(
         modifier = Modifier.width(LiveDimensions.mixerChannel).fillMaxHeight()
-            .background(LiveColors.panel)
+            .background(if (selected) accent.copy(alpha = 0.12f) else LiveColors.panel)
             .drawBehind {
                 drawLine(
                     color = LiveColors.divider,
-                    start = Offset(size.width - 1.dp.toPx(), 0f),
-                    end = Offset(size.width - 1.dp.toPx(), size.height),
+                    start = Offset(0f, 0f),
+                    end = Offset(0f, size.height),
                     strokeWidth = 1.dp.toPx(),
                 )
             }
+            .semantics { this.selected = selected }
+            .clickable(role = Role.Button, onClick = onSelect)
             .padding(vertical = LiveDimensions.smallGap),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
             "MASTER",
-            color = LiveColors.text,
+            color = if (selected) accent else LiveColors.text,
             style = MaterialTheme.typography.labelSmall,
             fontWeight = FontWeight.Bold,
         )
