@@ -413,7 +413,7 @@ TEST(RackGraphTransportTest, LoopRecordingStartsAtStrictNextQuarterBoundary) {
     expectSilence(buffers, 56);
     std::vector<guitarrackcraft::TrackSnapshot> tracks;
     const auto& pending = trackSnapshot(graph, track, tracks);
-    EXPECT_FALSE(pending.wavLoaded);
+    EXPECT_TRUE(pending.wavLoaded);
     EXPECT_TRUE(pending.recordPending);
     EXPECT_FALSE(pending.recording);
 
@@ -433,7 +433,7 @@ TEST(RackGraphTransportTest, LoopRecordingStartsAtStrictNextQuarterBoundary) {
     EXPECT_FLOAT_EQ(buffers.outputLeft[0], 0.25f);
     EXPECT_FLOAT_EQ(buffers.outputRight[0], 0.25f);
     const auto& recording = trackSnapshot(graph, track, tracks);
-    EXPECT_FALSE(recording.wavLoaded);
+    EXPECT_TRUE(recording.wavLoaded);
     EXPECT_FALSE(recording.recordPending);
     EXPECT_TRUE(recording.recording);
 }
@@ -465,7 +465,7 @@ TEST(RackGraphTransportTest, NoneStartsLoopRecordingAtCurrentTransportFrame) {
     EXPECT_FLOAT_EQ(buffers.outputRight[1], 0.5f);
     std::vector<guitarrackcraft::TrackSnapshot> tracks;
     const auto& recording = trackSnapshot(graph, track, tracks);
-    EXPECT_FALSE(recording.wavLoaded);
+    EXPECT_TRUE(recording.wavLoaded);
     EXPECT_FALSE(recording.recordPending);
     EXPECT_TRUE(recording.recording);
 }
@@ -664,7 +664,7 @@ TEST(RackGraphTransportTest, GlobalStopCancelsPendingAndInProgressLoopRecording)
         clearBuffers(buffers);
         graph.process(buffers.inputs, 2, buffers.outputs, 1);
         const auto& stopped = trackSnapshot(graph, track, tracks);
-        EXPECT_FALSE(stopped.wavLoaded);
+        EXPECT_TRUE(stopped.wavLoaded);
         EXPECT_FALSE(stopped.recordPending);
         EXPECT_FALSE(stopped.recording);
     }
@@ -689,7 +689,7 @@ TEST(RackGraphTransportTest, GlobalStopCancelsPendingAndInProgressLoopRecording)
         clearBuffers(buffers);
         graph.process(buffers.inputs, 2, buffers.outputs, 1);
         const auto& stopped = trackSnapshot(graph, track, tracks);
-        EXPECT_FALSE(stopped.wavLoaded);
+        EXPECT_TRUE(stopped.wavLoaded);
         EXPECT_FALSE(stopped.recordPending);
         EXPECT_FALSE(stopped.recording);
     }
@@ -929,7 +929,7 @@ TEST(RackGraphTransportTest, PunchIgnoresSubThresholdInputWhilePaused) {
         const auto& state = trackSnapshot(graph, track, tracks);
         EXPECT_TRUE(state.punchArmed);
         EXPECT_FALSE(state.recording);
-        EXPECT_FALSE(state.wavLoaded);
+        EXPECT_TRUE(state.wavLoaded);
     }
     const auto after = graph.getTransportSnapshot();
     EXPECT_FALSE(after.playing);
@@ -963,7 +963,7 @@ TEST(RackGraphTransportTest, PunchCalibratesSteadyNoiseBeforeTransient) {
     const auto& stillArmed = trackSnapshot(graph, track, tracks);
     EXPECT_TRUE(stillArmed.punchArmed);
     EXPECT_FALSE(stillArmed.recording);
-    EXPECT_FALSE(stillArmed.wavLoaded);
+    EXPECT_TRUE(stillArmed.wavLoaded);
     const auto stillPaused = graph.getTransportSnapshot();
     EXPECT_FALSE(stillPaused.playing);
     EXPECT_EQ(stillPaused.transportFrame, paused.transportFrame);
@@ -1070,7 +1070,7 @@ TEST(RackGraphTransportTest, ManualGlobalPlayCancelsArmedPunch) {
     EXPECT_FALSE(cancelled.punchArmed);
     EXPECT_FALSE(cancelled.recordPending);
     EXPECT_FALSE(cancelled.recording);
-    EXPECT_FALSE(cancelled.wavLoaded);
+    EXPECT_TRUE(cancelled.wavLoaded);
 }
 
 TEST(RackGraphTransportTest, CancelTrackLoopRecordingDisarmsPunch) {

@@ -139,13 +139,16 @@ public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    void process(const float* const* inputs, float* const* outputs,
-                 uint32_t numFrames,
-                 const guitarrackcraft::AudioProcessContext&) override {
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame] * 2.0f;
             outputs[1][frame] = inputs[1][frame] * 2.0f;
         }
+        return 0;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override { return {}; }
@@ -160,9 +163,11 @@ public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    void process(const float* const* inputs, float* const* outputs,
-                 uint32_t numFrames,
-                 const guitarrackcraft::AudioProcessContext&) override {
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             const bool hasInput = inputs[0][frame] != 0.0f ||
                                   inputs[1][frame] != 0.0f;
@@ -175,6 +180,7 @@ public:
                 outputs[1][frame] = tailActive_ ? 0.75f : 0.0f;
             }
         }
+        return 0;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override { return {}; }
@@ -220,7 +226,9 @@ TEST_F(PluginChainRealtimeTest, SupportedFrameQuantaProcessWithoutAllocations) {
         std::size_t allocations = 0;
         {
             allocation_probe::NoAllocScope noAlloc;
-            chain_.process(inputs, outputs, frames, guitarrackcraft::AudioProcessContext{});
+            chain_.process(inputs, outputs, frames,
+                           guitarrackcraft::AudioProcessContext{},
+                           nullptr, 0, nullptr, 0);
             allocations = noAlloc.count();
         }
 
@@ -242,7 +250,9 @@ TEST_F(PluginChainRealtimeTest, OversizedCallbackPassthroughsWithoutAllocating) 
     std::size_t allocations = 0;
     {
         allocation_probe::NoAllocScope noAlloc;
-        chain_.process(inputs, outputs, frames, guitarrackcraft::AudioProcessContext{});
+        chain_.process(inputs, outputs, frames,
+                       guitarrackcraft::AudioProcessContext{},
+                       nullptr, 0, nullptr, 0);
         allocations = noAlloc.count();
     }
 
@@ -273,7 +283,8 @@ TEST(PluginChainEmptyTest, InPlacePassesThroughWithoutAllocating) {
     {
         allocation_probe::NoAllocScope noAlloc;
         chain.process(inputs, outputs, frames,
-                      guitarrackcraft::AudioProcessContext{});
+                      guitarrackcraft::AudioProcessContext{},
+                      nullptr, 0, nullptr, 0);
         allocations = noAlloc.count();
     }
 
@@ -308,7 +319,8 @@ TEST(PluginChainContentionTest,
     std::thread callback([&] {
         allocation_probe::NoAllocScope noAlloc;
         chain.process(inputs, outputs, frames,
-                      guitarrackcraft::AudioProcessContext{});
+                      guitarrackcraft::AudioProcessContext{},
+                      nullptr, 0, nullptr, 0);
         callbackAllocations.store(noAlloc.count(), std::memory_order_release);
         processFinished.set_value();
     });
@@ -343,7 +355,9 @@ TEST(PluginChainContentionTest,
     primeRight.fill(-0.5f);
     const float* primeInputs[] = {primeLeft.data(), primeRight.data()};
     float* primeOutputs[] = {primeOutputLeft.data(), primeOutputRight.data()};
-    chain.process(primeInputs, primeOutputs, frames, guitarrackcraft::AudioProcessContext{});
+    chain.process(primeInputs, primeOutputs, frames,
+                  guitarrackcraft::AudioProcessContext{},
+                  nullptr, 0, nullptr, 0);
     EXPECT_FLOAT_EQ(primeOutputLeft[0], 0.5f);
     EXPECT_FLOAT_EQ(primeOutputRight[0], -1.0f);
 
@@ -361,7 +375,9 @@ TEST(PluginChainContentionTest,
     std::promise<void> processFinished;
     std::future<void> completion = processFinished.get_future();
     std::thread callback([&] {
-        chain.process(contendedInputs, tailOutputs, frames, guitarrackcraft::AudioProcessContext{});
+        chain.process(contendedInputs, tailOutputs, frames,
+                      guitarrackcraft::AudioProcessContext{},
+                      nullptr, 0, nullptr, 0);
         processFinished.set_value();
     });
 
@@ -399,7 +415,8 @@ void assertVariableFrameContentionPassesDryInput() {
     const float* primeInputs[] = {primeLeft.data(), primeRight.data()};
     float* primeOutputs[] = {primeOutputLeft.data(), primeOutputRight.data()};
     chain.process(primeInputs, primeOutputs, static_cast<uint32_t>(PrimeFrames),
-                  guitarrackcraft::AudioProcessContext{});
+                  guitarrackcraft::AudioProcessContext{},
+                  nullptr, 0, nullptr, 0);
 
     std::array<float, ContendedFrames> contendedInputLeft{};
     std::array<float, ContendedFrames> contendedInputRight{};
@@ -422,7 +439,8 @@ void assertVariableFrameContentionPassesDryInput() {
         allocation_probe::NoAllocScope noAlloc;
         chain.process(contendedInputs, contendedOutputs,
                       static_cast<uint32_t>(ContendedFrames),
-                      guitarrackcraft::AudioProcessContext{});
+                      guitarrackcraft::AudioProcessContext{},
+                      nullptr, 0, nullptr, 0);
         callbackAllocations.store(noAlloc.count(), std::memory_order_release);
         processFinished.set_value();
     });
@@ -487,7 +505,8 @@ TEST(PluginChainContentionTest,
         for (uint32_t iteration = 0; iteration < 2000; ++iteration) {
             const uint32_t frames = quanta[iteration % quanta.size()];
             chain.process(inputs, outputs, frames,
-                          guitarrackcraft::AudioProcessContext{});
+                          guitarrackcraft::AudioProcessContext{},
+                          nullptr, 0, nullptr, 0);
             bool dry = true;
             bool wet = true;
             for (uint32_t frame = 0; frame < frames; ++frame) {

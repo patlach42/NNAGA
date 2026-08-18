@@ -132,6 +132,13 @@ public:
     virtual ~IPlugin() = default;
 
     /**
+     * Prepare non-real-time resources that do not depend on the audio device.
+     * Called when the plugin enters a chain, before sample rate negotiation.
+     * Implementations may block; the audio callback never calls this method.
+     */
+    virtual void prepare() {}
+
+    /**
      * Activate the plugin (called before processing starts).
      * @param sampleRate Audio sample rate in Hz
      * @param bufferSize Nominal audio callback buffer size in frames (0 = unknown)

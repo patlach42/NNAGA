@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -110,7 +111,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.vibes.dsp.engine.ClipSlotInfo
 import com.vibes.dsp.engine.DirectUsbAudioManager
-import com.vibes.dsp.engine.DirectUsbSessionState
 import com.vibes.dsp.engine.MidiNoteInfo
 import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.engine.RackPathId
@@ -209,12 +209,9 @@ fun LiveScreen(
     val selectedPlugins by viewModel.selectedPathPlugins.collectAsState()
     val selectedPath by viewModel.selectedPathId.collectAsState()
     val engineRunning by viewModel.isEngineRunning.collectAsState()
-    val meterState by viewModel.meterState.collectAsState()
     val latencyMs by viewModel.latencyMs.collectAsState()
     val cpuLoad by viewModel.cpuLoad.collectAsState()
     val xRunCount by viewModel.xRunCount.collectAsState()
-    val directUsbState by viewModel.directUsbState.collectAsState()
-    val directUsbStats by viewModel.directUsbStats.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
     val slotsByTrack by viewModel.clipSlots.collectAsState()
@@ -318,6 +315,15 @@ fun LiveScreen(
     }
     LaunchedEffect(tracks) {
         tracks.forEach { viewModel.refreshTrackClipSlots(it.id) }
+    }
+    LaunchedEffect(errorMessage) {
+        val message = errorMessage ?: return@LaunchedEffect
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        viewModel.clearError()
+    }
+    LaunchedEffect(blockingOperation) {
+        val operation = blockingOperation ?: return@LaunchedEffect
+        Toast.makeText(context, operation, Toast.LENGTH_SHORT).show()
     }
 
     val fullscreenPlugin = fullscreenRequest?.let { request ->
@@ -513,6 +519,13 @@ fun LiveScreen(
         modifier = Modifier.fillMaxSize(),
         containerColor = Color.Black,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        floatingActionButtonPosition = androidx.compose.material3.FabPosition.Center,
+        floatingActionButton = {
+            EngineControlButton(
+                engineRunning = engineRunning,
+                onClick = { if (engineRunning) viewModel.stopEngine() else viewModel.startEngine() },
+            )
+        },
     ) { contentPadding ->
         Column(Modifier.fillMaxSize().padding(contentPadding)) {
             CameraToolbar(
@@ -531,17 +544,6 @@ fun LiveScreen(
                     tempoInput = transport.beatsPerMinute.toString()
                     showTempoDialog = true
                 },
-            )
-            StatusStrip(
-                engineRunning = engineRunning,
-                meterState = meterState,
-                usbState = directUsbState,
-                usbStats = directUsbStats,
-                errorMessage = errorMessage,
-                blockingOperation = blockingOperation,
-                onToggleEngine = { if (engineRunning) viewModel.stopEngine() else viewModel.startEngine() },
-                onResetClipping = viewModel::resetClipping,
-                onClearError = viewModel::clearError,
             )
             val displayedTiles = tileOrder.filter { it in visibleTiles }
             val tileStackModifier = Modifier.fillMaxWidth().weight(1f)
@@ -976,6 +978,12 @@ private fun DevicesTile(
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f),
             )
+            Text(
+                "${latencyMs.roundToInt()}ms · CPU ${(cpuLoad * 100).roundToInt()}% · XR $xRunCount",
+                color = LiveColors.textMuted,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
+                modifier = Modifier.padding(horizontal = LiveDimensions.smallGap),
+            )
             TextButton(
                 onClick = { onBrowser(pathId) },
                 modifier = Modifier.height(LiveDimensions.hitTarget),
@@ -987,18 +995,6 @@ private fun DevicesTile(
                 )
                 Text("ADD", modifier = Modifier.padding(start = LiveDimensions.smallGap))
             }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().height(16.dp)
-                .padding(horizontal = LiveDimensions.gap),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                "${latencyMs.roundToInt()}ms · CPU ${(cpuLoad * 100).roundToInt()}% · XR $xRunCount",
-                color = LiveColors.textMuted,
-                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-            )
         }
         Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             when {
@@ -1157,6 +1153,51 @@ private fun TransportBar(
     }
 }
 
+@Composable
+private fun EngineControlButton(
+    engineRunning: Boolean,
+    onClick: () -> Unit,
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    Box(
+        modifier = Modifier
+            .width(116.dp)
+            .height(LiveDimensions.hitTarget)
+            .semantics {
+                stateDescription = if (engineRunning) "Audio engine active" else "Audio engine inactive"
+            }
+            .clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            modifier = Modifier.fillMaxWidth().height(32.dp),
+            color = if (engineRunning) accent else LiveColors.raised,
+            contentColor = if (engineRunning) MaterialTheme.colorScheme.onPrimary else accent,
+            shape = RoundedCornerShape(16.dp),
+            shadowElevation = 4.dp,
+        ) {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Box(
+                    modifier = Modifier.size(6.dp).background(
+                        if (engineRunning) MaterialTheme.colorScheme.onPrimary else accent,
+                        CircleShape,
+                    ),
+                )
+                Text(
+                    text = if (engineRunning) "AUDIO ON" else "ACTIVATE AUDIO",
+                    modifier = Modifier.padding(start = 6.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                )
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun Launcher(
@@ -1238,13 +1279,14 @@ private fun TrackSlots(
         Modifier.requiredWidth(LiveDimensions.trackWidth).background(LiveColors.divider)
             .padding(end = LiveDimensions.hairline),
     ) {
-        Column(Modifier.fillMaxWidth().background(LiveColors.panel)) {
+        Column(Modifier.fillMaxWidth().background(if (selected) LiveColors.panel else Color.Black)) {
             repeat(visibleCount) { slotIndex ->
                 val slot = bySlot[slotIndex] ?: ClipSlotInfo(track.id, slotIndex, false, false, "", 0.0, false)
                 ClipCard(
                     track = track,
                     slot = slot,
                     selected = selected && slotIndex == selectedSlot,
+                    columnActive = selected,
                     onSelect = onSelect,
                     onLoad = onLoad,
                     onLaunch = onLaunch,
@@ -1338,6 +1380,7 @@ private fun ClipCard(
     track: RackTrackInfo,
     slot: ClipSlotInfo,
     selected: Boolean,
+    columnActive: Boolean,
     onSelect: (Int) -> Unit,
     onLoad: (Int) -> Unit,
     onLaunch: (Int) -> Unit,
@@ -1362,6 +1405,7 @@ private fun ClipCard(
     val accent = MaterialTheme.colorScheme.primary
     val typeColor = if (slot.midiLoaded) LiveColors.midi else LiveColors.audio
     val background = when {
+        !columnActive -> Color.Black
         recording -> LiveColors.record.copy(alpha = 0.18f)
         playing -> accent.copy(alpha = 0.18f)
         else -> LiveColors.card
@@ -1781,95 +1825,6 @@ private fun PianoRoll(clip: ClipSlotInfo, notes: List<MidiNoteInfo>) {
     }
 }
 
-@Composable
-private fun StatusStrip(
-    engineRunning: Boolean,
-    meterState: com.vibes.dsp.ui.rack.MeterState,
-    usbState: DirectUsbSessionState,
-    usbStats: com.vibes.dsp.engine.DirectUsbStats,
-    errorMessage: String?,
-    blockingOperation: String?,
-    onToggleEngine: () -> Unit,
-    onResetClipping: () -> Unit,
-    onClearError: () -> Unit,
-) {
-    val accent = MaterialTheme.colorScheme.primary
-    Surface(color = LiveColors.panel, modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(horizontal = LiveDimensions.smallGap)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().height(LiveDimensions.hitTarget)
-                    .horizontalScroll(rememberScrollState()),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(LiveDimensions.smallGap),
-            ) {
-                Box(
-                    modifier = Modifier.height(LiveDimensions.hitTarget).widthIn(min = 68.dp)
-                        .clickable(role = Role.Button, onClick = onToggleEngine),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Surface(
-                        color = if (engineRunning) accent.copy(alpha = 0.16f) else LiveColors.card,
-                        contentColor = if (engineRunning) accent else LiveColors.textMuted,
-                        shape = RoundedCornerShape(2.dp),
-                        modifier = Modifier.height(LiveDimensions.control).fillMaxWidth(),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(
-                                if (engineRunning) "ENGINE ON" else "ENGINE OFF",
-                                style = MaterialTheme.typography.labelSmall,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                    }
-                }
-                Text(
-                    "IN ${(meterState.inputLevel * 100).roundToInt()}",
-                    color = if (meterState.inputClipping) LiveColors.record else accent,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                Text(
-                    "OUT ${(meterState.outputLevel * 100).roundToInt()}",
-                    color = if (meterState.outputClipping) LiveColors.record else accent,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                TextButton(onClick = onResetClipping, modifier = Modifier.height(LiveDimensions.hitTarget)) {
-                    Text("RESET", style = MaterialTheme.typography.labelSmall)
-                }
-                Text(
-                    "USB ${usbState.name} · ${usbStats.sampleRateHz}Hz",
-                    color = LiveColors.textDim,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            blockingOperation?.let {
-                Text(
-                    "BUSY · $it",
-                    color = accent,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.padding(horizontal = LiveDimensions.smallGap, vertical = 2.dp),
-                )
-            }
-            errorMessage?.let {
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(LiveDimensions.hitTarget),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        it,
-                        color = LiveColors.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    TextButton(onClick = onClearError, modifier = Modifier.height(LiveDimensions.hitTarget)) {
-                        Text("CLEAR", color = LiveColors.error, style = MaterialTheme.typography.labelSmall)
-                    }
-                }
-            }
-        }
-    }
-}
 
 @Composable
 private fun Mixer(

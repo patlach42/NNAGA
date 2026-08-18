@@ -35,6 +35,7 @@ public:
                   int displayNumber);
     ~WineVstPlugin() override;
 
+    void prepare() override;
     void activate(float sampleRate, uint32_t bufferSize) override;
     void deactivate() override;
     uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
@@ -82,7 +83,7 @@ private:
 
     float sampleRate_ = 48000.0f;
     uint32_t bufferSize_ = 0;
-    std::atomic<bool> active_{false};
+    std::atomic<bool> prepared_{false};
 
     std::unique_ptr<SharedRing>      ring_;
     std::unique_ptr<PickerChannel>   picker_;

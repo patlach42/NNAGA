@@ -18,7 +18,7 @@
 
 namespace {
 
-static_assert(sizeof(VstpocTransportBlock) == 48);
+static_assert(sizeof(VstpocTransportBlock) == 1080);
 static_assert(VSTPOC_TRANSPORT_QUEUE_CAPACITY == 1024u);
 static_assert(offsetof(VstpocShared, state_response_seq) < offsetof(VstpocShared, shared_layout_magic));
 static_assert(offsetof(VstpocShared, state_command) < offsetof(VstpocShared, shared_layout_magic));
@@ -31,8 +31,8 @@ static_assert(offsetof(VstpocShared, shared_layout_size) == 269988);
 static_assert(offsetof(VstpocShared, transport_queue_head) == 270400);
 static_assert(offsetof(VstpocShared, transport_queue_tail) == 270464);
 static_assert(offsetof(VstpocShared, transport_queue) == 270528);
-static_assert(offsetof(VstpocShared, transport_queue_dropped) == 319680);
-static_assert(sizeof(VstpocShared) == 319744);
+static_assert(offsetof(VstpocShared, transport_queue_dropped) == 1377536);
+static_assert(sizeof(VstpocShared) == 1377600);
 
 class TempBackingFile {
 public:
@@ -107,7 +107,7 @@ void DrainWake(int fd) {
     while (::recv(fd, token, sizeof(token), MSG_DONTWAIT) > 0) {}
 }
 
-TEST(VstSharedLayoutTest, MetadataAndV4FeatureEnvelopeAreStable) {
+TEST(VstSharedLayoutTest, MetadataAndV6FeatureEnvelopeAreStable) {
     TempBackingFile backing;
     SharedRing ring(backing.path());
 
@@ -117,7 +117,9 @@ TEST(VstSharedLayoutTest, MetadataAndV4FeatureEnvelopeAreStable) {
     EXPECT_EQ(shared->shared_layout_version, VSTPOC_SHARED_LAYOUT_VERSION);
     EXPECT_EQ(shared->shared_layout_size, sizeof(VstpocShared));
     EXPECT_EQ(shared->shared_feature_bits,
-              static_cast<uint64_t>(VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET));
+              static_cast<uint64_t>(VSTPOC_FEATURE_PLANAR_AUDIO |
+                                    VSTPOC_FEATURE_WAKE_SOCKET |
+                                    VSTPOC_FEATURE_MIDI_EVENTS));
     EXPECT_NE(shared->shared_feature_bits & VSTPOC_FEATURE_PLANAR_AUDIO, 0u);
     EXPECT_NE(shared->shared_feature_bits & VSTPOC_FEATURE_WAKE_SOCKET, 0u);
 
@@ -144,7 +146,7 @@ TEST_F(SharedRingFixture, TransportRecordPreservesFieldsAndFIFOOrder) {
     for (uint32_t i = 0; i < kRecords; ++i) {
         ASSERT_TRUE(ring.publishTransport(
             1000 + i, 2000 + i, 3000 + i, 48000.0 + i, 120.0 + i,
-            (i & 1u) != 0, (i & 2u) != 0, 64 + i));
+            (i & 1u) != 0, (i & 2u) != 0, 64 + i, nullptr, 0));
     }
 
     VstpocShared* shared = ring.raw();
@@ -163,6 +165,29 @@ TEST_F(SharedRingFixture, TransportRecordPreservesFieldsAndFIFOOrder) {
         EXPECT_EQ(record.block_frames, 64u + i);
     }
 }
+TEST_F(SharedRingFixture, TransportRecordPreservesMidiPayloadAndClampsFrameOffsets) {
+    const guitarrackcraft::MidiEvent midiEvents[] = {
+        {7u, 0x90u, 60u, 100u},
+        {99u, 0x80u, 60u, 0u},
+    };
+
+    ASSERT_TRUE(ring.publishTransport(
+        1000, 2000, 3000, 48000.0, 120.0, true, false, 64,
+        midiEvents, 2));
+
+    const VstpocTransportBlock& record = ring.raw()->transport_queue[0];
+    EXPECT_EQ(record.midi_event_count, 2u);
+    EXPECT_EQ(record.midi_events[0].frame_offset, 7u);
+    EXPECT_EQ(record.midi_events[0].status, 0x90u);
+    EXPECT_EQ(record.midi_events[0].data1, 60u);
+    EXPECT_EQ(record.midi_events[0].data2, 100u);
+    EXPECT_EQ(record.midi_events[0].reserved, 0u);
+    EXPECT_EQ(record.midi_events[1].frame_offset, 63u);
+    EXPECT_EQ(record.midi_events[1].status, 0x80u);
+    EXPECT_EQ(record.midi_events[1].data1, 60u);
+    EXPECT_EQ(record.midi_events[1].data2, 0u);
+    EXPECT_EQ(record.midi_events[1].reserved, 0u);
+}
 
 TEST_F(SharedRingFixture, TransportQueueWrapsWithoutReordering) {
     VstpocShared* shared = ring.raw();
@@ -170,10 +195,14 @@ TEST_F(SharedRingFixture, TransportQueueWrapsWithoutReordering) {
     StoreRelaxed(&shared->transport_queue_tail, start);
     StoreRelaxed(&shared->transport_queue_head, start);
 
-    ASSERT_TRUE(ring.publishTransport(11, 21, 31, 44100.0, 90.0, true, false, 3));
-    ASSERT_TRUE(ring.publishTransport(12, 22, 32, 44100.0, 91.0, false, true, 4));
-    ASSERT_TRUE(ring.publishTransport(13, 23, 33, 44100.0, 92.0, true, true, 5));
-    ASSERT_TRUE(ring.publishTransport(14, 24, 34, 44100.0, 93.0, false, false, 6));
+    ASSERT_TRUE(ring.publishTransport(11, 21, 31, 44100.0, 90.0, true, false, 3,
+                                      nullptr, 0));
+    ASSERT_TRUE(ring.publishTransport(12, 22, 32, 44100.0, 91.0, false, true, 4,
+                                      nullptr, 0));
+    ASSERT_TRUE(ring.publishTransport(13, 23, 33, 44100.0, 92.0, true, true, 5,
+                                      nullptr, 0));
+    ASSERT_TRUE(ring.publishTransport(14, 24, 34, 44100.0, 93.0, false, false, 6,
+                                      nullptr, 0));
 
     EXPECT_EQ(LoadAcquire(&shared->transport_queue_head), start + 4u);
     const VstpocTransportBlock& wrapped0 = shared->transport_queue[(start + 0u) & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
@@ -207,7 +236,8 @@ TEST_F(SharedRingFixture, FullTransportQueueRejectsWithoutOverwritingOrAdvancing
     occupied.transport_frame = 888;
     occupied.sample_rate = 96000.0;
 
-    EXPECT_FALSE(ring.publishTransport(1, 2, 3, 4.0, 5.0, true, true, 6));
+    EXPECT_FALSE(ring.publishTransport(1, 2, 3, 4.0, 5.0, true, true, 6,
+                                       nullptr, 0));
     EXPECT_EQ(LoadAcquire(&shared->transport_queue_head), head);
     EXPECT_EQ(LoadAcquire(&shared->transport_queue_tail), tail);
     EXPECT_EQ(LoadAcquire(&shared->transport_queue_dropped), 1u);
@@ -338,21 +368,21 @@ TEST_F(SharedRingFixture, WakeSocketNotifiesTransportQueueTransitions) {
         StoreRelease(&shared->transport_queue_tail,
                      LoadAcquire(&shared->transport_queue_head));
         ASSERT_TRUE(ring.publishTransport(100, 200, 300, 48000.0, 120.0,
-                                          true, false, 64));
+                                          true, false, 64, nullptr, 0));
         firstWakeObserved = WakeReadable(wakeFd, 10);
     }
     ASSERT_TRUE(firstWakeObserved);
     DrainWake(wakeFd);
 
     ASSERT_TRUE(ring.publishTransport(101, 201, 301, 48000.0, 120.0,
-                                      true, false, 64));
+                                      true, false, 64, nullptr, 0));
     pollfd quiet{wakeFd, POLLIN, 0};
     EXPECT_EQ(::poll(&quiet, 1, 20), 0);
 
     StoreRelease(&shared->transport_queue_tail,
                  LoadAcquire(&shared->transport_queue_head));
     ASSERT_TRUE(ring.publishTransport(102, 202, 302, 48000.0, 120.0,
-                                      true, false, 64));
+                                      true, false, 64, nullptr, 0));
     ASSERT_TRUE(WakeReadable(wakeFd));
     DrainWake(wakeFd);
     ::close(wakeFd);

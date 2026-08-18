@@ -76,6 +76,11 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
         return -1;
     }
 
+    // Wine and other out-of-process formats may need their guest/UI resources
+    // before an audio device has negotiated a sample rate. This is deliberately
+    // outside the chain lock because preparation may block.
+    plugin->prepare();
+
     bool pluginActivated = false;
     float activatedSampleRate = 0.0f;
     uint32_t activatedBufferSize = 0;
@@ -89,9 +94,9 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
             targetBufferSize = bufferSize_;
         }
 
-        // VST activation may start Wine and wait for the guest process. Keep
-        // that outside the exclusive chain lock so the live audio callback
-        // keeps running the existing chain until this plugin is ready.
+        // Activation may still perform blocking format-specific work. Keep it
+        // outside the exclusive chain lock so the live audio callback keeps
+        // running the existing chain until this plugin is ready.
         if (targetSampleRate > 0.0f &&
             (!pluginActivated ||
              activatedSampleRate != targetSampleRate ||

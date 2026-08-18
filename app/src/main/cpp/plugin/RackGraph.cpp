@@ -83,6 +83,15 @@ void RackGraph::setAvailableInputChannelCount(int32_t count) noexcept {
     count = std::max<int32_t>(0, count);
     std::lock_guard lock(controlMutex_);
     availableInputChannelCount_.store(count, std::memory_order_release);
+    if (count > 0) {
+        const int32_t highestAvailableChannel = count - 1;
+        for (const auto& node : tracks_) {
+            const int32_t channel = node->inputChannel.load(std::memory_order_relaxed);
+            if (channel > highestAvailableChannel) {
+                node->inputChannel.store(highestAvailableChannel, std::memory_order_release);
+            }
+        }
+    }
 }
 bool RackGraph::attachTrackWav(RackPathId id,std::shared_ptr<const WavClip> clip){return attachTrackWavSlot(id,0,std::move(clip));}
 bool RackGraph::attachTrackMidi(RackPathId id,std::shared_ptr<const MidiClip> clip){return attachTrackMidiSlot(id,0,std::move(clip));}

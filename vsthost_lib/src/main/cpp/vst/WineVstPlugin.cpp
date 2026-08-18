@@ -126,13 +126,17 @@ WineVstPlugin::WineVstPlugin(RegistryEntry entry,
       displayNumber_(displayNumber) {}
 
 WineVstPlugin::~WineVstPlugin() {
-    if (active_.load()) deactivate();
+    if (prepared_.load()) deactivate();
 }
 
 void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
-    if (active_.load()) return;
     sampleRate_ = sampleRate;
-    bufferSize_ = bufferSize ? bufferSize : 1024;
+    bufferSize_ = bufferSize;
+    prepare();
+}
+
+void WineVstPlugin::prepare() {
+    if (prepared_.load()) return;
 
     // Per-plugin shm + picker files. Naming matches vstpoc convention so
     // wine-side env vars + tmpfs lookups behave the same. The "_v" + uuid
@@ -228,6 +232,7 @@ void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     guest_ = std::make_unique<WineHostProcess>(std::move(cfg));
     if (!guest_->start()) {
         LOGE("WineVstPlugin[%s]: failed to start wine guest", entry_.displayName.c_str());
+        guitarrackcraft::destroyX11Display(displayNumber_);
         guest_.reset();
         ring_.reset();
         picker_.reset();
@@ -268,13 +273,13 @@ void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
         }
     }
 
-    active_.store(true);
-    LOGI("WineVstPlugin[%s] activated pid=%d sr=%.0f bs=%u",
-         entry_.displayName.c_str(), guest_->pid(), sampleRate, bufferSize_);
+    prepared_.store(true);
+    LOGI("WineVstPlugin[%s] prepared pid=%d sr=%.0f bs=%u",
+         entry_.displayName.c_str(), guest_->pid(), sampleRate_, bufferSize_);
 }
 
 void WineVstPlugin::deactivate() {
-    if (!active_.exchange(false)) return;
+    if (!prepared_.exchange(false)) return;
     if (ring_) ring_->signalStop();
     if (guest_) {
         if (!guest_->waitFor(3000)) {
