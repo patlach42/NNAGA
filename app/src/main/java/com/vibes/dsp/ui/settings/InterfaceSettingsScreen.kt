@@ -48,6 +48,9 @@ fun InterfaceSettingsScreen() {
     val context = LocalContext.current
     var horizontalPlugins by remember { mutableStateOf(LiveLayoutPreferences.getHorizontalPlugins(context)) }
     var fitTilesOnScreen by remember { mutableStateOf(LiveLayoutPreferences.getFitTilesOnScreen(context)) }
+    var hideTransportWithoutLauncher by remember {
+        mutableStateOf(LiveLayoutPreferences.getHideTransportWithoutLauncher(context))
+    }
     var armExclusiveOnTrackSelection by remember {
         mutableStateOf(LiveLayoutPreferences.getArmExclusiveOnTrackSelection(context))
     }
@@ -178,6 +181,39 @@ fun InterfaceSettingsScreen() {
                     LiveLayoutPreferences.setFitTilesOnScreen(context, enabled)
                 },
                 modifier = Modifier.semantics { contentDescription = "Fit all tiles on screen" }
+            )
+        }
+        Divider(
+            thickness = SettingsDimensions.divider,
+            color = MaterialTheme.colorScheme.outlineVariant
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = SettingsDimensions.touchTarget),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Hide transport without Clip Launcher",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Hide global transport controls while the Clip Launcher tile is disabled.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = hideTransportWithoutLauncher,
+                onCheckedChange = { enabled ->
+                    hideTransportWithoutLauncher = enabled
+                    LiveLayoutPreferences.setHideTransportWithoutLauncher(context, enabled)
+                },
+                modifier = Modifier.semantics {
+                    contentDescription = "Hide transport without Clip Launcher"
+                }
             )
         }
         Divider(

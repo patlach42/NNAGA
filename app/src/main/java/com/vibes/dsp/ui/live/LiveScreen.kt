@@ -235,6 +235,9 @@ fun LiveScreen(
     var visibleTiles by rememberSaveable { mutableStateOf(LiveLayoutPreferences.getVisibleTiles(context)) }
     val horizontalPlugins = remember { LiveLayoutPreferences.getHorizontalPlugins(context) }
     val fitTilesOnScreen = remember { LiveLayoutPreferences.getFitTilesOnScreen(context) }
+    val hideTransportWithoutLauncher = remember {
+        LiveLayoutPreferences.getHideTransportWithoutLauncher(context)
+    }
     var tileHeights by remember {
         mutableStateOf(tileOrder.associateWith { id -> LiveLayoutPreferences.getTileHeight(context, id) })
     }
@@ -533,16 +536,20 @@ fun LiveScreen(
                 onSettings = onNavigateToSettings,
                 onToggleEdit = { editTiles = !editTiles },
             )
-            TransportBar(
-                playing = transport.playing,
-                bpm = transport.beatsPerMinute,
-                onPlay = { if (transport.playing) viewModel.transportPause() else viewModel.transportPlay() },
-                onRestart = viewModel::transportRestart,
-                onBpm = {
-                    tempoInput = transport.beatsPerMinute.toString()
-                    showTempoDialog = true
-                },
-            )
+            if (!hideTransportWithoutLauncher || "launcher" in visibleTiles) {
+                TransportBar(
+                    playing = transport.playing,
+                    bpm = transport.beatsPerMinute,
+                    onPlay = {
+                        if (transport.playing) viewModel.transportPause() else viewModel.transportPlay()
+                    },
+                    onRestart = viewModel::transportRestart,
+                    onBpm = {
+                        tempoInput = transport.beatsPerMinute.toString()
+                        showTempoDialog = true
+                    },
+                )
+            }
             val displayedTiles = tileOrder.filter { it in visibleTiles }
             val tileStackModifier = Modifier.fillMaxWidth().weight(1f)
             Column(

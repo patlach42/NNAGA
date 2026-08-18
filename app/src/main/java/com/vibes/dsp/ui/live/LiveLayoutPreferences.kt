@@ -10,6 +10,7 @@ object LiveLayoutPreferences {
     private const val KEY_INSPECTOR_TOGGLE_MIGRATED = "inspector_toggle_migrated"
     private const val KEY_FIT_TILES_ON_SCREEN = "fit_tiles_on_screen"
     private const val KEY_ARM_EXCLUSIVE_ON_TRACK_SELECTION = "arm_exclusive_on_track_selection"
+    private const val KEY_HIDE_TRANSPORT_WITHOUT_LAUNCHER = "hide_transport_without_launcher"
     private const val TILE_HEIGHT_PREFIX = "tile_height_"
     private const val TRACK_COLOR_PREFIX = "track_color_"
     private const val MIN_UNKNOWN_TILE_HEIGHT = 96f
@@ -45,6 +46,16 @@ object LiveLayoutPreferences {
             .putBoolean(KEY_ARM_EXCLUSIVE_ON_TRACK_SELECTION, enabled)
             .apply()
     }
+
+    fun getHideTransportWithoutLauncher(context: Context): Boolean =
+        preferences(context).getBoolean(KEY_HIDE_TRANSPORT_WITHOUT_LAUNCHER, false)
+
+    fun setHideTransportWithoutLauncher(context: Context, enabled: Boolean) {
+        preferences(context).edit()
+            .putBoolean(KEY_HIDE_TRANSPORT_WITHOUT_LAUNCHER, enabled)
+            .apply()
+    }
+
 
     fun getTrackColor(context: Context, trackId: Long, fallbackArgb: Int): Int {
         val fallback = opaqueArgb(fallbackArgb)
