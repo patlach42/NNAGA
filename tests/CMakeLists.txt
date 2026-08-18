@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(x11_server_tests CXX)
+project(x11_server_tests C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -49,6 +49,33 @@ target_link_libraries(x11_unit_tests PRIVATE x11_core gtest_main)
 enable_testing()
 # Allocation-free direct audio callback tests.
 add_subdirectory(audio)
+set(GRC_LV2_ROOT "${CPP_SRC_DIR}/libs/lv2" CACHE PATH
+    "Directory containing LV2 headers and host libraries")
+find_path(LV2_TEST_LILV_INCLUDE_DIR
+    NAMES lilv/lilv.h
+    PATHS /usr/include/lilv-0 "${GRC_LV2_ROOT}/include/lilv-0")
+find_path(LV2_TEST_CORE_INCLUDE_DIR
+    NAMES lv2/core/lv2.h
+    PATHS /usr/include "${GRC_LV2_ROOT}/include")
+find_library(LV2_TEST_LILV_LIB NAMES lilv-0
+    PATHS /usr/lib /lib)
+find_library(LV2_TEST_SERD_LIB NAMES serd-0
+    PATHS /usr/lib /lib)
+find_library(LV2_TEST_SORD_LIB NAMES sord-0
+    PATHS /usr/lib /lib)
+find_library(LV2_TEST_SRATOM_LIB NAMES sratom-0
+    PATHS /usr/lib /lib)
+find_library(LV2_TEST_ZIX_LIB NAMES zix-0
+    PATHS /usr/lib /lib)
+if(LV2_TEST_LILV_INCLUDE_DIR AND LV2_TEST_CORE_INCLUDE_DIR
+   AND LV2_TEST_LILV_LIB AND LV2_TEST_SERD_LIB AND LV2_TEST_SORD_LIB
+   AND LV2_TEST_SRATOM_LIB AND LV2_TEST_ZIX_LIB)
+    add_subdirectory(lv2)
+else()
+    message(STATUS
+        "LV2 process regression test disabled: HAVE_LV2 host headers/libraries "
+        "not found (set GRC_LV2_ROOT or install Lilv/LV2 development files)")
+endif()
 
 add_subdirectory(vst)
 

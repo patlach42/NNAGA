@@ -504,20 +504,45 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
         }
         break;
     }
-    if (!instance_) { passthrough(); processing_.store(false, std::memory_order_seq_cst); return passthroughMidi(); }
+    // Run the DSP before inspecting output ports.  Worker responses are
+    // delivered during this run and must be drained before end_run().
+    const LV2_Handle workerHandle = lilv_instance_get_handle(instance_);
+    lilv_instance_run(instance_, static_cast<uint32_t>(maxCopy));
+    if (workerInterface_ && workerInterface_->work_response) {
+        while (workResponses_.consume([&](const WorkerMessage& response) {
+            workerInterface_->work_response(workerHandle, response.size, response.data);
+        })) {}
+    }
+    if (workerInterface_ && workerInterface_->end_run) {
+        workerInterface_->end_run(workerHandle);
+    }
     for (auto& ap : atomPorts_) {
         if (ap.isInput) continue;
         const auto* base = atomPortBuffers_[ap.bufferIdx].data();
-        const uint32_t total = reinterpret_cast<const LV2_Atom*>(base)->size;
-        if (reinterpret_cast<const LV2_Atom*>(base)->type != atom_Sequence_ ||
+        const auto* atom = reinterpret_cast<const LV2_Atom*>(base);
+        const uint32_t total = atom->size;
+        if (atom->type != atom_Sequence_ ||
             total < sizeof(LV2_Atom_Sequence_Body) ||
             total > kAtomBufferSize - sizeof(LV2_Atom)) continue;
         const uint8_t* pos = base + sizeof(LV2_Atom) + sizeof(LV2_Atom_Sequence_Body);
         const uint8_t* end = base + sizeof(LV2_Atom) + total;
         while (pos + sizeof(LV2_Atom_Event) <= end) {
             const auto* ev = reinterpret_cast<const LV2_Atom_Event*>(pos);
-            const uint64_t padded = (sizeof(LV2_Atom_Event) + static_cast<uint64_t>(ev->body.size) + 7u) & ~uint64_t(7u);
-            if (padded < sizeof(LV2_Atom_Event) || padded > static_cast<uint64_t>(end - pos)) break;
+            const uint64_t eventBytes =
+                sizeof(LV2_Atom_Event) + static_cast<uint64_t>(ev->body.size);
+            const uint64_t padded = (eventBytes + 7u) & ~uint64_t(7u);
+            if (padded < sizeof(LV2_Atom_Event) ||
+                padded > static_cast<uint64_t>(end - pos)) break;
+            const uint64_t bodyBytes = sizeof(LV2_Atom) + ev->body.size;
+            if (bodyBytes <= kUiPayloadSize) {
+                if (!pendingOutputAtoms_.tryEmplace([&](OutputMessage& msg) {
+                    msg.portIndex = ap.portIndex;
+                    msg.size = static_cast<uint32_t>(bodyBytes);
+                    std::memcpy(msg.data, &ev->body, bodyBytes);
+                })) {
+                    outputAtomDrops_.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
             if (ev->body.type == midi_MidiEvent_ && ev->body.size >= 2 && ev->body.size <= 3 &&
                 outputEvents && midiOutputCount < outputCapacity) {
                 const auto* data = reinterpret_cast<const uint8_t*>(&ev->body) + sizeof(LV2_Atom);

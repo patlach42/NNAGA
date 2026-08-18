@@ -412,6 +412,7 @@ void RackGraph::process(
                                 node.midiScratch.data(), midiCount,
                                 midiOutputScratch.data(),
                                 static_cast<uint32_t>(midiOutputScratch.size()));
+            trackSignal[0] = trackOutput[0];
             trackSignal[1] = trackOutput[1];
         }
         const float volume = node.volume.load(std::memory_order_relaxed);

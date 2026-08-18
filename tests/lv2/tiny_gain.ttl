@@ -1,0 +1,18 @@
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+
+<https://guitarrackcraft.test/lv2/tiny-gain>
+    a lv2:Plugin ;
+    doap:name "Tiny Gain" ;
+    lv2:binary <tiny_gain.so> ;
+    lv2:port [
+        a lv2:AudioPort, lv2:InputPort ;
+        lv2:index 0 ;
+        lv2:symbol "in" ;
+        lv2:name "Input"
+    ], [
+        a lv2:AudioPort, lv2:OutputPort ;
+        lv2:index 1 ;
+        lv2:symbol "out" ;
+        lv2:name "Output"
+    ] .

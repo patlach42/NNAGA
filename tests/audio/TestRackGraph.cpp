@@ -23,6 +23,31 @@ using guitarrackcraft::RackPathId;
 using guitarrackcraft::WavClip;
 using guitarrackcraft::TrackClipSlotInfo;
 
+using guitarrackcraft::IPlugin;
+
+class StereoOffsetPlugin final : public IPlugin {
+public:
+    void activate(float, uint32_t) override {}
+    void deactivate() override {}
+
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = inputs[0][frame] + 10.0f;
+            outputs[1][frame] = inputs[1][frame] + 20.0f;
+        }
+        return 0;
+    }
+
+    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+};
 constexpr float kTestSampleRate = 60.0f;
 constexpr double kTestBpm = 60.0;
 
@@ -1318,4 +1343,25 @@ TEST(RackGraphInputArmingTest, InvalidArmLockIdReturnsFalseWithoutMutatingTrackS
     EXPECT_FALSE(trackSnapshot(graph, second, tracks).inputArmLocked);
     EXPECT_TRUE(trackSnapshot(graph, third, tracks).inputArmed);
     EXPECT_FALSE(trackSnapshot(graph, third, tracks).inputArmLocked);
+}
+TEST(RackGraphPluginRoutingTest, TrackChainRoutesProcessedStereoToDirectOutput) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+    ASSERT_EQ(chain->addPlugin(std::make_unique<StereoOffsetPlugin>()), 0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    buffers.left.fill(1.5f);
+    buffers.right.fill(-7.0f);
+    graph.process(buffers.inputs, 2, buffers.outputs, 4);
+
+    for (uint32_t frame = 0; frame < 4; ++frame) {
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], 11.5f) << "frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], 21.5f) << "frame " << frame;
+    }
 }
