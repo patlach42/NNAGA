@@ -59,6 +59,8 @@ object RackManager {
         native.nativeLoadTrackClipMidi(trackId, slot, path, displayName)
     fun selectTrackClipSlot(trackId: RackPathId, slot: Int): Boolean =
         native.nativeSelectTrackClipSlot(trackId, slot)
+    fun renameTrackClip(trackId: RackPathId, slot: Int, displayName: String): Boolean =
+        native.nativeRenameTrackClip(trackId, slot, displayName)
     fun setTrackTransportPlaying(
         trackId: RackPathId,
         playing: Boolean,

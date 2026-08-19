@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
@@ -304,7 +305,7 @@ fun LiveScreen(
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         importTarget?.let { (trackId, slot) ->
             if (uri != null) {
-                viewModel.loadTrackClipMedia(trackId, slot, uri, uri.lastPathSegment ?: "Clip")
+                viewModel.loadTrackClipMedia(trackId, slot, uri)
             }
         }
         importTarget = null
@@ -539,10 +540,12 @@ fun LiveScreen(
             if (!hideTransportWithoutLauncher || "launcher" in visibleTiles) {
                 TransportBar(
                     playing = transport.playing,
+                    positionSec = transport.positionSec,
                     bpm = transport.beatsPerMinute,
                     onPlay = {
                         if (transport.playing) viewModel.transportPause() else viewModel.transportPlay()
                     },
+                    onStop = viewModel::transportStop,
                     onRestart = viewModel::transportRestart,
                     onBpm = {
                         tempoInput = transport.beatsPerMinute.toString()
@@ -655,6 +658,9 @@ fun LiveScreen(
                                             launchQuantization,
                                             startGlobal = !transport.playing,
                                         )
+                                    },
+                                    onRename = { track, slot, label ->
+                                        viewModel.renameTrackClip(track.id, slot, label)
                                     },
                                     onTrackColor = { track, argb ->
                                         LiveLayoutPreferences.setTrackColor(context, track.id, argb)
@@ -1102,12 +1108,15 @@ private fun DevicesTile(
 @Composable
 private fun TransportBar(
     playing: Boolean,
+    positionSec: Double,
     bpm: Double,
     onPlay: () -> Unit,
+    onStop: () -> Unit,
     onRestart: () -> Unit,
     onBpm: () -> Unit,
 ) {
     val accent = MaterialTheme.colorScheme.primary
+    val stopped = !playing && positionSec <= 0.001
     Surface(color = LiveColors.raised) {
         Row(
             modifier = Modifier.fillMaxWidth().height(LiveDimensions.transport)
@@ -1115,12 +1124,13 @@ private fun TransportBar(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Box(
-                modifier = Modifier.size(LiveDimensions.hitTarget).clickable(role = Role.Button, onClick = onPlay),
+                modifier = Modifier.size(LiveDimensions.hitTarget)
+                    .clickable(role = Role.Button, onClick = onPlay),
                 contentAlignment = Alignment.Center,
             ) {
                 Surface(
                     color = if (playing) accent.copy(alpha = 0.16f) else Color.Transparent,
-                    contentColor = accent,
+                    contentColor = if (playing) accent else LiveColors.textMuted,
                     shape = RoundedCornerShape(2.dp),
                     modifier = Modifier.size(LiveDimensions.control),
                 ) {
@@ -1128,6 +1138,26 @@ private fun TransportBar(
                         Icon(
                             imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = if (playing) "Pause transport" else "Play transport",
+                            modifier = Modifier.size(LiveDimensions.icon),
+                        )
+                    }
+                }
+            }
+            Box(
+                modifier = Modifier.size(LiveDimensions.hitTarget)
+                    .clickable(role = Role.Button, onClick = onStop),
+                contentAlignment = Alignment.Center,
+            ) {
+                Surface(
+                    color = if (stopped) accent.copy(alpha = 0.16f) else Color.Transparent,
+                    contentColor = if (stopped) accent else LiveColors.textMuted,
+                    shape = RoundedCornerShape(2.dp),
+                    modifier = Modifier.size(LiveDimensions.control),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Stop,
+                            contentDescription = "Stop transport",
                             modifier = Modifier.size(LiveDimensions.icon),
                         )
                     }
@@ -1142,10 +1172,11 @@ private fun TransportBar(
                 )
             }
             Text(
-                text = if (playing) "PLAYING" else "STOPPED",
-                color = if (playing) accent else LiveColors.textMuted,
+                text = "${formatMusicalPosition(positionSec, bpm)} · ${formatElapsedTime(positionSec)}",
+                color = LiveColors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
-                fontWeight = FontWeight.Bold,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
                 modifier = Modifier.padding(start = LiveDimensions.smallGap).weight(1f),
             )
             TextButton(onClick = onBpm, modifier = Modifier.height(LiveDimensions.hitTarget)) {
@@ -1215,6 +1246,7 @@ private fun Launcher(
     onLoad: (RackTrackInfo, Int) -> Unit,
     onLaunch: (RackTrackInfo, Int) -> Unit,
     onRecordClip: (RackTrackInfo, Int) -> Unit,
+    onRename: (RackTrackInfo, Int, String) -> Unit,
     onTrackColor: (RackTrackInfo, Int) -> Unit,
 ) {
     CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
@@ -1256,6 +1288,7 @@ private fun Launcher(
                     onLoad = { onLoad(track, it) },
                     onLaunch = { onLaunch(track, it) },
                     onRecordClip = { onRecordClip(track, it) },
+                    onRename = { slotIndex, label -> onRename(track, slotIndex, label) },
                 )
             }
         }
@@ -1273,6 +1306,7 @@ private fun TrackSlots(
     onLoad: (Int) -> Unit,
     onLaunch: (Int) -> Unit,
     onRecordClip: (Int) -> Unit,
+    onRename: (Int, String) -> Unit,
 ) {
     val visibleCount = maxOf(8, (slots.maxOfOrNull { it.slot + 1 } ?: 0) + 4)
     val bySlot = slots.associateBy { it.slot }
@@ -1292,6 +1326,7 @@ private fun TrackSlots(
                     onLoad = onLoad,
                     onLaunch = onLaunch,
                     onRecord = onRecordClip,
+                    onRename = onRename,
                 )
             }
         }
@@ -1386,8 +1421,11 @@ private fun ClipCard(
     onLoad: (Int) -> Unit,
     onLaunch: (Int) -> Unit,
     onRecord: (Int) -> Unit,
+    onRename: (Int, String) -> Unit,
 ) {
     val filled = slot.wavLoaded || slot.midiLoaded
+    var showRename by remember { mutableStateOf(false) }
+    var renameText by remember(slot.displayName) { mutableStateOf(slot.displayName) }
     val playing = filled && track.playing && slot.active
     val recordingSlot = slot.active || (!filled && selected)
     val recordingPending = recordingSlot && track.recordPending
@@ -1418,7 +1456,11 @@ private fun ClipCard(
                 this.selected = selected
                 stateDescription = clipState
             }
-            .clickable(role = Role.Button) { onSelect(slot.slot) },
+            .combinedClickable(
+                role = Role.Button,
+                onClick = { onSelect(slot.slot) },
+                onLongClick = { if (filled) showRename = true },
+            ),
     ) {
         Box {
             Row(
@@ -1430,7 +1472,7 @@ private fun ClipCard(
                         when {
                             recording -> LiveColors.record
                             playing -> accent
-                            recordAction -> LiveColors.record.copy(alpha = 0.6f)
+                            recordAction && selected -> LiveColors.record.copy(alpha = 0.6f)
                             selected -> accent.copy(alpha = 0.55f)
                             else -> Color.Transparent
                         },
@@ -1491,6 +1533,31 @@ private fun ClipCard(
                     .background(LiveColors.divider),
             )
         }
+    }
+    if (showRename) {
+        AlertDialog(
+            onDismissRequest = { showRename = false },
+            title = { Text("Rename clip") },
+            text = {
+                OutlinedTextField(
+                    value = renameText,
+                    onValueChange = { renameText = it },
+                    singleLine = true,
+                    label = { Text("Label") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        onRename(slot.slot, renameText)
+                        showRename = false
+                    },
+                    enabled = renameText.trim().isNotBlank(),
+                ) { Text("Rename") }
+            },
+            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -2024,3 +2091,21 @@ private fun VerticalFader(
     }
 }
 
+private fun formatElapsedTime(sec: Double): String {
+    val totalSec = sec.coerceAtLeast(0.0).toLong()
+    val hours = totalSec / 3_600
+    val minutes = totalSec % 3_600 / 60
+    val seconds = totalSec % 60
+    return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds)
+    else "%d:%02d".format(minutes, seconds)
+}
+
+private fun formatMusicalPosition(positionSec: Double, beatsPerMinute: Double): String {
+    val totalSixteenths = (
+        positionSec.coerceAtLeast(0.0) * beatsPerMinute.coerceAtLeast(1.0) / 60.0 * 4.0
+    ).toLong()
+    val bar = totalSixteenths / 16 + 1
+    val beat = totalSixteenths % 16 / 4 + 1
+    val sixteenth = totalSixteenths % 4 + 1
+    return "$bar:$beat:$sixteenth"
+}

@@ -60,7 +60,7 @@ public:
     bool attachTrackWav(RackPathId, std::shared_ptr<const WavClip>); bool unloadTrackWav(RackPathId); bool clearTrackWavs();
     bool attachTrackWavSlot(RackPathId, uint32_t, std::shared_ptr<const WavClip>); bool unloadTrackWavSlot(RackPathId, uint32_t);
     bool attachTrackMidi(RackPathId, std::shared_ptr<const MidiClip>); bool unloadTrackMidi(RackPathId);
-    bool attachTrackMidiSlot(RackPathId, uint32_t, std::shared_ptr<const MidiClip>); bool unloadTrackMidiSlot(RackPathId, uint32_t); bool selectTrackClipSlot(RackPathId, uint32_t);
+    bool attachTrackMidiSlot(RackPathId, uint32_t, std::shared_ptr<const MidiClip>); bool unloadTrackMidiSlot(RackPathId, uint32_t); bool selectTrackClipSlot(RackPathId, uint32_t); bool renameTrackClip(RackPathId, int32_t, const std::string&);
     bool startTrackClipRecording(RackPathId, uint32_t slot, double bars, LaunchQuantization, bool enterOnPunch);
     bool startTrackLoopRecording(RackPathId, double bars, LaunchQuantization, bool enterOnPunch);
     bool cancelTrackLoopRecording(RackPathId);
@@ -101,7 +101,7 @@ private:
     std::unique_ptr<GraphSnapshot> activeOwner_; alignas(64) std::atomic<GraphSnapshot*> activeSnapshot_{nullptr}; alignas(64) std::atomic<GraphSnapshot*> hazardSnapshot_{nullptr}; RetiredSnapshot* retired_=nullptr;
     std::thread reclaimerThread_; std::condition_variable reclaimerWake_; std::mutex reclaimerMutex_; bool reclaimerStop_=false; mutable std::mutex controlMutex_;
     uint64_t audioSamplePosition_=0, audioTransportFrame_=0, appliedPlaySerial_=0, appliedResetSerial_=0, appliedBpmSerial_=0; bool audioPlaying_=false; double audioBpm_=120;
-    std::vector<std::shared_ptr<TrackNode>> tracks_; std::vector<std::shared_ptr<const WavClip>> clips_; std::vector<std::shared_ptr<WavClip>> recordingClips_; std::vector<std::shared_ptr<const MidiClip>> midiClips_; std::vector<std::vector<std::shared_ptr<const WavClip>>> wavSlots_; std::vector<std::vector<std::shared_ptr<const MidiClip>>> midiSlots_; std::shared_ptr<PluginChain> master_; RackPathId nextTrackId_=1; std::atomic<float> sampleRate_{0}; uint32_t bufferSize_=0;
+    std::vector<std::shared_ptr<TrackNode>> tracks_; std::vector<std::shared_ptr<const WavClip>> clips_; std::vector<std::shared_ptr<WavClip>> recordingClips_; std::vector<std::shared_ptr<const MidiClip>> midiClips_; std::vector<std::vector<std::shared_ptr<const WavClip>>> wavSlots_; std::vector<std::vector<std::shared_ptr<const MidiClip>>> midiSlots_; std::vector<std::vector<std::string>> clipLabelOverrides_; std::shared_ptr<PluginChain> master_; RackPathId nextTrackId_=1; std::atomic<float> sampleRate_{0}; uint32_t bufferSize_=0;
     Mailbox mailbox_; std::atomic<bool> statusPlaying_{false}; std::atomic<double> statusPositionSec_{0}, statusBpm_{120}; std::atomic<uint64_t> statusSamplePosition_{0}, statusTransportFrame_{0}, statusSequence_{0};
     void writeMailboxLocked(bool, bool, bool, bool=false, double=120); std::unique_ptr<GraphSnapshot> buildSnapshotLocked(const std::vector<std::shared_ptr<TrackNode>>&, const std::vector<std::shared_ptr<const WavClip>>&, const std::vector<std::shared_ptr<WavClip>>& = {}) const; bool publishSnapshotLocked(std::unique_ptr<GraphSnapshot>); bool startTrackRecordingLocked(RackPathId, uint32_t, double, LaunchQuantization, bool, bool); static double clipDuration(const WavClip&); void reclaimerLoop(); void reclaimRetired();
     void applyGlobalMailbox() noexcept; void publishGlobalStatus(double) noexcept; static uint64_t nextBoundary(uint64_t, double, double, LaunchQuantization) noexcept;

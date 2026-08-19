@@ -595,6 +595,7 @@ class NativeEngine private constructor() {
     external fun nativeLoadTrackClipWav(trackId: Long, slot: Int, path: String, displayName: String): Boolean
     external fun nativeLoadTrackClipMidi(trackId: Long, slot: Int, path: String, displayName: String): Boolean
     external fun nativeSelectTrackClipSlot(trackId: Long, slot: Int): Boolean
+    external fun nativeRenameTrackClip(trackId: Long, slot: Int, displayName: String): Boolean
     external fun nativeGetTransportInfo(): TransportInfo
 
 

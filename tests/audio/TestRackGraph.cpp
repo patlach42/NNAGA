@@ -593,6 +593,54 @@ TEST(RackGraphTransportTest, CancelClipRecordingRemovesReservedSlot) {
     EXPECT_FALSE(cancelled.punchArmed);
     EXPECT_FALSE(graph.cancelTrackLoopRecording(track));
 }
+TEST(RackGraphClipLabelTest, RenameLoadedWavClipPreservesPayloadAndClearsOverride) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    constexpr uint32_t slot = 1;
+
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, slot,
+        makeClip({1.0f, -3.0f, 2.0f}, 60, {-4.0f, 1.0f, 2.0f}, "source.wav")));
+    ASSERT_TRUE(graph.selectTrackClipSlot(track, slot));
+
+    const auto originalPeaks = graph.getTrackWaveformPeaks(track, 3);
+    ASSERT_EQ(originalPeaks, (std::vector<float>{4.0f, 3.0f, 2.0f}));
+
+    // A label cannot be applied to an empty slot or to a blank name.
+    EXPECT_FALSE(graph.renameTrackClip(track, 0, "empty-slot"));
+    EXPECT_FALSE(graph.renameTrackClip(track, static_cast<int32_t>(slot), " \t"));
+
+    ASSERT_TRUE(graph.renameTrackClip(track, static_cast<int32_t>(slot), "Renamed take"));
+    auto slots = graph.getTrackClipSlots(track);
+    const auto* renamed = findClipSlot(slots, slot);
+    ASSERT_NE(renamed, nullptr);
+    EXPECT_TRUE(renamed->wavLoaded);
+    EXPECT_EQ(renamed->displayName, "Renamed take");
+    EXPECT_EQ(graph.getTrackWaveformPeaks(track, 3), originalPeaks);
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    EXPECT_EQ(trackSnapshot(graph, track, tracks).wavDisplayName, "Renamed take");
+
+    // Loading a replacement drops the old slot-specific override.
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, slot, makeClip({9.0f, 8.0f}, 60, {}, "replacement.wav")));
+    slots = graph.getTrackClipSlots(track);
+    renamed = findClipSlot(slots, slot);
+    ASSERT_NE(renamed, nullptr);
+    EXPECT_EQ(renamed->displayName, "replacement.wav");
+    EXPECT_EQ(trackSnapshot(graph, track, tracks).wavDisplayName, "replacement.wav");
+
+    // Unloading also removes any override and leaves the slot empty.
+    ASSERT_TRUE(graph.renameTrackClip(track, static_cast<int32_t>(slot), "Temporary"));
+    ASSERT_TRUE(graph.unloadTrackWavSlot(track, slot));
+    slots = graph.getTrackClipSlots(track);
+    renamed = findClipSlot(slots, slot);
+    ASSERT_NE(renamed, nullptr);
+    EXPECT_FALSE(renamed->wavLoaded);
+    EXPECT_TRUE(renamed->displayName.empty());
+    EXPECT_TRUE(trackSnapshot(graph, track, tracks).wavDisplayName.empty());
+}
 
 TEST(RackGraphTransportTest, LoopRecordingCapturesOneBarMonitorsAndLoopsImmediately) {
     RackGraph graph;

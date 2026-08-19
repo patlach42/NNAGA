@@ -312,18 +312,28 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         _clipSlots.update { current -> current + (trackId to slots) }
     }
 
-    fun loadTrackClipMedia(trackId: RackPathId, slot: Int, uri: Uri, displayName: String) {
+    fun loadTrackClipMedia(trackId: RackPathId, slot: Int, uri: Uri) {
         viewModelScope.launch {
+            val resolver = getApplication<Application>().contentResolver
+            val sourceName = runCatching {
+                resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                    ?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    }
+            }.getOrNull()
+                ?: uri.path?.substringBefore('?')?.substringAfterLast('/')
+                ?: "Clip"
+            val displayName = sourceName.substringBeforeLast('.', sourceName).ifBlank { "Clip" }
             val midi = uri.lastPathSegment?.substringBefore('?')?.lowercase()?.let {
                 it.endsWith(".mid") || it.endsWith(".midi")
-            } == true || getApplication<Application>().contentResolver.getType(uri)?.lowercase() in
+            } == true || resolver.getType(uri)?.lowercase() in
                 setOf("audio/midi", "audio/x-midi", "application/x-midi")
             val loaded = withBlockingOperation(if (midi) "Importing MIDI clip" else "Importing audio clip") {
                 withContext(Dispatchers.IO) {
                     val extension = if (midi) ".mid" else ".wav"
                     val source = File.createTempFile("clip_import_", extension, getApplication<Application>().cacheDir)
                     try {
-                        getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                        resolver.openInputStream(uri)?.use { input ->
                             source.outputStream().use(input::copyTo)
                         } ?: return@withContext false
                         if (midi) RackManager.loadTrackClipMidi(trackId, slot, source.absolutePath, displayName)
@@ -340,6 +350,20 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             if (!loaded) _errorMessage.value = "Unable to load clip media"
             refreshTrackClipSlots(trackId)
             if (!midi) loadTrackWaveform(trackId)
+        }
+    }
+    fun renameTrackClip(trackId: RackPathId, slot: Int, displayName: String) {
+        val trimmed = displayName.trim()
+        if (trimmed.isBlank()) {
+            _errorMessage.value = "Clip name cannot be blank"
+            return
+        }
+        viewModelScope.launch {
+            val renamed = withContext(Dispatchers.IO) {
+                RackManager.renameTrackClip(trackId, slot, trimmed)
+            }
+            if (!renamed) _errorMessage.value = "Unable to rename clip"
+            refreshTrackClipSlots(trackId)
         }
     }
     fun selectTrackClipSlot(trackId: RackPathId, slot: Int) {
@@ -382,6 +406,14 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun transportPlay() { setTransportPlaying(true) }
     fun transportPause() { setTransportPlaying(false) }
     fun transportRestart() { viewModelScope.launch(Dispatchers.IO) { RackManager.restartTransport(); refreshTransport() } }
+    fun transportStop() {
+        viewModelScope.launch(Dispatchers.IO) {
+            RackManager.setTransportPlaying(false)
+            RackManager.restartTransport()
+            refreshTransport()
+            refreshTrackTransport()
+        }
+    }
     fun setTrackTransportPlaying(
         trackId: RackPathId,
         playing: Boolean,
