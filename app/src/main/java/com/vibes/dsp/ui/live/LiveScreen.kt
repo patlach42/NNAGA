@@ -1404,7 +1404,6 @@ private fun ClipCard(
         else -> "Empty"
     }
     val accent = MaterialTheme.colorScheme.primary
-    val typeColor = if (slot.midiLoaded) LiveColors.midi else LiveColors.audio
     val background = when {
         !columnActive -> Color.Black
         recording -> LiveColors.record.copy(alpha = 0.18f)
@@ -1431,15 +1430,14 @@ private fun ClipCard(
                         when {
                             recording -> LiveColors.record
                             playing -> accent
-                            filled -> typeColor
                             recordAction -> LiveColors.record.copy(alpha = 0.6f)
                             selected -> accent.copy(alpha = 0.55f)
-                            else -> LiveColors.divider
+                            else -> Color.Transparent
                         },
                     ),
                 )
                 Text(
-                    text = if (filled) slot.displayName else "${slot.slot + 1}",
+                    text = if (filled) slot.displayName else "",
                     color = when {
                         recording || recordAction -> LiveColors.record
                         playing || selected -> accent
