@@ -336,7 +336,7 @@ Java_com_varcain_vsthost_NativeBridge_nativeStartExplorer(
         .nativeLibDir = jstr(jNativeLibDir), .cacheDir = jstr(jCacheDir),
         .wineBinary = jstr(jWineBinary), .wineserverBinary = jstr(jWineserverBinary),
         .wineDllPath = jstr(jWineDllPath), .winePrefix = jstr(jPrefixPath),
-        .primaryExe = jstr(jWineDllPath) + "/explorer.exe",
+        .primaryExe = jstr(jWineDllPath) + "/winefile.exe",
         .shmPath = {}, .pickerShmPath = {}, .pluginPaths = {},
         .extraArgs = {"S:\\"}, .displayNumber = static_cast<int>(displayNumber),
         .logSuffix = "explorer",

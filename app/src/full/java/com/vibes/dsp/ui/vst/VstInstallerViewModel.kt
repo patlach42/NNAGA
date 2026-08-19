@@ -194,6 +194,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
             }
             if (!shared) { bailOut("Couldn't prepare shared folder."); return@launch }
             val setup = WineSetup.ensure(ctx)
+            withContext(Dispatchers.IO) { prepareInstallerX11Session() }
             val pid = withContext(Dispatchers.IO) {
                 NativeBridge.nativeStartExplorer(prefixPath, INSTALLER_DISPLAY_NUMBER,
                     setup.wineBinary.absolutePath, setup.wineServer.absolutePath,
@@ -210,6 +211,21 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
             }
             reset()
         }
+    }
+
+    /** Starts the installer display before Wine initializes winex11.drv. */
+    private fun prepareInstallerX11Session() {
+        NativeBridge.nativeStartX11Server(
+            INSTALLER_DISPLAY_NUMBER,
+            INSTALLER_SCREEN_W,
+            INSTALLER_SCREEN_H
+        )
+        NativeBridge.nativeSetX11PluginSize(
+            INSTALLER_DISPLAY_NUMBER,
+            INSTALLER_SCREEN_W,
+            INSTALLER_SCREEN_H
+        )
+        NativeBridge.nativeSetX11FramebufferFrozen(INSTALLER_DISPLAY_NUMBER, true)
     }
 
     /** Run a user-picked installer .exe INSIDE an existing activation environment
@@ -263,22 +279,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         // wine. Wine's winex11.drv calls XOpenDisplay at startup; if the
         // TCP port isn't listening yet it disables X11 rendering for
         // the lifetime of the subprocess.
-        withContext(Dispatchers.IO) {
-            NativeBridge.nativeStartX11Server(
-                INSTALLER_DISPLAY_NUMBER,
-                INSTALLER_SCREEN_W, INSTALLER_SCREEN_H
-            )
-            NativeBridge.nativeSetX11PluginSize(
-                INSTALLER_DISPLAY_NUMBER,
-                INSTALLER_SCREEN_W, INSTALLER_SCREEN_H
-            )
-            // Freeze the framebuffer at INSTALLER_SCREEN_W×INSTALLER_SCREEN_H —
-            // otherwise wine's wizard CreateWindow (typically 500x350)
-            // triggers slot promotion / claim-slot in X11NativeDisplay,
-            // shrinks the framebuffer to wizard size, and the wizard
-            // renders into a tiny letterboxed region.
-            NativeBridge.nativeSetX11FramebufferFrozen(INSTALLER_DISPLAY_NUMBER, true)
-        }
+        withContext(Dispatchers.IO) { prepareInstallerX11Session() }
         val pid = withContext(Dispatchers.IO) {
             NativeBridge.nativeStartInstaller(
                 exePath = exePath,

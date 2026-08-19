@@ -121,6 +121,8 @@ object NativeBridge {
     ): Long
 
     external fun nativeDetachAndDestroyX11Display(displayNumber: Int)
+    /** Swap one fresh frame after an existing SurfaceView becomes visible again. */
+    external fun nativeRequestX11Frame(displayNumber: Int)
 
     /** Tell the X server the plugin's native editor dimensions so its
      *  framebuffer is sized correctly and the renderLoop letterboxes the

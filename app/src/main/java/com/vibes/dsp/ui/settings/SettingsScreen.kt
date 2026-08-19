@@ -132,6 +132,7 @@ fun SettingsScreen(
         mutableStateOf(initialTab.takeIf { it in availableTabs } ?: SettingsTab.Driver)
     }
     var showDriverDialog by remember { mutableStateOf(false) }
+    var wineSessionActive by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     if (showDriverDialog) {
         val current = AudioSettingsManager.getUsbAudioDriver(context)
@@ -149,60 +150,64 @@ fun SettingsScreen(
     }
 
     Scaffold(
-        topBar = { CompactSettingsTopBar(onNavigateBack) }
+        topBar = {
+            if (!wineSessionActive) CompactSettingsTopBar(onNavigateBack)
+        }
     ) { padding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            Column {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(SettingsDimensions.tabHeight)
-                ) {
-                    availableTabs.forEach { tab ->
-                        val isSelected = selectedTab == tab
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .fillMaxHeight()
-                                .semantics {
-                                    selected = isSelected
-                                    role = Role.Tab
-                                }
-                                .combinedClickable(
-                                    onClick = { selectedTab = tab },
-                                    onLongClick = if (tab == SettingsTab.Driver) {
-                                        { showDriverDialog = true }
-                                    } else null,
-                                    onLongClickLabel = if (tab == SettingsTab.Driver) "Choose USB driver" else null,
-                                    role = Role.Tab
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = tab.label,
-                                style = MaterialTheme.typography.labelMedium,
-                                maxLines = 1
-                            )
-                            if (isSelected) {
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .fillMaxWidth()
-                                        .height(SettingsDimensions.selectedIndicator)
-                                        .background(MaterialTheme.colorScheme.primary)
+            if (!wineSessionActive) {
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(SettingsDimensions.tabHeight)
+                    ) {
+                        availableTabs.forEach { tab ->
+                            val isSelected = selectedTab == tab
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                                    .semantics {
+                                        selected = isSelected
+                                        role = Role.Tab
+                                    }
+                                    .combinedClickable(
+                                        onClick = { selectedTab = tab },
+                                        onLongClick = if (tab == SettingsTab.Driver) {
+                                            { showDriverDialog = true }
+                                        } else null,
+                                        onLongClickLabel = if (tab == SettingsTab.Driver) "Choose USB driver" else null,
+                                        role = Role.Tab
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = tab.label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1
                                 )
+                                if (isSelected) {
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .fillMaxWidth()
+                                            .height(SettingsDimensions.selectedIndicator)
+                                            .background(MaterialTheme.colorScheme.primary)
+                                    )
+                                }
                             }
                         }
                     }
+                    Divider(
+                        thickness = SettingsDimensions.divider,
+                        color = MaterialTheme.colorScheme.outlineVariant
+                    )
                 }
-                Divider(
-                    thickness = SettingsDimensions.divider,
-                    color = MaterialTheme.colorScheme.outlineVariant
-                )
             }
             when (selectedTab) {
                 SettingsTab.Driver -> AudioSettingsScreen(
@@ -220,7 +225,9 @@ fun SettingsScreen(
                     sourceSlot = sourceSlot,
                     embedded = true
                 )
-                SettingsTab.Vst -> VstManagerTab()
+                SettingsTab.Vst -> VstManagerTab(
+                    onWineSessionActiveChanged = { wineSessionActive = it }
+                )
                 SettingsTab.Interface -> InterfaceSettingsScreen()
             }
         }

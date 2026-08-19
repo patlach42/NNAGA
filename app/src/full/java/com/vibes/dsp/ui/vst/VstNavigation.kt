@@ -8,6 +8,10 @@ package com.vibes.dsp.ui.vst
 import androidx.compose.runtime.Composable
 
 @Composable
-fun VstManagerTab() {
-    VstManagerScreen(onNavigateBack = {}, embedded = true)
+fun VstManagerTab(onWineSessionActiveChanged: (Boolean) -> Unit) {
+    VstManagerScreen(
+        onNavigateBack = {},
+        embedded = true,
+        onWineSessionActiveChanged = onWineSessionActiveChanged,
+    )
 }

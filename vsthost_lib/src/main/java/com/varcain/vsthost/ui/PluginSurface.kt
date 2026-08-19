@@ -10,7 +10,6 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.view.View
 import android.view.ViewConfiguration
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
@@ -22,11 +21,13 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.viewinterop.AndroidView
 import com.varcain.vsthost.NativeBridge
 import com.varcain.vsthost.util.X11Keymap
@@ -76,21 +77,39 @@ fun PluginSurface(
         // viewport (~2.2), so match WIDTH; a taller-relative editor matches HEIGHT. Hardcoding
         // matchHeightConstraintsFirst=true made wide editors overflow the width → zoomed+cropped.
         val viewportAspect = maxWidth / maxHeight
-        AndroidView(
-            modifier = if (isLandscape) {
+        val surfaceModifier = (
+            if (isLandscape) {
                 Modifier.fillMaxSize().aspectRatio(aspect, matchHeightConstraintsFirst = aspect <= viewportAspect)
             } else {
                 Modifier.fillMaxWidth().aspectRatio(aspect)
-            },
+            }
+        ).offset {
+            // Alpha hides SurfaceControl pixels, but the AndroidView holder otherwise
+            // keeps its full hit area and blocks Compose controls underneath.
+            if (isVisible) IntOffset.Zero else IntOffset(-100_000, -100_000)
+        }
+        AndroidView(
+            modifier = surfaceModifier,
             factory = { ctx ->
                 EditorSurfaceView(ctx, displayNumber).also {
-                    it.visibility = if (isVisible) View.VISIBLE else View.INVISIBLE
+                    // Keep SurfaceView visible: INVISIBLE/GONE tears down Surface/EGL and can crash on re-expand.
+                    it.alpha = if (isVisible) 1f else 0f
+                    it.isEnabled = isVisible
                     EditorViewRegistry.register(displayNumber, it)
                 }
             },
             update = { view ->
-                view.visibility = if (isVisible) View.VISIBLE else View.INVISIBLE
-            },
+                val wasHidden = view.alpha == 0f
+                view.alpha = if (isVisible) 1f else 0f
+                view.isEnabled = isVisible
+                if (!isVisible) {
+                    view.clearFocus()
+                } else if (wasHidden) {
+                    // Expanding the parent changes SurfaceControl's crop, but the old
+                    // buffer may stay hidden until the producer swaps another frame.
+                    NativeBridge.nativeRequestX11Frame(displayNumber)
+                }
+            }
         )
 }
     }

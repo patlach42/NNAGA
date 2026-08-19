@@ -86,6 +86,7 @@ data class VstExecutableEntry(
 fun VstManagerScreen(
     onNavigateBack: () -> Unit,
     embedded: Boolean = false,
+    onWineSessionActiveChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -117,6 +118,14 @@ fun VstManagerScreen(
     }
     val installerState by installerVm.state.collectAsState()
     val installerError by installerVm.errorMessage.collectAsState()
+    val wineSessionActive = installerState == VstInstallerViewModel.State.PREPARING ||
+        installerState == VstInstallerViewModel.State.RUNNING
+    LaunchedEffect(wineSessionActive) {
+        onWineSessionActiveChanged(wineSessionActive)
+    }
+    DisposableEffect(Unit) {
+        onDispose { onWineSessionActiveChanged(false) }
+    }
     LaunchedEffect(installerError) {
         installerError?.let {
             Toast.makeText(context, it, Toast.LENGTH_LONG).show()
