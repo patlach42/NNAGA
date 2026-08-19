@@ -126,6 +126,7 @@ object WineSetup {
         seedFonts(ctx, winePrefix)
         seedCommonControlsManifests(winePrefix)
         seedRpcSsService(winePrefix)
+        seedMountMgrService(winePrefix)
         seedCryptoProviders(winePrefix)
         seedCryptoProvidersFull(ctx, winePrefix)  // full CSP set incl. 32-bit (Wow6432Node) Enhanced RSA+AES — 32-bit installers' SHA256 CryptAcquireContext
         seedCryptoOids(ctx, winePrefix)  // Cryptography\OID function table (SHA256 catalog verify) for signature-checking installers
@@ -167,7 +168,7 @@ object WineSetup {
         winePrefix.parentFile?.listFiles { f ->
             f.isDirectory && f.name.startsWith("wineprefix_")
         }?.forEach { p ->
-            seedCryptoProviders(p); seedComClasses(p); seedWicDecoders(p); seedWicMetadataReaders(p); seedWicFactory(p); seedWicPatterns(p); seedWicPixelFormats(p); seedWow64ClassesLink(p); seedFonts(ctx, p); seedUserFolders(ctx, p)
+            seedMountMgrService(p); seedCryptoProviders(p); seedComClasses(p); seedWicDecoders(p); seedWicMetadataReaders(p); seedWicFactory(p); seedWicPatterns(p); seedWicPixelFormats(p); seedWow64ClassesLink(p); seedFonts(ctx, p); seedUserFolders(ctx, p)
             seedOleMarshalers(ctx, p)  // cross-process COM proxy-stubs (reach prefixes cloned before this seed)
             seedCryptoOids(ctx, p)     // Cryptography\OID table (reach prefixes cloned before this seed)
             seedWinTrust(ctx, p)       // wintrust providers + root certs (reach prefixes cloned before this seed)
@@ -900,6 +901,41 @@ object WineSetup {
 """
         systemReg.appendText(body)
         Log.i(TAG, "seeded RpcSs service registration in system.reg")
+    }
+
+    /** Register Wine's boot-start mount manager.
+     *
+     * The normal registration comes from wine.inf, which this runtime
+     * deliberately omits. Without MountMgr, the dosdevices symlinks still
+     * resolve for explicit paths, but \DosDevices has no drive objects:
+     * GetLogicalDrives returns zero and WineFile's C:/S: drive bar is empty. */
+    private fun seedMountMgrService(winePrefix: File) {
+        val systemReg = File(winePrefix, "system.reg")
+        if (!systemReg.exists()) return
+        val key = "[System\\\\CurrentControlSet\\\\Services\\\\MountMgr]"
+        if (systemReg.readText().contains(key)) return
+
+        val nowSec = System.currentTimeMillis() / 1000
+        val imagePath = "C:\\windows\\system32\\mountmgr.sys"
+        val expandSzHex = buildString {
+            for (ch in imagePath) {
+                append("%02x,%02x,".format(ch.code and 0xff, (ch.code ushr 8) and 0xff))
+            }
+            append("00,00")
+        }
+        val body = """
+
+[System\\CurrentControlSet\\Services\\MountMgr] $nowSec
+"ImagePath"=hex(2):$expandSzHex
+"DisplayName"="Mount Manager"
+"Description"="Device mounting service"
+"Type"=dword:00000001
+"Start"=dword:00000000
+"ErrorControl"=dword:00000001
+
+"""
+        systemReg.appendText(body)
+        Log.i(TAG, "seeded MountMgr service registration in system.reg")
     }
 
     /** Seed the Microsoft cryptographic service provider (CSP) registrations

@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Stop
@@ -683,6 +684,9 @@ fun LiveScreen(
                                 },
                                 onTrackDelete = { track -> viewModel.removeTrack(track.id) },
                                 onTrackRecordMenu = { recordMenuTrack = it },
+                                onTrackLoop = { track ->
+                                    viewModel.setTrackTransportLooping(track.id, !track.looping)
+                                },
                                 launchQuantization = launchQuantization,
                                 onLaunchQuantizationClick = { showQuantizationMenu = true },
                                 modifier = Modifier.fillMaxSize(),
@@ -1573,6 +1577,7 @@ private fun ClipInspector(
     onTrackArmLock: (RackTrackInfo) -> Unit,
     onTrackDelete: (RackTrackInfo) -> Unit,
     onTrackRecordMenu: (RackTrackInfo) -> Unit,
+    onTrackLoop: (RackTrackInfo) -> Unit,
     launchQuantization: TrackLaunchQuantization,
     onLaunchQuantizationClick: () -> Unit,
     modifier: Modifier,
@@ -1592,6 +1597,7 @@ private fun ClipInspector(
                     onArmLockClick = { track?.let(onTrackArmLock) },
                     onDeleteClick = { track?.let(onTrackDelete) },
                     onRecordOptionsClick = { track?.let(onTrackRecordMenu) },
+                    onLoopClick = { track?.let(onTrackLoop) },
                     launchQuantization = launchQuantization,
                     onLaunchQuantizationClick = onLaunchQuantizationClick,
                 )
@@ -1617,6 +1623,7 @@ private fun TrackInspectorControls(
     onArmLockClick: () -> Unit,
     onDeleteClick: () -> Unit,
     onRecordOptionsClick: () -> Unit,
+    onLoopClick: () -> Unit,
     launchQuantization: TrackLaunchQuantization,
     onLaunchQuantizationClick: () -> Unit,
 ) {
@@ -1715,6 +1722,27 @@ private fun TrackInspectorControls(
                 value = track.volume,
                 onValueChange = onVolumeChange,
                 modifier = Modifier.fillMaxWidth().height(32.dp),
+            )
+        }
+        IconButton(
+            onClick = onLoopClick,
+            modifier = Modifier
+                .size(LiveDimensions.hitTarget)
+                .background(
+                    if (track.looping) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                    else Color.Transparent,
+                    RoundedCornerShape(2.dp),
+                )
+                .semantics {
+                    contentDescription = "Loop selected track"
+                    stateDescription = if (track.looping) "Active" else "Inactive"
+                },
+        ) {
+            Icon(
+                Icons.Default.Repeat,
+                contentDescription = null,
+                tint = if (track.looping) MaterialTheme.colorScheme.primary else LiveColors.textDim,
+                modifier = Modifier.size(LiveDimensions.icon),
             )
         }
         Box {

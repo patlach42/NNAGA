@@ -1,0 +1,116 @@
+From: Kamil Lulko <limakzagan@gmail.com>
+Subject: winefile: open explicit paths as filesystems and create directories
+
+WineFile asks the shell to parse every startup path. In the minimal Android
+prefix the shell resolves S:\\ to My Computer, but its namespace has no drive
+objects, so the window is empty even though dosdevices/s: is mounted. Use the
+Win32 filesystem tree for explicit command-line paths while preserving the
+shell namespace for an argument-less launch.
+
+The existing Create Directory menu item had no command handler. Wire it to a
+name prompt, CreateDirectoryW, error reporting, and a view refresh.
+
+diff --git a/programs/winefile/winefile.c b/programs/winefile/winefile.c
+index e37f3371bab..30082bc213d 100644
+--- a/programs/winefile/winefile.c
++++ b/programs/winefile/winefile.c
+@@ -1410,6 +1410,41 @@ static INT_PTR CALLBACK DestinationDlgProc(HWND hwnd, UINT nmsg, WPARAM wparam,
+ 	return 0;
+ }
+ 
++static INT_PTR CALLBACK CreateDirectoryDlgProc(HWND hwnd, UINT nmsg, WPARAM wparam, LPARAM lparam)
++{
++	WCHAR *path = (WCHAR *)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
++
++	switch(nmsg) {
++		case WM_INITDIALOG: {
++			WCHAR *name;
++
++			path = (WCHAR *)lparam;
++			SetWindowLongPtrW(hwnd, GWLP_USERDATA, lparam);
++			SetWindowTextW(hwnd, L"Create Directory");
++			SetWindowTextW(GetDlgItem(hwnd, 201), path);
++			name = wcsrchr(path, '\\');
++			SendMessageW(GetDlgItem(hwnd, 201), EM_SETSEL,
++					name ? name - path + 1 : 0, -1);
++			return 1;
++		}
++
++		case WM_COMMAND:
++			switch(LOWORD(wparam)) {
++				case IDOK:
++					GetWindowTextW(GetDlgItem(hwnd, 201), path, MAX_PATH);
++					EndDialog(hwnd, IDOK);
++					return 1;
++
++				case IDCANCEL:
++					EndDialog(hwnd, IDCANCEL);
++					return 1;
++			}
++			break;
++	}
++
++	return 0;
++}
++
+ 
+ struct FilterDialog {
+ 	WCHAR	pattern[MAX_PATH];
+@@ -3584,6 +3619,26 @@ static LRESULT CALLBACK ChildWndProc(HWND hwnd, UINT nmsg, WPARAM wparam, LPARAM
+ 					activate_entry(child, pane, hwnd);
+ 					break;
+ 
++				case ID_MKDIR: {
++					WCHAR path[MAX_PATH];
++					int len;
++
++					get_path(child->left.cur, path);
++					len = lstrlenW(path);
++					if (len && path[len - 1] != '\\' && path[len - 1] != '/')
++						path[len++] = '\\';
++					lstrcpynW(path + len, L"New Folder", ARRAY_SIZE(path) - len);
++
++					if (DialogBoxParamW(Globals.hInstance,
++							MAKEINTRESOURCEW(IDD_SELECT_DESTINATION), hwnd,
++							CreateDirectoryDlgProc, (LPARAM)path) == IDOK) {
++						if (CreateDirectoryW(path, NULL))
++							refresh_child(child);
++						else
++							display_error(hwnd, GetLastError());
++					}
++					break;}
++
+ 				case ID_FILE_MOVE: {
+ 					WCHAR source[BUFFER_LEN], target[BUFFER_LEN];
+ 
+@@ -3939,15 +3994,23 @@ static BOOL show_frame(HWND hwndParent, int cmdshow, LPWSTR path)
+ 
+ 	/*TODO: read paths from registry */
+ 
+-	if (!path || !*path) {
+-		GetCurrentDirectoryW(MAX_PATH, buffer);
+-		path = buffer;
+-	}
++	{
++		BOOL explicit_path = path && *path;
+ 
+-	ShowWindow(Globals.hMainWnd, cmdshow);
++		if (!explicit_path) {
++			GetCurrentDirectoryW(MAX_PATH, buffer);
++			path = buffer;
++		}
+ 
+-	 /* Shell Namespace as default: */
+-	child = alloc_child_window(path, get_path_pidl(path,Globals.hMainWnd), Globals.hMainWnd);
++		ShowWindow(Globals.hMainWnd, cmdshow);
++
++		/* Explicit command-line paths should use the Win32 filesystem tree.
++		 * Shell parsing can resolve a drive root to My Computer when the
++		 * shell namespace has no registered drive objects. */
++		child = alloc_child_window(path,
++				explicit_path ? NULL : get_path_pidl(path, Globals.hMainWnd),
++				Globals.hMainWnd);
++	}
+ 
+ 	child->pos.showCmd = SW_SHOWMAXIMIZED;
+ 	child->pos.rcNormalPosition.left = 0;
