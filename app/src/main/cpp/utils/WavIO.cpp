@@ -51,7 +51,7 @@ bool readWavFile(const std::string& path,
     if (!file || std::memcmp(header.riff, "RIFF", 4) != 0 ||
         std::memcmp(header.wave, "WAVE", 4) != 0 ||
         std::memcmp(header.fmt, "fmt ", 4) != 0 || header.audioFormat != 1 ||
-        (header.bitsPerSample != 16 && header.bitsPerSample != 32) ||
+        (header.bitsPerSample != 16 && header.bitsPerSample != 24 && header.bitsPerSample != 32) ||
         header.sampleRate == 0 || (header.numChannels != 1 && header.numChannels != 2)) {
         LOGE("Invalid WAV file format");
         return false;
@@ -94,6 +94,20 @@ bool readWavFile(const std::string& path,
             file.read(reinterpret_cast<char*>(source.data()), dataSize);
             if (file.gcount() != static_cast<std::streamsize>(dataSize)) { samples.clear(); return false; }
             for (size_t index = 0; index < count; ++index) samples[index] = source[index] / kInt16MaxF;
+        } else if (header.bitsPerSample == 24) {
+            std::vector<uint8_t> source(dataSize);
+            file.read(reinterpret_cast<char*>(source.data()), dataSize);
+            if (file.gcount() != static_cast<std::streamsize>(dataSize)) { samples.clear(); return false; }
+            for (size_t index = 0; index < count; ++index) {
+                const size_t offset = index * 3;
+                const uint32_t packed = static_cast<uint32_t>(source[offset]) |
+                                        (static_cast<uint32_t>(source[offset + 1]) << 8) |
+                                        (static_cast<uint32_t>(source[offset + 2]) << 16);
+                const int32_t sample = (packed & 0x00800000U) != 0
+                    ? static_cast<int32_t>(packed | 0xFF000000U)
+                    : static_cast<int32_t>(packed);
+                samples[index] = sample / 8388608.0f;
+            }
         } else {
             std::vector<int32_t> source(count);
             file.read(reinterpret_cast<char*>(source.data()), dataSize);
