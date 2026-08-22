@@ -36,7 +36,9 @@ import com.vibes.dsp.ui.browser.PluginBrowserScreen
 import com.vibes.dsp.ui.live.LiveScreen
 import com.vibes.dsp.ui.modgui.ModguiScreen
 import com.vibes.dsp.ui.rack.RackViewModel
-import com.vibes.dsp.ui.settings.SettingsScreen
+import com.vibes.dsp.ui.dashboard.DashboardScreen
+import com.vibes.dsp.ui.dashboard.DashboardSection
+import com.vibes.dsp.ui.dashboard.DashboardTab
 import com.vibes.dsp.ui.settings.SettingsTab
 import com.vibes.dsp.ui.tone3000.Tone
 import com.vibes.dsp.ui.tone3000.ToneDetailScreen
@@ -49,22 +51,31 @@ sealed class Screen(val route: String) {
     object Modgui : Screen("modgui/{pluginIndex}?pathId={pathId}&w={w}&h={h}") {
         fun route(pathId: Long, pluginIndex: Int, w: Int = 0, h: Int = 0) = "modgui/$pluginIndex?pathId=$pathId&w=$w&h=$h"
     }
-    object Settings : Screen("settings?tab={tab}&tag={tag}&gear={gear}&platform={platform}&sourcePlugin={sourcePlugin}&sourceSlot={sourceSlot}") {
+    object Dashboard : Screen(
+        "dashboard?section={section}&dashboardTab={dashboardTab}&settingsTab={settingsTab}" +
+            "&tag={tag}&gear={gear}&platform={platform}&sourcePlugin={sourcePlugin}&sourceSlot={sourceSlot}"
+    ) {
         fun route(
-            tab: SettingsTab = SettingsTab.Driver,
+            section: DashboardSection = DashboardSection.Dashboard,
+            dashboardTab: DashboardTab = DashboardTab.Main,
+            settingsTab: SettingsTab = SettingsTab.Driver,
             tag: String? = null,
             gear: String? = null,
             platform: String? = null,
             sourcePluginIndex: Int = -1,
-            sourceSlot: String? = null
+            sourceSlot: String? = null,
         ): String {
-            val parts = mutableListOf("tab=${tab.argument}")
+            val parts = mutableListOf(
+                "section=${section.argument}",
+                "dashboardTab=${dashboardTab.argument}",
+                "settingsTab=${settingsTab.argument}",
+            )
             tag?.let { parts.add("tag=$it") }
             gear?.let { parts.add("gear=$it") }
             platform?.let { parts.add("platform=$it") }
             if (sourcePluginIndex >= 0) parts.add("sourcePlugin=$sourcePluginIndex")
             sourceSlot?.let { parts.add("sourceSlot=$it") }
-            return "settings?${parts.joinToString("&")}"
+            return "dashboard?${parts.joinToString("&")}"
         }
     }
     object ToneDetail : Screen("tone_detail/{toneId}?sourcePlugin={sourcePlugin}&sourceSlot={sourceSlot}&architecture={architecture}") {
@@ -105,58 +116,71 @@ fun AppNavigation(
                 onNavigateToBrowser = { pathId, replaceIndex ->
                     navController.navigate(Screen.Browser.route(pathId, replaceIndex))
                 },
-                onNavigateToSettings = {
-                    navController.navigate(Screen.Settings.route())
+                onNavigateToDashboard = {
+                    navController.navigate(Screen.Dashboard.route())
                 },
                 onNavigateToTone3000 = { tag, gear, platform, sourcePluginIndex, sourceSlot ->
                     navController.navigate(
-                        Screen.Settings.route(
-                            tab = SettingsTab.Tone3000,
+                        Screen.Dashboard.route(
+                            dashboardTab = DashboardTab.Tone3000,
                             tag = tag,
                             gear = gear,
                             platform = platform,
                             sourcePluginIndex = sourcePluginIndex,
-                            sourceSlot = sourceSlot
+                            sourceSlot = sourceSlot,
                         )
                     )
                 }
             )
         }
         composable(
-            route = Screen.Settings.route,
-                arguments = listOf(
-                    navArgument("tab") { type = NavType.StringType; defaultValue = SettingsTab.Driver.argument },
-                    navArgument("tag") { type = NavType.StringType; nullable = true; defaultValue = null },
-                    navArgument("gear") { type = NavType.StringType; nullable = true; defaultValue = null },
-                    navArgument("platform") { type = NavType.StringType; nullable = true; defaultValue = null },
-                    navArgument("sourcePlugin") { type = NavType.IntType; defaultValue = -1 },
-                    navArgument("sourceSlot") { type = NavType.StringType; nullable = true; defaultValue = null }
-                )
-            ) { entry ->
-                val sourcePluginIndex = entry.arguments?.getInt("sourcePlugin") ?: -1
-                val sourceSlot = entry.arguments?.getString("sourceSlot")
-                SettingsScreen(
-                    viewModel = rackViewModel,
-                    initialTab = SettingsTab.fromArgument(entry.arguments?.getString("tab")),
-                    onNavigateBack = { navController.popBackStack() },
-                    onNavigateToToneDetail = { tone, architecture ->
-                        navController.currentBackStackEntry?.savedStateHandle?.set("selected_tone", tone)
-                        navController.navigate(
-                            Screen.ToneDetail.route(
-                                tone.id,
-                                sourcePluginIndex,
-                                sourceSlot,
-                                architecture
-                            )
+            route = Screen.Dashboard.route,
+            arguments = listOf(
+                navArgument("section") {
+                    type = NavType.StringType
+                    defaultValue = DashboardSection.Dashboard.argument
+                },
+                navArgument("dashboardTab") {
+                    type = NavType.StringType
+                    defaultValue = DashboardTab.Main.argument
+                },
+                navArgument("settingsTab") {
+                    type = NavType.StringType
+                    defaultValue = SettingsTab.Driver.argument
+                },
+                navArgument("tag") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("gear") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("platform") { type = NavType.StringType; nullable = true; defaultValue = null },
+                navArgument("sourcePlugin") { type = NavType.IntType; defaultValue = -1 },
+                navArgument("sourceSlot") { type = NavType.StringType; nullable = true; defaultValue = null },
+            ),
+        ) { entry ->
+            val sourcePluginIndex = entry.arguments?.getInt("sourcePlugin") ?: -1
+            val sourceSlot = entry.arguments?.getString("sourceSlot")
+            DashboardScreen(
+                viewModel = rackViewModel,
+                onNavigateBack = { navController.popBackStack() },
+                onNavigateToToneDetail = { tone, architecture ->
+                    navController.currentBackStackEntry?.savedStateHandle?.set("selected_tone", tone)
+                    navController.navigate(
+                        Screen.ToneDetail.route(
+                            tone.id,
+                            sourcePluginIndex,
+                            sourceSlot,
+                            architecture,
                         )
-                    },
-                    initialTag = entry.arguments?.getString("tag"),
-                    initialGear = entry.arguments?.getString("gear"),
-                    initialPlatform = entry.arguments?.getString("platform"),
-                    sourcePluginIndex = sourcePluginIndex,
-                    sourceSlot = sourceSlot
-                )
-            }
+                    )
+                },
+                initialSection = DashboardSection.fromArgument(entry.arguments?.getString("section")),
+                initialDashboardTab = DashboardTab.fromArgument(entry.arguments?.getString("dashboardTab")),
+                initialSettingsTab = SettingsTab.fromArgument(entry.arguments?.getString("settingsTab")),
+                initialTag = entry.arguments?.getString("tag"),
+                initialGear = entry.arguments?.getString("gear"),
+                initialPlatform = entry.arguments?.getString("platform"),
+                sourcePluginIndex = sourcePluginIndex,
+                sourceSlot = sourceSlot,
+            )
+        }
             composable(
                 route = Screen.Modgui.route,
                 arguments = listOf(

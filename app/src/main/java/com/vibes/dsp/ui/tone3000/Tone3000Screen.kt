@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -91,15 +92,21 @@ fun Tone3000Screen(
     val hasSourcePlugin = sourcePluginIndex >= 0
     val filesDir = LocalContext.current.filesDir
 
-    var showFilterSheet by remember { mutableStateOf(false) }
-    var showSortMenu by remember { mutableStateOf(false) }
+    var showFilterSheet by rememberSaveable { mutableStateOf(false) }
+    var showSortMenu by rememberSaveable { mutableStateOf(false) }
+    var filtersInitialized by rememberSaveable(initialTag, initialGear, initialPlatform) {
+        mutableStateOf(false)
+    }
 
     LaunchedEffect(sourcePathId, sourcePluginIndex, sourceSlot) {
         viewModel.setSourcePlugin(sourcePathId, sourcePluginIndex, sourceSlot)
     }
 
-    LaunchedEffect(initialTag, initialGear, initialPlatform) {
-        viewModel.initFilters(initialTag, initialGear, initialPlatform)
+    LaunchedEffect(initialTag, initialGear, initialPlatform, filtersInitialized) {
+        if (!filtersInitialized) {
+            viewModel.initFilters(initialTag, initialGear, initialPlatform)
+            filtersInitialized = true
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -114,7 +121,7 @@ fun Tone3000Screen(
         }
     }
 
-    var searchQuery by remember { mutableStateOf("") }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
 
     val activeFilterCount = listOfNotNull(
         selectedGear,

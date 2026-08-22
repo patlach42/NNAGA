@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc" style="color:#fff">
+  <title id="title">NNAGA neural circuit mark</title>
+  <desc id="desc">A symmetric neural circuit forming an angular helmet with electric cores.</desc>
+  <g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke-width="7" opacity=".72">
+      <path d="M256 74 192 139 119 214 110 288 199 381"/>
+      <path d="M256 74 320 139 393 214 402 288 313 381"/>
+    </g>
+    <g stroke-width="8">
+      <path d="M256 145 211 191 166 236 171 295 231 354 219 424"/>
+      <path d="M256 145 301 191 346 236 341 295 281 354 293 424"/>
+      <path d="M166 236 216 278 231 354"/>
+      <path d="M346 236 296 278 281 354"/>
+    </g>
+  </g>
+  <g fill="currentColor">
+    <circle cx="256" cy="74" r="11"/>
+    <circle cx="192" cy="139" r="10"/>
+    <circle cx="119" cy="214" r="10"/>
+    <circle cx="110" cy="288" r="10"/>
+    <circle cx="199" cy="381" r="10"/>
+    <circle cx="320" cy="139" r="10"/>
+    <circle cx="393" cy="214" r="10"/>
+    <circle cx="402" cy="288" r="10"/>
+    <circle cx="313" cy="381" r="10"/>
+    <circle cx="256" cy="145" r="11"/>
+    <circle cx="211" cy="191" r="10"/>
+    <circle cx="166" cy="236" r="11"/>
+    <circle cx="171" cy="295" r="10"/>
+    <circle cx="216" cy="278" r="10"/>
+    <circle cx="231" cy="354" r="11"/>
+    <circle cx="219" cy="424" r="10"/>
+    <circle cx="301" cy="191" r="10"/>
+    <circle cx="346" cy="236" r="11"/>
+    <circle cx="341" cy="295" r="10"/>
+    <circle cx="296" cy="278" r="10"/>
+    <circle cx="281" cy="354" r="11"/>
+    <circle cx="293" cy="424" r="10"/>
+  </g>
+</svg>

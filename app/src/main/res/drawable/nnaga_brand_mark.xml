@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="256dp"
+    android:height="256dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M256,74 L192,139 L119,214 L110,288 L199,381 M256,74 L320,139 L393,214 L402,288 L313,381"
+        android:strokeAlpha="0.72"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="7" />
+    <path
+        android:fillColor="@android:color/transparent"
+        android:pathData="M256,145 L211,191 L166,236 L171,295 L231,354 L219,424 M256,145 L301,191 L346,236 L341,295 L281,354 L293,424 M166,236 L216,278 L231,354 M346,236 L296,278 L281,354"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:strokeWidth="8" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M256,63 A11,11 0,1 0,256,85 A11,11 0,1 0,256,63 M192,129 A10,10 0,1 0,192,149 A10,10 0,1 0,192,129 M119,204 A10,10 0,1 0,119,224 A10,10 0,1 0,119,204 M110,278 A10,10 0,1 0,110,298 A10,10 0,1 0,110,278 M199,371 A10,10 0,1 0,199,391 A10,10 0,1 0,199,371 M320,129 A10,10 0,1 0,320,149 A10,10 0,1 0,320,129 M393,204 A10,10 0,1 0,393,224 A10,10 0,1 0,393,204 M402,278 A10,10 0,1 0,402,298 A10,10 0,1 0,402,278 M313,371 A10,10 0,1 0,313,391 A10,10 0,1 0,313,371 M256,134 A11,11 0,1 0,256,156 A11,11 0,1 0,256,134 M211,181 A10,10 0,1 0,211,201 A10,10 0,1 0,211,181 M166,225 A11,11 0,1 0,166,247 A11,11 0,1 0,166,225 M171,285 A10,10 0,1 0,171,305 A10,10 0,1 0,171,285 M216,268 A10,10 0,1 0,216,288 A10,10 0,1 0,216,268 M231,343 A11,11 0,1 0,231,365 A11,11 0,1 0,231,343 M219,414 A10,10 0,1 0,219,434 A10,10 0,1 0,219,414 M301,181 A10,10 0,1 0,301,201 A10,10 0,1 0,301,181 M346,225 A11,11 0,1 0,346,247 A11,11 0,1 0,346,225 M341,285 A10,10 0,1 0,341,305 A10,10 0,1 0,341,285 M296,268 A10,10 0,1 0,296,288 A10,10 0,1 0,296,268 M281,343 A11,11 0,1 0,281,365 A11,11 0,1 0,281,343 M293,414 A10,10 0,1 0,293,434 A10,10 0,1 0,293,414" />
+</vector>

@@ -4,7 +4,6 @@ import android.graphics.Paint
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.net.Uri
-import android.os.Build
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -108,7 +107,6 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -131,6 +129,7 @@ import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.engine.RackPathId
 import com.vibes.dsp.engine.RackTrackInfo
 import com.vibes.dsp.engine.TrackLaunchQuantization
+import com.vibes.dsp.ui.dashboard.rememberTopCutoutBounds
 import com.vibes.dsp.ui.rack.PluginCard
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.rack.RackPlugin
@@ -138,27 +137,6 @@ import com.vibes.dsp.ui.theme.AppearancePreferences
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
-
-private data class TopCutoutBounds(
-    val left: Int = 0,
-    val right: Int = 0,
-    val bottom: Int = 0,
-) {
-    val present: Boolean get() = right > left && bottom > 0
-}
-
-private fun topCutoutBounds(view: android.view.View): TopCutoutBounds {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return TopCutoutBounds()
-    val cutout = view.rootWindowInsets?.displayCutout ?: return TopCutoutBounds()
-    val centralTopBounds = cutout.boundingRects
-        .filter { it.top <= 1 && it.width() > 0 }
-    if (centralTopBounds.isEmpty()) return TopCutoutBounds()
-    return TopCutoutBounds(
-        left = centralTopBounds.minOf { it.left },
-        right = centralTopBounds.maxOf { it.right },
-        bottom = centralTopBounds.maxOf { it.bottom },
-    )
-}
 
 private object LiveColors {
     val panel = Color.Black
@@ -232,7 +210,7 @@ internal fun resolveLiveFullscreenPlugin(
 fun LiveScreen(
     viewModel: RackViewModel,
     onNavigateToBrowser: (Long, Int) -> Unit,
-    onNavigateToSettings: () -> Unit = {},
+    onNavigateToDashboard: () -> Unit = {},
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit = { _, _, _, _, _ -> },
 ) {
     val context = LocalContext.current
@@ -729,7 +707,7 @@ fun LiveScreen(
                 visibleTiles = visibleTiles,
                 editMode = editTiles,
                 onToggleTile = ::toggleTile,
-                onSettings = onNavigateToSettings,
+                onDashboard = onNavigateToDashboard,
                 onToggleEdit = { editTiles = !editTiles },
             )
             if (!hideTransportWithoutLauncher || "launcher" in visibleTiles) {
@@ -945,12 +923,11 @@ private fun CameraToolbar(
     visibleTiles: Set<String>,
     editMode: Boolean,
     onToggleTile: (String) -> Unit,
-    onSettings: () -> Unit,
+    onDashboard: () -> Unit,
     onToggleEdit: () -> Unit,
 ) {
-    val view = LocalView.current
     val density = LocalDensity.current
-    val cutout = topCutoutBounds(view)
+    val cutout = rememberTopCutoutBounds()
     BoxWithConstraints(
         modifier = Modifier.fillMaxWidth().background(LiveColors.panel),
     ) {
@@ -978,7 +955,7 @@ private fun CameraToolbar(
                 ) {
                     CameraToolbarButton("launcher", "Clip launcher tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("inspector", "Clip inspector tile", visibleTiles, onToggleTile)
-                    NnagaToolbarButton(editMode, onSettings, onToggleEdit)
+                    NnagaToolbarButton(editMode, onDashboard, onToggleEdit)
                 }
             }
         } else {
@@ -992,7 +969,7 @@ private fun CameraToolbar(
                     CameraToolbarButton("devices", "Devices tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("launcher", "Clip launcher tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("inspector", "Clip inspector tile", visibleTiles, onToggleTile)
-                    NnagaToolbarButton(editMode, onSettings, onToggleEdit)
+                    NnagaToolbarButton(editMode, onDashboard, onToggleEdit)
                 }
             }
         }
@@ -1036,7 +1013,7 @@ private fun CameraToolbarButton(
 @OptIn(ExperimentalFoundationApi::class)
 private fun NnagaToolbarButton(
     editMode: Boolean,
-    onSettings: () -> Unit,
+    onDashboard: () -> Unit,
     onToggleEdit: () -> Unit,
 ) {
     val accent = MaterialTheme.colorScheme.primary
@@ -1044,9 +1021,9 @@ private fun NnagaToolbarButton(
         modifier = Modifier.height(LiveDimensions.hitTarget).widthIn(min = LiveDimensions.hitTarget)
             .combinedClickable(
                 role = Role.Button,
-                onClickLabel = "Open settings",
+                onClickLabel = "Open dashboard",
                 onLongClickLabel = "Edit tile order",
-                onClick = onSettings,
+                onClick = onDashboard,
                 onLongClick = onToggleEdit,
             ),
         contentAlignment = Alignment.Center,
