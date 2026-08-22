@@ -78,7 +78,7 @@ std::vector<TrackClipSlotInfo> RackGraph::getTrackClipSlots(RackPathId id) const
         const auto rt=s<n.clipRuntime.size()?n.clipRuntime[s]:nullptr;
         const uint64_t frame=rt?rt->statusFrame.load():0;
         const double defaultLoopLength = s<n.slotConfig.size()&&n.slotConfig[s]?n.slotConfig[s]->defaultLoopLengthBars.load():n.defaultLoopLengthBars.load();
-        out.push_back({id,static_cast<uint32_t>(s),static_cast<bool>(w),static_cast<bool>(m),name,m?static_cast<double>(m->durationFrames)/rate:(w?clipDuration(*w):0.0),n.selectedSlot.load(std::memory_order_relaxed)==s,audibleActive&&rt&&rt->statusPlaying.load(),rt?rt->looping.load():false,static_cast<double>(frame)/rate,frame,rt?rt->loopLengthBars.load():defaultLoopLength,s<n.slotConfig.size()&&n.slotConfig[s]&&n.slotConfig[s]->enterOnPunch.load(),(w&&rt)?rt->sourceBpm.load():0.0,rt?rt->tempoMode.load():0,defaultLoopLength});
+        out.push_back({id,static_cast<uint32_t>(s),static_cast<bool>(w),static_cast<bool>(m),name,m?static_cast<double>(m->durationFrames)/rate:(w?clipDuration(*w):0.0),n.selectedSlot.load(std::memory_order_relaxed)==s,audibleActive&&rt&&rt->statusPlaying.load(),rt?rt->looping.load():false,static_cast<double>(frame)/rate,frame,rt?rt->loopLengthBars.load():defaultLoopLength,s<n.slotConfig.size()&&n.slotConfig[s]&&n.slotConfig[s]->enterOnPunch.load(),(w&&rt)?rt->sourceBpm.load():0.0,rt?rt->tempoMode.load():0,defaultLoopLength,n.pendingSwitchSlot.load(std::memory_order_relaxed)==static_cast<int32_t>(s)});
     }
     return out;
 }
@@ -272,7 +272,14 @@ bool RackGraph::setSlotEnterOnPunch(RackPathId id,uint32_t slot,bool armed,Launc
     return publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));
 }
 bool RackGraph::setClipLooping(RackPathId id,uint32_t slot,bool looping){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;const size_t i=static_cast<size_t>(it-tracks_.begin());if(i>=wavSlots_.size()||i>=midiSlots_.size()||(slot>=wavSlots_[i].size()||!wavSlots_[i][slot])&&(slot>=midiSlots_[i].size()||!midiSlots_[i][slot]))return false;auto& n=**it;if(!ensureClipRuntimeLocked(n,slot))return false;n.clipRuntime[slot]->looping.store(looping);return publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
-bool RackGraph::setClipTransportPlaying(RackPathId id,uint32_t slot,bool playing,LaunchQuantization q){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;const size_t i=static_cast<size_t>(it-tracks_.begin());if(i>=wavSlots_.size()||i>=midiSlots_.size()||(slot>=wavSlots_[i].size()||!wavSlots_[i][slot])&&(slot>=midiSlots_[i].size()||!midiSlots_[i][slot]))return false;auto& n=**it;if(!ensureClipRuntimeLocked(n,slot))return false;auto& r=*n.clipRuntime[slot];r.desiredPlaying.store(playing);r.desiredQuantization.store(static_cast<uint8_t>(q));r.commandSerial.fetch_add(1,std::memory_order_release);return publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
+bool RackGraph::setClipTransportPlaying(RackPathId id,uint32_t slot,bool playing,LaunchQuantization q){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;const size_t i=static_cast<size_t>(it-tracks_.begin());if(i>=wavSlots_.size()||i>=midiSlots_.size()||(slot>=wavSlots_[i].size()||!wavSlots_[i][slot])&&(slot>=midiSlots_[i].size()||!midiSlots_[i][slot]))return false;auto& n=**it;if(!ensureClipRuntimeLocked(n,slot))return false;auto& r=*n.clipRuntime[slot];r.desiredPlaying.store(playing);r.desiredQuantization.store(static_cast<uint8_t>(q));if (playing) {
+        n.pendingSwitchSlot.store(static_cast<int32_t>(slot), std::memory_order_release);
+    } else {
+        int32_t expected = static_cast<int32_t>(slot);
+        n.pendingSwitchSlot.compare_exchange_strong(expected, -1, std::memory_order_acq_rel,
+                                                     std::memory_order_relaxed);
+    }
+    r.commandSerial.fetch_add(1, std::memory_order_release);return publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
 bool RackGraph::setClipTempoMode(RackPathId id,uint32_t slot,ClipTempoMode mode){
     std::lock_guard lock(controlMutex_);
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});

@@ -233,6 +233,7 @@ data class ClipSlotInfo(
     val sourceBpm: Double = 120.0,
     val tempoMode: Int = ClipTempoMode.Original.ordinal,
     val defaultLoopLengthBars: Double = 1.0,
+    val launchPending: Boolean = false,
 )
 
 data class MidiNoteInfo(

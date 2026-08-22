@@ -318,7 +318,6 @@ fun RackScreen(
     BackHandler(enabled = blockingOperation != null) { }
 
     var pendingAudioTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
-    val pendingTrackLaunches = remember { mutableStateMapOf<Long, Boolean>() }
     val audioFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -695,7 +694,6 @@ fun RackScreen(
                             text = { Text("Delete track") },
                             onClick = {
                                 deleteMenuExpanded = false
-                                pendingTrackLaunches.remove(track.id)
                                 viewModel.removeTrack(track.id)
                             }
                         )
@@ -730,24 +728,12 @@ fun RackScreen(
                 1.0 -> "1 bar"
                 else -> "${slotLoopLengthBars.toInt()} bars"
             }
-            val launchPending = pendingTrackLaunches[track.id] == true &&
-                !selectedSlotPlaying && (selectedSlotWavLoaded || selectedSlotMidiLoaded)
-            LaunchedEffect(
-                track.id,
-                selectedSlot,
-                selectedSlotPlaying,
-                selectedSlotWavLoaded,
-                selectedSlotMidiLoaded
-            ) {
-                if (selectedSlotPlaying || (!selectedSlotWavLoaded && !selectedSlotMidiLoaded)) {
-                    pendingTrackLaunches.remove(track.id)
-                }
-            }
+            val launchPending = selectedClip?.launchPending == true
             val playIconAlpha = if (launchPending) {
                 val transition = rememberInfiniteTransition(label = "Pending track launch")
                 val alpha by transition.animateFloat(
                     initialValue = 1f,
-                    targetValue = 0.45f,
+                    targetValue = 0.35f,
                     animationSpec = infiniteRepeatable(
                         animation = tween(durationMillis = 650),
                         repeatMode = RepeatMode.Reverse
@@ -879,8 +865,7 @@ fun RackScreen(
                                 // while guarding normal taps below when no audio is loaded.
                                 onClick = {
                                     if (playEnabled) {
-                                        if (launchPending) {
-                                            pendingTrackLaunches.remove(track.id)
+                                        if (launchPending && !selectedSlotPlaying) {
                                             viewModel.setClipTransportPlaying(
                                                 track.id,
                                                 selectedSlot,
@@ -888,7 +873,6 @@ fun RackScreen(
                                                 launchQuantization
                                             )
                                         } else {
-                                            pendingTrackLaunches[track.id] = true
                                             viewModel.launchClipTransport(
                                                 track.id,
                                                 selectedSlot,
@@ -907,11 +891,15 @@ fun RackScreen(
                                 if (!playEnabled) disabled()
                                 contentDescription = when {
                                     !playEnabled -> "Selected clip play unavailable until audio is loaded"
+                                    launchPending && selectedSlotPlaying -> "Restart pending for selected clip"
+                                    launchPending -> "Launch pending for selected clip; cancel"
                                     selectedSlotPlaying -> "Restart selected clip"
-                                    launchPending -> "Cancel pending clip launch"
                                     else -> "Start selected clip"
                                 }
-                                if (launchPending) stateDescription = "Launch pending"
+                                if (launchPending) {
+                                    stateDescription =
+                                        if (selectedSlotPlaying) "Restart pending" else "Launch pending"
+                                }
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -1152,7 +1140,6 @@ fun RackScreen(
                             text = { Text("Delete track") },
                             onClick = {
                                 deleteMenuExpanded = false
-                                pendingTrackLaunches.remove(track.id)
                                 viewModel.removeTrack(track.id)
                             }
                         )

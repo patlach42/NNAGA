@@ -1031,7 +1031,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTrackClipSlots(
     jclass clazz = env->FindClass("com/vibes/dsp/engine/ClipSlotInfo");
     if (!clazz) return nullptr;
     jmethodID ctor = env->GetMethodID(
-        clazz, "<init>", "(JIZZLjava/lang/String;DZZZDJDZDID)V");
+        clazz, "<init>", "(JIZZLjava/lang/String;DZZZDJDZDIDZ)V");
     if (!ctor) {
         env->DeleteLocalRef(clazz);
         return nullptr;
@@ -1047,7 +1047,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTrackClipSlots(
             slot.playing ? JNI_TRUE : JNI_FALSE, slot.looping ? JNI_TRUE : JNI_FALSE,
             slot.positionSec, static_cast<jlong>(slot.transportFrame),
             slot.loopLengthBars, slot.enterOnPunch ? JNI_TRUE : JNI_FALSE,
-            slot.sourceBpm, static_cast<jint>(slot.tempoMode), slot.defaultLoopLengthBars);
+            slot.sourceBpm, static_cast<jint>(slot.tempoMode), slot.defaultLoopLengthBars,
+            slot.launchPending ? JNI_TRUE : JNI_FALSE);
         if (item) env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         if (name) env->DeleteLocalRef(name);
         if (item) env->DeleteLocalRef(item);

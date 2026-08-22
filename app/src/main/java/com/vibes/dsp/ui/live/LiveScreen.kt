@@ -8,6 +8,11 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalOverscrollConfiguration
@@ -88,6 +93,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -1581,9 +1587,36 @@ private fun ClipCard(
     val recording = recordingPending || activelyRecording
     val recordAction = !filled && track.inputArmed
     val recordEnabled = recordAction && !track.recordPending && !track.recording
+    val playIconAlpha = if (slot.launchPending) {
+        val transition = rememberInfiniteTransition(label = "Pending clip launch")
+        val alpha by transition.animateFloat(
+            initialValue = 1f,
+            targetValue = 0.35f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 650),
+                repeatMode = RepeatMode.Reverse,
+            ),
+            label = "Pending clip launch alpha",
+        )
+        alpha
+    } else {
+        1f
+    }
+    val launchActionDescription = when {
+        slot.launchPending && playing -> "Restart pending for ${slot.displayName}"
+        slot.launchPending -> "Launch pending for ${slot.displayName}"
+        playing -> "Restart ${slot.displayName}"
+        filled -> "Launch ${slot.displayName}"
+        activelyRecording -> "Recording into slot ${slot.slot + 1}"
+        recordingPending -> "Recording pending in slot ${slot.slot + 1}"
+        recordAction -> "Record into slot ${slot.slot + 1}"
+        else -> "Load clip into slot ${slot.slot + 1}"
+    }
     val clipState = when {
         activelyRecording -> "Recording"
         recordingPending -> "Recording pending"
+        slot.launchPending && playing -> "Restart pending"
+        slot.launchPending -> "Launch pending"
         playing -> "Playing"
         filled -> "Loaded"
         recordAction -> "Empty, armed for recording"
@@ -1594,6 +1627,7 @@ private fun ClipCard(
         !columnActive -> Color.Black
         recording -> LiveColors.record.copy(alpha = 0.18f)
         playing -> accent.copy(alpha = 0.18f)
+        slot.launchPending -> accent.copy(alpha = 0.10f)
         else -> LiveColors.card
     }
     Surface(
@@ -1621,6 +1655,7 @@ private fun ClipCard(
                             recording -> LiveColors.record
                             playing -> accent
                             recordAction && selected -> LiveColors.record.copy(alpha = 0.6f)
+                            slot.launchPending -> accent.copy(alpha = 0.75f)
                             selected -> accent.copy(alpha = 0.55f)
                             else -> Color.Transparent
                         },
@@ -1630,14 +1665,14 @@ private fun ClipCard(
                     text = if (filled) slot.displayName else "",
                     color = when {
                         recording || recordAction -> LiveColors.record
-                        playing || selected -> accent
+                        playing || slot.launchPending || selected -> accent
                         filled -> LiveColors.text
                         else -> LiveColors.textDim
                     },
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (playing || selected || recording) FontWeight.SemiBold else FontWeight.Normal,
+                    fontWeight = if (playing || slot.launchPending || selected || recording) FontWeight.SemiBold else FontWeight.Normal,
                     modifier = Modifier.padding(start = LiveDimensions.smallGap).weight(1f),
                 )
                 IconButton(
@@ -1649,7 +1684,14 @@ private fun ClipCard(
                         }
                     },
                     enabled = !recordAction || recordEnabled,
-                    modifier = Modifier.size(LiveDimensions.hitTarget),
+                    modifier = Modifier
+                        .size(LiveDimensions.hitTarget)
+                        .semantics {
+                            contentDescription = launchActionDescription
+                            if (slot.launchPending) {
+                                stateDescription = if (playing) "Restart pending" else "Launch pending"
+                            }
+                        },
                 ) {
                     Icon(
                         imageVector = when {
@@ -1658,21 +1700,14 @@ private fun ClipCard(
                             recordAction -> Icons.Default.FiberManualRecord
                             else -> Icons.Default.Add
                         },
-                        contentDescription = when {
-                            filled && playing -> "Restart ${slot.displayName}"
-                            filled -> "Launch ${slot.displayName}"
-                            activelyRecording -> "Recording into slot ${slot.slot + 1}"
-                            recordingPending -> "Recording pending in slot ${slot.slot + 1}"
-                            recordAction -> "Record into slot ${slot.slot + 1}"
-                            else -> "Load clip into slot ${slot.slot + 1}"
-                        },
+                        contentDescription = null,
                         tint = when {
                             recordAction || recording -> LiveColors.record
                             playing -> accent
                             filled -> LiveColors.textMuted
                             else -> LiveColors.textDim
                         },
-                        modifier = Modifier.size(16.dp),
+                        modifier = Modifier.size(16.dp).alpha(playIconAlpha),
                     )
                 }
             }

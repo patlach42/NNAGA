@@ -55,6 +55,7 @@ struct TrackClipSlotInfo {
     double sourceBpm{};
     int tempoMode{0};
     double defaultLoopLengthBars{1.0};
+    bool launchPending{};
 };
 struct TrackSnapshot {
     RackPathId id;

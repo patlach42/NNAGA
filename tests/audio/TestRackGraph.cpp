@@ -801,6 +801,149 @@ TEST(RackGraphTransportTest, LaunchesAtStrictNextQuantizedGlobalBoundary) {
         EXPECT_FALSE(state.recording);
     }
 }
+TEST(RackGraphTransportTest,
+     QuantizedNewLaunchReportsPendingUntilBoundaryAndCancelClearsIt) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId targetTrack = graph.getTracks().front().id;
+    const RackPathId otherTrack = graph.addTrack();
+    ASSERT_NE(otherTrack, 0u);
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        targetTrack, 0, makeRampClip(128, 1.0f, "target.wav")));
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        otherTrack, 0, makeRampClip(128, 101.0f, "other.wav")));
+    ASSERT_TRUE(graph.setClipLooping(targetTrack, 0, true));
+    ASSERT_TRUE(graph.setClipLooping(otherTrack, 0, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        otherTrack, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    auto otherSlots = graph.getTrackClipSlots(otherTrack);
+    const auto* otherPlaying = findClipSlot(otherSlots, 0);
+    ASSERT_NE(otherPlaying, nullptr);
+    ASSERT_TRUE(otherPlaying->playing);
+    EXPECT_FALSE(otherPlaying->launchPending);
+
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        targetTrack, 0, true, guitarrackcraft::LaunchQuantization::Quarter));
+    auto targetSlots = graph.getTrackClipSlots(targetTrack);
+    const auto* targetPending = findClipSlot(targetSlots, 0);
+    ASSERT_NE(targetPending, nullptr);
+    EXPECT_TRUE(targetPending->launchPending);
+    EXPECT_FALSE(targetPending->playing);
+
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    targetSlots = graph.getTrackClipSlots(targetTrack);
+    targetPending = findClipSlot(targetSlots, 0);
+    ASSERT_NE(targetPending, nullptr);
+    EXPECT_TRUE(targetPending->launchPending);
+    EXPECT_FALSE(targetPending->playing);
+    otherSlots = graph.getTrackClipSlots(otherTrack);
+    otherPlaying = findClipSlot(otherSlots, 0);
+    ASSERT_NE(otherPlaying, nullptr);
+    EXPECT_FALSE(otherPlaying->launchPending);
+    EXPECT_TRUE(otherPlaying->playing);
+
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        targetTrack, 0, false, guitarrackcraft::LaunchQuantization::Quarter));
+    targetSlots = graph.getTrackClipSlots(targetTrack);
+    targetPending = findClipSlot(targetSlots, 0);
+    ASSERT_NE(targetPending, nullptr);
+    EXPECT_FALSE(targetPending->launchPending);
+    EXPECT_FALSE(targetPending->playing);
+
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        targetTrack, 0, true, guitarrackcraft::LaunchQuantization::Quarter));
+    targetSlots = graph.getTrackClipSlots(targetTrack);
+    targetPending = findClipSlot(targetSlots, 0);
+    ASSERT_NE(targetPending, nullptr);
+    EXPECT_TRUE(targetPending->launchPending);
+
+    // The request at transport frame 2 launches at the strict next quarter
+    // boundary, global frame 60.
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 58);
+    targetSlots = graph.getTrackClipSlots(targetTrack);
+    targetPending = findClipSlot(targetSlots, 0);
+    ASSERT_NE(targetPending, nullptr);
+    EXPECT_TRUE(targetPending->launchPending);
+    EXPECT_FALSE(targetPending->playing);
+
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    targetSlots = graph.getTrackClipSlots(targetTrack);
+    targetPending = findClipSlot(targetSlots, 0);
+    ASSERT_NE(targetPending, nullptr);
+    EXPECT_FALSE(targetPending->launchPending);
+    EXPECT_TRUE(targetPending->playing);
+    EXPECT_EQ(targetPending->transportFrame, 1u);
+    otherSlots = graph.getTrackClipSlots(otherTrack);
+    otherPlaying = findClipSlot(otherSlots, 0);
+    ASSERT_NE(otherPlaying, nullptr);
+    EXPECT_FALSE(otherPlaying->launchPending);
+    EXPECT_TRUE(otherPlaying->playing);
+}
+
+TEST(RackGraphTransportTest,
+     QuantizedActiveRestartKeepsPlayingAndPendingUntilBoundary) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, 0, makeRampClip(128, 1.0f, "restart.wav")));
+    ASSERT_TRUE(graph.setClipLooping(track, 0, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 4);
+    auto slots = graph.getTrackClipSlots(track);
+    const auto* state = findClipSlot(slots, 0);
+    ASSERT_NE(state, nullptr);
+    ASSERT_TRUE(state->playing);
+    EXPECT_FALSE(state->launchPending);
+
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::Quarter));
+    slots = graph.getTrackClipSlots(track);
+    state = findClipSlot(slots, 0);
+    ASSERT_NE(state, nullptr);
+    EXPECT_TRUE(state->playing);
+    EXPECT_TRUE(state->launchPending);
+
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    slots = graph.getTrackClipSlots(track);
+    state = findClipSlot(slots, 0);
+    ASSERT_NE(state, nullptr);
+    EXPECT_TRUE(state->playing);
+    EXPECT_TRUE(state->launchPending);
+
+    // The active restart is applied at global frame 60.
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 55);
+    slots = graph.getTrackClipSlots(track);
+    state = findClipSlot(slots, 0);
+    ASSERT_NE(state, nullptr);
+    EXPECT_TRUE(state->playing);
+    EXPECT_TRUE(state->launchPending);
+
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    slots = graph.getTrackClipSlots(track);
+    state = findClipSlot(slots, 0);
+    ASSERT_NE(state, nullptr);
+    EXPECT_TRUE(state->playing);
+    EXPECT_FALSE(state->launchPending);
+    EXPECT_EQ(state->transportFrame, 1u);
+}
+
 TEST(RackGraphTransportTest, RelaunchingActiveClipWithNoneRestartsAtFrameZero) {
     RackGraph graph;
     configure(graph);
