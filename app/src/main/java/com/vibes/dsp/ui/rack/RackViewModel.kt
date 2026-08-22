@@ -20,6 +20,14 @@ import kotlinx.coroutines.sync.withLock
 import android.net.Uri
 import java.io.File
 
+import com.vibes.dsp.ui.live.ClipLauncherPreferences
+
+internal fun parseClipSourceBpmFromFilename(filename: String): Double? {
+    val match = Regex("""(?i)(?<![\d.,])(\d+(?:[.,]\d+)?)\s*bpm\b""").find(filename)
+        ?: return null
+    val bpm = match.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
+    return bpm.takeIf { it in 20.0..400.0 }
+}
 data class RackPlugin(val index: Int, val name: String, val pluginId: String, val instanceId: Long)
 
 data class MeterState(
@@ -327,10 +335,17 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                 ?: uri.path?.substringBefore('?')?.substringAfterLast('/')
                 ?: "Clip"
             val displayName = sourceName.substringBeforeLast('.', sourceName).ifBlank { "Clip" }
+            val mimeType = resolver.getType(uri)?.lowercase()
             val midi = uri.lastPathSegment?.substringBefore('?')?.lowercase()?.let {
                 it.endsWith(".mid") || it.endsWith(".midi")
-            } == true || resolver.getType(uri)?.lowercase() in
-                setOf("audio/midi", "audio/x-midi", "application/x-midi")
+            } == true || mimeType in setOf("audio/midi", "audio/x-midi", "application/x-midi")
+            val isWav = sourceName.substringAfterLast('.', "").equals("wav", ignoreCase = true) ||
+                mimeType in setOf("audio/wav", "audio/x-wav", "audio/wave")
+            val detectedBpm = if (!midi && isWav &&
+                ClipLauncherPreferences.getAutoDetectBpmFromFilename(getApplication())) {
+                parseClipSourceBpmFromFilename(sourceName)
+            } else null
+            var modeSetFailed = false
             val loaded = withBlockingOperation(if (midi) "Importing MIDI clip" else "Importing audio clip") {
                 withContext(Dispatchers.IO) {
                     val extension = if (midi) ".mid" else ".wav"
@@ -344,19 +359,24 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                             val wav = File.createTempFile("clip_import_decoded_", ".wav", getApplication<Application>().cacheDir)
                             try {
                                 AudioImportDecoder.copyOrDecode(getApplication(), uri, wav)
-                                RackManager.loadTrackClipWav(
+                                val wavLoaded = RackManager.loadTrackClipWav(
                                     trackId,
                                     slot,
                                     wav.absolutePath,
                                     displayName,
-                                    _transport.value.beatsPerMinute,
+                                    detectedBpm ?: _transport.value.beatsPerMinute,
                                 )
+                                if (wavLoaded && detectedBpm != null) {
+                                    modeSetFailed = !RackManager.setClipTempoMode(trackId, slot, ClipTempoMode.Stretch)
+                                }
+                                wavLoaded
                             } finally { wav.delete() }
                         }
                     } finally { source.delete() }
                 }
             }
             if (!loaded) _errorMessage.value = "Unable to load clip media"
+            else if (modeSetFailed) _errorMessage.value = "Failed to set clip tempo mode"
             refreshTrackClipSlots(trackId)
             if (!midi) loadTrackWaveform(trackId)
         }
