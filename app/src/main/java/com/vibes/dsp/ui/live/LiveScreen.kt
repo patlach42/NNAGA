@@ -21,7 +21,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
@@ -129,6 +128,7 @@ import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.engine.RackPathId
 import com.vibes.dsp.engine.RackTrackInfo
 import com.vibes.dsp.engine.TrackLaunchQuantization
+import com.vibes.dsp.ui.components.CompactHorizontalFader
 import com.vibes.dsp.ui.dashboard.rememberTopCutoutBounds
 import com.vibes.dsp.ui.rack.PluginCard
 import com.vibes.dsp.ui.rack.RackViewModel
@@ -1912,10 +1912,11 @@ private fun TrackInspectorControls(
                     style = MaterialTheme.typography.labelSmall,
                 )
             }
-            TrackVolumeFader(
+            CompactHorizontalFader(
                 value = track.volume,
                 onValueChange = onVolumeChange,
-                modifier = Modifier.fillMaxWidth().height(32.dp),
+                label = "Track volume",
+                modifier = Modifier.fillMaxWidth().height(48.dp),
             )
         }
         IconButton(
@@ -1984,56 +1985,6 @@ private fun TrackInspectorControls(
     }
 }
 
-@Composable
-private fun TrackVolumeFader(
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val accent = MaterialTheme.colorScheme.primary
-    val currentOnValueChange by rememberUpdatedState(onValueChange)
-    Canvas(
-        modifier = modifier
-            .semantics {
-                contentDescription = "Track volume"
-                progressBarRangeInfo = ProgressBarRangeInfo(value.coerceIn(0f, 1f), 0f..1f)
-                setProgress { target ->
-                    currentOnValueChange(target.coerceIn(0f, 1f))
-                    true
-                }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures { offset ->
-                    val inset = 8.dp.toPx()
-                    currentOnValueChange(horizontalFaderValue(offset.x, inset, size.width - inset))
-                }
-            }
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { offset ->
-                        val inset = 8.dp.toPx()
-                        currentOnValueChange(horizontalFaderValue(offset.x, inset, size.width - inset))
-                    },
-                    onHorizontalDrag = { change, _ ->
-                        val inset = 8.dp.toPx()
-                        currentOnValueChange(horizontalFaderValue(change.position.x, inset, size.width - inset))
-                    },
-                )
-            },
-    ) {
-        val inset = 8.dp.toPx()
-        val start = inset
-        val end = size.width - inset
-        val y = size.height / 2f
-        val x = start + (end - start) * value.coerceIn(0f, 1f)
-        drawLine(LiveColors.divider, Offset(start, y), Offset(end, y), 2.dp.toPx(), StrokeCap.Round)
-        drawLine(accent, Offset(start, y), Offset(x, y), 2.dp.toPx(), StrokeCap.Round)
-        drawCircle(accent, radius = 5.dp.toPx(), center = Offset(x, y))
-    }
-}
-
-private fun horizontalFaderValue(x: Float, start: Float, end: Float): Float =
-    if (end <= start) 0f else ((x - start) / (end - start)).coerceIn(0f, 1f)
 
 @Composable
 private fun InspectorMessage(message: String) {

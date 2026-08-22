@@ -97,6 +97,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.Role
@@ -123,6 +124,7 @@ import com.vibes.dsp.engine.DirectUsbSessionState
 import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.engine.TrackLaunchQuantization
+import com.vibes.dsp.ui.components.CompactHorizontalFader
 import com.vibes.dsp.ui.modgui.InlineModguiView
 import com.vibes.dsp.ui.x11.PluginX11UiView
 import com.vibes.dsp.ui.x11.X11DisplayManager
@@ -764,11 +766,16 @@ fun RackScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Text("Vol ${(track.volume * 100).roundToInt()}%", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Slider(
+                Text(
+                    "Vol ${(track.volume * 100).roundToInt()}%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                CompactHorizontalFader(
                     value = track.volume,
                     onValueChange = { viewModel.setTrackVolume(track.id, it) },
-                    modifier = Modifier.weight(1f)
+                    label = "Track volume",
+                    modifier = Modifier.weight(1f).height(48.dp)
                 )
             }
             if (track.wavLoaded || track.midiLoaded) {
@@ -1775,23 +1782,22 @@ fun PluginCard(
                                     UiType.MODGUI -> if (modguiUserScale.isNaN()) 1f else modguiUserScale
                                     else -> 1f
                                 }
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Slider(
-                                        value = scaleVal,
-                                        onValueChange = { v ->
-                                            when (currentUiMode) {
-                                                UiType.X11 -> x11UserScale = v
-                                                UiType.MODGUI -> modguiUserScale = v
-                                                else -> {}
-                                            }
-                                        },
-                                        valueRange = 0.3f..1f,
-                                        modifier = Modifier.width(150.dp).padding(horizontal = 4.dp)
-                                    )
-                                }
+                                CompactHorizontalFader(
+                                    value = scaleVal,
+                                    onValueChange = { v ->
+                                        when (currentUiMode) {
+                                            UiType.X11 -> x11UserScale = v
+                                            UiType.MODGUI -> modguiUserScale = v
+                                            else -> {}
+                                        }
+                                    },
+                                    valueRange = 0.3f..1f,
+                                    label = "Plugin UI scale",
+                                    modifier = Modifier
+                                        .width(150.dp)
+                                        .height(48.dp)
+                                        .padding(horizontal = 4.dp)
+                                )
                                 Divider()
                             }
                             if (compact) {
@@ -2510,7 +2516,7 @@ fun PluginCard(
                         // Modgui is always present above, nothing extra needed
                     }
                     UiType.SLIDERS -> {
-                      Column(modifier = Modifier.padding(horizontal = 12.dp)) {
+                      Column(modifier = Modifier.padding(horizontal = 4.dp)) {
                         if (modelConfig != null) {
                             var modelDropdownExpanded by remember { mutableStateOf(false) }
                             ExposedDropdownMenuBox(
@@ -2555,15 +2561,14 @@ fun PluginCard(
                                     }
                                 }
                             }
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(4.dp))
                         }
                         val controlPorts = pluginInfo.controlPorts
                         val isVst = pluginInfo.format == "VST2" || pluginInfo.format == "VST3"
                         if (controlPorts.isNotEmpty()) {
                             Divider()
-                            Spacer(modifier = Modifier.height(8.dp))
                             Column(
-                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 controlPorts.forEach { port ->
                                     ParameterControl(
@@ -2605,7 +2610,7 @@ fun ParameterControl(
     var isUserInteracting by remember { mutableStateOf(false) }
 
     // Poll native parameter value periodically so that changes made via the X11 UI
-    // (or other external sources) are reflected in the Android slider controls.
+    // (or other external sources) are reflected in the Android controls.
     LaunchedEffect(selectedPathId, pluginIndex, port.index) {
         while (true) {
             delay(200)
@@ -2618,30 +2623,28 @@ fun ParameterControl(
         }
     }
 
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = port.name.ifEmpty { port.symbol },
-                style = MaterialTheme.typography.bodyMedium
-            )
-            Text(
-                text = if (port.scalePoints.isNotEmpty()) {
-                    port.scalePoints.find { kotlin.math.abs(it.value - currentValue.value) < 1e-6f }
-                        ?.label ?: "%.2f".format(currentValue.value)
-                } else {
-                    "%.2f".format(currentValue.value)
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
+    val parameterName = port.name.ifEmpty { port.symbol }
+    val displayValue = if (port.scalePoints.isNotEmpty()) {
+        port.scalePoints.find { kotlin.math.abs(it.value - currentValue.value) < 1e-6f }
+            ?.label ?: "%.2f".format(currentValue.value)
+    } else {
+        "%.2f".format(currentValue.value)
+    }
 
-        if (port.isToggle) {
-            // Toggle port: switch
+    if (port.isToggle) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(parameterName, style = MaterialTheme.typography.labelMedium)
+                Text(
+                    displayValue,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             Switch(
                 checked = currentValue.value > 0.5f,
                 onCheckedChange = { checked ->
@@ -2650,16 +2653,28 @@ fun ParameterControl(
                     viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
                 }
             )
-        } else if (port.scalePoints.isNotEmpty()) {
-            // Enumeration port: dropdown
+        }
+    } else if (port.scalePoints.isNotEmpty()) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(parameterName, style = MaterialTheme.typography.labelMedium)
+                Text(
+                    displayValue,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
             var expanded by remember { mutableStateOf(false) }
             ExposedDropdownMenuBox(
                 expanded = expanded,
                 onExpandedChange = { expanded = it }
             ) {
                 OutlinedTextField(
-                    value = port.scalePoints.find { kotlin.math.abs(it.value - currentValue.value) < 1e-6f }
-                        ?.label ?: "%.2f".format(currentValue.value),
+                    value = displayValue,
                     onValueChange = {},
                     readOnly = true,
                     modifier = Modifier
@@ -2683,21 +2698,53 @@ fun ParameterControl(
                     }
                 }
             }
-        } else {
-            // Continuous port: slider
-            Slider(
-                value = currentValue.value,
-                onValueChange = { newValue ->
-                    isUserInteracting = true
-                    currentValue.value = newValue
-                    viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
-                },
-                onValueChangeFinished = {
-                    isUserInteracting = false
-                },
-                valueRange = port.minValue..port.maxValue,
-                modifier = Modifier.fillMaxWidth()
-            )
+        }
+    } else {
+        val controlHeight = (
+            48f + (LocalDensity.current.fontScale - 1f).coerceAtLeast(0f) * 16f
+        ).dp
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f),
+            shape = RoundedCornerShape(2.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(controlHeight),
+            ) {
+                CompactHorizontalFader(
+                    value = currentValue.value,
+                    onValueChange = { newValue ->
+                        isUserInteracting = true
+                        currentValue.value = newValue
+                        viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
+                    },
+                    valueRange = port.minValue..port.maxValue,
+                    label = "$parameterName parameter",
+                    valueStateDescription = displayValue,
+                    modifier = Modifier.matchParentSize(),
+                    railVerticalPosition = 0.7f,
+                    onValueChangeFinished = {
+                        isUserInteracting = false
+                    },
+                )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 6.dp, top = 2.dp, end = 6.dp)
+                        .clearAndSetSemantics { },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(parameterName, style = MaterialTheme.typography.labelSmall)
+                    Text(
+                        displayValue,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
     }
 }
