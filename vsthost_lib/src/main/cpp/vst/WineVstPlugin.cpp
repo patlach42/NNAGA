@@ -51,6 +51,37 @@ float sanitizeNormalizedParam(float value) {
     if (!std::isfinite(value)) return 0.0f;
     return std::clamp(value, 0.0f, 1.0f);
 }
+std::string readGuestParamDisplay(const SharedRing* ring, int32_t index) {
+    const VstpocShared* shared = ring ? ring->raw() : nullptr;
+    if (!shared || index < 0 || index >= VSTPOC_MAX_PARAMS) return {};
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const uint64_t before =
+            __atomic_load_n(&shared->param_values_seq, __ATOMIC_ACQUIRE);
+        if (before == 0 || (before & 1u)) continue;
+        std::array<char, VSTPOC_PARAM_DISPLAY_LEN> display{};
+        std::memcpy(display.data(), shared->param_display_values[index], display.size());
+        const uint64_t after =
+            __atomic_load_n(&shared->param_values_seq, __ATOMIC_ACQUIRE);
+        if (before == after && !(after & 1u)) {
+            const size_t len = boundedStringLength(display.data(), display.size());
+            return std::string(display.data(), len);
+        }
+    }
+    return {};
+}
+
+bool readGuestParamValue(const SharedRing* ring, int32_t index, float* out) {
+    const VstpocShared* shared = ring ? ring->raw() : nullptr;
+    if (!shared || !out || index < 0 || index >= VSTPOC_MAX_PARAMS) return false;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const uint64_t before = __atomic_load_n(&shared->param_values_seq, __ATOMIC_ACQUIRE);
+        if (before == 0 || (before & 1u)) continue;
+        const float value = sanitizeNormalizedParam(shared->param_values[index]);
+        const uint64_t after = __atomic_load_n(&shared->param_values_seq, __ATOMIC_ACQUIRE);
+        if (before == after && !(after & 1u)) { *out = value; return true; }
+    }
+    return false;
+}
 
 bool readGuestParamSnapshot(const SharedRing* ring, std::vector<float>& out) {
     const VstpocShared* shared = ring ? ring->raw() : nullptr;
@@ -424,6 +455,7 @@ guitarrackcraft::PluginInfo WineVstPlugin::getInfo() const {
     info.id = entry_.format + ":" + entry_.uuid;
     info.name = entry_.displayName;
     info.format = entry_.format;
+    info.parameterMetadataRevision = 0;
     // Audio ports — stereo in/out, indices 0..3. Control ports for VST
     // params start at 4 (numAudio); the JNI bridge / RackScreen separates
     // them by isControl/isAudio flags.
@@ -441,24 +473,31 @@ guitarrackcraft::PluginInfo WineVstPlugin::getInfo() const {
     // PluginX11UiView (LV2's X11 server).
     info.hasX11Ui = true;
 
-    // VST params reported by the guest via shm. param_count + param_names
-    // are populated before guest_ready=1 (we block in activate). VST2
-    // params are normalized [0,1]; min=0 max=1 default=0.5. We don't know
-    // the plugin's TRUE defaults — the guest could supply them in a future
-    // shared-layout bump.
-    if (ring_ && ring_->raw() && ring_->raw()->guest_ready != 0) {
+    // Parameter descriptors and current values are published by the Wine
+    // guest before param_metadata_seq becomes non-zero. All VST values use
+    // the normalized [0,1] host contract; metadata carries defaults, units,
+    // discrete steps, visibility and mutability.
+    if (ring_ && ring_->raw()) {
         const auto* shared = ring_->raw();
+        const uint64_t metadataRevision =
+            __atomic_load_n(&shared->param_metadata_seq, __ATOMIC_ACQUIRE);
+        if (metadataRevision == 0) return info;
+        info.parameterMetadataRevision = metadataRevision;
         const int32_t numAudio = static_cast<int32_t>(info.ports.size());
         const int32_t pc = std::max(0, std::min<int32_t>(shared->param_count, VSTPOC_MAX_PARAMS));
         for (int32_t i = 0; i < pc; ++i) {
             std::string name(shared->param_names[i]);
             if (name.empty()) name = "Param " + std::to_string(i + 1);
+            const auto& metadata = shared->param_metadata[i];
+            if ((metadata.flags & VSTPOC_PARAM_FLAG_HIDDEN) != 0) continue;
             guitarrackcraft::PortInfo p {
                 static_cast<uint32_t>(numAudio + i),
                 name, name,
-                /*isInput=*/true, /*isAudio=*/false, /*isControl=*/true, /*isToggle=*/false,
-                /*defaultValue=*/0.5f, /*minValue=*/0.0f, /*maxValue=*/1.0f,
-                /*scalePoints=*/{}
+                /*isInput=*/true, /*isAudio=*/false, /*isControl=*/true,
+                /*isToggle=*/metadata.step_count == 1,
+                metadata.default_normalized, 0.0f, 1.0f, {},
+                std::string(metadata.unit), metadata.step_count,
+                (metadata.flags & VSTPOC_PARAM_FLAG_READ_ONLY) != 0
             };
             info.ports.push_back(p);
         }
@@ -467,28 +506,39 @@ guitarrackcraft::PluginInfo WineVstPlugin::getInfo() const {
 }
 
 void WineVstPlugin::setParameter(uint32_t portIndex, float value) {
-    // Control port indices start past the audio ports (4 = 2 in + 2 out).
     const int32_t vstIdx = static_cast<int32_t>(portIndex) - static_cast<int32_t>(kNumAudioPorts);
     if (vstIdx < 0) return;
-    if (vstIdx >= static_cast<int32_t>(paramMirror_.size())) {
-        paramMirror_.resize(static_cast<size_t>(vstIdx) + 1, 0.5f);
+    if (ring_ && ring_->raw()) {
+        const auto* shared = ring_->raw();
+        if (vstIdx < std::max(0, std::min<int32_t>(shared->param_count, VSTPOC_MAX_PARAMS)) &&
+            (shared->param_metadata[vstIdx].flags & VSTPOC_PARAM_FLAG_READ_ONLY) != 0) {
+            return;
+        }
     }
+    if (vstIdx >= static_cast<int32_t>(paramMirror_.size()))
+        paramMirror_.resize(static_cast<size_t>(vstIdx) + 1, 0.5f);
     const float normalized = sanitizeNormalizedParam(value);
-    paramMirror_[vstIdx] = normalized;
+    paramMirror_[static_cast<size_t>(vstIdx)] = normalized;
     if (ring_) ring_->pushParam(vstIdx, normalized);
 }
 
 float WineVstPlugin::getParameter(uint32_t portIndex) const {
     const int32_t vstIdx = static_cast<int32_t>(portIndex) - static_cast<int32_t>(kNumAudioPorts);
     if (vstIdx < 0) return 0.0f;
-    std::vector<float> guestValues;
-    if (readGuestParamSnapshot(ring_.get(), guestValues) &&
-        vstIdx < static_cast<int32_t>(guestValues.size())) {
-        paramMirror_ = std::move(guestValues);
-        return paramMirror_[static_cast<size_t>(vstIdx)];
+    float guestValue = 0.0f;
+    if (readGuestParamValue(ring_.get(), vstIdx, &guestValue)) {
+        if (vstIdx >= static_cast<int32_t>(paramMirror_.size()))
+            paramMirror_.resize(static_cast<size_t>(vstIdx) + 1, 0.5f);
+        paramMirror_[static_cast<size_t>(vstIdx)] = guestValue;
+        return guestValue;
     }
     if (vstIdx >= static_cast<int32_t>(paramMirror_.size())) return 0.5f;
-    return paramMirror_[vstIdx];
+    return paramMirror_[static_cast<size_t>(vstIdx)];
+}
+
+std::string WineVstPlugin::getParameterDisplay(uint32_t portIndex) const {
+    const int32_t vstIdx = static_cast<int32_t>(portIndex) - static_cast<int32_t>(kNumAudioPorts);
+    return vstIdx < 0 ? std::string{} : readGuestParamDisplay(ring_.get(), vstIdx);
 }
 
 bool WineVstPlugin::requestGuestState(uint32_t command,

@@ -16,6 +16,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.channels.Channel
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.withLock
 import android.net.Uri
 import java.io.File
@@ -43,6 +45,9 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val _latencyMs = MutableStateFlow(0.0); val latencyMs = _latencyMs.asStateFlow()
     private val _meterState = MutableStateFlow(MeterState()); val meterState = _meterState.asStateFlow()
     private val _cpuLoad = MutableStateFlow(0f); val cpuLoad = _cpuLoad.asStateFlow()
+    private data class ParameterKey(val pathId: RackPathId, val pluginIndex: Int, val portIndex: Int)
+    private val parameterChannels = ConcurrentHashMap<ParameterKey, Channel<Float>>()
+    private val parameterJobs = ConcurrentHashMap<ParameterKey, Job>()
     private val _xRunCount = MutableStateFlow(0); val xRunCount = _xRunCount.asStateFlow()
     private val _tracks = MutableStateFlow<List<RackTrackInfo>>(emptyList()); val tracks: StateFlow<List<RackTrackInfo>> = _tracks.asStateFlow()
     private val _selectedPathId = MutableStateFlow<RackPathId>(1L); val selectedPathId = _selectedPathId.asStateFlow()
@@ -689,17 +694,21 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         portIndex: Int,
         value: Float
     ) {
-        viewModelScope.launch {
-            rackControlMutex.withLock {
-                withContext(Dispatchers.IO) {
-                    runCatching {
-                        RackManager.setParameter(pathId, pluginIndex, portIndex, value)
-                    }.onFailure {
-                        _errorMessage.value = "Failed to set parameter: ${it.message}"
+        val key = ParameterKey(pathId, pluginIndex, portIndex)
+        val channel = parameterChannels.computeIfAbsent(key) { Channel(Channel.CONFLATED) }
+        parameterJobs.computeIfAbsent(key) {
+            viewModelScope.launch {
+                for (pending in channel) {
+                    rackControlMutex.withLock {
+                        withContext(Dispatchers.IO) {
+                            runCatching { RackManager.setParameter(pathId, pluginIndex, portIndex, pending) }
+                                .onFailure { _errorMessage.value = "Failed to set parameter: ${it.message}" }
+                        }
                     }
                 }
             }
         }
+        channel.trySend(value)
     }
     suspend fun getParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int): Float = withContext(Dispatchers.IO) { runCatching { RackManager.getParameter(pathId, pluginIndex, portIndex) }.getOrDefault(0f) }
     fun getPreferredUiTypeForPlugin(info: PluginInfo): UiType { val stored = PluginUiPreferenceManager.getStoredUiType(getApplication(), info.fullId); return if (stored != null && info.guiTypes.contains(stored)) stored else info.preferredUiType }

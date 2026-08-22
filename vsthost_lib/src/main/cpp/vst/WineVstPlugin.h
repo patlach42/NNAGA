@@ -48,6 +48,7 @@ public:
     guitarrackcraft::PluginInfo getInfo() const override;
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
+    std::string getParameterDisplay(uint32_t portIndex) const override;
     bool pollNativeFilePicker(guitarrackcraft::NativeFilePickerRequest& request) override;
     void respondNativeFilePicker(uint32_t sequence, bool cancelled, const std::string& windowsPath) override;
 

@@ -82,6 +82,10 @@ struct PortInfo {
     float maxValue;
     /** Enumeration values for this port; empty for continuous ports. */
     std::vector<ScalePoint> scalePoints;
+    /** Optional display unit and discrete-step metadata for generic editors. */
+    std::string unit;
+    int32_t stepCount = 0;
+    bool isReadOnly = false;
 };
 
 struct PluginInfo {
@@ -99,6 +103,8 @@ struct PluginInfo {
     std::string x11UiBinaryPath;
     /** LV2 URI of the X11 UI (from the TTL). */
     std::string x11UiUri;
+    /** Zero until asynchronous parameter metadata is available. */
+    uint64_t parameterMetadataRevision = 1;
 };
 
 /** Immutable timing/transport state shared by every plugin in one audio block. */
@@ -184,6 +190,12 @@ public:
      * @return Current parameter value
      */
     virtual float getParameter(uint32_t portIndex) const = 0;
+
+    /**
+     * Plugin-formatted value for a generic editor (for example "-12.0 dB").
+     * Empty means the UI should format the numeric value itself.
+     */
+    virtual std::string getParameterDisplay(uint32_t portIndex) const { return {}; }
 
     /**
      * Get number of input audio ports.

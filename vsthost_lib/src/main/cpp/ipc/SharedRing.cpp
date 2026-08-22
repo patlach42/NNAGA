@@ -210,12 +210,12 @@ void SharedRing::setMicActive(bool active) {
 }
 
 void SharedRing::pushParam(int32_t index, float value) {
-    if (!data_) return;
-    const uint64_t head = __atomic_load_n(&data_->param_head, __ATOMIC_RELAXED);
-    const uint64_t tail = __atomic_load_n(&data_->param_tail, __ATOMIC_ACQUIRE);
-    if (head - tail >= VSTPOC_PARAM_RING_MSGS) return;
-    data_->params[head & (VSTPOC_PARAM_RING_MSGS - 1)] = {index, value};
-    __atomic_store_n(&data_->param_head, head + 1, __ATOMIC_RELEASE);
+    if (!data_ || index < 0 || index >= static_cast<int32_t>(VSTPOC_MAX_PARAMS)) return;
+    // v7 uses one lossless latest-value mailbox per parameter. Publish the
+    // value before the release sequence increment so the guest control thread
+    // observes a coherent value and can never lose the newest drag position.
+    data_->param_desired_values[index] = value;
+    __atomic_add_fetch(&data_->param_desired_seq[index], UINT64_C(1), __ATOMIC_RELEASE);
     notifyWake();
 }
 

@@ -1198,6 +1198,8 @@ static std::vector<ParamID> g_prewarmedParamIds;
 static std::vector<ParamValue> g_pendingParamValues;
 static std::vector<uint8_t> g_pendingParamFlags;
 static std::vector<size_t> g_touchedParamIndices;
+/* Control-thread consumer state for host→guest coalescing mailboxes. */
+static uint64_t g_observedDesiredSeq[VSTPOC_MAX_PARAMS] = {};
 static std::atomic<int> g_stateBlocksProcess{0};
 static std::atomic<int> g_processInFlight{0};
 static void prewarm_parameter_changes(IEditController* controller) {
@@ -1291,6 +1293,9 @@ static int find_shared_param_index(ParamID id) {
     return -1;
 }
 
+static void copy_param_title(char* dst, size_t dstLen,
+                              const String128& title, int fallbackIndex);
+
 static void begin_param_values_write(VstpocShared* shm) {
     __atomic_add_fetch(&shm->param_values_seq, 1, __ATOMIC_ACQ_REL);
     __sync_synchronize();
@@ -1316,8 +1321,16 @@ static void publish_current_param_values(IEditController* controller) {
     if (!shm || !controller || g_sharedParamCount <= 0) return;
     begin_param_values_write(shm);
     for (int i = 0; i < g_sharedParamCount; ++i) {
-        shm->param_values[i] = clamp_normalized_param(
-            controller->getParamNormalized(g_sharedParamIds[i]));
+        const ParamID id = g_sharedParamIds[i];
+        const ParamValue value = controller->getParamNormalized(id);
+        shm->param_values[i] = clamp_normalized_param(value);
+        String128 display{};
+        if (controller->getParamStringByValue(id, value, display) == kResultOk &&
+            display[0] != 0)
+            copy_param_title(shm->param_display_values[i],
+                             VSTPOC_PARAM_DISPLAY_LEN, display, i);
+        else
+            memset(shm->param_display_values[i], 0, VSTPOC_PARAM_DISPLAY_LEN);
     }
     end_param_values_write(shm);
 }
@@ -1336,7 +1349,6 @@ static void copy_param_title(char* dst, size_t dstLen, const String128& title, i
         snprintf(dst, dstLen, "Param %d", fallbackIndex + 1);
     }
 }
-
 static void publish_param_metadata(IEditController* controller) {
     VstpocShared* shm = (VstpocShared*)g_shm;
     if (!shm || !controller) return;
@@ -1349,34 +1361,47 @@ static void publish_param_metadata(IEditController* controller) {
         if (controller->getParameterInfo(i, info) != kResultOk) continue;
         g_sharedParamIds[out] = info.id;
         copy_param_title(shm->param_names[out], VSTPOC_PARAM_NAME_LEN, info.title, out);
+        copy_param_title(shm->param_metadata[out].unit,
+                         VSTPOC_PARAM_UNIT_LEN, info.units, out);
+        if (info.units[0] == 0)
+            memset(shm->param_metadata[out].unit, 0, VSTPOC_PARAM_UNIT_LEN);
+        shm->param_metadata[out].default_normalized =
+            clamp_normalized_param(info.defaultNormalizedValue);
+        shm->param_metadata[out].step_count = info.stepCount;
+        shm->param_metadata[out].flags = 0;
+        if (info.flags & ParameterInfo::kIsHidden)
+            shm->param_metadata[out].flags |= VSTPOC_PARAM_FLAG_HIDDEN;
+        if (info.flags & ParameterInfo::kIsReadOnly)
+            shm->param_metadata[out].flags |= VSTPOC_PARAM_FLAG_READ_ONLY;
         ++out;
     }
     g_sharedParamCount = out;
     shm->param_count = out;
     __sync_synchronize();
     publish_current_param_values(controller);
+    /* Non-zero release publication means names, metadata and initial values
+     * are complete and may be consumed by the host. */
+    __atomic_add_fetch(&shm->param_metadata_seq, 1u, __ATOMIC_RELEASE);
     LOG("published %d VST3 parameter(s)\n", out);
 }
 
-static void drain_host_param_ring(IEditController* controller) {
+static void drain_host_param_mailboxes(IEditController* controller) {
     VstpocShared* shm = (VstpocShared*)g_shm;
     if (!shm || !controller) return;
-
-    uint64_t ph = __atomic_load_n(&shm->param_head, __ATOMIC_ACQUIRE);
-    uint64_t pt = __atomic_load_n(&shm->param_tail, __ATOMIC_RELAXED);
-    while (pt != ph) {
-        VstpocParamMsg pmsg = shm->params[pt & (VSTPOC_PARAM_RING_MSGS - 1)];
-        if (pmsg.index >= 0 && pmsg.index < g_sharedParamCount) {
-            ParamID id = g_sharedParamIds[pmsg.index];
-            ParamValue value = (ParamValue)clamp_normalized_param(pmsg.value);
-            controller->setParamNormalized(id, value);
-            push_param_edit(id, value);
-            publish_shared_param_value(id, value);
-        }
-        ++pt;
+    for (int i = 0; i < g_sharedParamCount; ++i) {
+        const uint64_t seq = __atomic_load_n(&shm->param_desired_seq[i],
+                                             __ATOMIC_ACQUIRE);
+        if (seq == g_observedDesiredSeq[i]) continue;
+        const ParamValue value = clamp_normalized_param(
+            shm->param_desired_values[i]);
+        g_observedDesiredSeq[i] = seq;
+        const ParamID id = g_sharedParamIds[i];
+        controller->setParamNormalized(id, value);
+        push_param_edit(id, value);
+        publish_shared_param_value(id, value);
     }
-    __atomic_store_n(&shm->param_tail, pt, __ATOMIC_RELEASE);
 }
+
 
 #define VSTPOC_VST3_STATE_MAGIC "GRCVST3S"
 #define VSTPOC_VST3_STATE_VERSION 1u
@@ -2639,7 +2664,6 @@ int main(int argc, char** argv)
             LOG("component->getState returned 0x%x (skipping setComponentState)\n",
                 (unsigned)gs);
         }
-        publish_param_metadata(editController);
     }
 
     /* Connect Component <-> EditController via IConnectionPoint. JUCE-based
@@ -2664,6 +2688,11 @@ int main(int argc, char** argv)
         if (compCP) compCP->release();
         if (ctrlCP) ctrlCP->release();
     }
+
+    /* Some separate-controller plugins (Valhalla Supermassive confirmed)
+     * expose zero parameters until both IConnectionPoint directions are
+     * connected. Publish only after that lifecycle step. */
+    if (editController) publish_param_metadata(editController);
 
     /* Tell the plugin our channel layout BEFORE setActive. Without this
      * the plugin uses its default arrangement — Helix Native defaults to
@@ -2822,7 +2851,7 @@ int main(int argc, char** argv)
         }
         handle_state_request(component, editController);
         if (editController) {
-            drain_host_param_ring(editController);
+            drain_host_param_mailboxes(editController);
             DWORD now = GetTickCount();
             if (now - lastParamPublish >= 100) {
                 publish_current_param_values(editController);

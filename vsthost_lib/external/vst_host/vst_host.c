@@ -242,6 +242,10 @@ typedef struct {
 } PluginEntry;
 
 static PluginEntry g_plugins[VSTHOST_MAX_PLUGINS];
+/* Defaults are captured immediately after effOpen, before any state command
+ * can restore plugin values. Metadata publication later uses this snapshot. */
+static float g_vst2_defaults[VSTHOST_MAX_PLUGINS][VSTPOC_MAX_PARAMS];
+static int g_vst2_default_count[VSTHOST_MAX_PLUGINS];
 static int g_pluginCount = 0;
 
 /* Globals shared between audio loop and editor thread. The "g_eff" is
@@ -393,6 +397,9 @@ static int  g_failure_set = 0;
 } while (0)
 static int load_one_plugin(int slot, const char* dll_path);
 static void publish_param_values(VstpocShared* shm, AEffect* eff);
+static int clamped_param_count(AEffect* eff);
+static float clamp_normalized_param(float value);
+static void drain_primary_param_mailbox(int plugin_index, AEffect* eff);
 
 /* Host-frame window procedure. Used ONLY when VSTPOC_HOST_FRAME=1 (the
  * PC launcher sets this; Android leaves it unset). In that mode each
@@ -480,18 +487,21 @@ static void complete_editor_open_turn(int plugin_index) {
         InterlockedExchange(&g_editor_open_done, 1);
     }
 }
-static void drain_primary_param_ring(int plugin_index, AEffect* eff) {
+static void drain_primary_param_mailbox(int plugin_index, AEffect* eff) {
+    static uint64_t observed_seq[VSTPOC_MAX_PARAMS];
     if (plugin_index != g_primary_plugin_index || !g_shm || !eff) return;
-    uint64_t head = __atomic_load_n(&g_shm->param_head, __ATOMIC_ACQUIRE);
-    uint64_t tail = __atomic_load_n(&g_shm->param_tail, __ATOMIC_RELAXED);
-    while (tail != head) {
-        VstpocParamMsg msg = g_shm->params[tail & (VSTPOC_PARAM_RING_MSGS - 1)];
-        if (msg.index >= 0 && msg.index < eff->numParams) {
-            eff->setParameter(eff, msg.index, msg.value);
-        }
-        ++tail;
+    const int n = clamped_param_count(eff);
+    for (int i = 0; i < n; ++i) {
+        const uint64_t seq = __atomic_load_n(
+            (const uint64_t*)&g_shm->param_desired_seq[i], __ATOMIC_ACQUIRE);
+        if (seq == observed_seq[i]) continue;
+        /* The producer publishes value before release-incrementing seq.
+         * Coalesce bursts: only the newest value is applied once. */
+        const float value = clamp_normalized_param(
+            g_shm->param_desired_values[i]);
+        eff->setParameter(eff, i, value);
+        observed_seq[i] = seq;
     }
-    __atomic_store_n(&g_shm->param_tail, tail, __ATOMIC_RELEASE);
 }
 
 static void run_headless_control_loop(int plugin_index, AEffect* eff) {
@@ -499,7 +509,7 @@ static void run_headless_control_loop(int plugin_index, AEffect* eff) {
     if (plugin_index != g_primary_plugin_index) return;
     DWORD last_param_publish = 0;
     while (!(g_shm && g_shm->stop_flag)) {
-        drain_primary_param_ring(plugin_index, eff);
+        drain_primary_param_mailbox(plugin_index, eff);
         DWORD now = GetTickCount();
         if (plugin_index == g_primary_plugin_index && g_shm &&
             now - last_param_publish >= 100) {
@@ -509,6 +519,7 @@ static void run_headless_control_loop(int plugin_index, AEffect* eff) {
         Sleep(5);
     }
 }
+
 
 
 /* Per-plugin editor thread. Each plugin gets its own thread so they
@@ -675,9 +686,8 @@ static DWORD WINAPI per_plugin_editor_thread(LPVOID arg) {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
-        /* Param drain routes to the primary plugin only for now.
-         * Per-plugin parameter routing requires a separate ABI change. */
-        drain_primary_param_ring(p, eff);
+        /* Consume host writes only on this editor/control thread. */
+        drain_primary_param_mailbox(p, eff);
         DWORD now = GetTickCount();
         if (p == g_primary_plugin_index && g_shm && now - last_param_publish >= 100) {
             publish_param_values((VstpocShared*)g_shm, eff);
@@ -861,26 +871,50 @@ static void end_param_values_write(VstpocShared* shm) {
 
 static void publish_param_values(VstpocShared* shm, AEffect* eff) {
     if (!shm || !eff) return;
-    int n = clamped_param_count(eff);
+    const int n = clamped_param_count(eff);
     begin_param_values_write(shm);
     for (int i = 0; i < n; i++) {
-        shm->param_values[i] = clamp_normalized_param(eff->getParameter(eff, i));
+        const float value = clamp_normalized_param(eff->getParameter(eff, i));
+        shm->param_values[i] = value;
+        char display[VSTPOC_PARAM_DISPLAY_LEN] = {0};
+        eff->dispatcher(eff, /*effGetParamDisplay=*/7, i, 0, display, 0.0f);
+        strncpy(shm->param_display_values[i], display,
+                VSTPOC_PARAM_DISPLAY_LEN - 1);
     }
     end_param_values_write(shm);
 }
 
 static void publish_params(VstpocShared* shm, AEffect* eff) {
-    int n = clamped_param_count(eff);
+    if (!shm || !eff) return;
+    const int n = clamped_param_count(eff);
     for (int i = 0; i < n; i++) {
         char name[VSTPOC_PARAM_NAME_LEN] = {0};
+        char unit[VSTPOC_PARAM_UNIT_LEN] = {0};
         eff->dispatcher(eff, /*effGetParamName=*/8, i, 0, name, 0.0f);
+        eff->dispatcher(eff, /*effGetParamLabel=*/6, i, 0, unit, 0.0f);
         strncpy(shm->param_names[i], name, VSTPOC_PARAM_NAME_LEN - 1);
+        int default_slot = -1;
+        for (int s = 0; s < g_pluginCount; ++s) {
+            if (g_plugins[s].eff == eff) {
+                default_slot = s;
+                break;
+            }
+        }
+        float default_value = clamp_normalized_param(eff->getParameter(eff, i));
+        if (default_slot >= 0 && i < g_vst2_default_count[default_slot])
+            default_value = g_vst2_defaults[default_slot][i];
+        shm->param_metadata[i].default_normalized = default_value;
+        /* VST2 does not expose generic step/read-only/hidden metadata. */
+        shm->param_metadata[i].step_count = 0;
+        shm->param_metadata[i].flags = 0;
+        strncpy(shm->param_metadata[i].unit, unit, VSTPOC_PARAM_UNIT_LEN - 1);
     }
     shm->param_count = n;
+    /* Publish only after the complete descriptor snapshot is visible. */
     __sync_synchronize();
+    __atomic_store_n(&shm->param_metadata_seq, 1u, __ATOMIC_RELEASE);
     publish_param_values(shm, eff);
 }
-
 #define VSTPOC_VST2_STATE_MAGIC "GRCVST2S"
 #define VSTPOC_VST2_STATE_VERSION 1u
 #define VSTPOC_VST2_STATE_KIND_BANK_CHUNK 1u
@@ -1364,6 +1398,16 @@ static int load_one_plugin(int slot, const char* dll_path) {
 
     /* effOpen; sample rate/block size are configured on first valid block. */
     eff->dispatcher(eff, /*effOpen=*/0, 0, 0, NULL, 0.0f);
+    /* Capture defaults now, before any later state restore request. */
+    {
+        int default_count = eff->numParams;
+        if (default_count < 0) default_count = 0;
+        if (default_count > VSTPOC_MAX_PARAMS) default_count = VSTPOC_MAX_PARAMS;
+        g_vst2_default_count[slot] = default_count;
+        for (int i = 0; i < default_count; ++i)
+            g_vst2_defaults[slot][i] =
+                clamp_normalized_param(eff->getParameter(eff, i));
+    }
     g_plugins[slot].module = plugin;
     g_plugins[slot].eff    = eff;
     g_plugins[slot].path   = dll_path;

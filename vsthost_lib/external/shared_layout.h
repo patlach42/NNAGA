@@ -20,11 +20,13 @@
 #define VSTPOC_PARAM_RING_MSGS     64     /* power of 2 */
 #define VSTPOC_CHANNELS            2
 #define VSTPOC_CACHELINE           64
-#define VSTPOC_MAX_PARAMS          128    /* bumped from 8 — Lecto and other deeper plugins expose 20+ params */
-#define VSTPOC_PARAM_NAME_LEN      32     /* per-name buffer including NUL */
+#define VSTPOC_MAX_PARAMS          1024   /* generic editor cap; large instruments commonly exceed 128 */
+#define VSTPOC_PARAM_NAME_LEN      64     /* per-name buffer including NUL */
+#define VSTPOC_PARAM_UNIT_LEN      24     /* display unit, e.g. dB/Hz/ms */
+#define VSTPOC_PARAM_DISPLAY_LEN   64     /* current plugin-formatted value */
 
-#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435336) /* "VSTPOCS6" */
-#define VSTPOC_SHARED_LAYOUT_VERSION 6u
+#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435337) /* "VSTPOCS7" */
+#define VSTPOC_SHARED_LAYOUT_VERSION 7u
 #define VSTPOC_TRANSPORT_QUEUE_CAPACITY 1024u
 #define VSTPOC_FEATURE_PLANAR_AUDIO (UINT64_C(1) << 0)
 #define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1)
@@ -66,6 +68,18 @@ typedef struct {
     int32_t index;
     float   value;
 } VstpocParamMsg;
+
+/* Generic-editor metadata. Values on the control channel remain normalized.
+ * step_count follows VST3 semantics: 0 continuous, 1 toggle, >1 discrete. */
+#define VSTPOC_PARAM_FLAG_HIDDEN    (UINT32_C(1) << 0)
+#define VSTPOC_PARAM_FLAG_READ_ONLY (UINT32_C(1) << 1)
+
+typedef struct {
+    float    default_normalized;
+    int32_t  step_count;
+    uint32_t flags;
+    char     unit[VSTPOC_PARAM_UNIT_LEN];
+} VstpocParamMetadata;
 
 typedef struct {
     uint64_t sample_position;
@@ -239,6 +253,16 @@ typedef struct {
     uint32_t midi_output_count;
     VstpocMidiEvent midi_output_events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_dropped;
+
+    /* Generic editor extension (layout v7). Metadata is published before
+     * metadata_seq is incremented. Desired values form lossless coalescing
+     * mailboxes: the host writes a value then increments that parameter's
+     * sequence; the guest applies the newest value once per observed seq. */
+    _Alignas(VSTPOC_CACHELINE) uint64_t param_metadata_seq;
+    _Alignas(VSTPOC_CACHELINE) VstpocParamMetadata param_metadata[VSTPOC_MAX_PARAMS];
+    _Alignas(VSTPOC_CACHELINE) char param_display_values[VSTPOC_MAX_PARAMS][VSTPOC_PARAM_DISPLAY_LEN];
+    _Alignas(VSTPOC_CACHELINE) uint64_t param_desired_seq[VSTPOC_MAX_PARAMS];
+    _Alignas(VSTPOC_CACHELINE) float param_desired_values[VSTPOC_MAX_PARAMS];
 } VstpocShared;
 
 /* Native file-picker channel — lives in its OWN mmap file

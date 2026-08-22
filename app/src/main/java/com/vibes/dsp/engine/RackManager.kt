@@ -27,6 +27,8 @@ object RackManager {
     fun setPluginFilePath(pathId: RackPathId, pluginIndex: Int, propertyUri: String, filePath: String) = native.setPluginFilePath(pathId, pluginIndex, propertyUri, filePath)
     fun setParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int, value: Float) = native.setParameter(pathId, pluginIndex, portIndex, value)
     fun getParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int): Float = native.getParameter(pathId, pluginIndex, portIndex)
+    fun getParameterDisplay(pathId: RackPathId, pluginIndex: Int, portIndex: Int) =
+        native.getParameterDisplay(pathId, pluginIndex, portIndex)
     fun getRackSize(pathId: RackPathId): Int = native.getRackSize(pathId)
     fun getRackPluginInfo(pathId: RackPathId, index: Int): PluginInfo? = native.getRackPluginInfo(pathId, index)
     fun getRackPluginInstanceId(pathId: RackPathId, index: Int): Long = native.getRackPluginInstanceId(pathId, index)

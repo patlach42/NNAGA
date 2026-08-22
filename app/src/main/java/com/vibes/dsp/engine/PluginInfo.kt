@@ -41,7 +41,10 @@ data class PortInfo(
     val defaultValue: Float = 0.0f,
     val minValue: Float = 0.0f,
     val maxValue: Float = 1.0f,
-    val scalePoints: List<ScalePoint> = emptyList()
+    val scalePoints: List<ScalePoint> = emptyList(),
+    val unit: String = "",
+    val stepCount: Int = 0,
+    val isReadOnly: Boolean = false
 )
 
 /**
@@ -59,30 +62,20 @@ enum class UiType(val displayName: String) {
     SLIDERS("Sliders")
 }
 
-/**
- * Information about an available plugin.
- */
 data class PluginInfo(
     val id: String = "",
     val name: String = "",
     val format: String = "",
     val ports: List<PortInfo> = emptyList(),
-    /** If non-empty, path to bundle directory for modgui (file:// base for WebView). */
     val modguiBasePath: String = "",
-    /** Relative path to modgui icon HTML (e.g. modgui/icon-gxmicroamp.html). Only set if modguiBasePath is set. */
     val modguiIconTemplate: String = "",
-    /** True when the plugin ships with an X11UI binary. */
     val hasX11Ui: Boolean = false,
-    /** Absolute path to the X11 UI shared library (.so). */
     val x11UiBinaryPath: String = "",
-    /** LV2 URI of the X11 UI (from the TTL). */
     val x11UiUri: String = "",
-    /** Path to the thumbnail image in assets (e.g., "GxPlugins.lv2/GxVoodooFuzz.lv2/modgui/thumbnail-gxvoodoofuzz.png"). */
     val thumbnailPath: String = "",
-    /** Plugin description from README.md (may be empty). */
     val description: String = "",
-    /** Architecture: "x86"/"x64" for Windows VST PE plugins, "native" for LV2, "" if unknown. */
-    val arch: String = ""
+    val arch: String = "",
+    val parameterMetadataRevision: Long = 1L
 ) {
     val fullId: String
         get() = "$format:$id"
@@ -93,9 +86,10 @@ data class PluginInfo(
     val hasModgui: Boolean
         get() = modguiBasePath.isNotEmpty() && modguiIconTemplate.isNotEmpty()
 
-    /** Default UI: MODGUI when available, else Native (X11), else Sliders. Overflow menu order is unchanged (Native, Modgui, Sliders). */
+    /** Default UI: generic sliders for VST, then Modgui/X11 for native formats. */
     val preferredUiType: UiType
         get() = when {
+            format == "VST2" || format == "VST3" -> UiType.SLIDERS
             hasModgui -> UiType.MODGUI
             hasX11Ui -> UiType.X11
             else -> UiType.SLIDERS

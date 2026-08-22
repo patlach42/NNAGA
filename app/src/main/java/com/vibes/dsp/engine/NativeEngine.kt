@@ -482,6 +482,7 @@ class NativeEngine private constructor() {
     external fun nativeSetPluginFilePath(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String)
     external fun nativeSetParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float)
     external fun nativeGetParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float
+    external fun nativeGetParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String
     external fun nativeGetRackSize(pathId: Long): Int
     external fun nativeGetRackPluginInfo(pathId: Long, index: Int): PluginInfo?
 
@@ -682,6 +683,8 @@ class NativeEngine private constructor() {
         nativeSetParameter(pathId, pluginIndex, portIndex, value)
     fun getParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float =
         nativeGetParameter(pathId, pluginIndex, portIndex)
+    fun getParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String =
+        nativeGetParameterDisplay(pathId, pluginIndex, portIndex)
     fun getRackSize(pathId: Long): Int = nativeGetRackSize(pathId)
     fun getRackPluginInfo(pathId: Long, index: Int): PluginInfo? = nativeGetRackPluginInfo(pathId, index)
     fun getRackPluginInstanceId(pathId: Long, index: Int): Long = nativeGetRackPluginInstanceId(pathId, index)

@@ -119,6 +119,7 @@ static struct {
     jfieldID piModguiIconTemplate = nullptr;
     jfieldID piHasX11Ui = nullptr;
     jfieldID piX11UiBinaryPath = nullptr;
+    jfieldID piParameterMetadataRevision = nullptr;
     jfieldID piX11UiUri = nullptr;
 
     jclass portInfoClass = nullptr;
@@ -152,7 +153,7 @@ static bool ensureJniCache(JNIEnv* env) {
     g_jni.portInfoClass = cache("com/vibes/dsp/engine/PortInfo");
     if (!g_jni.portInfoClass) return false;
     g_jni.portInfoCtor = env->GetMethodID(g_jni.portInfoClass, "<init>",
-        "(ILjava/lang/String;Ljava/lang/String;ZZZZFFFLjava/util/List;)V");
+        "(ILjava/lang/String;Ljava/lang/String;ZZZZFFFLjava/util/List;Ljava/lang/String;IZ)V");
 
     g_jni.pluginInfoClass = cache("com/vibes/dsp/engine/PluginInfo");
     if (!g_jni.pluginInfoClass) return false;
@@ -165,6 +166,8 @@ static bool ensureJniCache(JNIEnv* env) {
     g_jni.piModguiIconTemplate = env->GetFieldID(g_jni.pluginInfoClass, "modguiIconTemplate", "Ljava/lang/String;");
     g_jni.piHasX11Ui = env->GetFieldID(g_jni.pluginInfoClass, "hasX11Ui", "Z");
     g_jni.piX11UiBinaryPath = env->GetFieldID(g_jni.pluginInfoClass, "x11UiBinaryPath", "Ljava/lang/String;");
+    g_jni.piParameterMetadataRevision = env->GetFieldID(
+        g_jni.pluginInfoClass, "parameterMetadataRevision", "J");
     g_jni.piX11UiUri = env->GetFieldID(g_jni.pluginInfoClass, "x11UiUri", "Ljava/lang/String;");
 
     return true;
@@ -763,6 +766,7 @@ jobject createPortInfoObject(JNIEnv* env, const PortInfo& port) {
     jstring nameStr = env->NewStringUTF(port.name.c_str());
     jstring symbolStr = env->NewStringUTF(port.symbol.c_str());
 
+    jstring unitStr = env->NewStringUTF(port.unit.c_str());
     jobject portObj = env->NewObject(g_jni.portInfoClass, g_jni.portInfoCtor,
         static_cast<jint>(port.index),
         nameStr,
@@ -774,8 +778,12 @@ jobject createPortInfoObject(JNIEnv* env, const PortInfo& port) {
         static_cast<jfloat>(port.defaultValue),
         static_cast<jfloat>(port.minValue),
         static_cast<jfloat>(port.maxValue),
-        scalePointsList
+        scalePointsList,
+        unitStr,
+        static_cast<jint>(port.stepCount),
+        static_cast<jboolean>(port.isReadOnly ? JNI_TRUE : JNI_FALSE)
     );
+    env->DeleteLocalRef(unitStr);
 
     env->DeleteLocalRef(nameStr);
     env->DeleteLocalRef(symbolStr);
@@ -808,6 +816,9 @@ jobject createPluginInfoObject(JNIEnv* env, const PluginInfo& info) {
 
     if (g_jni.piHasX11Ui)
         env->SetBooleanField(obj, g_jni.piHasX11Ui, info.hasX11Ui ? JNI_TRUE : JNI_FALSE);
+    if (g_jni.piParameterMetadataRevision)
+        env->SetLongField(obj, g_jni.piParameterMetadataRevision,
+                          static_cast<jlong>(info.parameterMetadataRevision));
 
     // Create ports list
     if (g_jni.piPorts && !info.ports.empty()) {
@@ -931,6 +942,19 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameter(
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
     return chain ? chain->getParameter(pluginIndex, static_cast<uint32_t>(portIndex)) : 0.0f;
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameterDisplay(
+    JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jint portIndex) {
+    if (!g_ctx || !g_ctx->audioEngine) return env->NewStringUTF("");
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
+    if (!chain) return env->NewStringUTF("");
+    auto* plugin = chain->getPlugin(pluginIndex);
+    if (!plugin) return env->NewStringUTF("");
+    const std::string display = plugin->getParameterDisplay(static_cast<uint32_t>(portIndex));
+    return env->NewStringUTF(display.c_str());
 }
 
 JNIEXPORT jlong JNICALL

@@ -1648,8 +1648,13 @@ fun PluginCard(
         key1 = pathId,
         key2 = plugin.instanceId
     ) {
-        value = withContext(Dispatchers.IO) {
-            RackManager.getRackPluginInfo(pathId, pluginIndex)
+        while (true) {
+            val fetched = withContext(Dispatchers.IO) {
+                RackManager.getRackPluginInfo(pathId, pluginIndex)
+            }
+            value = fetched
+            if (fetched == null || fetched.parameterMetadataRevision > 0L) break
+            delay(150)
         }
     }
     val pluginInfo = pluginInfoState.value
@@ -2537,9 +2542,14 @@ fun PluginCard(
                                     )
                                 }
                             }
-                        } else if (modelConfig == null && !isVst) {
+                        } else if (modelConfig == null) {
                             Text(
-                                text = "No control parameters available",
+                                text = when {
+                                    isVst && pluginInfo.parameterMetadataRevision == 0L ->
+                                        "Loading plugin parameters…"
+                                    isVst -> "Wine guest reported 0 parameters"
+                                    else -> "No control parameters available"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -2566,6 +2576,7 @@ fun ParameterControl(
         mutableFloatStateOf(port.defaultValue)
     }
     var isUserInteracting by remember { mutableStateOf(false) }
+    var nativeDisplay by remember { mutableStateOf("") }
 
     // Poll native parameter value periodically so that changes made via the X11 UI
     // (or other external sources) are reflected in the Android controls.
@@ -2578,15 +2589,32 @@ fun ParameterControl(
                     currentValue.value = nativeValue
                 }
             }
+            nativeDisplay = RackManager.getParameterDisplay(
+                selectedPathId, pluginIndex, port.index
+            )
         }
     }
 
     val parameterName = port.name.ifEmpty { port.symbol }
-    val displayValue = if (port.scalePoints.isNotEmpty()) {
-        port.scalePoints.find { kotlin.math.abs(it.value - currentValue.value) < 1e-6f }
-            ?.label ?: "%.2f".format(currentValue.value)
+    fun quantize(value: Float): Float {
+        if (port.stepCount <= 1) return value
+        val steps = port.stepCount.toFloat()
+        return (kotlin.math.round(value * steps) / steps)
+            .coerceIn(port.minValue, port.maxValue)
+    }
+    val labelledScalePoints = port.scalePoints.filter { it.label.isNotBlank() }
+    val rawDisplayValue = nativeDisplay.ifBlank {
+        if (labelledScalePoints.isNotEmpty()) {
+            labelledScalePoints.find { kotlin.math.abs(it.value - currentValue.value) < 1e-6f }
+                ?.label ?: "%.2f".format(currentValue.value)
+        } else "%.2f".format(currentValue.value)
+    }
+    val displayValue = if (
+        port.unit.isNotBlank() && !rawDisplayValue.trimEnd().endsWith(port.unit, ignoreCase = true)
+    ) {
+        "${rawDisplayValue.trimEnd()} ${port.unit}"
     } else {
-        "%.2f".format(currentValue.value)
+        rawDisplayValue
     }
 
     if (port.isToggle) {
@@ -2603,14 +2631,17 @@ fun ParameterControl(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            NnagaSwitch(checked = currentValue.value > 0.5f,
-            onCheckedChange = { checked ->
-                val newValue = if (checked) port.maxValue else port.minValue
-                currentValue.value = newValue
-                viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
-            })
+            NnagaSwitch(
+                checked = currentValue.value > 0.5f,
+                onCheckedChange = { checked ->
+                    val newValue = if (checked) port.maxValue else port.minValue
+                    currentValue.value = newValue
+                    viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
+                },
+                enabled = !port.isReadOnly
+            )
         }
-    } else if (port.scalePoints.isNotEmpty()) {
+    } else if (labelledScalePoints.isNotEmpty()) {
         Column {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -2627,18 +2658,19 @@ fun ParameterControl(
             var expanded by remember { mutableStateOf(false) }
             ExposedDropdownMenuBox(
                 expanded = expanded,
-                onExpandedChange = { expanded = it }
+                onExpandedChange = { if (!port.isReadOnly) expanded = it }
             ) {
                 NnagaSelectorField(
                     value = displayValue,
                     expanded = expanded,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    enabled = !port.isReadOnly
                 )
                 ExposedDropdownMenu(
                     expanded = expanded,
                     onDismissRequest = { expanded = false }
                 ) {
-                    port.scalePoints.forEach { sp ->
+                    labelledScalePoints.forEach { sp ->
                         NnagaSelectorMenuItem(
                             text = sp.label,
                             selected = kotlin.math.abs(sp.value - currentValue.value) < 1e-6f,
@@ -2646,7 +2678,8 @@ fun ParameterControl(
                                 currentValue.value = sp.value
                                 viewModel.setParameter(selectedPathId, pluginIndex, port.index, sp.value)
                                 expanded = false
-                            }
+                            },
+                            enabled = !port.isReadOnly
                         )
                     }
                 }
@@ -2670,16 +2703,23 @@ fun ParameterControl(
                     value = currentValue.value,
                     onValueChange = { newValue ->
                         isUserInteracting = true
-                        currentValue.value = newValue
-                        viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
+                        val quantizedValue = quantize(newValue)
+                        currentValue.value = quantizedValue
+                        viewModel.setParameter(
+                            selectedPathId, pluginIndex, port.index, quantizedValue
+                        )
                     },
                     valueRange = port.minValue..port.maxValue,
                     label = "$parameterName parameter",
                     valueStateDescription = displayValue,
                     modifier = Modifier.matchParentSize(),
                     railVerticalPosition = 0.7f,
+                    enabled = !port.isReadOnly,
                     onValueChangeFinished = {
                         isUserInteracting = false
+                        viewModel.setParameter(
+                            selectedPathId, pluginIndex, port.index, currentValue.value
+                        )
                     },
                 )
                 Row(

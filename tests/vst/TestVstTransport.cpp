@@ -24,15 +24,15 @@ static_assert(offsetof(VstpocShared, state_response_seq) < offsetof(VstpocShared
 static_assert(offsetof(VstpocShared, state_command) < offsetof(VstpocShared, shared_layout_magic));
 static_assert(offsetof(VstpocShared, state_path) < offsetof(VstpocShared, shared_layout_magic));
 static_assert(offsetof(VstpocShared, state_message) < offsetof(VstpocShared, shared_layout_magic));
-static_assert(offsetof(VstpocShared, shared_feature_bits) == 269992);
-static_assert(offsetof(VstpocShared, shared_layout_magic) == 269976);
-static_assert(offsetof(VstpocShared, shared_layout_version) == 269984);
-static_assert(offsetof(VstpocShared, shared_layout_size) == 269988);
-static_assert(offsetof(VstpocShared, transport_queue_head) == 270400);
-static_assert(offsetof(VstpocShared, transport_queue_tail) == 270464);
-static_assert(offsetof(VstpocShared, transport_queue) == 270528);
-static_assert(offsetof(VstpocShared, transport_queue_dropped) == 1377536);
-static_assert(sizeof(VstpocShared) == 1377600);
+static_assert(offsetof(VstpocShared, shared_feature_bits) == 335016);
+static_assert(offsetof(VstpocShared, shared_layout_magic) == 335000);
+static_assert(offsetof(VstpocShared, shared_layout_version) == 335008);
+static_assert(offsetof(VstpocShared, shared_layout_size) == 335012);
+static_assert(offsetof(VstpocShared, transport_queue_head) == 335424);
+static_assert(offsetof(VstpocShared, transport_queue_tail) == 335488);
+static_assert(offsetof(VstpocShared, transport_queue) == 335552);
+static_assert(offsetof(VstpocShared, transport_queue_dropped) == 1442560);
+static_assert(sizeof(VstpocShared) == 1557376);
 
 class TempBackingFile {
 public:
