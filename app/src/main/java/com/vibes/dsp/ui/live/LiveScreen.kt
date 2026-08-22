@@ -1,5 +1,6 @@
 package com.vibes.dsp.ui.live
 
+import android.graphics.Paint
 import android.app.Activity
 import android.content.pm.ActivityInfo
 import android.net.Uri
@@ -95,8 +96,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.RectangleShape
@@ -130,6 +135,7 @@ import com.vibes.dsp.ui.rack.PluginCard
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.rack.RackPlugin
 import com.vibes.dsp.ui.theme.AppearancePreferences
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 
@@ -250,6 +256,7 @@ fun LiveScreen(
     var clipSettingsTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
     var slotSettingsTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
     var clipBpmInput by rememberSaveable { mutableStateOf("") }
+    var clipNameInput by rememberSaveable { mutableStateOf("") }
     var showTempoDialog by rememberSaveable { mutableStateOf(false) }
     var tempoInput by rememberSaveable { mutableStateOf("") }
     var selectedTrackId by rememberSaveable { mutableLongStateOf(0L) }
@@ -292,6 +299,17 @@ fun LiveScreen(
         0.25 to "1/4", 1.0 to "1 bar", 2.0 to "2 bars", 4.0 to "4 bars",
         8.0 to "8 bars", 16.0 to "16 bars",
     )
+    fun openClipSettings(trackId: Long, clip: ClipSlotInfo) {
+        clipNameInput = clip.displayName
+        clipBpmInput = if (clip.wavLoaded) clip.sourceBpm.toString() else ""
+        clipSettingsTarget = trackId to clip.slot
+    }
+
+    fun closeClipSettings() {
+        clipSettingsTarget = null
+        clipNameInput = ""
+        clipBpmInput = ""
+    }
     val launcherHorizontalScrollState = rememberScrollState()
     val launcherVerticalScrollState = rememberScrollState()
     val mixerScrollState = rememberScrollState()
@@ -462,16 +480,26 @@ fun LiveScreen(
         val clip = slotsByTrack[trackId]?.firstOrNull { it.slot == slotIndex }
             ?: return@let
         val hasMedia = clip.wavLoaded || clip.midiLoaded
+        val normalizedClipName = clipNameInput.trim()
+        val validClipName = normalizedClipName.isNotBlank()
         val parsedBpm = clipBpmInput.toDoubleOrNull()
         val validBpm = parsedBpm != null && parsedBpm.isFinite() && parsedBpm in 20.0..400.0
         AlertDialog(
-            onDismissRequest = { clipSettingsTarget = null },
+            onDismissRequest = ::closeClipSettings,
             title = { Text("Clip settings") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text(
-                        clip.displayName.ifBlank { "Slot ${slotIndex + 1}" },
-                        style = MaterialTheme.typography.titleSmall,
+                    OutlinedTextField(
+                        value = clipNameInput,
+                        onValueChange = { clipNameInput = it },
+                        label = { Text("Clip name") },
+                        supportingText = {
+                            if (!validClipName) Text("Enter a clip name")
+                        },
+                        isError = !validClipName,
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                        modifier = Modifier.fillMaxWidth(),
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
@@ -538,13 +566,31 @@ fun LiveScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (clip.wavLoaded && validBpm) {
+                        if (normalizedClipName != clip.displayName) {
+                            viewModel.renameTrackClip(track.id, slotIndex, normalizedClipName)
+                        }
+                        if (clip.wavLoaded) {
                             viewModel.setClipSourceBpm(track.id, slotIndex, parsedBpm!!)
                         }
-                        clipSettingsTarget = null
+                        closeClipSettings()
                     },
-                    enabled = !clip.wavLoaded || validBpm,
+                    enabled = validClipName && (!clip.wavLoaded || validBpm),
                 ) { Text("Done") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.unloadTrackClipMedia(
+                            track.id,
+                            slotIndex,
+                            clip.wavLoaded,
+                            clip.midiLoaded,
+                        )
+                        closeClipSettings()
+                    },
+                ) {
+                    Text("Clear slot", color = LiveColors.error)
+                }
             },
         )
     }
@@ -803,8 +849,11 @@ fun LiveScreen(
                                             startGlobal = !transport.playing,
                                         )
                                     },
-                                    onRename = { track, slot, label ->
-                                        viewModel.renameTrackClip(track.id, slot, label)
+                                    onOpenClipSettings = { track, clip ->
+                                        openClipSettings(track.id, clip)
+                                    },
+                                    onOpenSlotSettings = { track, clip ->
+                                        slotSettingsTarget = track.id to clip.slot
                                     },
                                     onTrackColor = { track, argb ->
                                         LiveLayoutPreferences.setTrackColor(context, track.id, argb)
@@ -828,8 +877,7 @@ fun LiveScreen(
                                 },
                                 onTrackDelete = { track -> viewModel.removeTrack(track.id) },
                                 onOpenClipSettings = { track, clip ->
-                                    clipBpmInput = if (clip.wavLoaded) clip.sourceBpm.toString() else ""
-                                    clipSettingsTarget = track.id to clip.slot
+                                    openClipSettings(track.id, clip)
                                 },
                                 onOpenSlotSettings = { track, slot ->
                                     slotSettingsTarget = track.id to slot.slot
@@ -1400,7 +1448,8 @@ private fun Launcher(
     onLoad: (RackTrackInfo, Int) -> Unit,
     onLaunch: (RackTrackInfo, Int) -> Unit,
     onRecordClip: (RackTrackInfo, Int) -> Unit,
-    onRename: (RackTrackInfo, Int, String) -> Unit,
+    onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
+    onOpenSlotSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onTrackColor: (RackTrackInfo, Int) -> Unit,
 ) {
     CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
@@ -1442,7 +1491,8 @@ private fun Launcher(
                     onLoad = { onLoad(track, it) },
                     onLaunch = { onLaunch(track, it) },
                     onRecordClip = { onRecordClip(track, it) },
-                    onRename = { slotIndex, label -> onRename(track, slotIndex, label) },
+                    onOpenClipSettings = { clip -> onOpenClipSettings(track, clip) },
+                    onOpenSlotSettings = { clip -> onOpenSlotSettings(track, clip) },
                 )
             }
         }
@@ -1460,7 +1510,8 @@ private fun TrackSlots(
     onLoad: (Int) -> Unit,
     onLaunch: (Int) -> Unit,
     onRecordClip: (Int) -> Unit,
-    onRename: (Int, String) -> Unit,
+    onOpenClipSettings: (ClipSlotInfo) -> Unit,
+    onOpenSlotSettings: (ClipSlotInfo) -> Unit,
 ) {
     val visibleCount = maxOf(8, (slots.maxOfOrNull { it.slot + 1 } ?: 0) + 4)
     val bySlot = slots.associateBy { it.slot }
@@ -1480,7 +1531,8 @@ private fun TrackSlots(
                     onLoad = onLoad,
                     onLaunch = onLaunch,
                     onRecord = onRecordClip,
-                    onRename = onRename,
+                    onOpenClipSettings = onOpenClipSettings,
+                    onOpenSlotSettings = onOpenSlotSettings,
                 )
             }
         }
@@ -1575,11 +1627,10 @@ private fun ClipCard(
     onLoad: (Int) -> Unit,
     onLaunch: (Int) -> Unit,
     onRecord: (Int) -> Unit,
-    onRename: (Int, String) -> Unit,
+    onOpenClipSettings: (ClipSlotInfo) -> Unit,
+    onOpenSlotSettings: (ClipSlotInfo) -> Unit,
 ) {
     val filled = slot.wavLoaded || slot.midiLoaded
-    var showRename by remember { mutableStateOf(false) }
-    var renameText by remember(slot.displayName) { mutableStateOf(slot.displayName) }
     val playing = filled && slot.playing
     val recordingSlot = slot.active || (!filled && selected)
     val recordingPending = recordingSlot && track.recordPending
@@ -1641,7 +1692,10 @@ private fun ClipCard(
             .combinedClickable(
                 role = Role.Button,
                 onClick = { onSelect(slot.slot) },
-                onLongClick = { if (filled) showRename = true },
+                onLongClickLabel = if (filled) "Open clip settings" else "Open slot settings",
+                onLongClick = {
+                    if (filled) onOpenClipSettings(slot) else onOpenSlotSettings(slot)
+                },
             ),
     ) {
         Box {
@@ -1716,31 +1770,6 @@ private fun ClipCard(
                     .background(LiveColors.divider),
             )
         }
-    }
-    if (showRename) {
-        AlertDialog(
-            onDismissRequest = { showRename = false },
-            title = { Text("Rename clip") },
-            text = {
-                OutlinedTextField(
-                    value = renameText,
-                    onValueChange = { renameText = it },
-                    singleLine = true,
-                    label = { Text("Label") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        onRename(slot.slot, renameText)
-                        showRename = false
-                    },
-                    enabled = renameText.trim().isNotBlank(),
-                ) { Text("Rename") }
-            },
-            dismissButton = { TextButton(onClick = { showRename = false }) { Text("Cancel") } },
-        )
     }
 }
 
@@ -2038,6 +2067,17 @@ private fun InspectorMessage(message: String) {
         Text(message, color = LiveColors.textMuted, style = MaterialTheme.typography.bodySmall)
     }
 }
+private fun clipPlaybackDuration(clip: ClipSlotInfo, bpm: Double): Double {
+    val sourceDuration = clip.durationSec.takeIf { it.isFinite() && it > 0.0 } ?: return 0.0
+    val mode = ClipTempoMode.entries.getOrElse(clip.tempoMode) { ClipTempoMode.Original }
+    if (mode == ClipTempoMode.Original) return sourceDuration
+    val sourceBpm = clip.sourceBpm
+    if (!sourceBpm.isFinite() || sourceBpm <= 0.0 || !bpm.isFinite() || bpm <= 0.0) {
+        return sourceDuration
+    }
+    val adapted = sourceDuration * sourceBpm / bpm
+    return adapted.takeIf { it.isFinite() && it > 0.0 } ?: sourceDuration
+}
 
 private fun clipTimelineDuration(clip: ClipSlotInfo, bpm: Double): Double {
     val loopDuration = if (
@@ -2050,8 +2090,38 @@ private fun clipTimelineDuration(clip: ClipSlotInfo, bpm: Double): Double {
     }
     return when {
         clip.looping && loopDuration.isFinite() && loopDuration > 0.0 -> loopDuration
-        clip.durationSec.isFinite() && clip.durationSec > 0.0 -> clip.durationSec
-        else -> 0.0
+        else -> clipPlaybackDuration(clip, bpm)
+    }
+}
+
+private fun DrawScope.drawMusicalGrid(durationSec: Double, bpm: Double, labelPaint: Paint) {
+    if (durationSec <= 0.0 || !durationSec.isFinite() || !bpm.isFinite() || bpm <= 0.0) return
+    val secondsPerBeat = 60.0 / bpm
+    val beatWidth = size.width * (secondsPerBeat / durationSec).toFloat()
+    if (!beatWidth.isFinite() || beatWidth <= 0f) return
+    val beatCount = (durationSec / secondsPerBeat).toInt().coerceAtLeast(0)
+    val maxLines = size.width.toInt().coerceAtLeast(1)
+    val beatStride = ceil((beatCount + 1).toDouble() / maxLines).toInt().coerceAtLeast(1)
+    repeat(beatCount + 1) { beat ->
+        val isBar = beat % 4 == 0
+        if (!isBar && beat % beatStride != 0) return@repeat
+        val x = beat * beatWidth
+        drawLine(
+            color = if (isBar) LiveColors.text.copy(alpha = 0.8f) else LiveColors.divider,
+            start = Offset(x, 0f),
+            end = Offset(x, size.height),
+            strokeWidth = if (isBar) 3f else 1.75f,
+        )
+        if (isBar) {
+            drawIntoCanvas { canvas ->
+                canvas.nativeCanvas.drawText(
+                    (beat / 4 + 1).toString(),
+                    x + 2f,
+                    labelPaint.textSize + 1f,
+                    labelPaint,
+                )
+            }
+        }
     }
 }
 
@@ -2125,31 +2195,29 @@ private fun Waveform(
 ) {
     if (clip?.wavLoaded != true) return
     val accent = MaterialTheme.colorScheme.primary
+    val density = LocalDensity.current
+    val gridLabelPaint = remember(density) {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = LiveColors.textMuted.toArgb()
+            textSize = with(density) { 9.dp.toPx() }
+            alpha = 210
+        }
+    }
     Box(Modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(horizontal = LiveDimensions.smallGap),
         ) {
-            val durationSec = clipTimelineDuration(clip, bpm)
+            val timelineDurationSec = clipTimelineDuration(clip, bpm)
+            val playbackDurationSec = clipPlaybackDuration(clip, bpm)
             val mid = size.height / 2
             drawLine(LiveColors.waveformLine, Offset(0f, mid), Offset(size.width, mid), 1f)
-            if (durationSec > 0.0 && bpm.isFinite() && bpm > 0.0) {
-                val secondsPerBeat = 60.0 / bpm
-                val beatWidth = size.width * (secondsPerBeat / durationSec).toFloat()
-                if (beatWidth.isFinite() && beatWidth >= 1f) {
-                    val beatCount = (durationSec / secondsPerBeat).toInt()
-                        .coerceAtMost(size.width.toInt().coerceAtLeast(0))
-                    repeat(beatCount + 1) { beat ->
-                        val x = beat * beatWidth
-                        drawLine(LiveColors.divider, Offset(x, 0f), Offset(x, size.height), 1f)
-                    }
-                }
-            }
-            val audioDurationSec = clip.durationSec.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
-            if (peaks.isNotEmpty() && durationSec > 0.0 && audioDurationSec > 0.0) {
-                val audioWidth = size.width *
-                    (audioDurationSec / durationSec).toFloat().coerceIn(0f, 1f)
+            drawMusicalGrid(timelineDurationSec, bpm, gridLabelPaint)
+            if (peaks.isNotEmpty() && timelineDurationSec > 0.0 && playbackDurationSec > 0.0) {
+                val audioWidth = (
+                    size.width * (playbackDurationSec / timelineDurationSec).toFloat()
+                ).coerceIn(0f, size.width)
                 val step = audioWidth / peaks.size
                 peaks.forEachIndexed { index, peak ->
                     val half = (peak * mid).coerceAtLeast(1f)
@@ -2164,9 +2232,9 @@ private fun Waveform(
                 }
             }
             val positionSec = clip.positionSec.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-            if (clip.playing && durationSec > 0.0) {
+            if (clip.playing && timelineDurationSec > 0.0) {
                 val x = size.width *
-                    (positionSec / durationSec).toFloat().coerceIn(0f, 1f)
+                    (positionSec / timelineDurationSec).toFloat().coerceIn(0f, 1f)
                 drawLine(accent, Offset(x, 0f), Offset(x, size.height), 2f)
             }
         }
@@ -2190,6 +2258,14 @@ private fun PianoRoll(
     onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
 ) {
     val accent = MaterialTheme.colorScheme.primary
+    val density = LocalDensity.current
+    val gridLabelPaint = remember(density) {
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = LiveColors.textMuted.toArgb()
+            textSize = with(density) { 9.dp.toPx() }
+            alpha = 210
+        }
+    }
     Box(Modifier.fillMaxSize()) {
         Canvas(
             modifier = Modifier
@@ -2202,18 +2278,7 @@ private fun PianoRoll(
                 drawLine(LiveColors.divider, Offset(0f, y), Offset(size.width, y), 1f)
             }
             val durationSec = clipTimelineDuration(clip, bpm)
-            if (durationSec > 0.0 && bpm.isFinite() && bpm > 0.0) {
-                val secondsPerBeat = 60.0 / bpm
-                val beatWidth = size.width * (secondsPerBeat / durationSec).toFloat()
-                if (beatWidth.isFinite() && beatWidth >= 1f) {
-                    val beatCount = (durationSec / secondsPerBeat).toInt()
-                        .coerceAtMost(size.width.toInt().coerceAtLeast(0))
-                    repeat(beatCount + 1) { beat ->
-                        val x = beat * beatWidth
-                        drawLine(LiveColors.divider, Offset(x, 0f), Offset(x, size.height), 1f)
-                    }
-                }
-            }
+            drawMusicalGrid(durationSec, bpm, gridLabelPaint)
             val durationFrames = (durationSec * 48_000).coerceAtLeast(1.0)
             notes.forEach { note ->
                 val x = (note.startFrame / durationFrames).toFloat().coerceIn(0f, 1f) * size.width
