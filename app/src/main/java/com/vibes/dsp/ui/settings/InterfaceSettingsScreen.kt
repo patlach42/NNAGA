@@ -21,7 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
+import com.vibes.dsp.ui.components.NnagaSwitch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -146,7 +146,7 @@ fun InterfaceSettingsScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            NnagaSwitch(
                 checked = horizontalPlugins,
                 onCheckedChange = { enabled ->
                     horizontalPlugins = enabled
@@ -174,7 +174,7 @@ fun InterfaceSettingsScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            NnagaSwitch(
                 checked = fitTilesOnScreen,
                 onCheckedChange = { enabled ->
                     fitTilesOnScreen = enabled
@@ -205,7 +205,7 @@ fun InterfaceSettingsScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            NnagaSwitch(
                 checked = hideTransportWithoutLauncher,
                 onCheckedChange = { enabled ->
                     hideTransportWithoutLauncher = enabled
@@ -238,7 +238,7 @@ fun InterfaceSettingsScreen() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            NnagaSwitch(
                 checked = armExclusiveOnTrackSelection,
                 onCheckedChange = { enabled ->
                     armExclusiveOnTrackSelection = enabled

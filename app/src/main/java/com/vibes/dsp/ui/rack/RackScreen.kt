@@ -125,6 +125,14 @@ import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.engine.TrackLaunchQuantization
 import com.vibes.dsp.ui.components.CompactHorizontalFader
+import com.vibes.dsp.ui.components.NnagaSelectorField
+import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
+import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaCheckbox
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaSwitch
+import com.vibes.dsp.ui.components.NnagaTextButton
+import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import com.vibes.dsp.ui.modgui.InlineModguiView
 import com.vibes.dsp.ui.x11.PluginX11UiView
 import com.vibes.dsp.ui.x11.X11DisplayManager
@@ -465,16 +473,12 @@ fun RackScreen(
                         )
                         Box {
                             var showOverflowMenu by remember { mutableStateOf(false) }
-                            IconButton(
-                                onClick = { showOverflowMenu = true },
-                                modifier = Modifier.size(28.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.MoreVert,
-                                    contentDescription = "More options",
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
+                            NnagaIconButton(onClick = { showOverflowMenu = true },
+                            modifier = Modifier.size(48.dp)) { Icon(
+                                Icons.Default.MoreVert,
+                                contentDescription = "More options",
+                                modifier = Modifier.size(18.dp)
+                            ) }
                             DropdownMenu(
                                 expanded = showOverflowMenu,
                                 onDismissRequest = { showOverflowMenu = false }
@@ -550,21 +554,13 @@ fun RackScreen(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        IconButton(
-            onClick = { if (transport.playing) viewModel.transportPause() else viewModel.transportPlay() },
-            modifier = Modifier.size(40.dp)
-        ) {
-            Icon(
-                if (transport.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-                if (transport.playing) "Pause global transport" else "Start global transport"
-            )
-        }
-        IconButton(
-            onClick = { viewModel.transportRestart() },
-            modifier = Modifier.size(40.dp)
-        ) {
-            Icon(Icons.Default.SkipPrevious, "Restart global transport")
-        }
+        NnagaIconButton(onClick = { if (transport.playing) viewModel.transportPause() else viewModel.transportPlay() },
+        modifier = Modifier.size(48.dp)) { Icon(
+            if (transport.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+            if (transport.playing) "Pause global transport" else "Start global transport"
+        ) }
+        NnagaIconButton(onClick = { viewModel.transportRestart() },
+        modifier = Modifier.size(48.dp)) { Icon(Icons.Default.SkipPrevious, "Restart global transport") }
         Text(
             "${formatMusicalPosition(transport.positionSec, transport.beatsPerMinute)} · " +
                 formatElapsedTime(transport.positionSec),
@@ -573,17 +569,15 @@ fun RackScreen(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1
         )
-        TextButton(
+        NnagaTextButton(
             onClick = {
                 tempoInput = transport.beatsPerMinute.toString()
                 showTempoDialog = true
             },
-            modifier = Modifier.heightIn(min = 40.dp),
-            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
         ) {
             Text(
                 "${transport.beatsPerMinute.toInt()} BPM",
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
             )
         }
     }
@@ -605,6 +599,8 @@ fun RackScreen(
                             keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
                         ),
                         isError = tempoInput.isNotBlank() && validTempo == null,
+                        shape = MaterialTheme.shapes.small,
+                        colors = nnagaOutlinedTextFieldColors(),
                         supportingText = {
                             if (tempoInput.isNotBlank() && validTempo == null) {
                                 Text("Enter a value from 20 to 400 BPM")
@@ -616,35 +612,31 @@ fun RackScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        TextButton(
-                            onClick = {
-                                tempoInput = ((enteredTempo ?: transport.beatsPerMinute) - 1.0)
-                                    .coerceIn(20.0, 400.0).toString()
-                            }
-                        ) { Text("−") }
+                        NnagaTextButton(onClick = {
+                            tempoInput = ((enteredTempo ?: transport.beatsPerMinute) - 1.0)
+                                .coerceIn(20.0, 400.0).toString()
+                        }) { Text("−") }
                         Text(
                             validTempo?.let { "${it.toInt()} BPM" } ?: "—",
                             style = MaterialTheme.typography.titleMedium
                         )
-                        TextButton(
-                            onClick = {
-                                tempoInput = ((enteredTempo ?: transport.beatsPerMinute) + 1.0)
-                                    .coerceIn(20.0, 400.0).toString()
-                            }
-                        ) { Text("+") }
+                        NnagaTextButton(onClick = {
+                            tempoInput = ((enteredTempo ?: transport.beatsPerMinute) + 1.0)
+                                .coerceIn(20.0, 400.0).toString()
+                        }) { Text("+") }
                     }
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showTempoDialog = false }) { Text("Cancel") }
+                NnagaTextButton(onClick = { showTempoDialog = false }) { Text("Cancel") }
             },
             confirmButton = {
-                TextButton(
+                NnagaTextButton(
                     enabled = validTempo != null,
                     onClick = {
-                        viewModel.setTransportBpm(validTempo ?: return@TextButton)
+                        viewModel.setTransportBpm(validTempo ?: return@NnagaTextButton)
                         showTempoDialog = false
-                    }
+                    },
                 ) { Text("Apply") }
             }
         )
@@ -663,15 +655,15 @@ fun RackScreen(
                 var deleteMenuExpanded by remember(track.id) { mutableStateOf(false) }
                 Box(
                     modifier = Modifier
-                        .heightIn(min = 44.dp)
+                        .heightIn(min = 48.dp)
                         .combinedClickable(
                             onClick = { viewModel.selectPath(track.id) },
                             onLongClick = { deleteMenuExpanded = true }
                         )
                 ) {
                     Surface(
-                        modifier = Modifier.heightIn(min = 44.dp),
-                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        shape = MaterialTheme.shapes.small,
                         color = if (track.id == selectedPathId) {
                             MaterialTheme.colorScheme.secondaryContainer
                         } else {
@@ -844,14 +836,9 @@ fun RackScreen(
                         onDismissRequest = { inputChannelMenuExpanded = false }
                     ) {
                         repeat(inputChannelCount) { channel ->
-                            DropdownMenuItem(
-                                text = { Text("Input ${channel + 1}") },
-                                trailingIcon = {
-                                    RadioButton(
-                                        selected = track.inputChannel == channel,
-                                        onClick = null
-                                    )
-                                },
+                            NnagaSelectorMenuItem(
+                                text = "Input ${channel + 1}",
+                                selected = track.inputChannel == channel,
                                 onClick = {
                                     viewModel.setTrackInputChannel(track.id, channel)
                                     inputChannelMenuExpanded = false
@@ -940,8 +927,9 @@ fun RackScreen(
                                 TrackLaunchQuantization.Sixteenth -> "1/16"
                                 TrackLaunchQuantization.None -> "None (Immediate)"
                             }
-                            DropdownMenuItem(
-                                text = { Text(label) },
+                            NnagaSelectorMenuItem(
+                                text = label,
+                                selected = launchQuantization == quantization,
                                 onClick = {
                                     launchQuantizationOrdinal = quantization.ordinal
                                     launchQuantizeMenuExpanded = false
@@ -951,34 +939,28 @@ fun RackScreen(
                         }
                     }
                 }
-                IconButton(
-                    onClick = {
-                        viewModel.setClipLooping(track.id, selectedSlot, !selectedSlotLooping)
-                    },
-                    modifier = Modifier.semantics {
-                        contentDescription = "Loop selected clip"
-                        stateDescription = if (selectedSlotLooping) "Active" else "Inactive"
-                    }
-                ) {
-                    Icon(
-                        Icons.Default.Repeat,
-                        contentDescription = null,
-                        tint = if (selectedSlotLooping) Color(0xFF2E7D32)
-                        else MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                NnagaIconButton(onClick = {
+                    viewModel.setClipLooping(track.id, selectedSlot, !selectedSlotLooping)
+                },
+                modifier = Modifier.semantics {
+                    contentDescription = "Loop selected clip"
+                    stateDescription = if (selectedSlotLooping) "Active" else "Inactive"
+                }) { Icon(
+                    Icons.Default.Repeat,
+                    contentDescription = null,
+                    tint = if (selectedSlotLooping) Color(0xFF2E7D32)
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                ) }
                 when {
                     selectedSlotWavLoaded || selectedSlotMidiLoaded -> {
-                        IconButton(onClick = {
+                        NnagaIconButton(onClick = {
                             viewModel.unloadTrackClipMedia(
                                 track.id,
                                 selectedSlot,
                                 wavLoaded = selectedSlotWavLoaded,
                                 midiLoaded = selectedSlotMidiLoaded
                             )
-                        }) {
-                            Icon(Icons.Default.Close, contentDescription = "Unload media from selected clip")
-                        }
+                        }) { Icon(Icons.Default.Close, contentDescription = "Unload media from selected clip") }
                     }
                     selectedSlotPunchArmed || (track.inputArmed && selectedSlotLooping) -> {
                         Box {
@@ -1049,10 +1031,8 @@ fun RackScreen(
                                 DropdownMenuItem(
                                     text = { Text("Enter on punch") },
                                     leadingIcon = {
-                                        Checkbox(
-                                            checked = selectedSlotPunchArmed,
-                                            onCheckedChange = null,
-                                        )
+                                        NnagaCheckbox(checked = selectedSlotPunchArmed,
+                                        onCheckedChange = null,)
                                     },
                                     onClick = {
                                         viewModel.setSlotEnterOnPunch(
@@ -1078,8 +1058,13 @@ fun RackScreen(
                                     8.0 to "8 bars",
                                     16.0 to "16 bars"
                                 ).forEach { (bars, label) ->
-                                    DropdownMenuItem(
-                                        text = { Text(label) },
+                                    NnagaSelectorMenuItem(
+                                        text = label,
+                                        selected = if (editTrackDefaultLoopLength) {
+                                            track.defaultLoopLengthBars == bars
+                                        } else {
+                                            slotLoopLengthBars == bars
+                                        },
                                         onClick = {
                                             if (editTrackDefaultLoopLength) {
                                                 viewModel.setTrackDefaultLoopLength(track.id, bars)
@@ -1095,16 +1080,12 @@ fun RackScreen(
                         }
                     }
                     else -> {
-                        IconButton(
-                            onClick = {
-                                pendingAudioTarget = track.id to selectedSlot
-                                audioFilePickerLauncher.launch(
-                                    arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a", "application/x-midi", "audio/midi")
-                                )
-                            }
-                        ) {
-                            Icon(Icons.Default.Folder, contentDescription = "Load audio for selected track")
-                        }
+                        NnagaIconButton(onClick = {
+                            pendingAudioTarget = track.id to selectedSlot
+                            audioFilePickerLauncher.launch(
+                                arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a", "application/x-midi", "audio/midi")
+                            )
+                        }) { Icon(Icons.Default.Folder, contentDescription = "Load audio for selected track") }
                     }
                 }
             }
@@ -1122,15 +1103,15 @@ fun RackScreen(
                 var deleteMenuExpanded by remember(track.id) { mutableStateOf(false) }
                 Box(
                     modifier = Modifier
-                        .heightIn(min = 44.dp)
+                        .heightIn(min = 48.dp)
                         .combinedClickable(
                             onClick = { viewModel.selectPath(track.id) },
                             onLongClick = { deleteMenuExpanded = true }
                         )
                 ) {
                     Surface(
-                        modifier = Modifier.heightIn(min = 44.dp),
-                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.heightIn(min = 48.dp),
+                        shape = MaterialTheme.shapes.small,
                         color = MaterialTheme.colorScheme.surface,
                         contentColor = MaterialTheme.colorScheme.onSurface,
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
@@ -1276,16 +1257,14 @@ fun RackScreen(
             if (!isFullscreenActive) {
             Spacer(modifier = Modifier.height(16.dp))
             if (!isEngineRunning) {
-                Button(
+                NnagaButton(
                     onClick = { viewModel.startEngine() },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 44.dp)
+                    modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(
                         imageVector = Icons.Filled.PlayArrow,
                         contentDescription = null,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(20.dp),
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Start engine")
@@ -1296,7 +1275,7 @@ fun RackScreen(
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     color = MaterialTheme.colorScheme.errorContainer,
-                    shape = RoundedCornerShape(4.dp),
+                    shape = MaterialTheme.shapes.small,
                     border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f))
                 ) {
                     Row(
@@ -1308,13 +1287,11 @@ fun RackScreen(
                             modifier = Modifier.weight(1f),
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
-                        IconButton(onClick = { viewModel.clearError() }) {
-                            Icon(
-                                imageVector = Icons.Filled.Close,
-                                contentDescription = "Dismiss",
-                                tint = MaterialTheme.colorScheme.onErrorContainer
-                            )
-                        }
+                        NnagaIconButton(onClick = { viewModel.clearError() }) { Icon(
+                            imageVector = Icons.Filled.Close,
+                            contentDescription = "Dismiss",
+                            tint = MaterialTheme.colorScheme.onErrorContainer
+                        ) }
                     }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
@@ -1460,7 +1437,7 @@ private fun BlockingOperationOverlay(label: String) {
         contentAlignment = Alignment.Center
     ) {
         Surface(
-            shape = RoundedCornerShape(4.dp),
+            shape = MaterialTheme.shapes.small,
             color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
@@ -1469,7 +1446,7 @@ private fun BlockingOperationOverlay(label: String) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                CircularProgressIndicator(strokeWidth = 3.dp)
+                CircularProgressIndicator(strokeWidth = 2.dp)
                 Text(
                     text = "$label...",
                     style = MaterialTheme.typography.bodyMedium,
@@ -1583,7 +1560,7 @@ private fun VuMeter(
         }
         Box(
             modifier = Modifier
-                .sizeIn(minWidth = 44.dp, minHeight = 44.dp)
+                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 .clickable(onClick = onClippingTap),
             contentAlignment = Alignment.Center
         ) {
@@ -1608,7 +1585,7 @@ private fun PluginChromeButton(
     if (compact) {
         Box(
             modifier = modifier
-                .size(44.dp)
+                .size(48.dp)
                 .clickable(
                     role = Role.Button,
                     onClick = onClick
@@ -1630,14 +1607,14 @@ private fun PluginChromeButton(
             }
         }
     } else {
-        IconButton(
+        NnagaIconButton(
             onClick = onClick,
-            modifier = modifier.size(44.dp)
+            modifier = modifier,
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = contentDescription,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(20.dp),
             )
         }
     }
@@ -1680,7 +1657,7 @@ fun PluginCard(
     Surface(
         modifier = modifier,
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(4.dp),
+        shape = MaterialTheme.shapes.small,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Column(
@@ -2241,19 +2218,15 @@ fun PluginCard(
                     }
                     // Fullscreen back button — overlays on top of viewport
                     if (isFullscreen && currentUiMode == UiType.X11) {
-                        IconButton(
-                            onClick = onExitFullscreen,
-                            modifier = Modifier
-                                .align(Alignment.TopStart)
-                                .padding(16.dp)
-                                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)
-                        ) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Exit fullscreen",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
+                        NnagaIconButton(onClick = onExitFullscreen,
+                        modifier = Modifier
+                            .align(Alignment.TopStart)
+                            .padding(16.dp)
+                            .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)) { Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Exit fullscreen",
+                            tint = MaterialTheme.colorScheme.onSurface
+                        ) }
                     }
                 }
                 // Resize handle — below X11 viewport, hidden in fullscreen
@@ -2336,29 +2309,21 @@ fun PluginCard(
                                     .padding(16.dp),
                                 verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                IconButton(
-                                    onClick = onExitFullscreen,
-                                    modifier = Modifier.background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Close,
-                                        contentDescription = "Exit fullscreen",
-                                        tint = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
+                                NnagaIconButton(onClick = onExitFullscreen,
+                                modifier = Modifier.background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)) { Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Exit fullscreen",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                ) }
                                 // Soft-keyboard toggle — mirrors the exe-installer fullscreen
                                 // control; raises the IME against the wine editor surface for
                                 // plugins with text fields (license keys, in-editor search).
-                                IconButton(
-                                    onClick = { com.vibes.dsp.ui.vst.VstKeyboardAction.showKeyboard(pathId, pluginIndex) },
-                                    modifier = Modifier.background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)
-                                ) {
-                                    Icon(
-                                        Icons.Default.Keyboard,
-                                        contentDescription = "Toggle keyboard",
-                                        tint = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
+                                NnagaIconButton(onClick = { com.vibes.dsp.ui.vst.VstKeyboardAction.showKeyboard(pathId, pluginIndex) },
+                                modifier = Modifier.background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)) { Icon(
+                                    Icons.Default.Keyboard,
+                                    contentDescription = "Toggle keyboard",
+                                    tint = MaterialTheme.colorScheme.onSurface
+                                ) }
                             }
                         }
                     }
@@ -2456,19 +2421,15 @@ fun PluginCard(
                         }
                         // Fullscreen back button — overlays on top of modgui viewport
                         if (modguiFullscreen) {
-                            IconButton(
-                                onClick = onExitFullscreen,
-                                modifier = Modifier
-                                    .align(Alignment.TopStart)
-                                    .padding(16.dp)
-                                    .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)
-                            ) {
-                                Icon(
-                                    Icons.Default.Close,
-                                    contentDescription = "Exit fullscreen",
-                                    tint = MaterialTheme.colorScheme.onSurface
-                                )
-                            }
+                            NnagaIconButton(onClick = onExitFullscreen,
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(16.dp)
+                                .background(MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f), CircleShape)) { Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Exit fullscreen",
+                                tint = MaterialTheme.colorScheme.onSurface
+                            ) }
                         }
                     }
                     // Resize handle — below Modgui viewport, hidden in fullscreen
@@ -2529,14 +2490,10 @@ fun PluginCard(
                                     }
                                 }
                             ) {
-                                OutlinedTextField(
+                                NnagaSelectorField(
                                     value = modelActiveModelName ?: modelConfig.placeholder,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .menuAnchor(),
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = modelDropdownExpanded) }
+                                    expanded = modelDropdownExpanded,
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                                 ExposedDropdownMenu(
                                     expanded = modelDropdownExpanded,
@@ -2550,8 +2507,9 @@ fun PluginCard(
                                         }
                                     )
                                     modelFiles.forEach { modelFile ->
-                                        DropdownMenuItem(
-                                            text = { Text(modelFile.nameWithoutExtension) },
+                                        NnagaSelectorMenuItem(
+                                            text = modelFile.nameWithoutExtension,
+                                            selected = modelActiveModelName == modelFile.nameWithoutExtension,
                                             onClick = {
                                                 modelDropdownExpanded = false
                                                 modelActiveModelName = modelFile.nameWithoutExtension
@@ -2645,14 +2603,12 @@ fun ParameterControl(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
-                checked = currentValue.value > 0.5f,
-                onCheckedChange = { checked ->
-                    val newValue = if (checked) port.maxValue else port.minValue
-                    currentValue.value = newValue
-                    viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
-                }
-            )
+            NnagaSwitch(checked = currentValue.value > 0.5f,
+            onCheckedChange = { checked ->
+                val newValue = if (checked) port.maxValue else port.minValue
+                currentValue.value = newValue
+                viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
+            })
         }
     } else if (port.scalePoints.isNotEmpty()) {
         Column {
@@ -2673,22 +2629,19 @@ fun ParameterControl(
                 expanded = expanded,
                 onExpandedChange = { expanded = it }
             ) {
-                OutlinedTextField(
+                NnagaSelectorField(
                     value = displayValue,
-                    onValueChange = {},
-                    readOnly = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(),
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
+                    expanded = expanded,
+                    modifier = Modifier.fillMaxWidth()
                 )
                 ExposedDropdownMenu(
                     expanded = expanded,
                     onDismissRequest = { expanded = false }
                 ) {
                     port.scalePoints.forEach { sp ->
-                        DropdownMenuItem(
-                            text = { Text(sp.label) },
+                        NnagaSelectorMenuItem(
+                            text = sp.label,
+                            selected = kotlin.math.abs(sp.value - currentValue.value) < 1e-6f,
                             onClick = {
                                 currentValue.value = sp.value
                                 viewModel.setParameter(selectedPathId, pluginIndex, port.index, sp.value)
@@ -3081,7 +3034,7 @@ private fun GenericFilePickerDialog(
         },
         confirmButton = {},
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+            NnagaTextButton(onClick = onDismiss) { Text("Cancel") }
         }
     )
 }
@@ -3138,34 +3091,26 @@ private fun FileItemRow(
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        IconButton(
-            onClick = { onToggleFavorite(path) },
-            modifier = Modifier.size(32.dp)
-        ) {
-            Icon(
-                if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                contentDescription = "Favorite",
-                tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp)
-            )
-        }
+        NnagaIconButton(onClick = { onToggleFavorite(path) },
+        modifier = Modifier.size(48.dp)) { Icon(
+            if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+            contentDescription = "Favorite",
+            tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(18.dp)
+        ) }
         Text(
             text = name,
             modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
             style = MaterialTheme.typography.bodyMedium
         )
         if (canDelete && onDelete != null) {
-            IconButton(
-                onClick = { onDelete(path) },
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    Icons.Default.Delete,
-                    contentDescription = "Delete",
-                    tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+            NnagaIconButton(onClick = { onDelete(path) },
+            modifier = Modifier.size(48.dp)) { Icon(
+                Icons.Default.Delete,
+                contentDescription = "Delete",
+                tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f),
+                modifier = Modifier.size(18.dp)
+            ) }
         }
     }
 }

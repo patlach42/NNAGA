@@ -26,7 +26,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -51,13 +50,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.activity.compose.BackHandler
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vibes.dsp.engine.PluginInfo
-import com.vibes.dsp.engine.UiType
+import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaIconButton
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -106,20 +105,24 @@ fun PluginBrowserScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             topBar = {
                 TopAppBar(
                     title = { Text("Plugin Browser") },
                     navigationIcon = {
-                        IconButton(onClick = onNavigateBack) {
+                        NnagaIconButton(onClick = onNavigateBack) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                         }
                     },
                     actions = {
-                        IconButton(onClick = { viewModel.refresh() }) {
+                        NnagaIconButton(onClick = { viewModel.refresh() }) {
                             Icon(Icons.Default.Refresh, contentDescription = "Refresh")
                         }
-                    }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ),
                 )
             }
         ) { padding ->
@@ -131,7 +134,9 @@ fun PluginBrowserScreen(
                 when {
                     isLoading -> {
                         CircularProgressIndicator(
-                            modifier = Modifier.align(Alignment.Center)
+                            modifier = Modifier.align(Alignment.Center),
+                            color = MaterialTheme.colorScheme.primary,
+                            strokeWidth = 2.dp,
                         )
                     }
                     errorMessage != null -> {
@@ -147,7 +152,7 @@ fun PluginBrowserScreen(
                                 color = MaterialTheme.colorScheme.error
                             )
                             Spacer(modifier = Modifier.height(16.dp))
-                            Button(onClick = { viewModel.refresh() }) {
+                            NnagaButton(onClick = { viewModel.refresh() }) {
                                 Text("Retry")
                             }
                         }
@@ -266,7 +271,7 @@ private fun BrowserBlockingOperationOverlay(label: String) {
         Surface(
             tonalElevation = 0.dp,
             shadowElevation = 0.dp,
-            shape = RoundedCornerShape(8.dp),
+            shape = MaterialTheme.shapes.small,
             color = MaterialTheme.colorScheme.surface
         ) {
             Column(
@@ -274,7 +279,10 @@ private fun BrowserBlockingOperationOverlay(label: String) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                CircularProgressIndicator(strokeWidth = 3.dp)
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 2.dp,
+                )
                 Text(
                     text = "$label...",
                     style = MaterialTheme.typography.bodyMedium,
@@ -296,6 +304,7 @@ fun AuthorHeader(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onToggle),
+        shape = MaterialTheme.shapes.small,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
@@ -345,9 +354,10 @@ fun CategoryHeader(
         modifier = Modifier
             .fillMaxWidth()
             .padding(start = 12.dp)
+            .heightIn(min = 48.dp)
             .clickable(onClick = onToggle),
         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
-        shape = MaterialTheme.shapes.small
+        shape = MaterialTheme.shapes.extraSmall
     ) {
         Row(
             modifier = Modifier
@@ -445,6 +455,10 @@ fun PluginItem(
             .padding(start = 12.dp)
             .clickable(onClick = onClick)
             .testTag("browser_plugin_item"),
+        shape = MaterialTheme.shapes.small,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         border = CardDefaults.outlinedCardBorder()
     ) {
@@ -499,7 +513,7 @@ fun PluginItem(
                         else   -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
                     }
                     Surface(
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                        shape = MaterialTheme.shapes.extraSmall,
                         color = badgeBg,
                     ) {
                         Text(
@@ -518,7 +532,7 @@ fun PluginItem(
                             else     -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
                         }
                         Surface(
-                            shape = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
+                            shape = MaterialTheme.shapes.extraSmall,
                             color = archBg,
                         ) {
                             Text(
@@ -538,7 +552,7 @@ fun PluginItem(
             }
 
             // Favorite star
-            IconButton(onClick = onToggleFavorite) {
+            NnagaIconButton(onClick = onToggleFavorite) {
                 Icon(
                     imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
                     contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",

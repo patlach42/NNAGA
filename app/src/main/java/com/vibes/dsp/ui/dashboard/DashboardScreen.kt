@@ -38,12 +38,10 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +63,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.vibes.dsp.R
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaTextButton
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.settings.SettingsScreen
 import com.vibes.dsp.ui.settings.SettingsTab
@@ -266,7 +266,7 @@ private fun DashboardTopBar(
 
 @Composable
 private fun BackButton(onNavigateBack: () -> Unit) {
-    IconButton(
+    NnagaIconButton(
         onClick = onNavigateBack,
         modifier = Modifier.size(DashboardDimensions.touchTarget),
     ) {
@@ -422,7 +422,7 @@ private fun BrandHome(modifier: Modifier = Modifier) {
             contentScale = ContentScale.FillWidth,
             colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
         )
-        IconButton(
+        NnagaIconButton(
             onClick = { showAbout = true },
             modifier = Modifier
                 .align(Alignment.TopEnd)
@@ -448,7 +448,7 @@ private fun BrandHome(modifier: Modifier = Modifier) {
                         modifier = Modifier.padding(top = 12.dp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    TextButton(
+                    NnagaTextButton(
                         onClick = {
                             uriHandler.openUri("https://github.com/Varcain/GuitarRackCraft")
                         },
@@ -456,7 +456,7 @@ private fun BrandHome(modifier: Modifier = Modifier) {
                     ) {
                         Text("Original repository")
                     }
-                    TextButton(
+                    NnagaTextButton(
                         onClick = {
                             uriHandler.openUri("https://github.com/patlach42/NNAGA")
                         },
@@ -466,7 +466,7 @@ private fun BrandHome(modifier: Modifier = Modifier) {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showAbout = false }) {
+                NnagaTextButton(onClick = { showAbout = false }) {
                     Text("Close")
                 }
             },

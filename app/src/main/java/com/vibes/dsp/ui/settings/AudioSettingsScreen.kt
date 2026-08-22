@@ -54,6 +54,14 @@ import com.vibes.dsp.engine.DirectUsbFormat
 import com.vibes.dsp.engine.UsbAudioDriver
 import com.vibes.dsp.engine.DirectUsbCalibrationProfile
 import com.vibes.dsp.ui.rack.RackViewModel
+import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaCheckbox
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaOutlinedButton
+import com.vibes.dsp.ui.components.NnagaSwitch
+import com.vibes.dsp.ui.components.NnagaTextButton
+import com.vibes.dsp.ui.components.NnagaSelectorField
+import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -75,7 +83,7 @@ fun AudioSettingsScreen(
                 TopAppBar(
                     title = { Text("USB Audio Settings") },
                     navigationIcon = {
-                        IconButton(onClick = onNavigateBack) {
+                        NnagaIconButton(onClick = onNavigateBack) {
                             Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                         }
                     }
@@ -173,7 +181,7 @@ private fun AudioSettingsContent(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            OutlinedButton(
+            NnagaOutlinedButton(
                 onClick = viewModel::stopEngine,
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -418,7 +426,7 @@ private fun DirectUsbSessionSettings(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text("USB Interface", style = MaterialTheme.typography.labelLarge)
-        IconButton(
+        NnagaIconButton(
             onClick = { scope.launch { refreshDevices() } },
             enabled = controlsEnabled
         ) { Icon(Icons.Default.Refresh, contentDescription = "Refresh USB interfaces") }
@@ -429,20 +437,16 @@ private fun DirectUsbSessionSettings(
             onExpandedChange = { if (controlsEnabled) devicesExpanded = it }
         ) {
             Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
+                NnagaSelectorField(
                     value = selectedDevice?.name
                         ?: AudioSettingsManager.getDirectUsbDeviceName(context)
                             .ifEmpty { "No USB audio interface found" } +
                         if (selectedDevice == null &&
                             AudioSettingsManager.getDirectUsbDeviceName(context).isNotEmpty()
                         ) " (disconnected)" else "",
-                    onValueChange = {},
-                    readOnly = true,
+                    expanded = devicesExpanded,
                     enabled = controlsEnabled,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(),
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(devicesExpanded) }
+                    modifier = Modifier.fillMaxWidth()
                 )
                 Box(
                     modifier = Modifier
@@ -459,8 +463,9 @@ private fun DirectUsbSessionSettings(
                 onDismissRequest = { devicesExpanded = false }
             ) {
                 devices.forEach { device ->
-                    DropdownMenuItem(
-                        text = { Text(device.name) },
+                    NnagaSelectorMenuItem(
+                        text = device.name,
+                        selected = selectedDevice?.id == device.id,
                         enabled = controlsEnabled,
                         onClick = { loadDevice(device) }
                     )
@@ -476,7 +481,7 @@ private fun DirectUsbSessionSettings(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text("Show all USB devices")
-                Switch(
+                NnagaSwitch(
                     checked = showAllUsbDevices,
                     enabled = controlsEnabled,
                     onCheckedChange = {
@@ -509,7 +514,7 @@ private fun DirectUsbSessionSettings(
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
+                NnagaTextButton(onClick = {
                     clipboardManager.setText(AnnotatedString(usbInterfaceLog))
                     showUsbInterfaceLog = false
                 }) {
@@ -517,7 +522,7 @@ private fun DirectUsbSessionSettings(
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showUsbInterfaceLog = false }) {
+                NnagaTextButton(onClick = { showUsbInterfaceLog = false }) {
                     Text("Close")
                 }
             }
@@ -647,7 +652,7 @@ private fun DirectUsbSessionSettings(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            NnagaSwitch(
                 checked = includeExperimental,
                 onCheckedChange = { includeExperimental = it },
                 enabled = controlsEnabled
@@ -668,7 +673,7 @@ private fun DirectUsbSessionSettings(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Checkbox(
+            NnagaCheckbox(
                 checked = fixedSampleRateCalibration,
                 onCheckedChange = { fixedSampleRateCalibration = it },
                 enabled = controlsEnabled
@@ -692,7 +697,7 @@ private fun DirectUsbSessionSettings(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Switch(
+            NnagaSwitch(
                 checked = dangerOverride,
                 onCheckedChange = { dangerOverride = it },
                 enabled = controlsEnabled
@@ -700,7 +705,7 @@ private fun DirectUsbSessionSettings(
         }
         selectedFormat?.let { format ->
             val device = selectedDevice
-            OutlinedButton(
+            NnagaOutlinedButton(
                 onClick = {
                     if (device == null) {
                         message = "Select an interface first"
@@ -753,7 +758,7 @@ private fun DirectUsbSessionSettings(
             )
         }
         val extendedBase = appliedStableBaseProfile
-        OutlinedButton(
+        NnagaOutlinedButton(
             onClick = {
                 val device = selectedDevice
                 val baseProfile = appliedStableBaseProfile
@@ -823,7 +828,7 @@ private fun DirectUsbSessionSettings(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Button(
+        NnagaButton(
             onClick = {
                 val device = selectedDevice
                 if (device == null) {
@@ -891,16 +896,39 @@ private fun DirectUsbSessionSettings(
                     LinearProgressIndicator(
                         progress = ((progress.profileIndex + 1).toFloat() /
                             progress.profileCount.toFloat()).coerceIn(0f, 1f),
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
                     )
                 } else {
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(2.dp),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 }
-            } ?: LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            } ?: LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(2.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
         }
         autoCalibrationResult?.let { result ->
             val proposal = result.finalProfile
-            Card(modifier = Modifier.fillMaxWidth()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = MaterialTheme.shapes.small,
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+            ) {
                 Column(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -975,7 +1003,7 @@ private fun DirectUsbSessionSettings(
                                 )
                             }
                         }
-                        Button(
+                        NnagaButton(
                             onClick = { applyProfile(proposal) },
                             enabled = controlsEnabled,
                             modifier = Modifier.fillMaxWidth()
@@ -1019,7 +1047,14 @@ private fun DirectUsbSessionSettings(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 displayedProfiles.forEach { profile ->
-                    Card(modifier = Modifier.fillMaxWidth()) {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.small,
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                        ),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                    ) {
                         Column(modifier = Modifier.padding(8.dp)) {
                             val f = profile.format
                             if (profile.label.isNotBlank()) {
@@ -1081,7 +1116,7 @@ private fun DirectUsbSessionSettings(
                                     MaterialTheme.colorScheme.error
                                 }
                             )
-                            TextButton(
+                            NnagaTextButton(
                                 onClick = { applyProfile(profile) },
                                 enabled = controlsEnabled
                             ) { Text("Apply profile") }
@@ -1114,7 +1149,7 @@ private fun DirectUsbSessionSettings(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        Switch(
+        NnagaSwitch(
             checked = thermalSafetyEnabled,
             onCheckedChange = {
                 thermalSafetyEnabled = it
@@ -1144,7 +1179,7 @@ private fun DirectUsbSessionSettings(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Text("Engine run at app start")
-        Switch(
+        NnagaSwitch(
             checked = runAtStart,
             onCheckedChange = {
                 runAtStart = it
@@ -1153,7 +1188,7 @@ private fun DirectUsbSessionSettings(
             enabled = controlsEnabled
         )
     }
-    OutlinedButton(
+    NnagaOutlinedButton(
         onClick = {
             DirectUsbAudioManager.disable(context)
             AudioSettingsManager.forgetDirectUsbInterface(context)
@@ -1239,19 +1274,18 @@ private fun IntSelector(
             expanded = expanded,
             onExpandedChange = { if (enabled) expanded = it }
         ) {
-            OutlinedTextField(
+            NnagaSelectorField(
                 value = display(selected),
-                onValueChange = {},
-                readOnly = true,
+                expanded = expanded,
                 enabled = enabled,
-                modifier = Modifier.fillMaxWidth().menuAnchor(),
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) }
+                modifier = Modifier.fillMaxWidth()
             )
             ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 options.forEach { value ->
-                    DropdownMenuItem(
+                    NnagaSelectorMenuItem(
+                        text = display(value),
+                        selected = value == selected,
                         enabled = enabled,
-                        text = { Text(display(value)) },
                         onClick = {
                             onSelected(value)
                             expanded = false
@@ -1306,24 +1340,21 @@ private fun BufferSizeDropdown(
             expanded = expanded,
             onExpandedChange = { if (enabled) expanded = it }
         ) {
-            OutlinedTextField(
+            NnagaSelectorField(
                 value = selectedLabel,
-                onValueChange = {},
-                readOnly = true,
+                expanded = expanded,
                 enabled = enabled,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .menuAnchor(),
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
+                modifier = Modifier.fillMaxWidth()
             )
             ExposedDropdownMenu(
                 expanded = expanded,
                 onDismissRequest = { expanded = false }
             ) {
                 options.forEach { (size, label) ->
-                    DropdownMenuItem(
+                    NnagaSelectorMenuItem(
+                        text = label,
+                        selected = size == selectedSize,
                         enabled = enabled,
-                        text = { Text(label) },
                         onClick = {
                             onSelected(size)
                             expanded = false

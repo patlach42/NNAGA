@@ -16,11 +16,9 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.style.TextOverflow
@@ -29,6 +27,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.varcain.vsthost.NativeBridge
 import com.varcain.vsthost.ui.EditorViewRegistry
 import com.varcain.vsthost.ui.PluginSurface
+import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaCheckbox
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaOutlinedButton
 
 /**
  * Full-screen overlay shown for the install-from-.exe flow. Rendered
@@ -71,6 +73,9 @@ fun VstInstallerScreen(vm: VstInstallerViewModel = viewModel()) {
             Surface(
                 modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.background,
+                shape = MaterialTheme.shapes.small,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
             ) {
                 Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                     PhaseHeader(state, mode, session?.displayName ?: "…", onCancel = null)
@@ -89,6 +94,9 @@ fun VstInstallerScreen(vm: VstInstallerViewModel = viewModel()) {
             Surface(
                 modifier = Modifier.fillMaxSize(),
                 color = MaterialTheme.colorScheme.background,
+                shape = MaterialTheme.shapes.small,
+                tonalElevation = 0.dp,
+                shadowElevation = 0.dp,
             ) {
                 Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
                     PhaseHeader(state, mode, session?.displayName ?: "…",
@@ -144,14 +152,14 @@ private fun RunningOverlay(mode: VstInstallerViewModel.Mode, onCancel: () -> Uni
             modifier = Modifier.align(Alignment.TopEnd).padding(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            IconButton(
+            NnagaIconButton(
                 onClick = onCancel,
                 modifier = Modifier.background(colors.surfaceVariant.copy(alpha = 0.85f), CircleShape),
             ) {
                 Icon(Icons.Default.Close, contentDescription = closeDescription,
                      tint = colors.onSurface)
             }
-            IconButton(
+            NnagaIconButton(
                 onClick = { EditorViewRegistry.showKeyboard(displayNumber) },
                 modifier = Modifier.background(colors.surfaceVariant.copy(alpha = 0.85f), CircleShape),
             ) {
@@ -194,7 +202,7 @@ private fun PhaseHeader(
             )
         }
         if (onCancel != null) {
-            OutlinedButton(onClick = onCancel) {
+            NnagaOutlinedButton(onClick = onCancel) {
                 Icon(Icons.Default.Close, contentDescription = null,
                      modifier = Modifier.size(16.dp))
                 Spacer(Modifier.width(4.dp))
@@ -208,7 +216,10 @@ private fun PhaseHeader(
 private fun SpinnerBox() {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator()
+            CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 2.dp,
+            )
             Spacer(Modifier.height(12.dp))
         }
     }
@@ -253,7 +264,7 @@ private fun PickList(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Checkbox(
+                    NnagaCheckbox(
                         checked = picked[p.absPath] ?: false,
                         onCheckedChange = { picked[p.absPath] = it },
                     )
@@ -282,7 +293,10 @@ private fun PickList(
                         )
                     }
                 }
-                Divider()
+                Divider(
+                    thickness = 1.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant,
+                )
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -290,10 +304,10 @@ private fun PickList(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
+            NnagaOutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) {
                 Text("Discard all")
             }
-            Button(
+            NnagaButton(
                 onClick = {
                     val picks = discovered.filter { picked[it.absPath] == true }
                     onConfirm(picks)

@@ -27,7 +27,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaTonalButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CloudDownload
@@ -100,7 +102,7 @@ fun ToneDetailScreen(
                 modifier = Modifier.fillMaxSize().padding(padding),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator(strokeWidth = 3.dp)
+                CircularProgressIndicator(strokeWidth = 2.dp)
             }
         } else if (error != null && tone == null) {
             Box(
@@ -116,7 +118,7 @@ fun ToneDetailScreen(
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodyMedium
                     )
-                    FilledTonalButton(onClick = { viewModel.loadToneDetail(toneId, architecture) }) {
+                    NnagaTonalButton(onClick = { viewModel.loadToneDetail(toneId, architecture) }) {
                         Text("Retry")
                     }
                 }
@@ -158,7 +160,7 @@ fun ToneDetailScreen(
 
 
                             // Back button
-                            IconButton(
+                            NnagaIconButton(
                                 onClick = onNavigateBack,
                                 modifier = Modifier
                                     .align(Alignment.TopStart)
@@ -332,9 +334,9 @@ fun ToneDetailScreen(
                                     .fillMaxWidth()
                                     .padding(horizontal = 12.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant
                                 ),
-                                shape = RoundedCornerShape(12.dp),
+                                shape = MaterialTheme.shapes.small,
                                 elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                                 border = CardDefaults.outlinedCardBorder()
                             ) {
@@ -347,18 +349,17 @@ fun ToneDetailScreen(
                                 ) {
                                     Text(
                                         text = modelsError!!,
-                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        color = MaterialTheme.colorScheme.error,
                                         style = MaterialTheme.typography.bodyMedium
                                     )
                                     if (modelsError!!.contains("login", ignoreCase = true)) {
-                                        Button(
+                                        NnagaButton(
                                             onClick = {
                                                 val redirectUrl = URLEncoder.encode("guitarrackcraft://tone3000auth", "UTF-8")
                                                 val url = "https://www.tone3000.com/api/v1/auth?redirect_url=$redirectUrl"
                                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                                                 context.startActivity(intent)
                                             },
-                                            shape = RoundedCornerShape(12.dp)
                                         ) {
                                             Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(16.dp))
                                             Spacer(modifier = Modifier.width(8.dp))
@@ -376,7 +377,7 @@ fun ToneDetailScreen(
                             ) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(32.dp),
-                                    strokeWidth = 3.dp
+                                    strokeWidth = 2.dp
                                 )
                             }
                         }
@@ -443,9 +444,9 @@ fun ModelItem(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 4.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         border = CardDefaults.outlinedCardBorder()
     ) {
@@ -488,10 +489,11 @@ fun ModelItem(
                 isDownloaded && hasSourcePlugin -> {
                     FilledIconButton(
                         onClick = onDownload,
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = Color(0xFF4CAF50)
-                        )
+                        ),
+                        shape = MaterialTheme.shapes.small
                     ) {
                         Icon(
                             Icons.Default.PlayArrow,
@@ -504,11 +506,12 @@ fun ModelItem(
                     FilledIconButton(
                         onClick = {},
                         enabled = false,
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant,
                             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        ),
+                        shape = MaterialTheme.shapes.small
                     ) {
                         Icon(
                             Icons.Default.Check,
@@ -521,10 +524,11 @@ fun ModelItem(
                 else -> {
                     FilledIconButton(
                         onClick = onDownload,
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primary
-                        )
+                        ),
+                        shape = MaterialTheme.shapes.small
                     ) {
                         Icon(
                             Icons.Default.Download,

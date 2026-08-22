@@ -29,6 +29,7 @@ import androidx.compose.ui.Modifier
 import com.vibes.dsp.engine.NativeEngine
 import com.varcain.vsthost.NativeBridge
 import com.varcain.vsthost.ui.PluginSurface
+import com.vibes.dsp.ui.theme.NNAGATheme
 import kotlinx.coroutines.delay
 
 /**
@@ -57,7 +58,7 @@ class VstEditorActivity : ComponentActivity() {
         NativeBridge.nativeStartX11Server(displayNumber, 4096, 2160)
 
         setContent {
-            MaterialTheme {
+            NNAGATheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background

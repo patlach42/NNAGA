@@ -16,7 +16,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
@@ -38,6 +37,12 @@ import com.vibes.dsp.engine.RackManager
 import com.vibes.dsp.engine.Renderer
 import com.vibes.dsp.engine.RendererPreferenceManager
 import com.vibes.dsp.engine.WineEnvFile
+import com.vibes.dsp.ui.components.NnagaSelectorField
+import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
+import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaOutlinedButton
+import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.compose.material.icons.filled.Folder
 import com.varcain.vsthost.NativeBridge
@@ -262,7 +267,7 @@ fun VstManagerScreen(
                             containerColor = MaterialTheme.colorScheme.background,
                         ),
                         navigationIcon = {
-                            IconButton(onClick = onNavigateBack) {
+                            NnagaIconButton(onClick = onNavigateBack) {
                                 Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                             }
                         }
@@ -322,11 +327,13 @@ fun VstManagerScreen(
                                 .heightIn(min = 110.dp),
                             label = { Text("Scan roots (one per line)") },
                             minLines = 3,
-                            maxLines = 8
+                            maxLines = 8,
+                            shape = MaterialTheme.shapes.small,
+                            colors = nnagaOutlinedTextFieldColors(),
                         )
                         Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Button(
+                            NnagaButton(
                                 onClick = {
                                     val saved = VstScanPathManager.writeScanPaths(
                                         context,
@@ -338,7 +345,7 @@ fun VstManagerScreen(
                             ) {
                                 Text("Save scan paths")
                             }
-                            OutlinedButton(
+                            NnagaOutlinedButton(
                                 onClick = {
                                     val defaults = VstScanPathManager.writeScanPaths(
                                         context,
@@ -465,7 +472,7 @@ fun VstManagerScreen(
                     }
                 }
                 Spacer(Modifier.height(8.dp))
-                Button(
+                NnagaButton(
                     onClick = { pickerLauncher.launch(arrayOf("*/*")) },
                     enabled = blockingOperation == null,
                     modifier = Modifier.fillMaxWidth()
@@ -473,7 +480,7 @@ fun VstManagerScreen(
                     Text("Import VST…")
                 }
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(
+                NnagaOutlinedButton(
                     onClick = { sharedPicker.launch(null) },
                     enabled = blockingOperation == null,
                     modifier = Modifier.fillMaxWidth()
@@ -490,7 +497,7 @@ fun VstManagerScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(8.dp))
-                Button(
+                NnagaButton(
                     onClick = {
                         scope.launch(Dispatchers.IO) {
                             val ok = sharedManager.refreshAndMount(listOf(File(context.filesDir, "wineprefix")))
@@ -504,7 +511,7 @@ fun VstManagerScreen(
                     modifier = Modifier.fillMaxWidth()
                 ) { Text("Open Wine Explorer") }
                 Spacer(Modifier.height(8.dp))
-                OutlinedButton(
+                NnagaOutlinedButton(
                     onClick = { exePickerLauncher.launch(arrayOf("*/*")) },
                     enabled = blockingOperation == null,
                     modifier = Modifier.fillMaxWidth()
@@ -545,14 +552,19 @@ private fun VstBlockingOperationOverlay(label: String) {
     ) {
         Surface(
             color = MaterialTheme.colorScheme.surface,
-            shape = RoundedCornerShape(8.dp)
+            shape = MaterialTheme.shapes.small,
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
         ) {
             Column(
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                CircularProgressIndicator(strokeWidth = 3.dp)
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 2.dp,
+                )
                 Text(
                     text = "$label...",
                     style = MaterialTheme.typography.bodyMedium,
@@ -575,26 +587,23 @@ private fun RendererDropdown(
         expanded = expanded,
         onExpandedChange = { expanded = it }
     ) {
-        OutlinedTextField(
+        NnagaSelectorField(
             value = selected.label,
-            onValueChange = {},
-            readOnly = true,
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(),
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) }
+            expanded = expanded,
+            modifier = Modifier.fillMaxWidth(),
         )
         ExposedDropdownMenu(
             expanded = expanded,
             onDismissRequest = { expanded = false }
         ) {
             options.forEach { renderer ->
-                DropdownMenuItem(
-                    text = { Text(renderer.label) },
+                NnagaSelectorMenuItem(
+                    text = renderer.label,
+                    selected = renderer == selected,
                     onClick = {
                         onSelected(renderer)
                         expanded = false
-                    }
+                    },
                 )
             }
         }
@@ -626,10 +635,10 @@ private fun VstRow(
                      maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        IconButton(onClick = onOpenEditor) {
+        NnagaIconButton(onClick = onOpenEditor) {
             Icon(Icons.Default.OpenInNew, contentDescription = "Open ${entry.displayName} editor")
         }
-        IconButton(onClick = onRemove) {
+        NnagaIconButton(onClick = onRemove) {
             Icon(Icons.Default.Delete, contentDescription = "Remove ${entry.displayName}")
         }
     }
@@ -659,15 +668,15 @@ private fun ExecutableRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        IconButton(onClick = onInstallInto) {
+        NnagaIconButton(onClick = onInstallInto) {
             Icon(Icons.Default.Add,
                  contentDescription = "Install a plugin into ${entry.displayName}'s environment")
         }
-        IconButton(onClick = onLaunch) {
+        NnagaIconButton(onClick = onLaunch) {
             Icon(Icons.Default.PlayArrow,
                  contentDescription = "Open / re-validate ${entry.displayName}")
         }
-        IconButton(onClick = onRemove) {
+        NnagaIconButton(onClick = onRemove) {
             Icon(Icons.Default.Delete, contentDescription = "Remove ${entry.displayName}")
         }
     }

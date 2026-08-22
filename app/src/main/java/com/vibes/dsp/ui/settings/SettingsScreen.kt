@@ -25,7 +25,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Divider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import com.vibes.dsp.ui.components.NnagaTextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -102,13 +102,13 @@ fun SettingsScreen(
             text = { Text("Choose the direct USB transport driver") },
             confirmButton = {
                 Row {
-                    TextButton(
+                    NnagaTextButton(
                         onClick = {
                             viewModel.setUsbAudioDriver(UsbAudioDriver.Uac)
                             showDriverDialog = false
                         },
                     ) { Text("UAC") }
-                    TextButton(
+                    NnagaTextButton(
                         onClick = {
                             viewModel.setUsbAudioDriver(UsbAudioDriver.Line6)
                             showDriverDialog = false

@@ -63,18 +63,14 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -129,6 +125,11 @@ import com.vibes.dsp.engine.RackPathId
 import com.vibes.dsp.engine.RackTrackInfo
 import com.vibes.dsp.engine.TrackLaunchQuantization
 import com.vibes.dsp.ui.components.CompactHorizontalFader
+import com.vibes.dsp.ui.components.NnagaChoiceRow
+import com.vibes.dsp.ui.components.NnagaCheckbox
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaTextButton
+import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import com.vibes.dsp.ui.dashboard.rememberTopCutoutBounds
 import com.vibes.dsp.ui.rack.PluginCard
 import com.vibes.dsp.ui.rack.RackViewModel
@@ -154,10 +155,10 @@ private object LiveColors {
 }
 
 private object LiveDimensions {
-    val hitTarget = 44.dp
+    val hitTarget = 48.dp
     val control = 32.dp
-    val toolbar = 44.dp
-    val transport = 44.dp
+    val toolbar = 48.dp
+    val transport = 48.dp
     val trackWidth = 120.dp
     val trackHeader = 40.dp
     val slotHeight = 48.dp
@@ -450,7 +451,7 @@ fun LiveScreen(
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { inputMenuTrack = null }) { Text("Cancel") } },
+            confirmButton = { NnagaTextButton(onClick = { inputMenuTrack = null }) { Text("Cancel") } },
         )
     }
     clipSettingsTarget?.let { (trackId, slotIndex) ->
@@ -478,9 +479,11 @@ fun LiveScreen(
                         singleLine = true,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                         modifier = Modifier.fillMaxWidth(),
+                        shape = MaterialTheme.shapes.small,
+                        colors = nnagaOutlinedTextFieldColors(),
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
+                        NnagaCheckbox(
                             checked = clip.looping,
                             enabled = hasMedia,
                             onCheckedChange = {
@@ -491,19 +494,15 @@ fun LiveScreen(
                     }
                     Text("Clip loop length")
                     supportedLoopLengths.forEach { (bars, label) ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable(enabled = hasMedia) {
+                        NnagaChoiceRow(
+                            text = label,
+                            selected = clip.loopLengthBars == bars,
+                            enabled = hasMedia,
+                            onClick = {
                                 viewModel.setClipLoopLength(track.id, slotIndex, bars)
                             },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = clip.loopLengthBars == bars,
-                                enabled = hasMedia,
-                                onClick = { viewModel.setClipLoopLength(track.id, slotIndex, bars) },
-                            )
-                            Text(label)
-                        }
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                     if (clip.wavLoaded) {
                         OutlinedTextField(
@@ -517,32 +516,28 @@ fun LiveScreen(
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                             modifier = Modifier.fillMaxWidth(),
+                            shape = MaterialTheme.shapes.small,
+                            colors = nnagaOutlinedTextFieldColors(),
                         )
                         Text("Playback tempo mode")
                         val currentMode = ClipTempoMode.entries.getOrElse(clip.tempoMode) {
                             ClipTempoMode.Original
                         }
                         ClipTempoMode.entries.forEach { mode ->
-                            Row(
-                                Modifier.fillMaxWidth().clickable {
+                            NnagaChoiceRow(
+                                text = mode.name,
+                                selected = currentMode == mode,
+                                onClick = {
                                     viewModel.setClipTempoMode(track.id, slotIndex, mode)
                                 },
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                RadioButton(
-                                    selected = currentMode == mode,
-                                    onClick = {
-                                        viewModel.setClipTempoMode(track.id, slotIndex, mode)
-                                    },
-                                )
-                                Text(mode.name)
-                            }
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                         }
                     }
                 }
             },
             confirmButton = {
-                TextButton(
+                NnagaTextButton(
                     onClick = {
                         if (normalizedClipName != clip.displayName) {
                             viewModel.renameTrackClip(track.id, slotIndex, normalizedClipName)
@@ -556,7 +551,7 @@ fun LiveScreen(
                 ) { Text("Done") }
             },
             dismissButton = {
-                TextButton(
+                NnagaTextButton(
                     onClick = {
                         viewModel.unloadTrackClipMedia(
                             track.id,
@@ -588,23 +583,17 @@ fun LiveScreen(
                     )
                     Text("Default recording loop length")
                     supportedLoopLengths.forEach { (bars, label) ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable {
+                        NnagaChoiceRow(
+                            text = label,
+                            selected = slot.defaultLoopLengthBars == bars,
+                            onClick = {
                                 viewModel.setSlotDefaultLoopLength(track.id, slotIndex, bars)
                             },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = slot.defaultLoopLengthBars == bars,
-                                onClick = {
-                                    viewModel.setSlotDefaultLoopLength(track.id, slotIndex, bars)
-                                },
-                            )
-                            Text(label)
-                        }
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(
+                        NnagaCheckbox(
                             checked = slot.enterOnPunch,
                             enabled = slot.enterOnPunch || !slotHasMedia,
                             onCheckedChange = {
@@ -620,23 +609,19 @@ fun LiveScreen(
                     }
                     Text("Track default for future slots")
                     supportedLoopLengths.forEach { (bars, label) ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable {
+                        NnagaChoiceRow(
+                            text = label,
+                            selected = track.defaultLoopLengthBars == bars,
+                            onClick = {
                                 viewModel.setTrackDefaultLoopLength(track.id, bars)
                             },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = track.defaultLoopLengthBars == bars,
-                                onClick = { viewModel.setTrackDefaultLoopLength(track.id, bars) },
-                            )
-                            Text(label)
-                        }
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { slotSettingsTarget = null }) { Text("Done") }
+                NnagaTextButton(onClick = { slotSettingsTarget = null }) { Text("Done") }
             },
         )
     }
@@ -647,26 +632,19 @@ fun LiveScreen(
             text = {
                 Column {
                     TrackLaunchQuantization.entries.forEachIndexed { index, quantization ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable {
+                        NnagaChoiceRow(
+                            text = quantization.name,
+                            selected = launchQuantization == quantization,
+                            onClick = {
                                 launchQuantizationOrdinal = index
                                 showQuantizationMenu = false
                             },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = launchQuantization == quantization,
-                                onClick = {
-                                    launchQuantizationOrdinal = index
-                                    showQuantizationMenu = false
-                                },
-                            )
-                            Text(quantization.name)
-                        }
+                            modifier = Modifier.fillMaxWidth(),
+                        )
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = { showQuantizationMenu = false }) { Text("Cancel") } },
+            confirmButton = { NnagaTextButton(onClick = { showQuantizationMenu = false }) { Text("Cancel") } },
         )
     }
     if (showTempoDialog) {
@@ -679,15 +657,17 @@ fun LiveScreen(
                     onValueChange = { tempoInput = it },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     suffix = { Text(" BPM") },
+                    shape = MaterialTheme.shapes.small,
+                    colors = nnagaOutlinedTextFieldColors(),
                 )
             },
             confirmButton = {
-                TextButton(onClick = {
+                NnagaTextButton(onClick = {
                     tempoInput.toDoubleOrNull()?.coerceIn(20.0, 400.0)?.let(viewModel::setTransportBpm)
                     showTempoDialog = false
                 }) { Text("Apply") }
             },
-            dismissButton = { TextButton(onClick = { showTempoDialog = false }) { Text("Cancel") } },
+            dismissButton = { NnagaTextButton(onClick = { showTempoDialog = false }) { Text("Cancel") } },
         )
     }
 
@@ -1089,10 +1069,9 @@ private fun TileContainer(
                     style = MaterialTheme.typography.labelSmall,
                     maxLines = 1,
                 )
-                IconButton(
+                NnagaIconButton(
                     onClick = onShrink,
                     enabled = canShrink,
-                    modifier = Modifier.size(LiveDimensions.control),
                 ) {
                     Icon(
                         Icons.Default.Remove,
@@ -1100,10 +1079,9 @@ private fun TileContainer(
                         modifier = Modifier.size(LiveDimensions.icon),
                     )
                 }
-                IconButton(
+                NnagaIconButton(
                     onClick = onGrow,
                     enabled = canGrow,
-                    modifier = Modifier.size(LiveDimensions.control),
                 ) {
                     Icon(
                         Icons.Default.Add,
@@ -1111,10 +1089,9 @@ private fun TileContainer(
                         modifier = Modifier.size(LiveDimensions.icon),
                     )
                 }
-                IconButton(
+                NnagaIconButton(
                     onClick = onMoveUp,
                     enabled = canMoveUp,
-                    modifier = Modifier.size(LiveDimensions.control),
                 ) {
                     Icon(
                         Icons.Default.KeyboardArrowUp,
@@ -1122,10 +1099,9 @@ private fun TileContainer(
                         modifier = Modifier.size(LiveDimensions.icon),
                     )
                 }
-                IconButton(
+                NnagaIconButton(
                     onClick = onMoveDown,
                     enabled = canMoveDown,
-                    modifier = Modifier.size(LiveDimensions.control),
                 ) {
                     Icon(
                         Icons.Default.KeyboardArrowDown,
@@ -1176,9 +1152,8 @@ private fun DevicesTile(
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                 modifier = Modifier.padding(horizontal = LiveDimensions.smallGap),
             )
-            TextButton(
+            NnagaTextButton(
                 onClick = { onBrowser(pathId) },
-                modifier = Modifier.height(LiveDimensions.hitTarget),
             ) {
                 Icon(
                     Icons.Default.Add,
@@ -1342,7 +1317,7 @@ private fun TransportBar(
                     }
                 }
             }
-            IconButton(onClick = onRestart, modifier = Modifier.size(LiveDimensions.hitTarget)) {
+            NnagaIconButton(onClick = onRestart, modifier = Modifier.size(LiveDimensions.hitTarget)) {
                 Icon(
                     Icons.Default.SkipPrevious,
                     contentDescription = "Restart transport",
@@ -1358,7 +1333,7 @@ private fun TransportBar(
                 maxLines = 1,
                 modifier = Modifier.padding(start = LiveDimensions.smallGap).weight(1f),
             )
-            TextButton(onClick = onBpm, modifier = Modifier.height(LiveDimensions.hitTarget)) {
+            NnagaTextButton(onClick = onBpm, modifier = Modifier.height(LiveDimensions.hitTarget)) {
                 Text(
                     "${bpm.roundToInt()} BPM",
                     color = LiveColors.text,
@@ -1587,7 +1562,7 @@ private fun TrackHeader(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showPalette = false }) { Text("Cancel") }
+                NnagaTextButton(onClick = { showPalette = false }) { Text("Cancel") }
             },
         )
     }
@@ -1706,7 +1681,7 @@ private fun ClipCard(
                     fontWeight = if (playing || slot.launchPending || selected || recording) FontWeight.SemiBold else FontWeight.Normal,
                     modifier = Modifier.padding(start = LiveDimensions.smallGap).weight(1f),
                 )
-                IconButton(
+                NnagaIconButton(
                     onClick = {
                         when {
                             filled -> onLaunch(slot.slot)
@@ -1892,9 +1867,8 @@ private fun TrackInspectorControls(
                 )
             }
         }
-        TextButton(
+        NnagaTextButton(
             onClick = onInputClick,
-            modifier = Modifier.height(40.dp),
         ) {
             Text("IN ${track.inputChannel + 1}", style = MaterialTheme.typography.labelSmall)
         }
@@ -1919,7 +1893,7 @@ private fun TrackInspectorControls(
                 modifier = Modifier.fillMaxWidth().height(48.dp),
             )
         }
-        IconButton(
+        NnagaIconButton(
             onClick = onLoopClick,
             enabled = clipHasMedia,
             modifier = Modifier
@@ -1947,7 +1921,7 @@ private fun TrackInspectorControls(
             )
         }
         Box {
-            IconButton(
+            NnagaIconButton(
                 onClick = { showMore = true },
                 modifier = Modifier.size(LiveDimensions.hitTarget),
             ) {
@@ -2265,7 +2239,7 @@ private fun Mixer(
                         onVolume = { onVolume(track, it) },
                     )
                 }
-                IconButton(onClick = onAdd, modifier = Modifier.size(LiveDimensions.hitTarget)) {
+                NnagaIconButton(onClick = onAdd, modifier = Modifier.size(LiveDimensions.hitTarget)) {
                     Icon(
                         Icons.Default.Add,
                         contentDescription = "Add track",

@@ -30,7 +30,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaFilledIconButton
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaTextButton
+import com.vibes.dsp.ui.components.NnagaTonalButton
+import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
@@ -55,6 +60,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.vibes.dsp.ui.components.NnagaFilterChip
+import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 
@@ -148,13 +155,13 @@ fun Tone3000Screen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    NnagaIconButton(onClick = onNavigateBack) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
                     if (isAuthenticated) {
-                        IconButton(onClick = { viewModel.logout() }) {
+                        NnagaIconButton(onClick = { viewModel.logout() }) {
                             Icon(
                                 Icons.Default.ExitToApp,
                                 contentDescription = "Logout",
@@ -162,7 +169,7 @@ fun Tone3000Screen(
                             )
                         }
                     } else {
-                        FilledTonalButton(
+                        NnagaTonalButton(
                             onClick = {
                                 val redirectUrl = URLEncoder.encode("guitarrackcraft://tone3000auth", "UTF-8")
                                 val url = "https://www.tone3000.com/api/v1/auth?redirect_url=$redirectUrl"
@@ -197,7 +204,7 @@ fun Tone3000Screen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                TextField(
+                OutlinedTextField(
                     value = searchQuery,
                     onValueChange = {
                         searchQuery = it
@@ -213,18 +220,13 @@ fun Tone3000Screen(
                         )
                     },
                     singleLine = true,
-                    shape = RoundedCornerShape(24.dp),
-                    colors = TextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        focusedIndicatorColor = Color.Transparent,
-                        unfocusedIndicatorColor = Color.Transparent
-                    )
+                    shape = MaterialTheme.shapes.small,
+                    colors = nnagaOutlinedTextFieldColors()
                 )
 
                 // Filter button with badge
                 Box {
-                    IconButton(onClick = { showFilterSheet = true }) {
+                    NnagaIconButton(onClick = { showFilterSheet = true }) {
                         Icon(
                             Icons.Default.FilterList,
                             contentDescription = "Filters",
@@ -233,17 +235,27 @@ fun Tone3000Screen(
                         )
                     }
                     if (activeFilterCount > 0) {
-                        Badge(
-                            modifier = Modifier.align(Alignment.TopEnd).offset(x = (-4).dp, y = 4.dp)
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(x = (-4).dp, y = 4.dp)
+                                .defaultMinSize(minWidth = 16.dp, minHeight = 16.dp),
+                            shape = MaterialTheme.shapes.extraSmall,
+                            color = MaterialTheme.colorScheme.error,
                         ) {
-                            Text("$activeFilterCount")
+                            Text(
+                                text = "$activeFilterCount",
+                                modifier = Modifier.padding(horizontal = 4.dp),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onError,
+                            )
                         }
                     }
                 }
 
                 // Sort button
                 Box {
-                    IconButton(onClick = { showSortMenu = true }) {
+                    NnagaIconButton(onClick = { showSortMenu = true }) {
                         Icon(
                             Icons.Default.Sort,
                             contentDescription = "Sort",
@@ -255,21 +267,12 @@ fun Tone3000Screen(
                         onDismissRequest = { showSortMenu = false }
                     ) {
                         TonesSort.values().forEach { sort ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        text = sort.displayName,
-                                        fontWeight = if (selectedSort == sort) FontWeight.Bold else FontWeight.Normal
-                                    )
-                                },
+                            NnagaSelectorMenuItem(
+                                text = sort.displayName,
+                                selected = selectedSort == sort,
                                 onClick = {
                                     showSortMenu = false
                                     viewModel.setSort(sort)
-                                },
-                                leadingIcon = {
-                                    if (selectedSort == sort) {
-                                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                                    }
                                 }
                             )
                         }
@@ -312,7 +315,7 @@ fun Tone3000Screen(
                             modifier = Modifier.widthIn(max = 280.dp)
                         )
                         Spacer(modifier = Modifier.height(8.dp))
-                        Button(
+                        NnagaButton(
                             onClick = {
                                 val redirectUrl = URLEncoder.encode("guitarrackcraft://tone3000auth", "UTF-8")
                                 val url = "https://www.tone3000.com/api/v1/auth?redirect_url=$redirectUrl"
@@ -320,7 +323,6 @@ fun Tone3000Screen(
                                 context.startActivity(intent)
                             },
                             modifier = Modifier.fillMaxWidth(0.7f),
-                            shape = RoundedCornerShape(12.dp)
                         ) {
                             Icon(Icons.Default.Person, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
@@ -341,7 +343,7 @@ fun Tone3000Screen(
                             color = MaterialTheme.colorScheme.error,
                             style = MaterialTheme.typography.bodyMedium
                         )
-                        FilledTonalButton(onClick = { viewModel.searchTones(searchQuery) }) {
+                        NnagaTonalButton(onClick = { viewModel.searchTones(searchQuery) }) {
                             Text("Retry")
                         }
                     }
@@ -388,7 +390,7 @@ fun Tone3000Screen(
                             ) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(32.dp),
-                                    strokeWidth = 3.dp
+                                    strokeWidth = 2.dp
                                 )
                             }
                         }
@@ -402,7 +404,8 @@ fun Tone3000Screen(
     if (showFilterSheet) {
         ModalBottomSheet(
             onDismissRequest = { showFilterSheet = false },
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.small,
         ) {
             Column(
                 modifier = Modifier
@@ -417,7 +420,7 @@ fun Tone3000Screen(
                 ) {
                     Text("Filters", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
                     if (activeFilterCount > 0) {
-                        TextButton(onClick = { viewModel.clearFilters() }) {
+                        NnagaTextButton(onClick = { viewModel.clearFilters() }) {
                             Text("Clear All")
                         }
                     }
@@ -437,10 +440,10 @@ fun Tone3000Screen(
                             "pedal" to "Pedal",
                             "outboard" to "Outboard"
                         ).forEach { (value, label) ->
-                            FilterChip(
+                            NnagaFilterChip(
+                                text = label,
                                 selected = selectedGear == value,
-                                onClick = { viewModel.setGearFilter(if (selectedGear == value) null else value) },
-                                label = { Text(label) }
+                                onClick = { viewModel.setGearFilter(if (selectedGear == value) null else value) }
                             )
                         }
                     }
@@ -453,10 +456,10 @@ fun Tone3000Screen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Platform.values().forEach { platform ->
-                            FilterChip(
+                            NnagaFilterChip(
+                                text = platform.displayName,
                                 selected = selectedPlatform == platform,
-                                onClick = { viewModel.setPlatformFilter(if (selectedPlatform == platform) null else platform) },
-                                label = { Text(platform.displayName) }
+                                onClick = { viewModel.setPlatformFilter(if (selectedPlatform == platform) null else platform) }
                             )
                         }
                     }
@@ -469,10 +472,10 @@ fun Tone3000Screen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf("nam", "aida-x", "ir", "metal", "high-gain", "rock", "crunch", "distortion", "clean").forEach { tag ->
-                            FilterChip(
+                            NnagaFilterChip(
+                                text = tag,
                                 selected = selectedTags.contains(tag),
-                                onClick = { viewModel.toggleTag(tag) },
-                                label = { Text(tag) }
+                                onClick = { viewModel.toggleTag(tag) }
                             )
                         }
                     }
@@ -485,10 +488,10 @@ fun Tone3000Screen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         listOf("standard", "lite", "feather", "nano", "custom").forEach { size ->
-                            FilterChip(
+                            NnagaFilterChip(
+                                text = ModelSize.fromString(size),
                                 selected = selectedSizes.contains(size),
-                                onClick = { viewModel.toggleSize(size) },
-                                label = { Text(ModelSize.fromString(size)) }
+                                onClick = { viewModel.toggleSize(size) }
                             )
                         }
                     }
@@ -501,14 +504,14 @@ fun Tone3000Screen(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Architecture.values().forEach { architecture ->
-                            FilterChip(
+                            NnagaFilterChip(
+                                text = architecture.displayName,
                                 selected = selectedArchitecture == architecture,
                                 onClick = {
                                     viewModel.setArchitectureFilter(
                                         if (selectedArchitecture == architecture) null else architecture
                                     )
-                                },
-                                label = { Text(architecture.displayName) }
+                                }
                             )
                         }
                     }
@@ -516,15 +519,15 @@ fun Tone3000Screen(
 
                 FilterSection(title = "Calibrated") {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(
+                        NnagaFilterChip(
+                            text = "Yes",
                             selected = isCalibrated == true,
-                            onClick = { viewModel.setCalibrated(if (isCalibrated == true) null else true) },
-                            label = { Text("Yes") }
+                            onClick = { viewModel.setCalibrated(if (isCalibrated == true) null else true) }
                         )
-                        FilterChip(
+                        NnagaFilterChip(
+                            text = "No",
                             selected = isCalibrated == false,
-                            onClick = { viewModel.setCalibrated(if (isCalibrated == false) null else false) },
-                            label = { Text("No") }
+                            onClick = { viewModel.setCalibrated(if (isCalibrated == false) null else false) }
                         )
                     }
                 }
@@ -536,7 +539,8 @@ fun Tone3000Screen(
     modelsForTone?.let { (tone, models) ->
         ModalBottomSheet(
             onDismissRequest = { viewModel.dismissModelDialog() },
-            containerColor = MaterialTheme.colorScheme.surface
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.small,
         ) {
             Column(
                 modifier = Modifier
@@ -607,9 +611,9 @@ private fun ModelSelectionItem(
     Card(
         modifier = Modifier.fillMaxWidth().clickable(enabled = isClickable, onClick = onSelect),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         border = CardDefaults.outlinedCardBorder()
     ) {
@@ -652,10 +656,11 @@ private fun ModelSelectionItem(
                 isDownloaded && hasSourcePlugin -> {
                     FilledIconButton(
                         onClick = onSelect,
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = Color(0xFF4CAF50)
-                        )
+                        ),
+                        shape = MaterialTheme.shapes.small
                     ) {
                         Icon(
                             Icons.Default.PlayArrow,
@@ -668,11 +673,12 @@ private fun ModelSelectionItem(
                     FilledIconButton(
                         onClick = {},
                         enabled = false,
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant,
                             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
+                        ),
+                        shape = MaterialTheme.shapes.small
                     ) {
                         Icon(
                             Icons.Default.Check,
@@ -685,10 +691,11 @@ private fun ModelSelectionItem(
                 else -> {
                     FilledIconButton(
                         onClick = onSelect,
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primary
-                        )
+                        ),
+                        shape = MaterialTheme.shapes.small
                     ) {
                         Icon(
                             Icons.Default.Download,
@@ -711,9 +718,9 @@ fun ToneItem(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp),
+        shape = MaterialTheme.shapes.small,
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         border = CardDefaults.outlinedCardBorder()
@@ -729,7 +736,7 @@ fun ToneItem(
             Box(
                 modifier = Modifier
                     .size(88.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(MaterialTheme.shapes.small)
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
                 AsyncImage(
@@ -745,7 +752,7 @@ fun ToneItem(
                 tone.formatValue()?.let { format ->
                     Surface(
                         color = MaterialTheme.colorScheme.inverseSurface.copy(alpha = 0.85f),
-                        shape = RoundedCornerShape(bottomStart = 10.dp, topEnd = 0.dp),
+                        shape = MaterialTheme.shapes.extraSmall,
                         modifier = Modifier.align(Alignment.TopEnd)
                     ) {
                         Text(
@@ -803,13 +810,7 @@ fun ToneItem(
             }
 
             // Download button
-            FilledIconButton(
-                onClick = onDownload,
-                modifier = Modifier.size(40.dp),
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer
-                )
-            ) {
+            NnagaFilledIconButton(onClick = onDownload) {
                 Icon(
                     Icons.Default.Download,
                     contentDescription = "Download",
@@ -825,7 +826,7 @@ fun ToneItem(
 fun ToneBadge(text: String, containerColor: Color, contentColor: Color) {
     Surface(
         color = containerColor,
-        shape = RoundedCornerShape(6.dp)
+        shape = MaterialTheme.shapes.extraSmall
     ) {
         Text(
             text = text,

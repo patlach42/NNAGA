@@ -29,7 +29,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -48,6 +47,7 @@ import androidx.lifecycle.lifecycleScope
 import com.vibes.dsp.engine.AudioEngine
 import com.vibes.dsp.engine.EngineInitHelper
 import com.vibes.dsp.engine.NativeEngine
+import com.vibes.dsp.ui.components.NnagaButton
 import com.vibes.dsp.ui.loading.PluginExtractScreen
 import com.vibes.dsp.ui.navigation.AppNavigation
 import com.vibes.dsp.ui.theme.NNAGATheme
@@ -424,7 +424,7 @@ class MainActivity : ComponentActivity() {
                 modifier = Modifier.padding(24.dp)
             ) {
                 Text(message, color = MaterialTheme.colorScheme.onBackground)
-                Button(onClick = onRetry) {
+                NnagaButton(onClick = onRetry) {
                     Text("Retry")
                 }
             }

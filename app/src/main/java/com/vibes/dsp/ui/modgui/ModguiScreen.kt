@@ -34,12 +34,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -60,6 +59,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.webkit.WebViewAssetLoader
 import android.app.Activity
 import android.content.pm.ActivityInfo
+import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.RackManager
 import java.io.File
@@ -163,7 +163,10 @@ fun ModguiScreen(
 
     if (!pluginInfoLoaded) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+            CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 2.dp,
+            )
         }
         return
     }
@@ -193,7 +196,10 @@ fun ModguiScreen(
     val templateData = templateDataState.value
     if (templateData == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+            CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 2.dp,
+            )
         }
         return
     }
@@ -219,7 +225,7 @@ fun ModguiScreen(
             modifier = Modifier.fillMaxSize()
         )
         // Floating back button
-        IconButton(
+        NnagaIconButton(
             onClick = onNavigateBack,
             modifier = Modifier
                 .align(Alignment.TopStart)
@@ -228,7 +234,7 @@ fun ModguiScreen(
             Icon(
                 Icons.Default.ArrowBack,
                 contentDescription = "Back",
-                tint = Color.White
+                tint = MaterialTheme.colorScheme.onSurface
             )
         }
     }
@@ -269,7 +275,10 @@ fun InlineModguiView(
     val templateData = templateDataState.value
     if (templateData == null) {
         Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator()
+            CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 2.dp,
+            )
         }
         return
     }
@@ -358,7 +367,10 @@ fun InlineModguiView(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 2.dp,
+                )
             }
             return@BoxWithConstraints
         }

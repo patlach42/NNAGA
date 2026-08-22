@@ -13,17 +13,28 @@ package com.vibes.dsp.ui.theme
 import android.app.Activity
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.Shapes
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.collectAsState
 import androidx.core.view.WindowCompat
+
+private val NnagaShapes = Shapes(
+    extraSmall = RoundedCornerShape(2.dp),
+    small = RoundedCornerShape(2.dp),
+    medium = RoundedCornerShape(2.dp),
+    large = RoundedCornerShape(2.dp),
+    extraLarge = RoundedCornerShape(2.dp),
+)
 
 private fun amoledColorScheme(accentArgb: Int) : androidx.compose.material3.ColorScheme {
     val accent = Color(accentArgb)
@@ -49,9 +60,9 @@ private fun amoledColorScheme(accentArgb: Int) : androidx.compose.material3.Colo
         surface = surface,
         onSurface = Color(0xFFF5F5F5),
         surfaceVariant = Color(0xFF121212),
-        onSurfaceVariant = Color(0xFFC5C5C5),
+        onSurfaceVariant = Color(0xFFA3A3A3),
         outline = Color(0xFF8C8C8C),
-        outlineVariant = Color(0xFF414141),
+        outlineVariant = Color(0xFF292929),
         inverseSurface = Color(0xFFE5E5E5),
         inverseOnSurface = Color(0xFF202020),
         error = Color(0xFFFFB4AB),
@@ -85,6 +96,7 @@ fun NNAGATheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = androidx.compose.material3.Typography(),
+        shapes = NnagaShapes,
         content = content
     )
 }
