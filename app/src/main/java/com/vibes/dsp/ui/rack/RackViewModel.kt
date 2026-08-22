@@ -409,6 +409,19 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setSlotDefaultLoopLength(trackId: RackPathId, slot: Int, bars: Double) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setSlotDefaultLoopLength(trackId, slot, bars)
+                if (!ok) _errorMessage.value = "Failed to set slot default loop length"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
     fun setClipTempoMode(trackId: RackPathId, slot: Int, mode: ClipTempoMode) {
         viewModelScope.launch(Dispatchers.IO) {
             rackControlMutex.withLock {
@@ -460,7 +473,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun setClipEnterOnPunch(
+    fun setSlotEnterOnPunch(
         trackId: RackPathId,
         slot: Int,
         armed: Boolean,
@@ -472,26 +485,25 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                 if (armed && (
                         _tracks.value.firstOrNull { it.id == trackId }?.inputArmed != true ||
                             target?.wavLoaded == true ||
-                            target?.midiLoaded == true ||
-                            (_transport.value.playing && quantization != TrackLaunchQuantization.None)
+                            target?.midiLoaded == true
                         )) {
                     _errorMessage.value = "Failed to arm enter on punch"
                     return@withLock
                 }
                 val ok = if (armed) {
-                    val configured = RackManager.setClipEnterOnPunch(trackId, slot, true, quantization)
+                    val configured = RackManager.setSlotEnterOnPunch(trackId, slot, true, quantization)
                     if (!configured) {
                         false
                     } else {
                         val started = RackManager.startTrackClipRecording(trackId, slot, quantization)
                         if (!started) {
-                            RackManager.setClipEnterOnPunch(trackId, slot, false, quantization)
+                            RackManager.setSlotEnterOnPunch(trackId, slot, false, quantization)
                         }
                         started
                     }
                 } else {
                     RackManager.cancelTrackLoopRecording(trackId)
-                    RackManager.setClipEnterOnPunch(trackId, slot, false, quantization)
+                    RackManager.setSlotEnterOnPunch(trackId, slot, false, quantization)
                 }
                 if (!ok) _errorMessage.value = if (armed) {
                     "Failed to arm enter on punch"
@@ -617,8 +629,8 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun transportStop() {
         viewModelScope.launch(Dispatchers.IO) {
-            RackManager.setTransportPlaying(false)
-            RackManager.restartTransport()
+            val stopped = RackManager.stopTransport()
+            if (!stopped) _errorMessage.value = "Failed to stop transport"
             refreshTransport()
             refreshTrackTransport()
         }

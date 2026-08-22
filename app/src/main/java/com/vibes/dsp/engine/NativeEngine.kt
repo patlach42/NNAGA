@@ -232,6 +232,7 @@ data class ClipSlotInfo(
     val enterOnPunch: Boolean,
     val sourceBpm: Double = 120.0,
     val tempoMode: Int = ClipTempoMode.Original.ordinal,
+    val defaultLoopLengthBars: Double = 1.0,
 )
 
 data class MidiNoteInfo(
@@ -601,10 +602,12 @@ class NativeEngine private constructor() {
     external fun nativeSetTransportPlaying(playing: Boolean): Boolean
     external fun nativeSetTransportBpm(bpm: Double): Boolean
     external fun nativeRestartTransport(): Boolean
+    external fun nativeStopTransport(): Boolean
     external fun nativeSetTrackDefaultLoopLength(trackId: Long, bars: Double): Boolean
+    external fun nativeSetSlotDefaultLoopLength(trackId: Long, slot: Int, bars: Double): Boolean
     external fun nativeSetClipLoopLength(trackId: Long, slot: Int, bars: Double): Boolean
     external fun nativeSetClipLooping(trackId: Long, slot: Int, looping: Boolean): Boolean
-    external fun nativeSetClipEnterOnPunch(
+    external fun nativeSetSlotEnterOnPunch(
         trackId: Long,
         slot: Int,
         armed: Boolean,
@@ -705,18 +708,21 @@ class NativeEngine private constructor() {
     fun setTransportBpm(bpm: Double): Boolean = nativeSetTransportBpm(bpm.coerceIn(20.0, 400.0))
     fun setTransportPlaying(playing: Boolean): Boolean = nativeSetTransportPlaying(playing)
     fun restartTransport(): Boolean = nativeRestartTransport()
+    fun stopTransport(): Boolean = nativeStopTransport()
     fun setTrackDefaultLoopLength(trackId: Long, bars: Double): Boolean =
         nativeSetTrackDefaultLoopLength(trackId, bars)
+    fun setSlotDefaultLoopLength(trackId: Long, slot: Int, bars: Double): Boolean =
+        nativeSetSlotDefaultLoopLength(trackId, slot, bars)
     fun setClipLoopLength(trackId: Long, slot: Int, bars: Double): Boolean =
         nativeSetClipLoopLength(trackId, slot, bars)
     fun setClipLooping(trackId: Long, slot: Int, looping: Boolean): Boolean =
         nativeSetClipLooping(trackId, slot, looping)
-    fun setClipEnterOnPunch(
+    fun setSlotEnterOnPunch(
         trackId: Long,
         slot: Int,
         armed: Boolean,
         quantization: TrackLaunchQuantization
-    ): Boolean = nativeSetClipEnterOnPunch(trackId, slot, armed, quantization.ordinal)
+    ): Boolean = nativeSetSlotEnterOnPunch(trackId, slot, armed, quantization.ordinal)
     fun setClipTransportPlaying(
         trackId: Long,
         slot: Int,

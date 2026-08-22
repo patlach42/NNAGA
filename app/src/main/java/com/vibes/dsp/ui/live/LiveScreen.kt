@@ -194,6 +194,7 @@ private fun emptyClipSlot(track: RackTrackInfo, slot: Int) = ClipSlotInfo(
     transportFrame = 0L,
     loopLengthBars = track.defaultLoopLengthBars,
     enterOnPunch = false,
+    defaultLoopLengthBars = track.defaultLoopLengthBars,
 )
 
 internal data class LiveFullscreenRequest(
@@ -239,7 +240,9 @@ fun LiveScreen(
 
     var launchQuantizationOrdinal by rememberSaveable { mutableIntStateOf(0) }
     val launchQuantization = TrackLaunchQuantization.entries[launchQuantizationOrdinal]
-    var recordMenuTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    var clipSettingsTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    var slotSettingsTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    var clipBpmInput by rememberSaveable { mutableStateOf("") }
     var showTempoDialog by rememberSaveable { mutableStateOf(false) }
     var tempoInput by rememberSaveable { mutableStateOf("") }
     var selectedTrackId by rememberSaveable { mutableLongStateOf(0L) }
@@ -447,48 +450,65 @@ fun LiveScreen(
             confirmButton = { TextButton(onClick = { inputMenuTrack = null }) { Text("Cancel") } },
         )
     }
-    recordMenuTarget?.let { (trackId, slotIndex) ->
+    clipSettingsTarget?.let { (trackId, slotIndex) ->
         val track = tracks.firstOrNull { it.id == trackId } ?: return@let
         val clip = slotsByTrack[trackId]?.firstOrNull { it.slot == slotIndex }
-            ?: emptyClipSlot(track, slotIndex)
+            ?: return@let
+        val hasMedia = clip.wavLoaded || clip.midiLoaded
+        val parsedBpm = clipBpmInput.toDoubleOrNull()
+        val validBpm = parsedBpm != null && parsedBpm.isFinite() && parsedBpm in 20.0..400.0
         AlertDialog(
-            onDismissRequest = { recordMenuTarget = null },
-            title = { Text("Clip options") },
+            onDismissRequest = { clipSettingsTarget = null },
+            title = { Text("Clip settings") },
             text = {
                 Column(Modifier.verticalScroll(rememberScrollState())) {
-                    Text("Default loop length for new slots")
-                    supportedLoopLengths.forEach { (bars, label) ->
-                        Row(
-                            Modifier.fillMaxWidth().clickable {
-                                viewModel.setTrackDefaultLoopLength(track.id, bars)
+                    Text(
+                        clip.displayName.ifBlank { "Slot ${slotIndex + 1}" },
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(
+                            checked = clip.looping,
+                            enabled = hasMedia,
+                            onCheckedChange = {
+                                viewModel.setClipLooping(track.id, slotIndex, it)
                             },
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = track.defaultLoopLengthBars == bars,
-                                onClick = { viewModel.setTrackDefaultLoopLength(track.id, bars) },
-                            )
-                            Text(label)
-                        }
+                        )
+                        Text("Loop clip")
                     }
-                    Text("Selected slot loop length")
+                    Text("Clip loop length")
                     supportedLoopLengths.forEach { (bars, label) ->
                         Row(
-                            Modifier.fillMaxWidth().clickable {
+                            Modifier.fillMaxWidth().clickable(enabled = hasMedia) {
                                 viewModel.setClipLoopLength(track.id, slotIndex, bars)
                             },
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             RadioButton(
                                 selected = clip.loopLengthBars == bars,
+                                enabled = hasMedia,
                                 onClick = { viewModel.setClipLoopLength(track.id, slotIndex, bars) },
                             )
                             Text(label)
                         }
                     }
                     if (clip.wavLoaded) {
-                        Text("WAV tempo mode")
-                        val currentMode = ClipTempoMode.entries.getOrElse(clip.tempoMode) { ClipTempoMode.Original }
+                        OutlinedTextField(
+                            value = clipBpmInput,
+                            onValueChange = { clipBpmInput = it },
+                            label = { Text("WAV Base BPM") },
+                            supportingText = {
+                                if (!validBpm) Text("Enter a value from 20 to 400 BPM")
+                            },
+                            isError = !validBpm,
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text("Playback tempo mode")
+                        val currentMode = ClipTempoMode.entries.getOrElse(clip.tempoMode) {
+                            ClipTempoMode.Original
+                        }
                         ClipTempoMode.entries.forEach { mode ->
                             Row(
                                 Modifier.fillMaxWidth().clickable {
@@ -506,14 +526,58 @@ fun LiveScreen(
                             }
                         }
                     }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (clip.wavLoaded && validBpm) {
+                            viewModel.setClipSourceBpm(track.id, slotIndex, parsedBpm!!)
+                        }
+                        clipSettingsTarget = null
+                    },
+                    enabled = !clip.wavLoaded || validBpm,
+                ) { Text("Done") }
+            },
+        )
+    }
+    slotSettingsTarget?.let { (trackId, slotIndex) ->
+        val track = tracks.firstOrNull { it.id == trackId } ?: return@let
+        val slot = slotsByTrack[trackId]?.firstOrNull { it.slot == slotIndex }
+            ?: emptyClipSlot(track, slotIndex)
+        val slotHasMedia = slot.wavLoaded || slot.midiLoaded
+        AlertDialog(
+            onDismissRequest = { slotSettingsTarget = null },
+            title = { Text("Slot settings") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    Text(
+                        "Slot ${slotIndex + 1}",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text("Default recording loop length")
+                    supportedLoopLengths.forEach { (bars, label) ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                viewModel.setSlotDefaultLoopLength(track.id, slotIndex, bars)
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = slot.defaultLoopLengthBars == bars,
+                                onClick = {
+                                    viewModel.setSlotDefaultLoopLength(track.id, slotIndex, bars)
+                                },
+                            )
+                            Text(label)
+                        }
+                    }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(
-                            checked = clip.enterOnPunch,
-                            enabled = clip.enterOnPunch ||
-                                !transport.playing ||
-                                launchQuantization == TrackLaunchQuantization.None,
+                            checked = slot.enterOnPunch,
+                            enabled = slot.enterOnPunch || !slotHasMedia,
                             onCheckedChange = {
-                                viewModel.setClipEnterOnPunch(
+                                viewModel.setSlotEnterOnPunch(
                                     track.id,
                                     slotIndex,
                                     it,
@@ -523,9 +587,26 @@ fun LiveScreen(
                         )
                         Text("Enter on punch")
                     }
+                    Text("Track default for future slots")
+                    supportedLoopLengths.forEach { (bars, label) ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                viewModel.setTrackDefaultLoopLength(track.id, bars)
+                            },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = track.defaultLoopLengthBars == bars,
+                                onClick = { viewModel.setTrackDefaultLoopLength(track.id, bars) },
+                            )
+                            Text(label)
+                        }
+                    }
                 }
             },
-            confirmButton = { TextButton(onClick = { recordMenuTarget = null }) { Text("Done") } },
+            confirmButton = {
+                TextButton(onClick = { slotSettingsTarget = null }) { Text("Done") }
+            },
         )
     }
     if (showQuantizationMenu) {
@@ -742,9 +823,6 @@ fun LiveScreen(
                                 peaks = peaksByTrack[selectedTrack?.id].orEmpty(),
                                 notes = notesByClip[selectedTrack?.id to selectedSlot].orEmpty(),
                                 bpm = transport.beatsPerMinute,
-                                onClipSourceBpm = { track, clip, value ->
-                                    viewModel.setClipSourceBpm(track.id, clip.slot, value)
-                                },
                                 onTrackVolume = { track, volume -> viewModel.setTrackVolume(track.id, volume) },
                                 onTrackInput = { inputMenuTrack = it },
                                 onTrackArm = { track ->
@@ -754,8 +832,12 @@ fun LiveScreen(
                                     viewModel.setTrackInputArmLocked(track.id, !track.inputArmLocked)
                                 },
                                 onTrackDelete = { track -> viewModel.removeTrack(track.id) },
-                                onTrackRecordMenu = { track, clip ->
-                                    recordMenuTarget = track.id to clip.slot
+                                onOpenClipSettings = { track, clip ->
+                                    clipBpmInput = if (clip.wavLoaded) clip.sourceBpm.toString() else ""
+                                    clipSettingsTarget = track.id to clip.slot
+                                },
+                                onOpenSlotSettings = { track, slot ->
+                                    slotSettingsTarget = track.id to slot.slot
                                 },
                                 onClipLoop = { track, clip ->
                                     viewModel.setClipLooping(track.id, clip.slot, !clip.looping)
@@ -1649,9 +1731,9 @@ private fun ClipInspector(
     onTrackArm: (RackTrackInfo) -> Unit,
     onTrackArmLock: (RackTrackInfo) -> Unit,
     onTrackDelete: (RackTrackInfo) -> Unit,
-    onTrackRecordMenu: (RackTrackInfo, ClipSlotInfo) -> Unit,
+    onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
+    onOpenSlotSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onClipLoop: (RackTrackInfo, ClipSlotInfo) -> Unit,
-    onClipSourceBpm: (RackTrackInfo, ClipSlotInfo, Double) -> Unit,
     bpm: Double,
     launchQuantization: TrackLaunchQuantization,
     onLaunchQuantizationClick: () -> Unit,
@@ -1672,8 +1754,8 @@ private fun ClipInspector(
                     onArmClick = { track?.let(onTrackArm) },
                     onArmLockClick = { track?.let(onTrackArmLock) },
                     onDeleteClick = { track?.let(onTrackDelete) },
-                    onRecordOptionsClick = {
-                        if (track != null && clip != null) onTrackRecordMenu(track, clip)
+                    onSlotSettingsClick = {
+                        if (track != null && clip != null) onOpenSlotSettings(track, clip)
                     },
                     onLoopClick = {
                         if (track != null && clip != null) onClipLoop(track, clip)
@@ -1684,9 +1766,9 @@ private fun ClipInspector(
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 if (clip?.midiLoaded == true) {
-                    PianoRoll(clip, notes, bpm)
+                    PianoRoll(clip, notes, bpm, track, onOpenClipSettings)
                 } else {
-                    Waveform(clip, peaks, bpm, track, onClipSourceBpm)
+                    Waveform(clip, peaks, bpm, track, onOpenClipSettings)
                 }
             }
         }
@@ -1703,7 +1785,7 @@ private fun TrackInspectorControls(
     onArmClick: () -> Unit,
     onArmLockClick: () -> Unit,
     onDeleteClick: () -> Unit,
-    onRecordOptionsClick: () -> Unit,
+    onSlotSettingsClick: () -> Unit,
     onLoopClick: () -> Unit,
     launchQuantization: TrackLaunchQuantization,
     onLaunchQuantizationClick: () -> Unit,
@@ -1720,6 +1802,7 @@ private fun TrackInspectorControls(
         TrackLaunchQuantization.None -> "OFF"
     }
     var showArmLockMenu by remember { mutableStateOf(false) }
+    val clipHasMedia = clip?.wavLoaded == true || clip?.midiLoaded == true
     var showMore by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxSize().padding(horizontal = LiveDimensions.smallGap),
@@ -1807,6 +1890,7 @@ private fun TrackInspectorControls(
         }
         IconButton(
             onClick = onLoopClick,
+            enabled = clipHasMedia,
             modifier = Modifier
                 .size(LiveDimensions.hitTarget)
                 .background(
@@ -1815,8 +1899,13 @@ private fun TrackInspectorControls(
                     RoundedCornerShape(2.dp),
                 )
                 .semantics {
-                    contentDescription = "Loop selected clip slot"
-                    stateDescription = if (clip?.looping == true) "Active" else "Inactive"
+                    contentDescription = "Toggle selected clip looping"
+                    stateDescription = when {
+                        !clipHasMedia -> "Unavailable, slot is empty"
+                        clip?.looping == true -> "Active"
+                        else -> "Inactive"
+                    }
+                    if (!clipHasMedia) disabled()
                 },
         ) {
             Icon(
@@ -1833,7 +1922,7 @@ private fun TrackInspectorControls(
             ) {
                 Icon(
                     Icons.Default.MoreVert,
-                    contentDescription = "More track options",
+                    contentDescription = "More slot and track options",
                     tint = LiveColors.textMuted,
                     modifier = Modifier.size(LiveDimensions.icon),
                 )
@@ -1847,10 +1936,10 @@ private fun TrackInspectorControls(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("Loop length / enter on punch") },
+                    text = { Text("Slot settings") },
                     onClick = {
                         showMore = false
-                        onRecordOptionsClick()
+                        onSlotSettingsClick()
                     },
                 )
                 DropdownMenuItem(
@@ -1954,12 +2043,9 @@ private fun formatLoopLengthBars(bars: Double): String = when {
 private fun ClipPositionOverlay(
     clip: ClipSlotInfo,
     bpm: Double,
-    track: RackTrackInfo?,
-    onClipSourceBpm: (RackTrackInfo, ClipSlotInfo, Double) -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var showBpmDialog by remember { mutableStateOf(false) }
-    var bpmInput by remember(clip.sourceBpm) { mutableStateOf(clip.sourceBpm.toString()) }
     val positionSec = clip.positionSec.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
     val durationSec = clip.durationSec.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
     val mediaType = if (clip.midiLoaded) "MIDI" else "WAV"
@@ -1970,9 +2056,8 @@ private fun ClipPositionOverlay(
         append(" · Duration ${formatElapsedTime(durationSec)}")
         append(" · Loop ${if (clip.looping) "on" else "off"}")
         append(" (${formatLoopLengthBars(clip.loopLengthBars)})")
-        append(" · Punch ${if (clip.enterOnPunch) "on" else "off"}")
         append(" · ${if (clip.playing) "Playing" else "Stopped"}")
-        append(" · ${if (clip.active) "Selected" else "Not selected"}")
+        append(" · ${if (clip.active) "Active" else "Inactive"}")
         if (clip.wavLoaded) {
             append(" · Base BPM ${"%.2f".format(clip.sourceBpm)}")
             append(" · Tempo ${ClipTempoMode.entries.getOrElse(clip.tempoMode) { ClipTempoMode.Original }.name}")
@@ -1981,21 +2066,12 @@ private fun ClipPositionOverlay(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.8f))
+            .background(LiveColors.panel.copy(alpha = 0.82f))
+            .clickable(role = Role.Button, onClick = onOpenSettings)
             .semantics {
-                contentDescription = if (clip.wavLoaded) {
-                    "Clip information for ${clip.displayName.ifBlank { "Untitled clip" }}. Double tap to edit Base BPM."
-                } else {
-                    "MIDI clip information for ${clip.displayName.ifBlank { "Untitled clip" }}"
-                }
-            }
-            .then(
-                if (clip.wavLoaded && track != null) {
-                    Modifier.clickable { showBpmDialog = true }
-                } else {
-                    Modifier
-                }
-            ),
+                contentDescription =
+                    "Clip information for ${clip.displayName.ifBlank { "Untitled clip" }}. Open clip settings."
+            },
     ) {
         Row(
             modifier = Modifier
@@ -2013,35 +2089,6 @@ private fun ClipPositionOverlay(
                 maxLines = 1,
             )
         }
-
-    }
-    if (showBpmDialog && clip.wavLoaded && track != null) {
-        val value = bpmInput.toDoubleOrNull()
-        AlertDialog(
-            onDismissRequest = { showBpmDialog = false },
-            title = { Text("Edit Base BPM") },
-            text = {
-                OutlinedTextField(
-                    value = bpmInput,
-                    onValueChange = { bpmInput = it },
-                    label = { Text("Base BPM") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        if (value != null && value.isFinite() && value in 20.0..400.0) {
-                            onClipSourceBpm(track, clip, value)
-                            showBpmDialog = false
-                        }
-                    },
-                    enabled = value != null && value.isFinite() && value in 20.0..400.0,
-                ) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { showBpmDialog = false }) { Text("Cancel") } },
-        )
     }
 }
 @Composable
@@ -2050,7 +2097,7 @@ private fun Waveform(
     peaks: List<Float>,
     bpm: Double,
     track: RackTrackInfo?,
-    onClipSourceBpm: (RackTrackInfo, ClipSlotInfo, Double) -> Unit,
+    onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
 ) {
     if (clip?.wavLoaded != true) return
     val accent = MaterialTheme.colorScheme.primary
@@ -2102,15 +2149,22 @@ private fun Waveform(
         ClipPositionOverlay(
             clip = clip,
             bpm = bpm,
-            track = track,
-            onClipSourceBpm = onClipSourceBpm,
+            onOpenSettings = {
+                if (track != null) onOpenClipSettings(track, clip)
+            },
             modifier = Modifier.align(Alignment.BottomStart),
         )
     }
 }
 
 @Composable
-private fun PianoRoll(clip: ClipSlotInfo, notes: List<MidiNoteInfo>, bpm: Double) {
+private fun PianoRoll(
+    clip: ClipSlotInfo,
+    notes: List<MidiNoteInfo>,
+    bpm: Double,
+    track: RackTrackInfo?,
+    onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
+) {
     val accent = MaterialTheme.colorScheme.primary
     Box(Modifier.fillMaxSize()) {
         Canvas(
@@ -2159,8 +2213,9 @@ private fun PianoRoll(clip: ClipSlotInfo, notes: List<MidiNoteInfo>, bpm: Double
         ClipPositionOverlay(
             clip = clip,
             bpm = bpm,
-            track = null,
-            onClipSourceBpm = { _, _, _ -> },
+            onOpenSettings = {
+                if (track != null) onOpenClipSettings(track, clip)
+            },
             modifier = Modifier.align(Alignment.BottomStart),
         )
     }

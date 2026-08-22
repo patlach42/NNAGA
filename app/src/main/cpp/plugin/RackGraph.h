@@ -54,6 +54,7 @@ struct TrackClipSlotInfo {
     bool enterOnPunch{};
     double sourceBpm{};
     int tempoMode{0};
+    double defaultLoopLengthBars{1.0};
 };
 struct TrackSnapshot {
     RackPathId id;
@@ -101,10 +102,11 @@ public:
     bool attachTrackMidiSlot(RackPathId, uint32_t, std::shared_ptr<const MidiClip>); bool unloadTrackMidiSlot(RackPathId, uint32_t); bool selectTrackClipSlot(RackPathId, uint32_t); bool renameTrackClip(RackPathId, int32_t, const std::string&);
     bool startTrackClipRecording(RackPathId, uint32_t slot, LaunchQuantization);
     bool cancelTrackLoopRecording(RackPathId);
+    bool setSlotDefaultLoopLength(RackPathId, uint32_t, double);
     bool setTrackDefaultLoopLength(RackPathId, double);
     bool setClipLoopLength(RackPathId, uint32_t, double);
     bool setClipLooping(RackPathId, uint32_t, bool);
-    bool setClipEnterOnPunch(RackPathId, uint32_t, bool, LaunchQuantization);
+    bool setSlotEnterOnPunch(RackPathId, uint32_t, bool, LaunchQuantization);
     bool setClipTransportPlaying(RackPathId, uint32_t, bool, LaunchQuantization);
     bool setClipTempoMode(RackPathId, uint32_t, ClipTempoMode);
     bool setClipSourceBpm(RackPathId, uint32_t, double);
@@ -113,11 +115,16 @@ public:
     std::shared_ptr<PluginChain> getChain(RackPathId) const;
     void setSampleRate(float, uint32_t); void activate(); void deactivate(); void pauseAndResetTransport();
     void process(const float* const*, int, float* const*, uint32_t) noexcept; void advanceTransport(uint32_t) noexcept; State saveState();
+    struct SlotConfig {
+        std::atomic<double> defaultLoopLengthBars{1.0};
+        std::atomic<bool> enterOnPunch{false};
+        std::atomic<uint8_t> punchQuantization{0};
+    };
     struct ClipRuntime {
         std::atomic<double> sourceBpm{120.0};
         std::atomic<double> loopLengthBars{1.0};
-        std::atomic<bool> looping{false}, enterOnPunch{false}, desiredPlaying{false};
-        std::atomic<uint8_t> desiredQuantization{0}, punchQuantization{0};
+        std::atomic<bool> looping{false}, desiredPlaying{false};
+        std::atomic<uint8_t> desiredQuantization{0};
         std::atomic<int> tempoMode{0};
         std::atomic<uint64_t> commandSerial{0}, statusFrame{0};
         std::atomic<bool> statusPlaying{false}, restartOnLaunch{false};
@@ -125,37 +132,31 @@ public:
         bool localPlaying=false;
         ClipRuntime() = default;
     };
-    using ClipSlotState = ClipRuntime;
     struct TrackNode {
         RackPathId id{};
         std::atomic<float> volume{1.0f};
         std::atomic<bool> inputArmed{false};
         std::atomic<bool> inputArmLocked{false};
-        std::vector<std::shared_ptr<ClipSlotState>> slotRuntime;
+        std::vector<std::shared_ptr<SlotConfig>> slotConfig;
+        std::vector<std::shared_ptr<ClipRuntime>> clipRuntime;
         std::atomic<int32_t> activeSlot{-1};
         std::atomic<int32_t> pendingSwitchSlot{-1};
         uint64_t pendingSwitchFrame=std::numeric_limits<uint64_t>::max();
         std::atomic<uint32_t> selectedSlot{0};
         std::atomic<double> defaultLoopLengthBars{1.0};
-        std::atomic<uint8_t> desiredQuantization{0};
-        std::atomic<bool> desiredPlaying{false}, desiredLooping{false};
         std::shared_ptr<PluginChain> chain;
         std::atomic<int32_t> inputChannel{0};
         std::vector<float> sourceLeft, sourceRight, outputLeft, outputRight;
         std::vector<MidiEvent> midiScratch;
-        std::atomic<uint64_t> commandSerial{0}, statusFrame{0};
-        std::atomic<bool> statusPlaying{false}, statusLooping{false};
         std::atomic<uint32_t> punchCalibrationRemaining{0}, punchCalibrationFrames{0};
         std::atomic<float> punchNoiseSum{0.0f}, punchThreshold{0.02f};
         std::atomic<bool> recordPending{false}, recording{false}, recordComplete{false}, punchArmed{false};
         uint32_t recordingSlot=std::numeric_limits<uint32_t>::max();
         std::atomic<uint64_t> recordStartFrame{std::numeric_limits<uint64_t>::max()}, recordFrame{0};
         uint32_t recordLength=0; uint8_t recordQuantization=0;
-        uint64_t appliedCommandSerial=0, pendingLaunchFrame=std::numeric_limits<uint64_t>::max(), localFrame=0;
-        bool localPlaying=false, localLooping=false;
         TrackNode() = default;
     };
-    struct GraphSnapshot { struct TrackView { std::shared_ptr<TrackNode> node; std::shared_ptr<const WavClip> clip; std::shared_ptr<WavClip> recordingClip; std::shared_ptr<const MidiClip> midi; std::vector<std::shared_ptr<const WavClip>> wavSlots; std::vector<std::shared_ptr<const MidiClip>> midiSlots; std::vector<std::shared_ptr<ClipSlotState>> slotRuntime; uint32_t selectedSlot{0}; uint32_t recordingSlot{std::numeric_limits<uint32_t>::max()}; uint32_t recordLength{0}; }; std::vector<TrackView> tracks; std::shared_ptr<PluginChain> master; std::vector<float> mixLeft,mixRight; uint32_t capacity=0; };
+    struct GraphSnapshot { struct TrackView { std::shared_ptr<TrackNode> node; std::shared_ptr<const WavClip> clip; std::shared_ptr<WavClip> recordingClip; std::shared_ptr<const MidiClip> midi; std::vector<std::shared_ptr<const WavClip>> wavSlots; std::vector<std::shared_ptr<const MidiClip>> midiSlots; std::vector<std::shared_ptr<ClipRuntime>> clipRuntime; std::vector<std::shared_ptr<SlotConfig>> slotConfig; uint32_t selectedSlot{0}; uint32_t recordingSlot{std::numeric_limits<uint32_t>::max()}; uint32_t recordLength{0}; }; std::vector<TrackView> tracks; std::shared_ptr<PluginChain> master; std::vector<float> mixLeft,mixRight; uint32_t capacity=0; };
     struct RetiredSnapshot { std::unique_ptr<GraphSnapshot> owner; RetiredSnapshot* next=nullptr; };
     struct Mailbox { std::atomic<uint64_t> sequence{0}, playSerial{0}, resetSerial{0}, bpmSerial{0}; std::atomic<bool> desiredPlaying{false}; std::atomic<double> desiredBpm{120.0}; };
     std::unique_ptr<GraphSnapshot> activeOwner_; alignas(64) std::atomic<GraphSnapshot*> activeSnapshot_{nullptr}; alignas(64) std::atomic<GraphSnapshot*> hazardSnapshot_{nullptr}; RetiredSnapshot* retired_=nullptr;
@@ -163,10 +164,11 @@ public:
     uint64_t audioSamplePosition_=0, audioTransportFrame_=0, appliedPlaySerial_=0, appliedResetSerial_=0, appliedBpmSerial_=0; bool audioPlaying_=false; double audioBpm_=120;
     std::vector<std::shared_ptr<TrackNode>> tracks_; std::vector<std::shared_ptr<const WavClip>> clips_; std::vector<std::shared_ptr<WavClip>> recordingClips_; std::vector<std::shared_ptr<const MidiClip>> midiClips_; std::vector<std::vector<std::shared_ptr<const WavClip>>> wavSlots_; std::vector<std::vector<std::shared_ptr<const MidiClip>>> midiSlots_; std::vector<std::vector<std::string>> clipLabelOverrides_; std::shared_ptr<PluginChain> master_; RackPathId nextTrackId_=1; std::atomic<float> sampleRate_{0}; uint32_t bufferSize_=0;
     Mailbox mailbox_; std::atomic<bool> statusPlaying_{false}; std::atomic<double> statusPositionSec_{0}, statusBpm_{120}; std::atomic<uint64_t> statusSamplePosition_{0}, statusTransportFrame_{0}, statusSequence_{0};
-    void writeMailboxLocked(bool, bool, bool, bool=false, double=120); std::unique_ptr<GraphSnapshot> buildSnapshotLocked(const std::vector<std::shared_ptr<TrackNode>>&, const std::vector<std::shared_ptr<const WavClip>>&, const std::vector<std::shared_ptr<WavClip>>& = {}) const; bool publishSnapshotLocked(std::unique_ptr<GraphSnapshot>); bool startTrackRecordingLocked(RackPathId, uint32_t, double, LaunchQuantization, bool, bool); static double clipDuration(const WavClip&); void reclaimerLoop(); void reclaimRetired();
+    void writeMailboxLocked(bool, bool, bool, bool=false, double=120); std::unique_ptr<GraphSnapshot> buildSnapshotLocked(const std::vector<std::shared_ptr<TrackNode>>&, const std::vector<std::shared_ptr<const WavClip>>&, const std::vector<std::shared_ptr<WavClip>>& = {}) const; bool publishSnapshotLocked(std::unique_ptr<GraphSnapshot>); bool startTrackRecordingLocked(RackPathId, uint32_t, double, LaunchQuantization, bool); static double clipDuration(const WavClip&); void reclaimerLoop(); void reclaimRetired();
     void applyGlobalMailbox() noexcept; void publishGlobalStatus(double) noexcept; static uint64_t nextBoundary(uint64_t, double, double, LaunchQuantization) noexcept;
     std::atomic<int32_t> availableInputChannelCount_{0};
-    bool ensureSlotRuntimeLocked(TrackNode&, uint32_t);
+    bool ensureClipRuntimeLocked(TrackNode&, uint32_t);
+    bool ensureSlotConfigLocked(TrackNode&, uint32_t);
 };
 } // namespace guitarrackcraft
 #endif

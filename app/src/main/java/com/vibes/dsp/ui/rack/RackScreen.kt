@@ -718,7 +718,7 @@ fun RackScreen(
             val selectedSlotLooping = selectedClip?.looping ?: track.looping
             val selectedSlotPositionSec = selectedClip?.positionSec ?: track.positionSec
             val selectedSlotPunchArmed = selectedClip?.enterOnPunch ?: track.punchArmed
-            val slotLoopLengthBars = selectedClip?.loopLengthBars ?: track.defaultLoopLengthBars
+            val slotLoopLengthBars = selectedClip?.defaultLoopLengthBars ?: track.defaultLoopLengthBars
             val defaultLoopLengthLabel = when (track.defaultLoopLengthBars) {
                 0.25 -> "1/4"
                 1.0 -> "1 bar"
@@ -1032,8 +1032,6 @@ fun RackScreen(
                                     modifier = Modifier.alpha(recordIconAlpha)
                                 )
                             }
-                            val enterOnPunchEnabled =
-                                !transport.playing || launchQuantization == TrackLaunchQuantization.None
                             DropdownMenu(
                                 expanded = recordMenuExpanded,
                                 onDismissRequest = {
@@ -1057,16 +1055,14 @@ fun RackScreen(
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Enter on punch") },
-                                    enabled = enterOnPunchEnabled,
                                     leadingIcon = {
                                         Checkbox(
                                             checked = selectedSlotPunchArmed,
                                             onCheckedChange = null,
-                                            enabled = enterOnPunchEnabled
                                         )
                                     },
                                     onClick = {
-                                        viewModel.setClipEnterOnPunch(
+                                        viewModel.setSlotEnterOnPunch(
                                             track.id,
                                             selectedSlot,
                                             armed = !selectedSlotPunchArmed,
@@ -1095,7 +1091,7 @@ fun RackScreen(
                                             if (editTrackDefaultLoopLength) {
                                                 viewModel.setTrackDefaultLoopLength(track.id, bars)
                                             } else {
-                                                viewModel.setClipLoopLength(track.id, selectedSlot, bars)
+                                                viewModel.setSlotDefaultLoopLength(track.id, selectedSlot, bars)
                                             }
                                             loopLengthMenuExpanded = false
                                             recordMenuExpanded = false

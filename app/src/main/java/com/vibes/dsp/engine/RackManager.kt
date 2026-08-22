@@ -76,16 +76,18 @@ object RackManager {
         native.nativeRenameTrackClip(trackId, slot, displayName)
     fun setTrackDefaultLoopLength(trackId: RackPathId, bars: Double): Boolean =
         native.setTrackDefaultLoopLength(trackId, bars)
+    fun setSlotDefaultLoopLength(trackId: RackPathId, slot: Int, bars: Double): Boolean =
+        native.setSlotDefaultLoopLength(trackId, slot, bars)
     fun setClipLoopLength(trackId: RackPathId, slot: Int, bars: Double): Boolean =
         native.setClipLoopLength(trackId, slot, bars)
     fun setClipLooping(trackId: RackPathId, slot: Int, looping: Boolean): Boolean =
         native.setClipLooping(trackId, slot, looping)
-    fun setClipEnterOnPunch(
+    fun setSlotEnterOnPunch(
         trackId: RackPathId,
         slot: Int,
         armed: Boolean,
         quantization: TrackLaunchQuantization
-    ): Boolean = native.setClipEnterOnPunch(trackId, slot, armed, quantization)
+    ): Boolean = native.setSlotEnterOnPunch(trackId, slot, armed, quantization)
     fun setClipTransportPlaying(
         trackId: RackPathId,
         slot: Int,
@@ -102,6 +104,7 @@ object RackManager {
     fun setTransportBpm(bpm: Double): Boolean = native.setTransportBpm(bpm)
     fun setTransportPlaying(playing: Boolean): Boolean = native.setTransportPlaying(playing)
     fun restartTransport(): Boolean = native.restartTransport()
+    fun stopTransport(): Boolean = native.stopTransport()
     fun getTransportInfo(): TransportInfo = native.getTransportInfo()
 
 }
