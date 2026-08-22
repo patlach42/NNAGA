@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -878,25 +879,22 @@ fun RackScreen(
                                 // while guarding normal taps below when no audio is loaded.
                                 onClick = {
                                     if (playEnabled) {
-                                        when {
-                                            selectedSlotPlaying || launchPending -> {
-                                                pendingTrackLaunches.remove(track.id)
-                                                viewModel.setClipTransportPlaying(
-                                                    track.id,
-                                                    selectedSlot,
-                                                    false,
-                                                    launchQuantization
-                                                )
-                                            }
-                                            else -> {
-                                                pendingTrackLaunches[track.id] = true
-                                                viewModel.launchClipTransport(
-                                                    track.id,
-                                                    selectedSlot,
-                                                    launchQuantization,
-                                                    startGlobal = !transport.playing
-                                                )
-                                            }
+                                        if (launchPending) {
+                                            pendingTrackLaunches.remove(track.id)
+                                            viewModel.setClipTransportPlaying(
+                                                track.id,
+                                                selectedSlot,
+                                                false,
+                                                launchQuantization
+                                            )
+                                        } else {
+                                            pendingTrackLaunches[track.id] = true
+                                            viewModel.launchClipTransport(
+                                                track.id,
+                                                selectedSlot,
+                                                launchQuantization,
+                                                startGlobal = !transport.playing
+                                            )
                                         }
                                     }
                                 },
@@ -909,7 +907,7 @@ fun RackScreen(
                                 if (!playEnabled) disabled()
                                 contentDescription = when {
                                     !playEnabled -> "Selected clip play unavailable until audio is loaded"
-                                    selectedSlotPlaying -> "Pause selected clip"
+                                    selectedSlotPlaying -> "Restart selected clip"
                                     launchPending -> "Cancel pending clip launch"
                                     else -> "Start selected clip"
                                 }
@@ -918,7 +916,7 @@ fun RackScreen(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            if (selectedSlotPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            if (selectedSlotPlaying) Icons.Default.Replay else Icons.Default.PlayArrow,
                             contentDescription = null,
                             modifier = Modifier.alpha(playIconAlpha)
                         )

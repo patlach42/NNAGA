@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SkipPrevious
@@ -777,24 +778,12 @@ fun LiveScreen(
                                         armTrackExclusivelyIfEnabled(track.id)
                                         selectedSlot = slot
                                         viewModel.selectTrackClipSlot(track.id, slot)
-                                        val clip = slotsByTrack[track.id]
-                                            ?.firstOrNull { it.slot == slot }
-                                            ?: emptyClipSlot(track, slot)
-                                        if (clip.playing) {
-                                            viewModel.setClipTransportPlaying(
-                                                track.id,
-                                                slot,
-                                                false,
-                                                launchQuantization,
-                                            )
-                                        } else {
-                                            viewModel.launchClipTransport(
-                                                track.id,
-                                                slot,
-                                                launchQuantization,
-                                                startGlobal = !transport.playing,
-                                            )
-                                        }
+                                        viewModel.launchClipTransport(
+                                            track.id,
+                                            slot,
+                                            launchQuantization,
+                                            startGlobal = !transport.playing,
+                                        )
                                     },
                                     onRecordClip = { track, slot ->
                                         selectedTrackId = track.id
@@ -1664,13 +1653,13 @@ private fun ClipCard(
                 ) {
                     Icon(
                         imageVector = when {
-                            filled && playing -> Icons.Default.Pause
+                            filled && playing -> Icons.Default.Replay
                             filled -> Icons.Default.PlayArrow
                             recordAction -> Icons.Default.FiberManualRecord
                             else -> Icons.Default.Add
                         },
                         contentDescription = when {
-                            filled && playing -> "Stop ${slot.displayName}"
+                            filled && playing -> "Restart ${slot.displayName}"
                             filled -> "Launch ${slot.displayName}"
                             activelyRecording -> "Recording into slot ${slot.slot + 1}"
                             recordingPending -> "Recording pending in slot ${slot.slot + 1}"

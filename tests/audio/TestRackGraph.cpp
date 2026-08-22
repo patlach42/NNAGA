@@ -801,6 +801,86 @@ TEST(RackGraphTransportTest, LaunchesAtStrictNextQuantizedGlobalBoundary) {
         EXPECT_FALSE(state.recording);
     }
 }
+TEST(RackGraphTransportTest, RelaunchingActiveClipWithNoneRestartsAtFrameZero) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, 0, makeRampClip(128, 1.0f, "relaunch.wav")));
+    ASSERT_TRUE(graph.setClipLooping(track, 0, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 4);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 1.0f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[3], 4.0f);
+
+    // Repeating the launch of the active slot is a restart, not a stop.
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 3);
+
+    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 1.0f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[1], 2.0f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[2], 3.0f);
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    const auto& state = trackSnapshot(graph, track, tracks);
+    EXPECT_TRUE(state.playing);
+    EXPECT_EQ(state.transportFrame, 3u);
+}
+
+TEST(RackGraphTransportTest,
+     QuantizedRelaunchKeepsActiveAndOtherTrackPlayingUntilBoundary) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId relaunchedTrack = graph.getTracks().front().id;
+    const RackPathId otherTrack = graph.addTrack();
+    ASSERT_NE(otherTrack, 0u);
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        relaunchedTrack, 0, makeRampClip(128, 1.0f, "relaunch.wav")));
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        otherTrack, 0, makeRampClip(128, 201.0f, "other.wav")));
+    ASSERT_TRUE(graph.setClipLooping(relaunchedTrack, 0, true));
+    ASSERT_TRUE(graph.setClipLooping(otherTrack, 0, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        relaunchedTrack, 0, true, guitarrackcraft::LaunchQuantization::None));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        otherTrack, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 10);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 202.0f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[9], 220.0f);
+
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        relaunchedTrack, 0, true, guitarrackcraft::LaunchQuantization::Quarter));
+
+    // The active clip keeps producing its old samples while the restart is
+    // pending; the other track remains active as well.
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 222.0f);
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    EXPECT_TRUE(trackSnapshot(graph, relaunchedTrack, tracks).playing);
+    EXPECT_TRUE(trackSnapshot(graph, otherTrack, tracks).playing);
+
+    // At 60 BPM/60 Hz, Quarter is the strict next global boundary (frame 60).
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 50);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 224.0f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[48], 320.0f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[49], 262.0f);
+    EXPECT_TRUE(trackSnapshot(graph, relaunchedTrack, tracks).playing);
+    EXPECT_TRUE(trackSnapshot(graph, otherTrack, tracks).playing);
+}
+
+
 TEST(RackGraphTransportTest, NoneLaunchesTrackAtCurrentTransportFrame) {
     RackGraph graph;
     configure(graph);

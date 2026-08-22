@@ -419,16 +419,13 @@ void RackGraph::process(
             }
             const auto q = static_cast<LaunchQuantization>(
                 rt.desiredQuantization.load(std::memory_order_relaxed));
-            if (active == static_cast<int32_t>(s)) {
-                rt.pendingLaunchFrame = std::numeric_limits<uint64_t>::max();
-                continue; // same-slot relaunch retains its existing frame
-            }
             const uint64_t boundary = audioPlaying_ ? nextBoundary(audioTransportFrame_, rate, bpm, q)
                                                      : std::numeric_limits<uint64_t>::max();
             pending = static_cast<int32_t>(s); // newest launch wins
             pendingFrame = boundary;
             rt.pendingLaunchFrame = boundary;
-            rt.statusPlaying.store(false, std::memory_order_relaxed);
+            if (active != static_cast<int32_t>(s))
+                rt.statusPlaying.store(false, std::memory_order_relaxed);
         }
         if (!audioPlaying_) {
             active = -1;
