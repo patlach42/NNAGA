@@ -44,57 +44,90 @@ bool readWavFile(const std::string& path,
     file.seekg(0, std::ios::end);
     const std::streamoff fileSize = file.tellg();
     file.seekg(0, std::ios::beg);
-    if (fileSize < static_cast<std::streamoff>(sizeof(WavHeader))) return false;
+    if (fileSize < 12) return false;
 
-    WavHeader header{};
-    file.read(reinterpret_cast<char*>(&header), sizeof(header));
-    if (!file || std::memcmp(header.riff, "RIFF", 4) != 0 ||
-        std::memcmp(header.wave, "WAVE", 4) != 0 ||
-        std::memcmp(header.fmt, "fmt ", 4) != 0 || header.audioFormat != 1 ||
-        (header.bitsPerSample != 16 && header.bitsPerSample != 24 && header.bitsPerSample != 32) ||
-        header.sampleRate == 0 || (header.numChannels != 1 && header.numChannels != 2)) {
+    char riff[4];
+    uint32_t riffSize = 0;
+    char wave[4];
+    if (!file.read(riff, sizeof(riff)) ||
+        !file.read(reinterpret_cast<char*>(&riffSize), sizeof(riffSize)) ||
+        !file.read(wave, sizeof(wave)) ||
+        std::memcmp(riff, "RIFF", 4) != 0 ||
+        std::memcmp(wave, "WAVE", 4) != 0) {
         LOGE("Invalid WAV file format");
         return false;
     }
-    const uint32_t bytesPerSample = header.bitsPerSample / 8;
-    if (header.blockAlign != header.numChannels * bytesPerSample) return false;
-    if (header.fmtSize < 16) return false;
-    if (header.fmtSize > 16) {
-        const auto extra = static_cast<std::streamoff>(header.fmtSize - 16);
-        if (extra > fileSize - file.tellg()) return false;
-        file.seekg(extra, std::ios::cur);
-    }
 
+    uint16_t audioFormat = 0;
+    uint16_t channels = 0;
+    uint32_t rate = 0;
+    uint32_t byteRate = 0;
+    uint16_t blockAlign = 0;
+    uint16_t bitsPerSample = 0;
+    bool fmtFound = false;
     uint32_t dataSize = 0;
-    if (std::memcmp(header.data, "data", 4) == 0) {
-        dataSize = header.dataSize;
-    } else {
+    std::streamoff dataOffset = -1;
+
+    while (true) {
+        const std::streamoff chunkHeaderOffset = file.tellg();
+        if (chunkHeaderOffset < 0 || fileSize - chunkHeaderOffset < 8) break;
+
         char chunkId[4];
         uint32_t chunkSize = 0;
-        while (file.read(chunkId, sizeof(chunkId)) &&
-               file.read(reinterpret_cast<char*>(&chunkSize), sizeof(chunkSize))) {
-            const auto remaining = fileSize - file.tellg();
-            if (chunkSize > remaining) return false;
-            if (std::memcmp(chunkId, "data", 4) == 0) {
-                dataSize = chunkSize;
-                break;
-            }
-            file.seekg(static_cast<std::streamoff>(chunkSize) + (chunkSize & 1U), std::ios::cur);
+        if (!file.read(chunkId, sizeof(chunkId)) ||
+            !file.read(reinterpret_cast<char*>(&chunkSize), sizeof(chunkSize))) {
+            return false;
         }
+        const std::streamoff payloadOffset = file.tellg();
+        const std::streamoff remaining = fileSize - payloadOffset;
+        const uint64_t paddedChunkSize =
+            static_cast<uint64_t>(chunkSize) + (chunkSize & 1U);
+        if (remaining < 0 || paddedChunkSize > static_cast<uint64_t>(remaining)) return false;
+
+        if (std::memcmp(chunkId, "fmt ", 4) == 0 && !fmtFound) {
+            if (chunkSize < 16 ||
+                !file.read(reinterpret_cast<char*>(&audioFormat), sizeof(audioFormat)) ||
+                !file.read(reinterpret_cast<char*>(&channels), sizeof(channels)) ||
+                !file.read(reinterpret_cast<char*>(&rate), sizeof(rate)) ||
+                !file.read(reinterpret_cast<char*>(&byteRate), sizeof(byteRate)) ||
+                !file.read(reinterpret_cast<char*>(&blockAlign), sizeof(blockAlign)) ||
+                !file.read(reinterpret_cast<char*>(&bitsPerSample), sizeof(bitsPerSample))) {
+                return false;
+            }
+            fmtFound = true;
+        } else if (std::memcmp(chunkId, "data", 4) == 0 && dataOffset < 0) {
+            dataOffset = payloadOffset;
+            dataSize = chunkSize;
+        }
+
+        if (fmtFound && dataOffset >= 0) break;
+        file.seekg(payloadOffset + static_cast<std::streamoff>(paddedChunkSize));
+        if (!file) return false;
     }
-    if (dataSize == 0 || dataSize % header.blockAlign != 0 ||
-        dataSize > static_cast<uint64_t>(fileSize - file.tellg())) return false;
+
+    if (!fmtFound || dataOffset < 0 || audioFormat != 1 ||
+        (bitsPerSample != 16 && bitsPerSample != 24 && bitsPerSample != 32) ||
+        rate == 0 || (channels != 1 && channels != 2)) {
+        LOGE("Invalid WAV file format");
+        return false;
+    }
+    const uint32_t bytesPerSample = bitsPerSample / 8;
+    if (blockAlign != channels * bytesPerSample) return false;
+    if (dataSize == 0 || dataSize % blockAlign != 0 ||
+        dataSize > static_cast<uint64_t>(fileSize - dataOffset)) return false;
     const size_t count = dataSize / bytesPerSample;
     if (count == 0 || count > kMaxWavSamples) return false;
+    file.seekg(dataOffset);
+    if (!file) return false;
 
     try {
         samples.resize(count);
-        if (header.bitsPerSample == 16) {
+        if (bitsPerSample == 16) {
             std::vector<int16_t> source(count);
             file.read(reinterpret_cast<char*>(source.data()), dataSize);
             if (file.gcount() != static_cast<std::streamsize>(dataSize)) { samples.clear(); return false; }
             for (size_t index = 0; index < count; ++index) samples[index] = source[index] / kInt16MaxF;
-        } else if (header.bitsPerSample == 24) {
+        } else if (bitsPerSample == 24) {
             std::vector<uint8_t> source(dataSize);
             file.read(reinterpret_cast<char*>(source.data()), dataSize);
             if (file.gcount() != static_cast<std::streamsize>(dataSize)) { samples.clear(); return false; }
@@ -118,8 +151,8 @@ bool readWavFile(const std::string& path,
         samples.clear();
         return false;
     }
-    sampleRate = header.sampleRate;
-    numChannels = header.numChannels;
+    sampleRate = rate;
+    numChannels = channels;
     return true;
 }
 
