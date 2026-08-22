@@ -278,15 +278,13 @@ fun RackScreen(
     val selectedPathId by viewModel.selectedPathId.collectAsState()
     val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
     val transport by viewModel.transport.collectAsState()
+    val clipSlots by viewModel.clipSlots.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
     val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
     val inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
     var launchQuantizationOrdinal by rememberSaveable(selectedTrack?.id) { mutableIntStateOf(0) }
     val launchQuantization = TrackLaunchQuantization.entries[launchQuantizationOrdinal]
-    var loopLengthsByTrack by rememberSaveable {
-        mutableStateOf<Map<Long, Double>>(emptyMap())
-    }
     var showTempoDialog by rememberSaveable { mutableStateOf(false) }
     var tempoInput by rememberSaveable { mutableStateOf("") }
 
@@ -318,19 +316,15 @@ fun RackScreen(
     }
     BackHandler(enabled = blockingOperation != null) { }
 
-    val scope = rememberCoroutineScope()
-    var pendingAudioTargetId by remember { mutableStateOf<Long?>(null) }
+    var pendingAudioTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
     val pendingTrackLaunches = remember { mutableStateMapOf<Long, Boolean>() }
     val audioFilePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
-        val target = pendingAudioTargetId
-        pendingAudioTargetId = null
+        val target = pendingAudioTarget
+        pendingAudioTarget = null
         if (uri != null && target != null) {
-            scope.launch {
-                val name = queryDisplayName(context, uri) ?: uri.lastPathSegment ?: "Imported audio"
-                viewModel.importTrackAudio(target, uri, name)
-            }
+            viewModel.loadTrackClipMedia(target.first, target.second, uri)
         }
     }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -713,18 +707,40 @@ fun RackScreen(
             var launchQuantizeMenuExpanded by remember(track.id) { mutableStateOf(false) }
             var recordMenuExpanded by remember(track.id) { mutableStateOf(false) }
             var loopLengthMenuExpanded by remember(track.id) { mutableStateOf(false) }
+            var editTrackDefaultLoopLength by remember(track.id) { mutableStateOf(false) }
             var inputMenuExpanded by remember(track.id) { mutableStateOf(false) }
             var inputChannelMenuExpanded by remember(track.id) { mutableStateOf(false) }
-            val loopLengthBars = loopLengthsByTrack[track.id] ?: 1.0
-            val loopLengthLabel = when (loopLengthBars) {
+            val selectedSlot = track.selectedSlot
+            val selectedClip = clipSlots[track.id]?.firstOrNull { it.slot == selectedSlot }
+            val selectedSlotWavLoaded = selectedClip?.wavLoaded ?: track.wavLoaded
+            val selectedSlotMidiLoaded = selectedClip?.midiLoaded ?: track.midiLoaded
+            val selectedSlotPlaying = selectedClip?.playing ?: track.playing
+            val selectedSlotLooping = selectedClip?.looping ?: track.looping
+            val selectedSlotPositionSec = selectedClip?.positionSec ?: track.positionSec
+            val selectedSlotPunchArmed = selectedClip?.enterOnPunch ?: track.punchArmed
+            val slotLoopLengthBars = selectedClip?.loopLengthBars ?: track.defaultLoopLengthBars
+            val defaultLoopLengthLabel = when (track.defaultLoopLengthBars) {
                 0.25 -> "1/4"
                 1.0 -> "1 bar"
-                else -> "${loopLengthBars.toInt()} bars"
+                else -> "${track.defaultLoopLengthBars.toInt()} bars"
+            }
+            val slotLoopLengthLabel = when (slotLoopLengthBars) {
+                0.25 -> "1/4"
+                1.0 -> "1 bar"
+                else -> "${slotLoopLengthBars.toInt()} bars"
             }
             val launchPending = pendingTrackLaunches[track.id] == true &&
-                !track.playing && track.wavLoaded
-            LaunchedEffect(track.id, track.playing, track.wavLoaded) {
-                if (track.playing || !track.wavLoaded) pendingTrackLaunches.remove(track.id)
+                !selectedSlotPlaying && (selectedSlotWavLoaded || selectedSlotMidiLoaded)
+            LaunchedEffect(
+                track.id,
+                selectedSlot,
+                selectedSlotPlaying,
+                selectedSlotWavLoaded,
+                selectedSlotMidiLoaded
+            ) {
+                if (selectedSlotPlaying || (!selectedSlotWavLoaded && !selectedSlotMidiLoaded)) {
+                    pendingTrackLaunches.remove(track.id)
+                }
             }
             val playIconAlpha = if (launchPending) {
                 val transition = rememberInfiniteTransition(label = "Pending track launch")
@@ -784,8 +800,8 @@ fun RackScreen(
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    "${formatMusicalPosition(track.positionSec, transport.beatsPerMinute)} · " +
-                        formatElapsedTime(track.positionSec),
+                    "${formatMusicalPosition(selectedSlotPositionSec, transport.beatsPerMinute)} · " +
+                        formatElapsedTime(selectedSlotPositionSec),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
@@ -852,7 +868,7 @@ fun RackScreen(
                     }
                 }
                 Box {
-                    val playEnabled = track.wavLoaded || track.midiLoaded
+                    val playEnabled = selectedSlotWavLoaded || selectedSlotMidiLoaded
                     Box(
                         modifier = Modifier
                             .size(48.dp)
@@ -863,18 +879,20 @@ fun RackScreen(
                                 onClick = {
                                     if (playEnabled) {
                                         when {
-                                            track.playing || launchPending -> {
+                                            selectedSlotPlaying || launchPending -> {
                                                 pendingTrackLaunches.remove(track.id)
-                                                viewModel.setTrackTransportPlaying(
+                                                viewModel.setClipTransportPlaying(
                                                     track.id,
+                                                    selectedSlot,
                                                     false,
                                                     launchQuantization
                                                 )
                                             }
                                             else -> {
                                                 pendingTrackLaunches[track.id] = true
-                                                viewModel.launchTrackTransport(
+                                                viewModel.launchClipTransport(
                                                     track.id,
+                                                    selectedSlot,
                                                     launchQuantization,
                                                     startGlobal = !transport.playing
                                                 )
@@ -890,17 +908,17 @@ fun RackScreen(
                             .semantics {
                                 if (!playEnabled) disabled()
                                 contentDescription = when {
-                                    !playEnabled -> "Track play unavailable until audio is loaded"
-                                    track.playing -> "Pause selected track"
-                                    launchPending -> "Cancel pending track launch"
-                                    else -> "Start selected track"
+                                    !playEnabled -> "Selected clip play unavailable until audio is loaded"
+                                    selectedSlotPlaying -> "Pause selected clip"
+                                    launchPending -> "Cancel pending clip launch"
+                                    else -> "Start selected clip"
                                 }
                                 if (launchPending) stateDescription = "Launch pending"
                             },
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            if (track.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                            if (selectedSlotPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                             contentDescription = null,
                             modifier = Modifier.alpha(playIconAlpha)
                         )
@@ -941,26 +959,35 @@ fun RackScreen(
                     }
                 }
                 IconButton(
-                    onClick = { viewModel.setTrackTransportLooping(track.id, !track.looping) },
+                    onClick = {
+                        viewModel.setClipLooping(track.id, selectedSlot, !selectedSlotLooping)
+                    },
                     modifier = Modifier.semantics {
-                        contentDescription = "Loop selected track"
-                        stateDescription = if (track.looping) "Active" else "Inactive"
+                        contentDescription = "Loop selected clip"
+                        stateDescription = if (selectedSlotLooping) "Active" else "Inactive"
                     }
                 ) {
                     Icon(
                         Icons.Default.Repeat,
                         contentDescription = null,
-                        tint = if (track.looping) Color(0xFF2E7D32)
+                        tint = if (selectedSlotLooping) Color(0xFF2E7D32)
                         else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 when {
-                    track.wavLoaded || track.midiLoaded -> {
-                        IconButton(onClick = { if (track.midiLoaded) viewModel.unloadTrackMidi(track.id) else viewModel.unloadTrackWav(track.id) }) {
-                            Icon(Icons.Default.Close, contentDescription = "Unload media from selected track")
+                    selectedSlotWavLoaded || selectedSlotMidiLoaded -> {
+                        IconButton(onClick = {
+                            viewModel.unloadTrackClipMedia(
+                                track.id,
+                                selectedSlot,
+                                wavLoaded = selectedSlotWavLoaded,
+                                midiLoaded = selectedSlotMidiLoaded
+                            )
+                        }) {
+                            Icon(Icons.Default.Close, contentDescription = "Unload media from selected clip")
                         }
                     }
-                    track.punchArmed || (track.inputArmed && track.looping) -> {
+                    selectedSlotPunchArmed || (track.inputArmed && selectedSlotLooping) -> {
                         Box {
                             Box(
                                 modifier = Modifier
@@ -968,10 +995,10 @@ fun RackScreen(
                                     .combinedClickable(
                                         enabled = !track.recordPending && !track.recording,
                                         onClick = {
-                                            if (!track.punchArmed) {
-                                                viewModel.startTrackLoopRecording(
+                                            if (!selectedSlotPunchArmed) {
+                                                viewModel.startTrackClipRecording(
                                                     track.id,
-                                                    loopLengthBars,
+                                                    selectedSlot,
                                                     launchQuantization,
                                                     startGlobal = !transport.playing
                                                 )
@@ -983,9 +1010,9 @@ fun RackScreen(
                                         }
                                     )
                                     .semantics {
-                                        contentDescription = "Record $loopLengthLabel loop"
+                                        contentDescription = "Record $slotLoopLengthLabel loop"
                                         stateDescription = when {
-                                            track.punchArmed -> "Enter on punch armed"
+                                            selectedSlotPunchArmed -> "Enter on punch armed"
                                             track.recording -> "Recording"
                                             track.recordPending -> "Recording pending"
                                             else -> "Ready"
@@ -997,7 +1024,7 @@ fun RackScreen(
                                     Icons.Default.FiberManualRecord,
                                     contentDescription = null,
                                     tint = when {
-                                        track.punchArmed -> PunchArmedColor
+                                        selectedSlotPunchArmed -> PunchArmedColor
                                         track.recordPending || track.recording ->
                                             MaterialTheme.colorScheme.error
                                         else -> MaterialTheme.colorScheme.onSurfaceVariant
@@ -1015,25 +1042,35 @@ fun RackScreen(
                                 }
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Loop length") },
-                                    onClick = { loopLengthMenuExpanded = true }
+                                    text = { Text("Selected slot length ($slotLoopLengthLabel)") },
+                                    onClick = {
+                                        editTrackDefaultLoopLength = false
+                                        loopLengthMenuExpanded = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("Default for future slots ($defaultLoopLengthLabel)") },
+                                    onClick = {
+                                        editTrackDefaultLoopLength = true
+                                        loopLengthMenuExpanded = true
+                                    }
                                 )
                                 DropdownMenuItem(
                                     text = { Text("Enter on punch") },
                                     enabled = enterOnPunchEnabled,
                                     leadingIcon = {
                                         Checkbox(
-                                            checked = track.punchArmed,
+                                            checked = selectedSlotPunchArmed,
                                             onCheckedChange = null,
                                             enabled = enterOnPunchEnabled
                                         )
                                     },
                                     onClick = {
-                                        viewModel.setEnterOnPunch(
+                                        viewModel.setClipEnterOnPunch(
                                             track.id,
-                                            loopLengthBars,
-                                            launchQuantization,
-                                            armed = !track.punchArmed
+                                            selectedSlot,
+                                            armed = !selectedSlotPunchArmed,
+                                            quantization = launchQuantization
                                         )
                                         recordMenuExpanded = false
                                         loopLengthMenuExpanded = false
@@ -1055,7 +1092,11 @@ fun RackScreen(
                                     DropdownMenuItem(
                                         text = { Text(label) },
                                         onClick = {
-                                            loopLengthsByTrack = loopLengthsByTrack + (track.id to bars)
+                                            if (editTrackDefaultLoopLength) {
+                                                viewModel.setTrackDefaultLoopLength(track.id, bars)
+                                            } else {
+                                                viewModel.setClipLoopLength(track.id, selectedSlot, bars)
+                                            }
                                             loopLengthMenuExpanded = false
                                             recordMenuExpanded = false
                                         }
@@ -1067,7 +1108,7 @@ fun RackScreen(
                     else -> {
                         IconButton(
                             onClick = {
-                                pendingAudioTargetId = track.id
+                                pendingAudioTarget = track.id to selectedSlot
                                 audioFilePickerLauncher.launch(
                                     arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a", "application/x-midi", "audio/midi")
                                 )

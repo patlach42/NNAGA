@@ -47,40 +47,56 @@ object RackManager {
         native.loadTrackMidi(trackId, path, displayName)
     fun unloadTrackMidi(trackId: RackPathId): Boolean = native.unloadTrackMidi(trackId)
     fun unloadTrackWav(trackId: RackPathId): Boolean = native.unloadTrackWav(trackId)
+    fun unloadTrackClipWav(trackId: RackPathId, slot: Int): Boolean =
+        native.unloadTrackClipWav(trackId, slot)
+    fun unloadTrackClipMidi(trackId: RackPathId, slot: Int): Boolean =
+        native.unloadTrackClipMidi(trackId, slot)
     fun clearTrackWavs(): Boolean = native.clearTrackWavs()
     fun getTrackWaveformPeaks(trackId: RackPathId, maxBuckets: Int = 256): FloatArray =
         native.nativeGetTrackWaveformPeaks(trackId, maxBuckets)
     fun getTrackClipSlots(trackId: RackPathId): Array<ClipSlotInfo> = native.nativeGetTrackClipSlots(trackId)
     fun getTrackClipMidiNotes(trackId: RackPathId, slot: Int): Array<MidiNoteInfo> =
         native.nativeGetTrackClipMidiNotes(trackId, slot)
-    fun loadTrackClipWav(trackId: RackPathId, slot: Int, path: String, displayName: String): Boolean =
-        native.nativeLoadTrackClipWav(trackId, slot, path, displayName)
+    fun loadTrackClipWav(
+        trackId: RackPathId,
+        slot: Int,
+        path: String,
+        displayName: String,
+        sourceBpm: Double,
+    ): Boolean = native.nativeLoadTrackClipWav(trackId, slot, path, displayName, sourceBpm)
+    fun setClipTempoMode(trackId: RackPathId, slot: Int, mode: ClipTempoMode): Boolean =
+        native.nativeSetClipTempoMode(trackId, slot, mode.ordinal)
+    fun setClipSourceBpm(trackId: RackPathId, slot: Int, sourceBpm: Double): Boolean =
+        native.nativeSetClipSourceBpm(trackId, slot, sourceBpm)
     fun loadTrackClipMidi(trackId: RackPathId, slot: Int, path: String, displayName: String): Boolean =
         native.nativeLoadTrackClipMidi(trackId, slot, path, displayName)
     fun selectTrackClipSlot(trackId: RackPathId, slot: Int): Boolean =
         native.nativeSelectTrackClipSlot(trackId, slot)
     fun renameTrackClip(trackId: RackPathId, slot: Int, displayName: String): Boolean =
         native.nativeRenameTrackClip(trackId, slot, displayName)
-    fun setTrackTransportPlaying(
+    fun setTrackDefaultLoopLength(trackId: RackPathId, bars: Double): Boolean =
+        native.setTrackDefaultLoopLength(trackId, bars)
+    fun setClipLoopLength(trackId: RackPathId, slot: Int, bars: Double): Boolean =
+        native.setClipLoopLength(trackId, slot, bars)
+    fun setClipLooping(trackId: RackPathId, slot: Int, looping: Boolean): Boolean =
+        native.setClipLooping(trackId, slot, looping)
+    fun setClipEnterOnPunch(
         trackId: RackPathId,
+        slot: Int,
+        armed: Boolean,
+        quantization: TrackLaunchQuantization
+    ): Boolean = native.setClipEnterOnPunch(trackId, slot, armed, quantization)
+    fun setClipTransportPlaying(
+        trackId: RackPathId,
+        slot: Int,
         playing: Boolean,
         quantization: TrackLaunchQuantization
-    ): Boolean = native.setTrackTransportPlaying(trackId, playing, quantization)
-    fun setTrackTransportLooping(trackId: RackPathId, looping: Boolean): Boolean =
-        native.setTrackTransportLooping(trackId, looping)
-    fun startTrackLoopRecording(
-        trackId: RackPathId,
-        bars: Double,
-        quantization: TrackLaunchQuantization,
-        enterOnPunch: Boolean
-    ): Boolean = native.startTrackLoopRecording(trackId, bars, quantization, enterOnPunch)
+    ): Boolean = native.setClipTransportPlaying(trackId, slot, playing, quantization)
     fun startTrackClipRecording(
         trackId: RackPathId,
         slot: Int,
-        bars: Double,
-        quantization: TrackLaunchQuantization,
-        enterOnPunch: Boolean
-    ): Boolean = native.startTrackClipRecording(trackId, slot, bars, quantization, enterOnPunch)
+        quantization: TrackLaunchQuantization
+    ): Boolean = native.startTrackClipRecording(trackId, slot, quantization)
     fun cancelTrackLoopRecording(trackId: RackPathId): Boolean =
         native.cancelTrackLoopRecording(trackId)
     fun setTransportBpm(bpm: Double): Boolean = native.setTransportBpm(bpm)

@@ -100,6 +100,9 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                     if (rackVisible) {
                         refreshTransport()
                         refreshTrackTransport()
+                        _tracks.value.forEach { track ->
+                            refreshTrackClipSlotsNow(track.id)
+                        }
                     }
                 }
                 delay(200)
@@ -341,7 +344,13 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                             val wav = File.createTempFile("clip_import_decoded_", ".wav", getApplication<Application>().cacheDir)
                             try {
                                 AudioImportDecoder.copyOrDecode(getApplication(), uri, wav)
-                                RackManager.loadTrackClipWav(trackId, slot, wav.absolutePath, displayName)
+                                RackManager.loadTrackClipWav(
+                                    trackId,
+                                    slot,
+                                    wav.absolutePath,
+                                    displayName,
+                                    _transport.value.beatsPerMinute,
+                                )
                             } finally { wav.delete() }
                         }
                     } finally { source.delete() }
@@ -350,6 +359,20 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             if (!loaded) _errorMessage.value = "Unable to load clip media"
             refreshTrackClipSlots(trackId)
             if (!midi) loadTrackWaveform(trackId)
+        }
+    }
+    fun unloadTrackClipMedia(trackId: RackPathId, slot: Int, wavLoaded: Boolean, midiLoaded: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                var ok = true
+                if (wavLoaded) ok = RackManager.unloadTrackClipWav(trackId, slot) && ok
+                if (midiLoaded) ok = RackManager.unloadTrackClipMidi(trackId, slot) && ok
+                if (!ok) _errorMessage.value = "Unable to unload clip media"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
         }
     }
     fun renameTrackClip(trackId: RackPathId, slot: Int, displayName: String) {
@@ -373,21 +396,166 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             refreshTrackTransport()
         }
     }
-    fun startTrackClipRecording(
+    fun setTrackDefaultLoopLength(trackId: RackPathId, bars: Double) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setTrackDefaultLoopLength(trackId, bars)
+                if (!ok) _errorMessage.value = "Failed to set track loop length"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
+    fun setClipTempoMode(trackId: RackPathId, slot: Int, mode: ClipTempoMode) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setClipTempoMode(trackId, slot, mode)
+                if (!ok) _errorMessage.value = "Failed to set clip tempo mode"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+    fun setClipSourceBpm(trackId: RackPathId, slot: Int, sourceBpm: Double) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setClipSourceBpm(trackId, slot, sourceBpm)
+                if (!ok) _errorMessage.value = "Failed to set clip Base BPM"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
+    fun setClipLoopLength(trackId: RackPathId, slot: Int, bars: Double) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setClipLoopLength(trackId, slot, bars)
+                if (!ok) _errorMessage.value = "Failed to set clip loop length"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
+    fun setClipLooping(trackId: RackPathId, slot: Int, looping: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setClipLooping(trackId, slot, looping)
+                if (!ok) _errorMessage.value = "Failed to set clip looping"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
+    fun setClipEnterOnPunch(
         trackId: RackPathId,
         slot: Int,
-        bars: Double,
+        armed: Boolean,
+        quantization: TrackLaunchQuantization
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val target = _clipSlots.value[trackId]?.firstOrNull { it.slot == slot }
+                if (armed && (
+                        _tracks.value.firstOrNull { it.id == trackId }?.inputArmed != true ||
+                            target?.wavLoaded == true ||
+                            target?.midiLoaded == true ||
+                            (_transport.value.playing && quantization != TrackLaunchQuantization.None)
+                        )) {
+                    _errorMessage.value = "Failed to arm enter on punch"
+                    return@withLock
+                }
+                val ok = if (armed) {
+                    val configured = RackManager.setClipEnterOnPunch(trackId, slot, true, quantization)
+                    if (!configured) {
+                        false
+                    } else {
+                        val started = RackManager.startTrackClipRecording(trackId, slot, quantization)
+                        if (!started) {
+                            RackManager.setClipEnterOnPunch(trackId, slot, false, quantization)
+                        }
+                        started
+                    }
+                } else {
+                    RackManager.cancelTrackLoopRecording(trackId)
+                    RackManager.setClipEnterOnPunch(trackId, slot, false, quantization)
+                }
+                if (!ok) _errorMessage.value = if (armed) {
+                    "Failed to arm enter on punch"
+                } else {
+                    "Failed to cancel enter on punch"
+                }
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
+    fun setClipTransportPlaying(
+        trackId: RackPathId,
+        slot: Int,
+        playing: Boolean,
+        quantization: TrackLaunchQuantization
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setClipTransportPlaying(trackId, slot, playing, quantization)
+                if (!ok) _errorMessage.value = "Failed to set clip transport"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
+    fun launchClipTransport(
+        trackId: RackPathId,
+        slot: Int,
         quantization: TrackLaunchQuantization,
         startGlobal: Boolean
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             rackControlMutex.withLock {
                 if (startGlobal) RackManager.setTransportPlaying(true)
-                val recorded = RackManager.startTrackClipRecording(
-                    trackId, slot, bars, quantization, false
-                )
+                val ok = RackManager.setClipTransportPlaying(trackId, slot, true, quantization)
+                if (!ok) _errorMessage.value = "Failed to launch clip transport"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
+    fun startTrackClipRecording(
+        trackId: RackPathId,
+        slot: Int,
+        quantization: TrackLaunchQuantization,
+        startGlobal: Boolean
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                if (startGlobal) RackManager.setTransportPlaying(true)
+                val recorded = RackManager.startTrackClipRecording(trackId, slot, quantization)
                 if (!recorded) _errorMessage.value = "Failed to start clip recording"
                 refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
                 refreshTransport()
                 refreshTrackTransport()
             }
@@ -401,82 +569,13 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             _midiNotes.update { current -> current + ((trackId to slot) to notes) }
         }
     }
-    fun unloadTrackMidi(trackId: RackPathId) { viewModelScope.launch { val ok = withBlockingOperation("Unloading MIDI") { withContext(Dispatchers.IO) { RackManager.unloadTrackMidi(trackId) } }; if (!ok) _errorMessage.value = "Failed to unload MIDI"; refreshRack() } }
-    fun clearTrackWavs() { viewModelScope.launch(Dispatchers.IO) { RackManager.clearTrackWavs(); refreshRackNow() } }
-    fun transportPlay() { setTransportPlaying(true) }
-    fun transportPause() { setTransportPlaying(false) }
-    fun transportRestart() { viewModelScope.launch(Dispatchers.IO) { RackManager.restartTransport(); refreshTransport() } }
-    fun transportStop() {
-        viewModelScope.launch(Dispatchers.IO) {
-            RackManager.setTransportPlaying(false)
-            RackManager.restartTransport()
-            refreshTransport()
-            refreshTrackTransport()
-        }
-    }
-    fun setTrackTransportPlaying(
-        trackId: RackPathId,
-        playing: Boolean,
-        quantization: TrackLaunchQuantization
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            RackManager.setTrackTransportPlaying(trackId, playing, quantization)
-            refreshTrackTransport()
-        }
-    }
-    fun launchTrackTransport(
-        trackId: RackPathId,
-        quantization: TrackLaunchQuantization,
-        startGlobal: Boolean
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (startGlobal) RackManager.setTransportPlaying(true)
-            RackManager.setTrackTransportPlaying(trackId, true, quantization)
-            refreshTransport()
-            refreshTrackTransport()
-        }
-    }
-    fun setTrackTransportLooping(trackId: RackPathId, looping: Boolean) {
-        viewModelScope.launch(Dispatchers.IO) {
-            RackManager.setTrackTransportLooping(trackId, looping)
-            refreshTrackTransport()
-        }
-    }
-    fun startTrackLoopRecording(
-        trackId: RackPathId,
-        bars: Double,
-        quantization: TrackLaunchQuantization,
-        startGlobal: Boolean
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            if (startGlobal) RackManager.setTransportPlaying(true)
-            val ok = RackManager.startTrackLoopRecording(trackId, bars, quantization, false)
-            if (!ok) _errorMessage.value = "Failed to start loop recording"
-            refreshTransport()
-            refreshTrackTransport()
-        }
-    }
-    fun setEnterOnPunch(
-        trackId: RackPathId,
-        bars: Double,
-        quantization: TrackLaunchQuantization,
-        armed: Boolean
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val ok = if (armed) {
-                RackManager.startTrackLoopRecording(trackId, bars, quantization, true)
-            } else {
-                RackManager.cancelTrackLoopRecording(trackId)
+    fun unloadTrackMidi(trackId: RackPathId) {
+        viewModelScope.launch {
+            val ok = withBlockingOperation("Unloading MIDI") {
+                withContext(Dispatchers.IO) { RackManager.unloadTrackMidi(trackId) }
             }
-            if (!ok) {
-                _errorMessage.value = if (armed) {
-                    "Failed to arm enter on punch"
-                } else {
-                    "Failed to cancel enter on punch"
-                }
-            }
-            refreshTransport()
-            refreshTrackTransport()
+            if (!ok) _errorMessage.value = "Failed to unload MIDI"
+            refreshRack()
         }
     }
     suspend fun importTrackAudio(trackId: RackPathId, uri: Uri, displayName: String): Boolean {
@@ -507,6 +606,22 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         if (!result) _errorMessage.value = _errorMessage.value ?: "Unable to load imported media"
         refreshRack()
         return result
+    }
+    fun transportPlay() { setTransportPlaying(true) }
+    fun transportPause() { setTransportPlaying(false) }
+    fun transportRestart() {
+        viewModelScope.launch(Dispatchers.IO) {
+            RackManager.restartTransport()
+            refreshTransport()
+        }
+    }
+    fun transportStop() {
+        viewModelScope.launch(Dispatchers.IO) {
+            RackManager.setTransportPlaying(false)
+            RackManager.restartTransport()
+            refreshTransport()
+            refreshTrackTransport()
+        }
     }
     fun setTransportBpm(bpm: Double) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportBpm(bpm); refreshTransport() } }
     private fun refreshTransport() { if (nativeReady) runCatching { _transport.value = RackManager.getTransportInfo() } }

@@ -170,7 +170,7 @@ public:
     bool loadTrackWav(RackPathId trackId, const std::string& path,
                       const std::string& displayName);
     bool unloadTrackWav(RackPathId trackId);
-    bool loadTrackClipWav(RackPathId trackId, uint32_t slot, const std::string& path, const std::string& displayName);
+    bool loadTrackClipWav(RackPathId trackId, uint32_t slot, const std::string& path, const std::string& displayName, double sourceBpm);
     bool unloadTrackClipWav(RackPathId trackId, uint32_t slot);
     bool unloadTrackClipMidi(RackPathId trackId, uint32_t slot);
     bool selectTrackClipSlot(RackPathId trackId, uint32_t slot);

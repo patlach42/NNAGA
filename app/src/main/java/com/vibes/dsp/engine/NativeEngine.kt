@@ -195,6 +195,26 @@ enum class TrackLaunchQuantization {
     Sixteenth,
     None
 }
+enum class ClipTempoMode {
+    Original,
+    Stretch,
+    Repitch,
+}
+
+private val clipTempoModeOrdinalsValid = ClipTempoMode.entries.mapIndexed { index, mode ->
+    require(mode.ordinal == index) { "ClipTempoMode ordinal mismatch for $mode" }
+    mode
+}
+
+fun ClipTempoMode.label(): String = when (this) {
+    ClipTempoMode.Original -> "Original"
+    ClipTempoMode.Stretch -> "Stretch"
+    ClipTempoMode.Repitch -> "Repitch"
+}
+
+fun clipTempoModeFromOrdinal(value: Int): ClipTempoMode =
+    ClipTempoMode.entries.getOrElse(value) { ClipTempoMode.Original }
+
 
 data class ClipSlotInfo(
     val trackId: RackPathId,
@@ -203,7 +223,15 @@ data class ClipSlotInfo(
     val midiLoaded: Boolean,
     val displayName: String,
     val durationSec: Double,
-    val active: Boolean
+    val active: Boolean,
+    val playing: Boolean,
+    val looping: Boolean,
+    val positionSec: Double,
+    val transportFrame: Long,
+    val loopLengthBars: Double,
+    val enterOnPunch: Boolean,
+    val sourceBpm: Double = 120.0,
+    val tempoMode: Int = ClipTempoMode.Original.ordinal,
 )
 
 data class MidiNoteInfo(
@@ -230,7 +258,10 @@ data class RackTrackInfo(
     val punchArmed: Boolean,
     val inputChannel: Int,
     val midiLoaded: Boolean = false,
-    val midiPlaying: Boolean = false
+    val midiPlaying: Boolean = false,
+    val selectedSlot: Int = 0,
+    val defaultLoopLengthBars: Double = 1.0,
+    val activeSlot: Int = -1,
 )
 
 data class TransportInfo(
@@ -570,30 +601,41 @@ class NativeEngine private constructor() {
     external fun nativeSetTransportPlaying(playing: Boolean): Boolean
     external fun nativeSetTransportBpm(bpm: Double): Boolean
     external fun nativeRestartTransport(): Boolean
-    external fun nativeSetTrackTransportPlaying(
+    external fun nativeSetTrackDefaultLoopLength(trackId: Long, bars: Double): Boolean
+    external fun nativeSetClipLoopLength(trackId: Long, slot: Int, bars: Double): Boolean
+    external fun nativeSetClipLooping(trackId: Long, slot: Int, looping: Boolean): Boolean
+    external fun nativeSetClipEnterOnPunch(
         trackId: Long,
-        playing: Boolean,
+        slot: Int,
+        armed: Boolean,
         quantization: Int
     ): Boolean
-    external fun nativeSetTrackTransportLooping(trackId: Long, looping: Boolean): Boolean
-    external fun nativeStartTrackLoopRecording(
+    external fun nativeSetClipTransportPlaying(
         trackId: Long,
-        bars: Double,
-        quantization: Int,
-        enterOnPunch: Boolean
+        slot: Int,
+        playing: Boolean,
+        quantization: Int
     ): Boolean
     external fun nativeStartTrackClipRecording(
         trackId: Long,
         slot: Int,
-        bars: Double,
-        quantization: Int,
-        enterOnPunch: Boolean
+        quantization: Int
     ): Boolean
     external fun nativeCancelTrackLoopRecording(trackId: Long): Boolean
     external fun nativeGetTrackClipSlots(trackId: Long): Array<ClipSlotInfo>
     external fun nativeGetTrackClipMidiNotes(trackId: Long, slot: Int): Array<MidiNoteInfo>
-    external fun nativeLoadTrackClipWav(trackId: Long, slot: Int, path: String, displayName: String): Boolean
+    external fun nativeLoadTrackClipWav(
+        trackId: Long,
+        slot: Int,
+        path: String,
+        displayName: String,
+        sourceBpm: Double,
+    ): Boolean
+    external fun nativeSetClipTempoMode(trackId: Long, slot: Int, mode: Int): Boolean
+    external fun nativeSetClipSourceBpm(trackId: Long, slot: Int, sourceBpm: Double): Boolean
     external fun nativeLoadTrackClipMidi(trackId: Long, slot: Int, path: String, displayName: String): Boolean
+    external fun nativeUnloadTrackClipWav(trackId: Long, slot: Int): Boolean
+    external fun nativeUnloadTrackClipMidi(trackId: Long, slot: Int): Boolean
     external fun nativeSelectTrackClipSlot(trackId: Long, slot: Int): Boolean
     external fun nativeRenameTrackClip(trackId: Long, slot: Int, displayName: String): Boolean
     external fun nativeGetTransportInfo(): TransportInfo
@@ -655,32 +697,38 @@ class NativeEngine private constructor() {
     fun loadTrackMidi(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackMidi(trackId, path, displayName)
     fun unloadTrackMidi(trackId: Long): Boolean = nativeUnloadTrackMidi(trackId)
     fun unloadTrackWav(trackId: Long): Boolean = nativeUnloadTrackWav(trackId)
+    fun unloadTrackClipWav(trackId: Long, slot: Int): Boolean =
+        nativeUnloadTrackClipWav(trackId, slot)
+    fun unloadTrackClipMidi(trackId: Long, slot: Int): Boolean =
+        nativeUnloadTrackClipMidi(trackId, slot)
     fun clearTrackWavs(): Boolean = nativeClearTrackWavs()
     fun setTransportBpm(bpm: Double): Boolean = nativeSetTransportBpm(bpm.coerceIn(20.0, 400.0))
     fun setTransportPlaying(playing: Boolean): Boolean = nativeSetTransportPlaying(playing)
     fun restartTransport(): Boolean = nativeRestartTransport()
-    fun setTrackTransportPlaying(
+    fun setTrackDefaultLoopLength(trackId: Long, bars: Double): Boolean =
+        nativeSetTrackDefaultLoopLength(trackId, bars)
+    fun setClipLoopLength(trackId: Long, slot: Int, bars: Double): Boolean =
+        nativeSetClipLoopLength(trackId, slot, bars)
+    fun setClipLooping(trackId: Long, slot: Int, looping: Boolean): Boolean =
+        nativeSetClipLooping(trackId, slot, looping)
+    fun setClipEnterOnPunch(
         trackId: Long,
+        slot: Int,
+        armed: Boolean,
+        quantization: TrackLaunchQuantization
+    ): Boolean = nativeSetClipEnterOnPunch(trackId, slot, armed, quantization.ordinal)
+    fun setClipTransportPlaying(
+        trackId: Long,
+        slot: Int,
         playing: Boolean,
         quantization: TrackLaunchQuantization
-    ): Boolean = nativeSetTrackTransportPlaying(trackId, playing, quantization.ordinal)
-    fun setTrackTransportLooping(trackId: Long, looping: Boolean): Boolean =
-        nativeSetTrackTransportLooping(trackId, looping)
+    ): Boolean = nativeSetClipTransportPlaying(trackId, slot, playing, quantization.ordinal)
     fun startTrackClipRecording(
         trackId: Long,
         slot: Int,
-        bars: Double,
-        quantization: TrackLaunchQuantization,
-        enterOnPunch: Boolean
-    ): Boolean = nativeStartTrackClipRecording(trackId, slot, bars, quantization.ordinal, enterOnPunch)
-    fun startTrackLoopRecording(
-        trackId: Long,
-        bars: Double,
-        quantization: TrackLaunchQuantization,
-        enterOnPunch: Boolean
-    ): Boolean = nativeStartTrackLoopRecording(trackId, bars, quantization.ordinal, enterOnPunch)
-    fun cancelTrackLoopRecording(trackId: Long): Boolean =
-        nativeCancelTrackLoopRecording(trackId)
+        quantization: TrackLaunchQuantization
+    ): Boolean = nativeStartTrackClipRecording(trackId, slot, quantization.ordinal)
+    fun cancelTrackLoopRecording(trackId: Long): Boolean = nativeCancelTrackLoopRecording(trackId)
     fun getTransportInfo(): TransportInfo = nativeGetTransportInfo()
 
 }

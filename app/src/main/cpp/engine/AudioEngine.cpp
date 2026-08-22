@@ -623,7 +623,7 @@ bool AudioEngine::loadTrackWav(RackPathId trackId, const std::string& path,
         return false;
     }
 }
-bool AudioEngine::loadTrackClipWav(RackPathId id,uint32_t slot,const std::string& path,const std::string& name){try{std::vector<float> s;uint32_t r=0,c=0;if(!readWavFile(path,s,r,c)||s.empty()||r==0||(c!=1&&c!=2)||s.size()%c)return false;auto clip=std::make_shared<WavClip>();clip->sampleRate=r;clip->displayName=name;size_t f=s.size()/c;clip->left.resize(f);if(c==1)clip->left=std::move(s);else{clip->right.resize(f);for(size_t i=0;i<f;++i){clip->left[i]=s[i*2];clip->right[i]=s[i*2+1];}}return rackGraph_.attachTrackWavSlot(id,slot,std::move(clip));}catch(...){return false;}}
+bool AudioEngine::loadTrackClipWav(RackPathId id,uint32_t slot,const std::string& path,const std::string& name,double sourceBpm){try{if(!std::isfinite(sourceBpm)||sourceBpm<20.0||sourceBpm>400.0)return false;std::vector<float> s;uint32_t r=0,c=0;if(!readWavFile(path,s,r,c)||s.empty()||r==0||(c!=1&&c!=2)||s.size()%c)return false;auto clip=std::make_shared<WavClip>();clip->sampleRate=r;clip->sourceBpm=sourceBpm;clip->displayName=name;size_t f=s.size()/c;clip->left.resize(f);if(c==1)clip->left=std::move(s);else{clip->right.resize(f);for(size_t i=0;i<f;++i){clip->left[i]=s[i*2];clip->right[i]=s[i*2+1];}}return rackGraph_.attachTrackWavSlot(id,slot,std::move(clip));}catch(...){return false;}}
 bool AudioEngine::unloadTrackClipWav(RackPathId id,uint32_t slot){return rackGraph_.unloadTrackWavSlot(id,slot);}
 bool AudioEngine::unloadTrackClipMidi(RackPathId id,uint32_t slot){return rackGraph_.unloadTrackMidiSlot(id,slot);}
 bool AudioEngine::selectTrackClipSlot(RackPathId id,uint32_t slot){return rackGraph_.selectTrackClipSlot(id,slot);}
