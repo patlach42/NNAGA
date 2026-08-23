@@ -45,6 +45,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import com.vibes.dsp.engine.NativeEngine
 import com.vibes.dsp.engine.PluginRepositoryService
+import com.vibes.dsp.engine.WineInstallOwnership
+import com.vibes.dsp.ui.vst.RepositoryVstAdapter
 import com.vibes.dsp.ui.dashboard.RepositoryViewModel
 import com.vibes.dsp.ui.tone3000.ToneDetailScreen
 private const val PENDING_REPOSITORY_PACKAGE_ID = "pendingRepositoryPackageId"
@@ -113,6 +115,9 @@ fun AppNavigation(
             nativeRefresh = {
                 runCatching { NativeEngine.getInstance().nativeRefreshPluginRegistry() }.getOrDefault(false)
             },
+            removeWineOwnership = { ownership ->
+                RepositoryVstAdapter.removeOwnership(context, ownership)
+            },
         )
     }
     val repositoryViewModel: RepositoryViewModel = viewModel(
@@ -176,8 +181,8 @@ fun AppNavigation(
             val sourcePluginIndex = entry.arguments?.getInt("sourcePlugin") ?: -1
             val sourceSlot = entry.arguments?.getString("sourceSlot")
             val pendingRepositoryPackageId =
-                entry.savedStateHandle.remove<String>(PENDING_REPOSITORY_PACKAGE_ID)
-                    ?: navController.previousBackStackEntry?.savedStateHandle?.remove(
+                entry.savedStateHandle.get<String>(PENDING_REPOSITORY_PACKAGE_ID)
+                    ?: navController.previousBackStackEntry?.savedStateHandle?.get(
                         PENDING_REPOSITORY_PACKAGE_ID,
                     )
             DashboardScreen(
@@ -199,6 +204,8 @@ fun AppNavigation(
                                 settingsTab = SettingsTab.Vst,
                             ),
                         )
+                    } else if (item.status == com.vibes.dsp.ui.dashboard.RepositoryPackageStatus.Update) {
+                        repositoryViewModel.update(item.id)
                     } else {
                         repositoryViewModel.install(item.id)
                     }
@@ -217,6 +224,12 @@ fun AppNavigation(
                 onNavigateBack = { navController.popBackStack() },
                 initialSection = DashboardSection.fromArgument(entry.arguments?.getString("section")),
                 pendingRepositoryPackageId = pendingRepositoryPackageId,
+                onRepositoryHandoff = {
+                    entry.savedStateHandle.remove<String>(PENDING_REPOSITORY_PACKAGE_ID)
+                    navController.previousBackStackEntry?.savedStateHandle?.remove<String>(
+                        PENDING_REPOSITORY_PACKAGE_ID,
+                    )
+                },
                 initialDashboardTab = DashboardTab.fromArgument(entry.arguments?.getString("dashboardTab")),
                 initialSettingsTab = SettingsTab.fromArgument(entry.arguments?.getString("settingsTab")),
                 initialTag = entry.arguments?.getString("tag"),

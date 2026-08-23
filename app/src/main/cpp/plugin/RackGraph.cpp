@@ -136,7 +136,7 @@ std::vector<TrackClipSlotInfo> RackGraph::getTrackClipSlots(RackPathId id) const
         const auto rt=s<n.clipRuntime.size()?n.clipRuntime[s]:nullptr;
         const uint64_t frame = rt ? rt->statusFrame.load(std::memory_order_relaxed) : 0;
         const double defaultLoopLength = s<n.slotConfig.size()&&n.slotConfig[s]?n.slotConfig[s]->defaultLoopLengthBars.load():n.defaultLoopLengthBars.load();
-        out.push_back({id,static_cast<uint32_t>(s),static_cast<bool>(w),static_cast<bool>(m),name,m?static_cast<double>(m->durationMicroseconds)/1'000'000.0:(w?clipDuration(*w):0.0),n.selectedSlot.load(std::memory_order_relaxed)==s,audibleActive&&rt&&rt->statusPlaying.load(),rt?rt->looping.load():false,static_cast<double>(frame)/rate,frame,rt?rt->loopLengthBars.load():defaultLoopLength,s<n.slotConfig.size()&&n.slotConfig[s]&&n.slotConfig[s]->enterOnPunch.load(),(w&&rt)?rt->sourceBpm.load():0.0,rt?rt->tempoMode.load():0,defaultLoopLength,n.pendingSwitchSlot.load(std::memory_order_relaxed)==static_cast<int32_t>(s),static_cast<double>(frame)*audioBpm_/(rate*60.0),rate,statusCapturedAtNanos_.load(std::memory_order_relaxed),rt?rt->loopStartQuarterNotes.load():0.0,rt?rt->loopLengthQuarterNotes.load():defaultLoopLength*4.0});
+        out.push_back({id,static_cast<uint32_t>(s),static_cast<bool>(w),static_cast<bool>(m),name,m?static_cast<double>(m->durationMicroseconds)/1'000'000.0:(w?clipDuration(*w):0.0),n.selectedSlot.load(std::memory_order_relaxed)==s,audibleActive&&rt&&rt->statusPlaying.load(),rt?rt->looping.load():false,static_cast<double>(frame)/rate,frame,rt?rt->loopLengthBars.load():defaultLoopLength,s<n.slotConfig.size()&&n.slotConfig[s]&&n.slotConfig[s]->enterOnPunch.load(),((w||m)&&rt)?rt->sourceBpm.load():0.0,rt?rt->tempoMode.load():0,defaultLoopLength,n.pendingSwitchSlot.load(std::memory_order_relaxed)==static_cast<int32_t>(s),rt?rt->localQuarterNotes.load(std::memory_order_acquire):0.0,rate,statusCapturedAtNanos_.load(std::memory_order_relaxed),rt?rt->loopStartQuarterNotes.load():0.0,rt?rt->loopLengthQuarterNotes.load():defaultLoopLength*4.0});
     }
     return out;
 }
@@ -189,6 +189,7 @@ bool RackGraph::attachTrackMidiSlot(RackPathId id,uint32_t slot,std::shared_ptr<
     (*it)->clipRuntime[slot]=std::make_shared<ClipRuntime>();
     (*it)->clipRuntime[slot]->loopLengthBars.store(slot<(*it)->slotConfig.size()&&(*it)->slotConfig[slot] ? (*it)->slotConfig[slot]->defaultLoopLengthBars.load() : (*it)->defaultLoopLengthBars.load());
     (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store((*it)->clipRuntime[slot]->loopLengthBars.load() * 4.0);
+    (*it)->clipRuntime[slot]->sourceBpm.store(ms[i][slot]->sourceBpm, std::memory_order_release);
     if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){midiSlots_=std::move(old);(*it)->clipRuntime=std::move(oldRuntime);return false;} return true;
 }
 bool RackGraph::unloadTrackMidiSlot(RackPathId id,uint32_t slot){
@@ -649,6 +650,7 @@ void RackGraph::process(
         ClipTempoAdapter adapter;
         const WavClip* wav = nullptr;
         const MidiClip* midi = nullptr;
+        uint32_t activeRenderedFrames = 0;
         ClipRuntime* runtime = nullptr;
         if (active >= 0 && static_cast<uint32_t>(active) < slotCount && view.clipRuntime[static_cast<uint32_t>(active)]) {
             const uint32_t s = static_cast<uint32_t>(active);
@@ -788,9 +790,7 @@ void RackGraph::process(
                 const double timelineBpm = runtime->tempoMode.load(std::memory_order_relaxed) == static_cast<int>(ClipTempoMode::Original)
                     ? sourceBpm : bpm;
                 const uint64_t startFrame = looping
-                    ? (runtime->tempoMode.load(std::memory_order_relaxed) == static_cast<int>(ClipTempoMode::Original)
-                        ? static_cast<uint64_t>(std::llround(startQn * 60.0 * wav->sampleRate / sourceBpm))
-                        : static_cast<uint64_t>(std::llround(startQn * 60.0 * rate / bpm)))
+                    ? static_cast<uint64_t>(std::llround(startQn * 60.0 * rate / timelineBpm))
                     : 0;
                 const uint64_t length = looping
                     ? std::max<uint64_t>(1, static_cast<uint64_t>(std::llround(lengthQn * 60.0 * rate / bpm)))
@@ -804,6 +804,7 @@ void RackGraph::process(
                     adapter.renderStereo(wav->left.data(), wav->right.empty() ? nullptr : wav->right.data(),
                         wav->left.size(), runtime->localFrame + startFrame, source[0][frame], source[1][frame]);
                     ++runtime->localFrame;
+                    ++activeRenderedFrames;
                     if (runtime->localFrame >= length && looping) runtime->localFrame %= length;
                 }
             } else if (runtime && runtime->localPlaying && midi) {
@@ -830,6 +831,7 @@ void RackGraph::process(
                     }
                 }
                 ++runtime->localFrame;
+                ++activeRenderedFrames;
                 if (runtime->localFrame >= length) {
                     if (looping) runtime->localFrame %= length;
                     else runtime->localPlaying = false;
@@ -849,7 +851,7 @@ void RackGraph::process(
             const bool isActive = active == static_cast<int32_t>(s);
             rt.statusPlaying.store(isActive && rt.localPlaying, std::memory_order_relaxed);
             if (isActive && rt.localPlaying) {
-                const double deltaQn = static_cast<double>(frames) * bpm / (rate * 60.0);
+                const double deltaQn = static_cast<double>(activeRenderedFrames) * bpm / (rate * 60.0);
                 rt.localQuarterNotes.store(
                     rt.localQuarterNotes.load(std::memory_order_relaxed) + deltaQn,
                     std::memory_order_relaxed);

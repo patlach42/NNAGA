@@ -42,6 +42,7 @@ struct MidiTimedEvent {
 struct MidiClip {
     std::vector<MidiTimedEvent> events;
     uint64_t durationMicroseconds = 0;
+    double sourceBpm = 120.0;
     std::string displayName;
 };
 

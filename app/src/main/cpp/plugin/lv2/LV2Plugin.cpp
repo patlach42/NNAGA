@@ -196,9 +196,12 @@ void LV2Plugin::buildFeatures() {
     instanceFeatures_.push_back(nullptr);
 }
 
-LV2Plugin::LV2Plugin(const LilvPlugin* plugin, LilvWorld* world, float sampleRate, const std::string& filesDir)
-    : plugin_(plugin)
-    , world_(world)
+LV2Plugin::LV2Plugin(const LilvPlugin* plugin,
+                     std::shared_ptr<const LV2PluginGeneration> generation,
+                     float sampleRate, const std::string& filesDir)
+    : generation_(std::move(generation))
+    , plugin_(plugin)
+    , world_(generation_ ? generation_->world : nullptr)
     , instance_(nullptr)
     , sampleRate_(sampleRate)
     , isActive_(false)

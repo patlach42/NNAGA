@@ -94,6 +94,7 @@ fun VstManagerScreen(
     embedded: Boolean = false,
     repositoryService: PluginRepositoryService? = null,
     pendingRepositoryPackageId: String? = null,
+    onRepositoryHandoff: () -> Unit = {},
     onWineSessionActiveChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
@@ -121,6 +122,7 @@ fun VstManagerScreen(
         val packageId = pendingRepositoryPackageId ?: return@LaunchedEffect
         val repository = repositoryService ?: return@LaunchedEffect
         scope.launch {
+            onRepositoryHandoff()
             RepositoryVstAdapter.stageAndHandle(
                 context = context,
                 repository = repository,
@@ -130,8 +132,11 @@ fun VstManagerScreen(
                 when (result) {
                     is RepositoryVstAdapter.Result.Error ->
                         Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
-                    is RepositoryVstAdapter.Result.Installed ->
+                    is RepositoryVstAdapter.Result.Installed -> {
+                        entries = VstRegistry.read(context)
+                        executables = VstExecutableRegistry.read(context)
                         Toast.makeText(context, "Installed ${result.displayName}", Toast.LENGTH_SHORT).show()
+                    }
                     is RepositoryVstAdapter.Result.Pending -> Unit
                 }
             }

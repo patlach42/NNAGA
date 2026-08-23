@@ -46,6 +46,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.vibes.dsp.engine.AudioBackend
 import com.vibes.dsp.engine.AudioEngine
 import com.vibes.dsp.engine.AudioSettingsManager
 import com.vibes.dsp.engine.DirectUsbAudioManager
@@ -72,10 +73,11 @@ import kotlinx.coroutines.withContext
 fun AudioSettingsScreen(
     viewModel: RackViewModel,
     onNavigateBack: () -> Unit,
-    embedded: Boolean = false
+    embedded: Boolean = false,
+    backend: AudioBackend? = null,
 ) {
     if (embedded) {
-        AudioSettingsContent(viewModel = viewModel)
+        AudioSettingsContent(viewModel = viewModel, backend = backend)
     } else {
         BackHandler { onNavigateBack() }
         Scaffold(
@@ -92,6 +94,7 @@ fun AudioSettingsScreen(
         ) { padding ->
             AudioSettingsContent(
                 viewModel = viewModel,
+                backend = backend,
                 modifier = Modifier.padding(padding)
             )
         }
@@ -101,9 +104,11 @@ fun AudioSettingsScreen(
 @Composable
 private fun AudioSettingsContent(
     viewModel: RackViewModel,
+    backend: AudioBackend? = null,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
+    val selectedBackend = backend ?: AudioSettingsManager.getAudioBackend(context)
     var selectedBufferSize by remember { mutableIntStateOf(AudioSettingsManager.getBufferSize(context)) }
     var isCalibrationRunning by remember { mutableStateOf(false) }
     val isEngineRunning by viewModel.isEngineRunning.collectAsState()
@@ -119,6 +124,7 @@ private fun AudioSettingsContent(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        if (selectedBackend == AudioBackend.DirectUsb) {
         DirectUsbSessionSettings(
             selectedBufferFrames = selectedBufferSize,
             inputsEnabled = !isEngineRunning,
@@ -187,6 +193,52 @@ private fun AudioSettingsContent(
             ) {
                 Text("Stop engine")
             }
+        }
+        } else {
+            AndroidAudioSettings(
+                selectedBufferFrames = selectedBufferSize,
+                isEngineRunning = isEngineRunning,
+                onBufferFramesChange = { size ->
+                    selectedBufferSize = size
+                    AudioSettingsManager.setBufferSize(context, size)
+                },
+                onStop = viewModel::stopEngine,
+            )
+        }
+}
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@Composable
+private fun AndroidAudioSettings(
+    selectedBufferFrames: Int,
+    isEngineRunning: Boolean,
+    onBufferFramesChange: (Int) -> Unit,
+    onStop: () -> Unit,
+) {
+    val context = LocalContext.current
+    Text("Android audio (Oboe)", style = MaterialTheme.typography.labelLarge)
+    Text(
+        "Uses Android system audio devices. Device ID 0 means system default.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    InfoRow("Input device ID", AudioSettingsManager.getAndroidInputDeviceId(context).toString())
+    InfoRow("Output device ID", AudioSettingsManager.getAndroidOutputDeviceId(context).toString())
+    BufferSizeDropdown(
+        selectedSize = selectedBufferFrames,
+        enabled = !isEngineRunning,
+        onSelected = onBufferFramesChange,
+    )
+    InfoRow(
+        "Requested buffer",
+        "$selectedBufferFrames frames",
+    )
+    if (isEngineRunning) {
+        InfoRow("Actual buffer", "${AudioEngine.getBufferFrameCount()} frames")
+        InfoRow("Sample rate", "%.0f Hz".format(AudioEngine.getSampleRate()))
+        NnagaOutlinedButton(onClick = onStop, modifier = Modifier.fillMaxWidth()) {
+            Text("Stop engine")
         }
     }
 }

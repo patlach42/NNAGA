@@ -11,6 +11,12 @@ object RepositoryVstAdapter {
         data class Installed(val displayName: String) : Result()
         data class Error(val message: String) : Result()
     }
+    fun removeOwnership(
+        context: Context,
+        ownership: com.vibes.dsp.engine.WineInstallOwnership,
+    ): Boolean = ownership.vstUuids.isEmpty() &&
+        ownership.executableUuids.isEmpty() &&
+        ownership.prefixPaths.isEmpty()
 
     suspend fun stageAndHandle(
         context: Context,

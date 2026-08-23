@@ -105,15 +105,20 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
      * once when an interactive INSTALL session is accepted or abandoned; ordinary
      * manager launches leave it unset.
      */
-    private var repositoryCompletion: ((Boolean) -> Unit)? = null
+    private var repositoryCompletion: ((String, Boolean) -> Unit)? = null
+    private var repositoryStagedPath: String? = null
 
-    fun setRepositoryCompletionCallback(callback: ((Boolean) -> Unit)?) {
-        repositoryCompletion = callback
+    fun setRepositoryCompletionCallback(stagedExePath: String, callback: ((Boolean) -> Unit)?) {
+        repositoryStagedPath = stagedExePath
+        repositoryCompletion = callback?.let { cb -> { path, success -> if (path == stagedExePath) cb(success) } }
     }
 
     private fun finishRepository(success: Boolean) {
-        repositoryCompletion?.invoke(success)
+        val path = _session.value?.stagedExePath ?: repositoryStagedPath
+        val callback = repositoryCompletion
         repositoryCompletion = null
+        repositoryStagedPath = null
+        if (path != null) callback?.invoke(path, success)
     }
 
     fun consumeError() { _errorMessage.value = null }

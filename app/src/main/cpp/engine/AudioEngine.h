@@ -98,6 +98,11 @@ public:
      */
     bool isRunning() const;
 
+    /**
+     * Check if the active Android Oboe backend reported a device/route error.
+     * The flag is retained after cleanup until the next successful start.
+     */
+    bool hasError() const;
     /** Get the parallel rack graph for track and master operations. */
     RackGraph& getRackGraph() { return rackGraph_; }
     const RackGraph& getRackGraph() const { return rackGraph_; }
@@ -236,12 +241,12 @@ private:
     std::atomic<uint64_t> directUsbWriteWaitTimeouts_{0};
     std::vector<float> directUsbOutputRight_;
 
-
     RackGraph rackGraph_;
     std::unique_ptr<AndroidOboeBackend> androidOboeBackend_;
     float sampleRate_;
     uint32_t callbackFrameCount_ = 0;  // Power-of-2 frames per audio callback
-    std::atomic<bool> isRunning_;
+    mutable std::atomic<bool> isRunning_;
+    std::atomic<bool> androidOboeSession_{false};
 
     
     // Temporary buffers for plugin chain

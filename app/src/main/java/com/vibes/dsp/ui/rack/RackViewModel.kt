@@ -30,6 +30,20 @@ internal fun parseClipSourceBpmFromFilename(filename: String): Double? {
     val bpm = match.groupValues[1].replace(',', '.').toDoubleOrNull() ?: return null
     return bpm.takeIf { it in 20.0..400.0 }
 }
+
+internal fun detectLoopTempoBpm(durationSeconds: Double, referenceBpm: Double): Double? {
+    if (!durationSeconds.isFinite() || durationSeconds <= 0.0) return null
+    val reference = referenceBpm.takeIf { it.isFinite() && it > 0.0 } ?: 120.0
+    return listOf(2, 4, 8, 16)
+        .asSequence()
+        .map { bars ->
+            val bpm = bars * 4.0 * 60.0 / durationSeconds
+            bars to bpm
+        }
+        .filter { (_, bpm) -> bpm.isFinite() && bpm in 50.0..200.0 }
+        .minWithOrNull(compareBy<Pair<Int, Double>> { kotlin.math.abs(it.second - reference) }.thenBy { it.first })
+        ?.second
+}
 data class RackPlugin(val index: Int, val name: String, val pluginId: String, val instanceId: Long)
 
 data class MeterState(
@@ -127,9 +141,15 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         val stats = native.getDirectUsbStats()
         _directUsbStats.value = stats
         if (AudioSettingsManager.getAudioBackend(getApplication()) == AudioBackend.AndroidOboe) {
+            val error = native.nativeIsEngineError()
             val running = native.nativeIsEngineRunning()
-            _directUsbState.value = if (running) DirectUsbSessionState.Running else stats.state
+            _directUsbState.value = when {
+                error -> DirectUsbSessionState.Failed
+                running -> DirectUsbSessionState.Running
+                else -> DirectUsbSessionState.Stopped
+            }
             _isEngineRunning.value = running
+            if (error) _errorMessage.value = "Android audio route failed"
             return
         }
         _directUsbState.value = stats.state
@@ -380,15 +400,25 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                             val wav = File.createTempFile("clip_import_decoded_", ".wav", getApplication<Application>().cacheDir)
                             try {
                                 AudioImportDecoder.copyOrDecode(getApplication(), uri, wav)
+                                val durationBpm = if (detectedBpm == null &&
+                                    ClipLauncherPreferences.getAutoDetectLoopTempo(getApplication())) {
+                                    AudioImportDecoder.readWavDurationSeconds(wav)
+                                        ?.let { detectLoopTempoBpm(it, _transport.value.beatsPerMinute) }
+                                } else null
+                                val selectedBpm = detectedBpm ?: durationBpm
                                 val wavLoaded = RackManager.loadTrackClipWav(
                                     trackId,
                                     slot,
                                     wav.absolutePath,
                                     displayName,
-                                    detectedBpm ?: _transport.value.beatsPerMinute,
+                                    selectedBpm ?: _transport.value.beatsPerMinute,
                                 )
-                                if (wavLoaded && detectedBpm != null) {
-                                    modeSetFailed = !RackManager.setClipTempoMode(trackId, slot, ClipTempoMode.Stretch)
+                                if (wavLoaded && selectedBpm != null) {
+                                    modeSetFailed = !RackManager.setClipTempoMode(
+                                        trackId,
+                                        slot,
+                                        ClipTempoMode.Stretch,
+                                    )
                                 }
                                 wavLoaded
                             } finally { wav.delete() }

@@ -79,6 +79,7 @@ fun SettingsScreen(
     viewModel: RackViewModel,
     repositoryService: PluginRepositoryService,
     pendingRepositoryPackageId: String? = null,
+    onRepositoryHandoff: () -> Unit = {},
     initialTab: SettingsTab = SettingsTab.Driver,
     modifier: Modifier = Modifier,
     onFullscreenChanged: (Boolean) -> Unit = {},
@@ -96,10 +97,11 @@ fun SettingsScreen(
     }
     var showDriverDialog by remember { mutableStateOf(false) }
     var showBackendDialog by remember { mutableStateOf(false) }
-    var fullscreenContent by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    var fullscreenContent by remember { mutableStateOf(false) }
+    var selectedBackend by remember { mutableStateOf(AudioSettingsManager.getAudioBackend(context)) }
     if (showBackendDialog) {
-        val current = AudioSettingsManager.getAudioBackend(context)
+        val current = selectedBackend
         AlertDialog(
             onDismissRequest = { showBackendDialog = false },
             title = { Text("Audio backend (${current.name})") },
@@ -107,11 +109,13 @@ fun SettingsScreen(
             confirmButton = {
                 Row {
                     NnagaTextButton(onClick = {
+                        selectedBackend = AudioBackend.DirectUsb
                         viewModel.setAudioBackend(AudioBackend.DirectUsb)
                         showBackendDialog = false
                         showDriverDialog = true
                     }) { Text("Direct USB") }
                     NnagaTextButton(onClick = {
+                        selectedBackend = AudioBackend.AndroidOboe
                         viewModel.setAudioBackend(AudioBackend.AndroidOboe)
                         showBackendDialog = false
                     }) { Text("Android") }
@@ -202,16 +206,17 @@ fun SettingsScreen(
                 )
             }
         }
-
         when (selectedTab) {
             SettingsTab.Driver -> AudioSettingsScreen(
                 viewModel = viewModel,
                 onNavigateBack = {},
                 embedded = true,
+                backend = selectedBackend,
             )
             SettingsTab.Vst -> VstManagerTab(
                 repositoryService = repositoryService,
                 pendingRepositoryPackageId = pendingRepositoryPackageId,
+                onRepositoryHandoff = onRepositoryHandoff,
                 onWineSessionActiveChanged = { active ->
                     fullscreenContent = active
                     onFullscreenChanged(active)

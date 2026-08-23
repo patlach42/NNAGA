@@ -24,6 +24,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <mutex>
 
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
 #include <lilv/lilv.h>
@@ -32,6 +33,7 @@ struct LilvWorld_;
 #endif
 
 namespace guitarrackcraft {
+struct LV2PluginGeneration;
 
 /**
  * Factory for creating LV2 plugins.
@@ -56,6 +58,7 @@ public:
 
 private:
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
+    std::shared_ptr<LV2PluginGeneration> generation_;
     LilvWorld* world_;
     void scanPlugins(const std::string& bundlePath);
     void rewriteManifestPaths(const std::string& bundlePath);
@@ -75,6 +78,7 @@ private:
     std::string pluginLibDir_;
     std::vector<PluginInfo> plugins_;
     bool initialized_;
+    mutable std::mutex mutex_;
 };
 
 } // namespace guitarrackcraft

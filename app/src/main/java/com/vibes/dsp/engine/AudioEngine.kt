@@ -27,6 +27,7 @@ object AudioEngine {
 
     fun stop() = native.stopEngine()
     fun isRunning(): Boolean = native.isEngineRunning()
+    fun hasError(): Boolean = native.nativeIsEngineError()
     fun getSampleRate(): Float = native.getSampleRate()
     fun getBufferFrameCount(): Int = native.getBufferFrameCount()
     fun getLatencyMs(): Double = native.getLatencyMs()

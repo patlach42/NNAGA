@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 fun VstManagerTab(
     repositoryService: com.vibes.dsp.engine.PluginRepositoryService,
     pendingRepositoryPackageId: String? = null,
+    onRepositoryHandoff: () -> Unit = {},
     onWineSessionActiveChanged: (Boolean) -> Unit,
 ) {
     // VST hosting is unavailable in the playstore flavor.

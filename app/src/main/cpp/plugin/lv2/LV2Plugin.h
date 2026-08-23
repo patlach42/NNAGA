@@ -26,6 +26,8 @@
 #include <vector>
 #include <memory>
 #include <atomic>
+#include <mutex>
+
 
 
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
@@ -41,6 +43,19 @@
 #include <lv2/state/state.h>
 #include <thread>
 #include <condition_variable>
+
+namespace guitarrackcraft {
+
+/** Owns one immutable Lilv scan generation and keeps its metadata alive. */
+struct LV2PluginGeneration {
+    explicit LV2PluginGeneration(LilvWorld* world_) : world(world_) {}
+    ~LV2PluginGeneration() { lilv_world_free(world); }
+    LV2PluginGeneration(const LV2PluginGeneration&) = delete;
+    LV2PluginGeneration& operator=(const LV2PluginGeneration&) = delete;
+    LilvWorld* world;
+};
+
+}
 #else
 struct LilvInstance_;
 struct LilvPlugin_;
@@ -53,11 +68,12 @@ namespace guitarrackcraft {
  * LV2 plugin wrapper implementing IPlugin interface.
  * Wraps LilvInstance and handles LV2-specific audio processing.
  */
+
 class LV2Plugin : public IPlugin {
 public:
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
-    LV2Plugin(const LilvPlugin* plugin, LilvWorld* world, float sampleRate,
-              const std::string& filesDir = std::string());
+    LV2Plugin(const LilvPlugin* plugin, std::shared_ptr<const LV2PluginGeneration> generation,
+              float sampleRate, const std::string& filesDir = std::string());
 #else
     LV2Plugin(LilvPlugin_* plugin, LilvWorld_* world, float sampleRate,
               const std::string& filesDir = std::string());
@@ -97,6 +113,7 @@ public:
 
 private:
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
+    std::shared_ptr<const LV2PluginGeneration> generation_;
     const LilvPlugin* plugin_;
     LilvWorld* world_;
     LilvInstance* instance_;

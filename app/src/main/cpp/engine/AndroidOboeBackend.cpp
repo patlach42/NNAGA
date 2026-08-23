@@ -8,44 +8,73 @@ bool AndroidOboeBackend::start(int32_t sampleRate, int32_t inputDeviceId,
                                int32_t outputDeviceId, int32_t bufferFrames) {
     stop();
     error_.store(false, std::memory_order_release);
+
+    auto configureInput = [&](oboe::AudioStreamBuilder& builder,
+                              oboe::SharingMode sharing) {
+        builder.setDirection(oboe::Direction::Input)
+            ->setFormat(oboe::AudioFormat::Float)
+            // Leave the input channel count unspecified: phone microphones may
+            // be mono, and forcing two channels makes Oboe reject the stream.
+            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+            ->setSharingMode(sharing)
+            ->setErrorCallback(this);
+        if (sampleRate > 0) builder.setSampleRate(sampleRate);
+        if (inputDeviceId > 0) builder.setDeviceId(inputDeviceId);
+        if (bufferFrames > 0) builder.setFramesPerDataCallback(bufferFrames);
+    };
+
     oboe::AudioStreamBuilder in;
-    in.setDirection(oboe::Direction::Input)->setFormat(oboe::AudioFormat::Float)
-      ->setChannelCount(2)->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-      ->setSharingMode(oboe::SharingMode::Exclusive)->setErrorCallback(this);
-    if (sampleRate > 0) in.setSampleRate(sampleRate);
-    if (inputDeviceId > 0) in.setDeviceId(inputDeviceId);
-    if (bufferFrames > 0) in.setFramesPerDataCallback(bufferFrames);
+    configureInput(in, oboe::SharingMode::Exclusive);
     auto result = in.openStream(input_);
     if (result != oboe::Result::OK) {
         input_.reset();
-        in.setSharingMode(oboe::SharingMode::Shared)->setAudioApi(oboe::AudioApi::Unspecified);
-        result = in.openStream(input_);
+        // Rebuild the builder for the shared retry; do not carry stale stream
+        // configuration (especially a forced channel count) across attempts.
+        oboe::AudioStreamBuilder sharedIn;
+        configureInput(sharedIn, oboe::SharingMode::Shared);
+        sharedIn.setAudioApi(oboe::AudioApi::Unspecified);
+        result = sharedIn.openStream(input_);
     }
-    if (result != oboe::Result::OK) return false;
+    if (result != oboe::Result::OK) { closeStreams(); return false; }
+
+    auto configureOutput = [&](oboe::AudioStreamBuilder& builder,
+                               oboe::SharingMode sharing) {
+        builder.setDirection(oboe::Direction::Output)
+            ->setFormat(oboe::AudioFormat::Float)
+            ->setChannelCount(2)
+            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+            ->setSharingMode(sharing)
+            ->setDataCallback(this)
+            ->setErrorCallback(this);
+        if (sampleRate > 0) builder.setSampleRate(sampleRate);
+        if (outputDeviceId > 0) builder.setDeviceId(outputDeviceId);
+        if (bufferFrames > 0) builder.setFramesPerDataCallback(bufferFrames);
+    };
+
     oboe::AudioStreamBuilder out;
-    out.setDirection(oboe::Direction::Output)->setFormat(oboe::AudioFormat::Float)
-       ->setChannelCount(2)->setPerformanceMode(oboe::PerformanceMode::LowLatency)
-       ->setSharingMode(oboe::SharingMode::Exclusive)->setDataCallback(this)
-       ->setErrorCallback(this);
-    if (sampleRate > 0) out.setSampleRate(sampleRate);
-    if (outputDeviceId > 0) out.setDeviceId(outputDeviceId);
-    if (bufferFrames > 0) out.setFramesPerDataCallback(bufferFrames);
+    configureOutput(out, oboe::SharingMode::Exclusive);
     result = out.openStream(output_);
     if (result != oboe::Result::OK) {
         output_.reset();
-        out.setSharingMode(oboe::SharingMode::Shared)->setAudioApi(oboe::AudioApi::Unspecified);
-        result = out.openStream(output_);
+        oboe::AudioStreamBuilder sharedOut;
+        configureOutput(sharedOut, oboe::SharingMode::Shared);
+        sharedOut.setAudioApi(oboe::AudioApi::Unspecified);
+        result = sharedOut.openStream(output_);
     }
     if (result != oboe::Result::OK) { closeStreams(); return false; }
+
     const int32_t rate = output_->getSampleRate() > 0 ? output_->getSampleRate() : sampleRate;
     const int32_t callbackFrames = output_->getFramesPerDataCallback() > 0
         ? output_->getFramesPerDataCallback() : output_->getFramesPerBurst();
-    const int32_t inputChannels = input_->getChannelCount() > 0 ? input_->getChannelCount() : 2;
+    const int32_t inputChannels = input_->getChannelCount();
+    // RackGraph's hardware input contract is one or two channels. Do not
+    // publish a channel count for which the callback cannot provide pointers.
+    if (inputChannels < 1 || inputChannels > 2) { closeStreams(); return false; }
     actualSampleRate_.store(rate, std::memory_order_release);
     actualFramesPerDataCallback_.store(callbackFrames, std::memory_order_release);
     inputChannelCount_.store(inputChannels, std::memory_order_release);
     const int32_t capacity = std::max<int32_t>(bufferFrames > 0 ? bufferFrames : callbackFrames, callbackFrames);
-    inputInterleaved_.assign(static_cast<size_t>(capacity) * 2, 0.0f);
+    inputInterleaved_.assign(static_cast<size_t>(capacity) * static_cast<size_t>(inputChannels), 0.0f);
     inputLeft_.assign(capacity, 0.0f); inputRight_.assign(capacity, 0.0f);
     outputInterleaved_.assign(static_cast<size_t>(capacity) * 2, 0.0f);
     graph_.setSampleRate(static_cast<float>(rate), static_cast<uint32_t>(capacity));
@@ -73,19 +102,26 @@ oboe::DataCallbackResult AndroidOboeBackend::onAudioReady(oboe::AudioStream* str
     }
     if (stream != output_.get()) return oboe::DataCallbackResult::Continue;
     const int32_t capacity = static_cast<int32_t>(inputLeft_.size());
-    if (frames > capacity) { std::memset(data, 0, static_cast<size_t>(frames) * 2 * sizeof(float)); return oboe::DataCallbackResult::Continue; }
+    if (frames > capacity) {
+        std::memset(data, 0, static_cast<size_t>(frames) * 2 * sizeof(float));
+        return oboe::DataCallbackResult::Continue;
+    }
     int32_t got = 0;
+    const int32_t inputChannels = inputChannelCount_.load(std::memory_order_acquire);
     if (input_) {
         const auto readResult = input_->read(inputInterleaved_.data(), frames, 0);
         if (readResult == oboe::Result::OK) got = readResult.value();
     }
     for (int32_t i = 0; i < frames; ++i) {
-        inputLeft_[i] = (got > i) ? inputInterleaved_[static_cast<size_t>(i) * 2] : 0.0f;
-        inputRight_[i] = (got > i) ? inputInterleaved_[static_cast<size_t>(i) * 2 + 1] : 0.0f;
+        const bool available = got > i;
+        const size_t offset = static_cast<size_t>(i) * static_cast<size_t>(inputChannels);
+        inputLeft_[i] = available ? inputInterleaved_[offset] : 0.0f;
+        inputRight_[i] = (available && inputChannels > 1)
+            ? inputInterleaved_[offset + 1] : 0.0f;
     }
     const float* in[] = {inputLeft_.data(), inputRight_.data()};
     float* out[] = {outputInterleaved_.data(), outputInterleaved_.data() + frames};
-    graph_.process(in, 2, out, static_cast<uint32_t>(frames));
+    graph_.process(in, inputChannels, out, static_cast<uint32_t>(frames));
     auto* interleaved = static_cast<float*>(data);
     for (int32_t i = 0; i < frames; ++i) {
         interleaved[static_cast<size_t>(i) * 2] = out[0][i];

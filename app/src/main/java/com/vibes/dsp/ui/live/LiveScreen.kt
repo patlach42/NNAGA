@@ -223,7 +223,6 @@ fun LiveScreen(
     val context = LocalContext.current
     val tracks by viewModel.tracks.collectAsState()
     val transport by viewModel.transport.collectAsState()
-    val frameClockNanos = rememberFrameClockNanos(transport.playing)
     val selectedPlugins by viewModel.selectedPathPlugins.collectAsState()
     val selectedPath by viewModel.selectedPathId.collectAsState()
     val engineRunning by viewModel.isEngineRunning.collectAsState()
@@ -725,7 +724,6 @@ fun LiveScreen(
                     musicalQuarterNotes = transport.musicalQuarterNotes,
                     bpm = transport.beatsPerMinute,
                     capturedAtMonotonicNanos = transport.capturedAtMonotonicNanos,
-                    nowMonotonicNanos = frameClockNanos,
                     onPlay = {
                         if (transport.playing) viewModel.transportPause() else viewModel.transportPlay()
                     },
@@ -856,7 +854,6 @@ fun LiveScreen(
                                 peaks = peaksByTrack[selectedTrack?.id].orEmpty(),
                                 notes = notesByClip[selectedTrack?.id to selectedSlot].orEmpty(),
                                 bpm = transport.beatsPerMinute,
-                                nowMonotonicNanos = frameClockNanos,
                                 onTrackVolume = { track, volume -> viewModel.setTrackVolume(track.id, volume) },
                                 onTrackInput = { inputMenuTrack = it },
                                 onTrackArm = { track ->
@@ -1298,13 +1295,13 @@ private fun TransportBar(
     musicalQuarterNotes: Double,
     bpm: Double,
     capturedAtMonotonicNanos: Long,
-    nowMonotonicNanos: Long,
     onPlay: () -> Unit,
     onStop: () -> Unit,
     onRestart: () -> Unit,
     onBpm: () -> Unit,
 ) {
     val accent = MaterialTheme.colorScheme.primary
+    val nowMonotonicNanos = rememberFrameClockNanos(playing)
     val stopped = !playing && positionSec <= 0.001
     Surface(color = LiveColors.raised) {
         Row(
@@ -1776,11 +1773,11 @@ private fun ClipInspector(
     onOpenSlotSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onClipLoop: (RackTrackInfo, ClipSlotInfo) -> Unit,
     bpm: Double,
-    nowMonotonicNanos: Long,
     launchQuantization: TrackLaunchQuantization,
     onLaunchQuantizationClick: () -> Unit,
     modifier: Modifier,
 ) {
+    val nowMonotonicNanos = rememberFrameClockNanos(clip?.playing == true)
     Surface(color = LiveColors.panel, modifier = modifier.fillMaxWidth()) {
         Column {
             Box(

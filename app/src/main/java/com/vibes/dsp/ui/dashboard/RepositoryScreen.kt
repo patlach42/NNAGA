@@ -86,6 +86,7 @@ private object RepositoryDimensions {
 fun RepositoryScreen(
     viewModel: RepositoryViewModel,
     onInstallPackage: (RepositoryPackageItem) -> Unit = { viewModel.install(it.id) },
+    onUpdatePackage: (RepositoryPackageItem) -> Unit = { viewModel.update(it.id) },
     modifier: Modifier = Modifier,
 ) {
     val snapshot by viewModel.snapshot.collectAsState()
@@ -137,7 +138,9 @@ fun RepositoryScreen(
                 onRefreshSource = viewModel::refreshSource,
                 onRemoveSource = viewModel::removeSource,
                 onInstall = onInstallPackage,
-                onUpdate = viewModel::update,
+                onUpdate = { id ->
+                    snapshot.packages.firstOrNull { it.id == id }?.let(onUpdatePackage)
+                },
                 onRemovePackage = viewModel::remove,
                 modifier = Modifier.weight(1f),
             )

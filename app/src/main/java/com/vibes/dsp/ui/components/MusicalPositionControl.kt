@@ -1,6 +1,6 @@
 package com.vibes.dsp.ui.components
 
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material3.MaterialTheme
@@ -85,10 +85,16 @@ fun MusicalPositionControl(
     var text by remember { mutableStateOf(MusicalPosition.format(quarterNotes)) }
     var error by remember { mutableStateOf<String?>(null) }
     var lastCommitted by remember { mutableStateOf(quarterNotes) }
+    var pendingTarget by remember { mutableStateOf<Double?>(null) }
+    var commitGeneration by remember { mutableStateOf(0L) }
     LaunchedEffect(quarterNotes) {
-        lastCommitted = quarterNotes
-        text = MusicalPosition.format(quarterNotes)
-        error = null
+        // A native snapshot is authoritative only when no newer local commit is
+        // pending. This prevents an older callback from clobbering a rapid gesture.
+        if (pendingTarget == null) {
+            lastCommitted = quarterNotes
+            text = MusicalPosition.format(quarterNotes)
+            error = null
+        }
     }
     fun commit(candidate: String) {
         val parsed = MusicalPosition.parse(candidate)
@@ -102,49 +108,60 @@ fun MusicalPositionControl(
         }
         val clamped = parsed.coerceIn(0.0, maxQuarterNotes)
         error = null
-        if (clamped != quarterNotes) {
+        if (clamped != lastCommitted || pendingTarget != null) {
+            val generation = commitGeneration + 1
+            commitGeneration = generation
+            pendingTarget = clamped
+            text = MusicalPosition.format(clamped)
             onCommit(clamped) { accepted ->
+                if (generation != commitGeneration) return@onCommit
+                pendingTarget = null
                 if (accepted) {
                     lastCommitted = clamped
                     text = MusicalPosition.format(clamped)
-                } else {
-                    lastCommitted = quarterNotes
-                    text = MusicalPosition.format(quarterNotes)
-                    error = "Native transport rejected value"
-                }
-            }
-        } else {
-            lastCommitted = clamped
-            text = MusicalPosition.format(clamped)
-        }
-    }
-    fun adjust(delta: Double) {
-        val next = (lastCommitted + delta).coerceIn(0.0, maxQuarterNotes)
-        if (next != lastCommitted) {
-            onCommit(next) { accepted ->
-                if (accepted) {
-                    lastCommitted = next
-                    text = MusicalPosition.format(next)
-                    error = null
                 } else {
                     text = MusicalPosition.format(lastCommitted)
                     error = "Native transport rejected value"
                 }
             }
+        } else {
+            text = MusicalPosition.format(clamped)
         }
+    }
+    fun adjust(delta: Double): Boolean {
+        val base = pendingTarget ?: lastCommitted
+        val next = (base + delta).coerceIn(0.0, maxQuarterNotes)
+        if (next == base) return false
+        val generation = commitGeneration + 1
+        commitGeneration = generation
+        pendingTarget = next
+        text = MusicalPosition.format(next)
+        error = null
+        onCommit(next) { accepted ->
+            if (generation != commitGeneration) return@onCommit
+            pendingTarget = null
+            if (accepted) {
+                lastCommitted = next
+                text = MusicalPosition.format(next)
+            } else {
+                text = MusicalPosition.format(lastCommitted)
+                error = "Native transport rejected value"
+            }
+        }
+        return true
     }
     Column(
         modifier = modifier
             .onFocusChanged { state -> if (!state.isFocused && enabled) commit(text) }
             .pointerInput(enabled, maxQuarterNotes) {
                 if (!enabled) return@pointerInput
-                detectDragGestures(
+                detectHorizontalDragGestures(
                     onDragEnd = { dragRemainder = 0.0 },
                     onDragCancel = { dragRemainder = 0.0 },
                 ) { change, dragAmount ->
                     change.consume()
                     val coarseQuantum = MusicalPosition.SixteenthQuarterNotes
-                    val quantum = dragAmount.x / 24.dp.toPx() * coarseQuantum + dragRemainder
+                    val quantum = dragAmount / 24.dp.toPx() * coarseQuantum + dragRemainder
                     val coarseSteps = (quantum / coarseQuantum).toInt()
                     val coarse = coarseSteps * coarseQuantum
                     val fine = ((quantum - coarse) * MusicalPosition.SubdivisionsPerQuarter)
@@ -156,8 +173,12 @@ fun MusicalPositionControl(
             .semantics {
                 stateDescription = text
                 customActions = if (enabled) listOf(
-                    CustomAccessibilityAction("Increment $label") { adjust(MusicalPosition.SixteenthQuarterNotes); true },
-                    CustomAccessibilityAction("Decrement $label") { adjust(-MusicalPosition.SixteenthQuarterNotes); true },
+                    CustomAccessibilityAction("Increment $label") {
+                        adjust(MusicalPosition.SixteenthQuarterNotes)
+                    },
+                    CustomAccessibilityAction("Decrement $label") {
+                        adjust(-MusicalPosition.SixteenthQuarterNotes)
+                    },
                 ) else emptyList()
             },
     ) {

@@ -438,6 +438,8 @@ class NativeEngine private constructor() {
      * Check if the engine is currently running.
      */
     external fun nativeIsEngineRunning(): Boolean
+    /** True when Android Oboe reported a route/device error. */
+    external fun nativeIsEngineError(): Boolean
 
     /**
      * Get current sample rate in Hz.

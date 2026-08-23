@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <memory>
 #include <string>
 
 namespace guitarrackcraft {
@@ -58,6 +59,7 @@ TEST(LV2PluginProcessTest, RunsDspAndCopiesProcessedAudio) {
     lilv_world_load_all(world);
 
     LilvNode* uri = lilv_new_uri(world, "https://guitarrackcraft.test/lv2/tiny-gain");
+    auto generation = std::make_shared<const guitarrackcraft::LV2PluginGeneration>(world);
     ASSERT_NE(uri, nullptr);
     const LilvPlugin* plugin = lilv_world_get_all_plugins(world)
         ? lilv_plugins_get_by_uri(lilv_world_get_all_plugins(world), uri)
@@ -65,7 +67,7 @@ TEST(LV2PluginProcessTest, RunsDspAndCopiesProcessedAudio) {
     ASSERT_NE(plugin, nullptr);
 
     {
-        guitarrackcraft::LV2Plugin instance(plugin, world, 48000.0f);
+        guitarrackcraft::LV2Plugin instance(plugin, generation, 48000.0f);
         ASSERT_TRUE(instance.hasInstance());
         ASSERT_EQ(instance.getNumInputPorts(), 1u);
         ASSERT_EQ(instance.getNumOutputPorts(), 1u);
@@ -97,5 +99,4 @@ TEST(LV2PluginProcessTest, RunsDspAndCopiesProcessedAudio) {
     }
 
     lilv_node_free(uri);
-    lilv_world_free(world);
 }

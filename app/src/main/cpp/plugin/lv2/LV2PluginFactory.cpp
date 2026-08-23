@@ -45,7 +45,8 @@ namespace guitarrackcraft {
 
 LV2PluginFactory::LV2PluginFactory(const std::string& lv2Path, const std::string& nativeLibDir,
                                    const std::string& filesDir, const std::string& pluginLibDir)
-    : world_(nullptr)
+    : generation_(nullptr)
+    , world_(nullptr)
     , lv2Path_(lv2Path)
     , nativeLibDir_(nativeLibDir)
     , filesDir_(filesDir)
@@ -54,26 +55,20 @@ LV2PluginFactory::LV2PluginFactory(const std::string& lv2Path, const std::string
 {
 }
 
-LV2PluginFactory::~LV2PluginFactory() {
-    if (world_) {
-        lilv_world_free(world_);
-    }
-}
+LV2PluginFactory::~LV2PluginFactory() = default;
 
 bool LV2PluginFactory::initialize() {
-    // Refresh is a full world replacement; callers may install/remove bundles and rescan.
-    if (world_) {
-        lilv_world_free(world_);
-        world_ = nullptr;
-    }
-    plugins_.clear();
-    initialized_ = false;
-    world_ = lilv_world_new();
-    if (!world_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // Build a complete generation before publishing it. Existing instances retain
+    // their shared generation and therefore keep all Lilv metadata valid.
+    auto nextGeneration = std::make_shared<LV2PluginGeneration>(lilv_world_new());
+    if (!nextGeneration->world) {
         LOGE("Failed to create LV2 world");
         return false;
     }
-    
+    world_ = nextGeneration->world;
+    plugins_.clear();
+    initialized_ = false;
     // Scan only the explicitly managed root supplied by the repository/runtime.
     LOGI("LV2 scan path: '%s'", lv2Path_.c_str());
     if (!lv2Path_.empty()) {
@@ -92,22 +87,23 @@ bool LV2PluginFactory::initialize() {
         if (uri) info.id = lilv_node_as_string(uri);
         if (name) info.name = lilv_node_as_string(name);
         info.format = "LV2";
-        uint32_t numPorts = lilv_plugin_get_num_ports(plugin);
-        info.ports.reserve(numPorts);
+        info.ports.reserve(lilv_plugin_get_num_ports(plugin));
         discoverModgui(plugin, info);
         discoverX11UI(plugin, info);
         if (info.hasX11Ui) x11Count++;
         if (!info.modguiBasePath.empty()) modguiCount++;
         plugins_.push_back(info);
     }
-
+    generation_ = std::move(nextGeneration);
     initialized_ = true;
     LOGI("LV2 plugin factory initialized: %zu plugins found (x11=%d, modgui=%d)",
          plugins_.size(), x11Count, modguiCount);
     return true;
 }
 
+
 std::vector<PluginInfo> LV2PluginFactory::enumeratePlugins() {
+    std::lock_guard<std::mutex> lock(mutex_);
     if (!initialized_) {
         return {};
     }
@@ -115,27 +111,29 @@ std::vector<PluginInfo> LV2PluginFactory::enumeratePlugins() {
 }
 
 std::unique_ptr<IPlugin> LV2PluginFactory::createPlugin(const std::string& pluginId) {
-    if (!initialized_ || !world_) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto generation = generation_;
+    if (!initialized_ || !generation || !generation->world) {
         return nullptr;
     }
 
-    LilvNode* uri = lilv_new_uri(world_, pluginId.c_str());
+    LilvWorld* world = generation->world;
+    LilvNode* uri = lilv_new_uri(world, pluginId.c_str());
     if (!uri) {
         LOGE("Invalid plugin URI: %s", pluginId.c_str());
         return nullptr;
     }
-    
-    const LilvPlugins* plugins = lilv_world_get_all_plugins(world_);
+    const LilvPlugins* plugins = lilv_world_get_all_plugins(world);
     const LilvPlugin* plugin = lilv_plugins_get_by_uri(plugins, uri);
     lilv_node_free(uri);
-    
     if (!plugin) {
         LOGE("LV2 plugin not found: %s", pluginId.c_str());
         return nullptr;
     }
-    
+
     static constexpr float kDefaultSampleRate = 48000.0f;
-    auto lv2Plugin = std::make_unique<LV2Plugin>(plugin, world_, kDefaultSampleRate, filesDir_);
+    auto lv2Plugin = std::make_unique<LV2Plugin>(
+        plugin, std::move(generation), kDefaultSampleRate, filesDir_);
     if (!lv2Plugin->hasInstance()) {
         LOGE("LV2 plugin could not be instantiated (binary missing or load failed): %s", pluginId.c_str());
         return nullptr;

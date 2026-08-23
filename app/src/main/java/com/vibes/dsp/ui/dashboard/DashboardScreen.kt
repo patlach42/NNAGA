@@ -117,6 +117,7 @@ fun DashboardScreen(
     repositoryService: PluginRepositoryService,
     onRepositoryInstall: (RepositoryPackageItem) -> Unit,
     pendingRepositoryPackageId: String? = null,
+    onRepositoryHandoff: () -> Unit = {},
     onNavigateToToneDetail: (Tone, String?) -> Unit,
     initialSection: DashboardSection = DashboardSection.Dashboard,
     onNavigateBack: () -> Unit,
@@ -177,7 +178,9 @@ fun DashboardScreen(
                         viewModel = viewModel,
                         repositoryService = repositoryService,
                         pendingRepositoryPackageId = pendingRepositoryPackageId,
+                        onRepositoryHandoff = onRepositoryHandoff,
                         initialTab = initialSettingsTab,
+                        onFullscreenChanged = { active -> fullscreenContent = active },
                     )
                 }
             }
@@ -351,6 +354,7 @@ private fun DashboardContent(
                 DashboardTab.Repository -> RepositoryScreen(
                     viewModel = repositoryViewModel,
                     onInstallPackage = onRepositoryInstall,
+                    onUpdatePackage = onRepositoryInstall,
                     modifier = Modifier.weight(1f),
                 )
                 DashboardTab.Main -> BrandHome(modifier = Modifier.weight(1f))

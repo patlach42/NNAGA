@@ -539,18 +539,24 @@ bool AudioEngine::startAndroidOboeSession(int32_t inputDeviceId, int32_t outputD
         publishedSampleRate_.store(sampleRate_, std::memory_order_release);
         publishedCallbackFrameCount_.store(callbackFrameCount_, std::memory_order_release);
         rackGraph_.setAvailableInputChannelCount(androidOboeBackend_->inputChannelCount());
+        cleanupStarted_.store(false, std::memory_order_release);
+        androidOboeSession_.store(true, std::memory_order_release);
         isRunning_.store(true, std::memory_order_release);
     }
     return started;
 }
-
 void AudioEngine::stop() {
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
     if (androidOboeBackend_ &&
         (androidOboeBackend_->isRunning() || androidOboeBackend_->hasError())) {
+        // Oboe closes streams only after callbacks have quiesced. Keep all
+        // graph/plugin teardown on this lifecycle thread, never in Oboe's
+        // error callback.
         isRunning_.store(false, std::memory_order_release);
         androidOboeBackend_->stop();
-        androidOboeBackend_->clearError();
+        androidOboeSession_.store(false, std::memory_order_release);
+        cleanupEngineState();
+        publishedCallbackFrameCount_.store(0, std::memory_order_release);
         return;
     }
     LOGI("stop() entered tid=%ld isRunning_=%d", getTid(),
@@ -577,7 +583,17 @@ void AudioEngine::stop() {
 }
 
 bool AudioEngine::isRunning() const {
-    return isRunning_;
+    // Oboe reports route/device failure from its callback thread. Reconcile
+    // the public engine flag lazily without doing lifecycle work on RT.
+    if (androidOboeSession_.load(std::memory_order_acquire) &&
+        (!androidOboeBackend_->isRunning() || androidOboeBackend_->hasError())) {
+        isRunning_.store(false, std::memory_order_release);
+    }
+    return isRunning_.load(std::memory_order_acquire);
+}
+
+bool AudioEngine::hasError() const {
+    return androidOboeBackend_ && androidOboeBackend_->hasError();
 }
 
 double AudioEngine::getLatencyMs() const {

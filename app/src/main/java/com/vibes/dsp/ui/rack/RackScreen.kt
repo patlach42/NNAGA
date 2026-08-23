@@ -294,7 +294,6 @@ fun RackScreen(
     val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
     val transport by viewModel.transport.collectAsState()
     val clipSlots by viewModel.clipSlots.collectAsState()
-    val frameClockNanos = rememberFrameClockNanos(isVisible && transport.playing)
     val errorMessage by viewModel.errorMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
     val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
@@ -566,13 +565,13 @@ fun RackScreen(
         ) }
         NnagaIconButton(onClick = { viewModel.transportRestart() },
         modifier = Modifier.size(48.dp)) { Icon(Icons.Default.SkipPrevious, "Restart global transport") }
-        Text(
-            "${formatMusicalPosition(interpolatedMusicalQuarterNotes(transport.musicalQuarterNotes, transport.beatsPerMinute, transport.playing, transport.capturedAtMonotonicNanos, frameClockNanos))} · " +
-                formatElapsedTime(interpolatedElapsedSeconds(transport.positionSec, transport.playing, transport.capturedAtMonotonicNanos, frameClockNanos)),
+        RackTransportPosition(
+            musicalQuarterNotes = transport.musicalQuarterNotes,
+            positionSec = transport.positionSec,
+            bpm = transport.beatsPerMinute,
+            playing = transport.playing,
+            capturedAtMonotonicNanos = transport.capturedAtMonotonicNanos,
             modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1
         )
         NnagaTextButton(
             onClick = {
@@ -794,12 +793,13 @@ fun RackScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(
-                    "${formatMusicalPosition(interpolatedMusicalQuarterNotes(selectedSlotMusicalQuarterNotes, transport.beatsPerMinute, transport.playing && selectedSlotPlaying, selectedSlotCapturedAtNanos, frameClockNanos))} · " +
-                        formatElapsedTime(interpolatedElapsedSeconds(selectedSlotPositionSec, transport.playing && selectedSlotPlaying, selectedSlotCapturedAtNanos, frameClockNanos)),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
+                RackTransportPosition(
+                    musicalQuarterNotes = selectedSlotMusicalQuarterNotes,
+                    positionSec = selectedSlotPositionSec,
+                    bpm = transport.beatsPerMinute,
+                    playing = transport.playing && selectedSlotPlaying,
+                    capturedAtMonotonicNanos = selectedSlotCapturedAtNanos,
+                    modifier = Modifier.weight(1f),
                 )
                 Box {
                     Box(
@@ -3498,3 +3498,22 @@ private fun queryDisplayName(context: android.content.Context, uri: Uri): String
 }
 
 
+@Composable
+private fun RackTransportPosition(
+    musicalQuarterNotes: Double,
+    positionSec: Double,
+    bpm: Double,
+    playing: Boolean,
+    capturedAtMonotonicNanos: Long,
+    modifier: Modifier = Modifier,
+) {
+    val nowMonotonicNanos = rememberFrameClockNanos(playing)
+    Text(
+        "${formatMusicalPosition(interpolatedMusicalQuarterNotes(musicalQuarterNotes, bpm, playing, capturedAtMonotonicNanos, nowMonotonicNanos))} · " +
+            formatElapsedTime(interpolatedElapsedSeconds(positionSec, playing, capturedAtMonotonicNanos, nowMonotonicNanos)),
+        modifier = modifier,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        maxLines = 1,
+    )
+}
