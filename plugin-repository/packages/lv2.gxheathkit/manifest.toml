@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxheathkit"
+name = "GxHeathkit"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxHeathkit."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxheathkit/1.0.0.zip"
+sha256 = "8fd01f45da47552be959f2aafc1697b327196447f7cd41016d1d447aed56a129"
+size = 1503354
+
+[install]
+entry = "GxHeathkit.lv2/manifest.ttl"

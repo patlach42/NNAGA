@@ -119,6 +119,7 @@ struct AudioProcessContext {
     double beatPosition = 0.0;
     int64_t bar = 0;
     double barBeat = 0.0;
+    double musicalQuarterNotes = 0.0;
 };
 /** A raw MIDI short message scheduled within the current audio block. */
 struct MidiEvent {

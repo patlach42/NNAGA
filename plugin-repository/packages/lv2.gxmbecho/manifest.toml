@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxmbecho"
+name = "gx_mbecho"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_mbecho."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxmbecho/1.0.0.zip"
+sha256 = "fa44bce9867fd07cfec9e7e780b1640bcae7eeed892acea6dc27040182dde7f1"
+size = 4555940
+
+[install]
+entry = "gx_mbecho.lv2/manifest.ttl"

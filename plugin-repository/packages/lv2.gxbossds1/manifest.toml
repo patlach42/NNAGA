@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxbossds1"
+name = "gx_bossds1"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_bossds1."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxbossds1/1.0.0.zip"
+sha256 = "38a7129b2ccd86dcc56139d2f5bdee0797f77abcc386e269520c49a0dc01ac8e"
+size = 3513105
+
+[install]
+entry = "gx_bossds1.lv2/manifest.ttl"

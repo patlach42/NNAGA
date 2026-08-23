@@ -1,4 +1,9 @@
 package com.vibes.dsp.ui.live
+import com.vibes.dsp.ui.formatMusicalPosition
+import com.vibes.dsp.ui.components.MusicalPositionControl
+import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
+import com.vibes.dsp.ui.interpolatedElapsedSeconds
+import com.vibes.dsp.ui.rememberFrameClockNanos
 
 import android.graphics.Paint
 import android.app.Activity
@@ -126,6 +131,7 @@ import com.vibes.dsp.engine.RackTrackInfo
 import com.vibes.dsp.engine.TrackLaunchQuantization
 import com.vibes.dsp.ui.components.CompactHorizontalFader
 import com.vibes.dsp.ui.components.NnagaChoiceRow
+import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
 import com.vibes.dsp.ui.components.NnagaCheckbox
 import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.ui.components.NnagaTextButton
@@ -217,6 +223,7 @@ fun LiveScreen(
     val context = LocalContext.current
     val tracks by viewModel.tracks.collectAsState()
     val transport by viewModel.transport.collectAsState()
+    val frameClockNanos = rememberFrameClockNanos(transport.playing)
     val selectedPlugins by viewModel.selectedPathPlugins.collectAsState()
     val selectedPath by viewModel.selectedPathId.collectAsState()
     val engineRunning by viewModel.isEngineRunning.collectAsState()
@@ -430,24 +437,41 @@ fun LiveScreen(
         if (selectedClip?.wavLoaded == true) viewModel.loadTrackWaveform(selectedTrack.id)
     }
 
-    inputMenuTrack?.let { track ->
+    inputMenuTrack?.let { menuTrack ->
+        val track = tracks.firstOrNull { it.id == menuTrack.id } ?: menuTrack
         AlertDialog(
             onDismissRequest = { inputMenuTrack = null },
-            title = { Text("Input channel") },
+            title = { Text("Input source") },
             text = {
-                if (inputChannelCount == 0) {
-                    Text("No input channels available")
-                } else {
-                    Column {
-                        (0 until inputChannelCount).forEach { channel ->
-                            DropdownMenuItem(
-                                text = { Text("Channel ${channel + 1}") },
+                Column {
+                    (0 until inputChannelCount step 2).forEach { firstChannel ->
+                        NnagaSelectorMenuItem(
+                            text = "Hardware ${firstChannel + 1}/${firstChannel + 2}",
+                            selected = track.inputSourceKind == 0 &&
+                                track.inputSourceFirstChannel == firstChannel,
+                            onClick = {
+                                viewModel.setTrackInputHardwarePair(track.id, firstChannel)
+                                inputMenuTrack = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    tracks.filter { it.id != track.id }.forEach { source ->
+                        listOf(0 to "Pre", 1 to "Post").forEach { (tap, label) ->
+                            NnagaSelectorMenuItem(
+                                text = "${source.id} $label-fader",
+                                selected = track.inputSourceKind == 1 &&
+                                    track.inputSourceTrackId == source.id && track.inputTap == tap,
                                 onClick = {
-                                    viewModel.setTrackInputChannel(track.id, channel)
+                                    viewModel.setTrackInputTrack(track.id, source.id, tap)
                                     inputMenuTrack = null
                                 },
+                                modifier = Modifier.fillMaxWidth(),
                             )
                         }
+                    }
+                    if (inputChannelCount == 0 && tracks.none { it.id != track.id }) {
+                        Text("Add another track to route its pre- or post-fader signal.")
                     }
                 }
             },
@@ -492,18 +516,22 @@ fun LiveScreen(
                         )
                         Text("Loop clip")
                     }
-                    Text("Clip loop length")
-                    supportedLoopLengths.forEach { (bars, label) ->
-                        NnagaChoiceRow(
-                            text = label,
-                            selected = clip.loopLengthBars == bars,
-                            enabled = hasMedia,
-                            onClick = {
-                                viewModel.setClipLoopLength(track.id, slotIndex, bars)
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                    }
+                    MusicalPositionControl(
+                        label = "Loop start",
+                        quarterNotes = clip.loopStartQuarterNotes,
+                        maxQuarterNotes = (clip.durationSec * (if (clip.sourceBpm > 0.0) clip.sourceBpm else 120.0) / 60.0),
+                        enabled = hasMedia,
+                        onCommit = { value, result -> viewModel.setClipLoopStartQuarterNotes(track.id, slotIndex, value, result) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    MusicalPositionControl(
+                        label = "Loop length",
+                        quarterNotes = clip.loopLengthQuarterNotes,
+                        maxQuarterNotes = ((clip.durationSec * (if (clip.sourceBpm > 0.0) clip.sourceBpm else 120.0) / 60.0) - clip.loopStartQuarterNotes).coerceAtLeast(0.0),
+                        enabled = hasMedia,
+                        onCommit = { value, result -> viewModel.setClipLoopLengthQuarterNotes(track.id, slotIndex, value, result) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     if (clip.wavLoaded) {
                         OutlinedTextField(
                             value = clipBpmInput,
@@ -694,7 +722,10 @@ fun LiveScreen(
                 TransportBar(
                     playing = transport.playing,
                     positionSec = transport.positionSec,
+                    musicalQuarterNotes = transport.musicalQuarterNotes,
                     bpm = transport.beatsPerMinute,
+                    capturedAtMonotonicNanos = transport.capturedAtMonotonicNanos,
+                    nowMonotonicNanos = frameClockNanos,
                     onPlay = {
                         if (transport.playing) viewModel.transportPause() else viewModel.transportPlay()
                     },
@@ -825,6 +856,7 @@ fun LiveScreen(
                                 peaks = peaksByTrack[selectedTrack?.id].orEmpty(),
                                 notes = notesByClip[selectedTrack?.id to selectedSlot].orEmpty(),
                                 bpm = transport.beatsPerMinute,
+                                nowMonotonicNanos = frameClockNanos,
                                 onTrackVolume = { track, volume -> viewModel.setTrackVolume(track.id, volume) },
                                 onTrackInput = { inputMenuTrack = it },
                                 onTrackArm = { track ->
@@ -1263,7 +1295,10 @@ private fun DevicesTile(
 private fun TransportBar(
     playing: Boolean,
     positionSec: Double,
+    musicalQuarterNotes: Double,
     bpm: Double,
+    capturedAtMonotonicNanos: Long,
+    nowMonotonicNanos: Long,
     onPlay: () -> Unit,
     onStop: () -> Unit,
     onRestart: () -> Unit,
@@ -1326,7 +1361,8 @@ private fun TransportBar(
                 )
             }
             Text(
-                text = "${formatMusicalPosition(positionSec, bpm)} · ${formatElapsedTime(positionSec)}",
+                text = "${formatMusicalPosition(interpolatedMusicalQuarterNotes(musicalQuarterNotes, bpm, playing, capturedAtMonotonicNanos, nowMonotonicNanos))} · " +
+                    formatElapsedTime(interpolatedElapsedSeconds(positionSec, playing, capturedAtMonotonicNanos, nowMonotonicNanos)),
                 color = LiveColors.textMuted,
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.Medium,
@@ -1740,6 +1776,7 @@ private fun ClipInspector(
     onOpenSlotSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onClipLoop: (RackTrackInfo, ClipSlotInfo) -> Unit,
     bpm: Double,
+    nowMonotonicNanos: Long,
     launchQuantization: TrackLaunchQuantization,
     onLaunchQuantizationClick: () -> Unit,
     modifier: Modifier,
@@ -1771,9 +1808,9 @@ private fun ClipInspector(
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
                 if (clip?.midiLoaded == true) {
-                    PianoRoll(clip, notes, bpm, track, onOpenClipSettings)
+                    PianoRoll(clip, notes, bpm, nowMonotonicNanos, track, onOpenClipSettings)
                 } else {
-                    Waveform(clip, peaks, bpm, track, onOpenClipSettings)
+                    Waveform(clip, peaks, bpm, nowMonotonicNanos, track, onOpenClipSettings)
                 }
             }
         }
@@ -1870,7 +1907,11 @@ private fun TrackInspectorControls(
         NnagaTextButton(
             onClick = onInputClick,
         ) {
-            Text("IN ${track.inputChannel + 1}", style = MaterialTheme.typography.labelSmall)
+            Text(
+                if (track.inputSourceKind == 1) "TRK ${track.inputSourceTrackId} ${if (track.inputTap == 0) "PRE" else "POST"}"
+                else "IN ${track.inputSourceFirstChannel + 1}/${track.inputSourceFirstChannel + 2}",
+                style = MaterialTheme.typography.labelSmall,
+            )
         }
         Column(modifier = Modifier.weight(1f)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1969,45 +2010,61 @@ private fun InspectorMessage(message: String) {
         Text(message, color = LiveColors.textMuted, style = MaterialTheme.typography.bodySmall)
     }
 }
-private fun clipPlaybackDuration(clip: ClipSlotInfo, bpm: Double): Double {
-    val sourceDuration = clip.durationSec.takeIf { it.isFinite() && it > 0.0 } ?: return 0.0
-    val mode = ClipTempoMode.entries.getOrElse(clip.tempoMode) { ClipTempoMode.Original }
-    if (mode == ClipTempoMode.Original) return sourceDuration
-    val sourceBpm = clip.sourceBpm
-    if (!sourceBpm.isFinite() || sourceBpm <= 0.0 || !bpm.isFinite() || bpm <= 0.0) {
-        return sourceDuration
-    }
-    val adapted = sourceDuration * sourceBpm / bpm
-    return adapted.takeIf { it.isFinite() && it > 0.0 } ?: sourceDuration
+private fun clipSourceBeatsPerMinute(clip: ClipSlotInfo): Double =
+    clip.sourceBpm.takeIf { it.isFinite() && it > 0.0 } ?: 120.0
+
+private fun clipSourceLengthQuarterNotes(clip: ClipSlotInfo): Double {
+    val durationSeconds = clip.durationSec.takeIf { it.isFinite() && it > 0.0 } ?: return 0.0
+    return durationSeconds * clipSourceBeatsPerMinute(clip) / 60.0
 }
 
-private fun clipTimelineDuration(clip: ClipSlotInfo, bpm: Double): Double {
-    val loopDuration = if (
-        bpm.isFinite() && bpm > 0.0 &&
-        clip.loopLengthBars.isFinite() && clip.loopLengthBars > 0.0
-    ) {
-        clip.loopLengthBars * 4.0 * 60.0 / bpm
+private fun clipTimelineLengthQuarterNotes(clip: ClipSlotInfo): Double {
+    val loopEnd = (clip.loopStartQuarterNotes + clip.loopLengthQuarterNotes)
+        .takeIf { it.isFinite() && it > 0.0 } ?: 0.0
+    return clipSourceLengthQuarterNotes(clip).coerceAtLeast(loopEnd)
+}
+
+private fun clipDisplayPositionQuarterNotes(
+    clip: ClipSlotInfo,
+    bpm: Double,
+    nowMonotonicNanos: Long,
+): Double {
+    val playbackQuarterNotes = interpolatedMusicalQuarterNotes(
+        clip.musicalQuarterNotes,
+        bpm,
+        clip.playing,
+        clip.capturedAtMonotonicNanos,
+        nowMonotonicNanos,
+    )
+    val sourcePosition = when (ClipTempoMode.entries.getOrElse(clip.tempoMode) { ClipTempoMode.Original }) {
+        ClipTempoMode.Original -> {
+            if (bpm.isFinite() && bpm > 0.0) {
+                playbackQuarterNotes * clipSourceBeatsPerMinute(clip) / bpm
+            } else {
+                playbackQuarterNotes
+            }
+        }
+        ClipTempoMode.Stretch, ClipTempoMode.Repitch -> playbackQuarterNotes
+    }
+    return if (clip.looping && clip.loopLengthQuarterNotes.isFinite() && clip.loopLengthQuarterNotes > 0.0) {
+        clip.loopStartQuarterNotes.coerceAtLeast(0.0) +
+            sourcePosition.coerceAtLeast(0.0) % clip.loopLengthQuarterNotes
     } else {
-        0.0
-    }
-    return when {
-        clip.looping && loopDuration.isFinite() && loopDuration > 0.0 -> loopDuration
-        else -> clipPlaybackDuration(clip, bpm)
+        sourcePosition.coerceAtLeast(0.0)
     }
 }
 
-private fun DrawScope.drawMusicalGrid(durationSec: Double, bpm: Double, labelPaint: Paint) {
-    if (durationSec <= 0.0 || !durationSec.isFinite() || !bpm.isFinite() || bpm <= 0.0) return
-    val secondsPerBeat = 60.0 / bpm
-    val beatWidth = size.width * (secondsPerBeat / durationSec).toFloat()
-    if (!beatWidth.isFinite() || beatWidth <= 0f) return
-    val beatCount = (durationSec / secondsPerBeat).toInt().coerceAtLeast(0)
+private fun DrawScope.drawMusicalGrid(durationQuarterNotes: Double, labelPaint: Paint) {
+    if (durationQuarterNotes <= 0.0 || !durationQuarterNotes.isFinite()) return
+    val quarterWidth = size.width / durationQuarterNotes.toFloat()
+    if (!quarterWidth.isFinite() || quarterWidth <= 0f) return
+    val beatCount = ceil(durationQuarterNotes).toInt().coerceAtLeast(0)
     val maxLines = size.width.toInt().coerceAtLeast(1)
     val beatStride = ceil((beatCount + 1).toDouble() / maxLines).toInt().coerceAtLeast(1)
     repeat(beatCount + 1) { beat ->
         val isBar = beat % 4 == 0
         if (!isBar && beat % beatStride != 0) return@repeat
-        val x = beat * beatWidth
+        val x = beat * quarterWidth
         drawLine(
             color = if (isBar) LiveColors.text.copy(alpha = 0.8f) else LiveColors.divider,
             start = Offset(x, 0f),
@@ -2027,31 +2084,30 @@ private fun DrawScope.drawMusicalGrid(durationSec: Double, bpm: Double, labelPai
     }
 }
 
-private fun formatLoopLengthBars(bars: Double): String = when {
-    !bars.isFinite() || bars <= 0.0 -> "—"
-    bars == 0.25 -> "¼ bar"
-    bars == 1.0 -> "1 bar"
-    bars == bars.roundToInt().toDouble() -> "${bars.roundToInt()} bars"
-    else -> "$bars bars"
-}
-
 @Composable
 private fun ClipPositionOverlay(
     clip: ClipSlotInfo,
     bpm: Double,
+    nowMonotonicNanos: Long,
     onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val positionSec = clip.positionSec.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-    val durationSec = clip.durationSec.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+    val positionSec = interpolatedElapsedSeconds(
+        clip.positionSec.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0,
+        clip.playing,
+        clip.capturedAtMonotonicNanos,
+        nowMonotonicNanos,
+    )
+    val positionQuarterNotes = clipDisplayPositionQuarterNotes(clip, bpm, nowMonotonicNanos)
+    val durationQuarterNotes = clipTimelineLengthQuarterNotes(clip)
     val mediaType = if (clip.midiLoaded) "MIDI" else "WAV"
+    val loopEnd = clip.loopStartQuarterNotes + clip.loopLengthQuarterNotes
     val details = buildString {
         append(clip.displayName.ifBlank { "Untitled clip" })
         append(" · Slot ${clip.slot + 1} · $mediaType")
-        append(" · ${formatMusicalPosition(positionSec, bpm)} · ${formatElapsedTime(positionSec)}")
-        append(" · Duration ${formatElapsedTime(durationSec)}")
-        append(" · Loop ${if (clip.looping) "on" else "off"}")
-        append(" (${formatLoopLengthBars(clip.loopLengthBars)})")
+        append(" · ${formatMusicalPosition(positionQuarterNotes)} · ${formatElapsedTime(positionSec)}")
+        append(" · Length ${formatMusicalPosition(durationQuarterNotes)}")
+        append(" · Loop ${if (clip.looping) "on" else "off"} ${formatMusicalPosition(clip.loopStartQuarterNotes)}–${formatMusicalPosition(loopEnd)}")
         append(" · ${if (clip.playing) "Playing" else "Stopped"}")
         append(" · ${if (clip.active) "Active" else "Inactive"}")
         if (clip.wavLoaded) {
@@ -2092,6 +2148,7 @@ private fun Waveform(
     clip: ClipSlotInfo?,
     peaks: List<Float>,
     bpm: Double,
+    nowMonotonicNanos: Long,
     track: RackTrackInfo?,
     onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
 ) {
@@ -2111,14 +2168,27 @@ private fun Waveform(
                 .fillMaxSize()
                 .padding(horizontal = LiveDimensions.smallGap),
         ) {
-            val timelineDurationSec = clipTimelineDuration(clip, bpm)
-            val playbackDurationSec = clipPlaybackDuration(clip, bpm)
+            val timelineQuarterNotes = clipTimelineLengthQuarterNotes(clip)
+            val contentQuarterNotes = clipSourceLengthQuarterNotes(clip)
             val mid = size.height / 2
             drawLine(LiveColors.waveformLine, Offset(0f, mid), Offset(size.width, mid), 1f)
-            drawMusicalGrid(timelineDurationSec, bpm, gridLabelPaint)
-            if (peaks.isNotEmpty() && timelineDurationSec > 0.0 && playbackDurationSec > 0.0) {
+            if (timelineQuarterNotes > 0.0) {
+                val left = size.width *
+                    (clip.loopStartQuarterNotes / timelineQuarterNotes).toFloat().coerceIn(0f, 1f)
+                val loopEnd = clip.loopStartQuarterNotes + clip.loopLengthQuarterNotes
+                val right = size.width * (loopEnd / timelineQuarterNotes).toFloat().coerceIn(0f, 1f)
+                drawRect(
+                    accent.copy(alpha = 0.12f),
+                    Offset(left, 0f),
+                    Size((right - left).coerceAtLeast(0f), size.height),
+                )
+                drawLine(accent.copy(alpha = 0.75f), Offset(left, 0f), Offset(left, size.height), 1.5f)
+                drawLine(accent.copy(alpha = 0.75f), Offset(right, 0f), Offset(right, size.height), 1.5f)
+            }
+            drawMusicalGrid(timelineQuarterNotes, gridLabelPaint)
+            if (peaks.isNotEmpty() && timelineQuarterNotes > 0.0 && contentQuarterNotes > 0.0) {
                 val audioWidth = (
-                    size.width * (playbackDurationSec / timelineDurationSec).toFloat()
+                    size.width * (contentQuarterNotes / timelineQuarterNotes).toFloat()
                 ).coerceIn(0f, size.width)
                 val step = audioWidth / peaks.size
                 peaks.forEachIndexed { index, peak ->
@@ -2133,16 +2203,17 @@ private fun Waveform(
                     )
                 }
             }
-            val positionSec = clip.positionSec.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-            if (clip.playing && timelineDurationSec > 0.0) {
+            if (timelineQuarterNotes > 0.0) {
+                val displayQuarterNotes = clipDisplayPositionQuarterNotes(clip, bpm, nowMonotonicNanos)
                 val x = size.width *
-                    (positionSec / timelineDurationSec).toFloat().coerceIn(0f, 1f)
+                    (displayQuarterNotes / timelineQuarterNotes).toFloat().coerceIn(0f, 1f)
                 drawLine(accent, Offset(x, 0f), Offset(x, size.height), 2f)
             }
         }
         ClipPositionOverlay(
             clip = clip,
             bpm = bpm,
+            nowMonotonicNanos = nowMonotonicNanos,
             onOpenSettings = {
                 if (track != null) onOpenClipSettings(track, clip)
             },
@@ -2156,6 +2227,7 @@ private fun PianoRoll(
     clip: ClipSlotInfo,
     notes: List<MidiNoteInfo>,
     bpm: Double,
+    nowMonotonicNanos: Long,
     track: RackTrackInfo?,
     onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
 ) {
@@ -2179,14 +2251,32 @@ private fun PianoRoll(
                 val y = size.height * row / rows
                 drawLine(LiveColors.divider, Offset(0f, y), Offset(size.width, y), 1f)
             }
-            val durationSec = clipTimelineDuration(clip, bpm)
-            drawMusicalGrid(durationSec, bpm, gridLabelPaint)
-            val durationFrames = (durationSec * 48_000).coerceAtLeast(1.0)
+            val timelineQuarterNotes = clipTimelineLengthQuarterNotes(clip)
+            val loopLeft = size.width *
+                (clip.loopStartQuarterNotes / timelineQuarterNotes.coerceAtLeast(1e-9)).toFloat()
+                    .coerceIn(0f, 1f)
+            val loopEnd = clip.loopStartQuarterNotes + clip.loopLengthQuarterNotes
+            val loopRight = size.width *
+                (loopEnd / timelineQuarterNotes.coerceAtLeast(1e-9)).toFloat().coerceIn(0f, 1f)
+            drawRect(
+                accent.copy(alpha = 0.12f),
+                Offset(loopLeft, 0f),
+                Size((loopRight - loopLeft).coerceAtLeast(0f), size.height),
+            )
+            drawLine(accent.copy(alpha = 0.75f), Offset(loopLeft, 0f), Offset(loopLeft, size.height), 1.5f)
+            drawLine(accent.copy(alpha = 0.75f), Offset(loopRight, 0f), Offset(loopRight, size.height), 1.5f)
+            drawMusicalGrid(timelineQuarterNotes, gridLabelPaint)
+            val sourceBpm = clipSourceBeatsPerMinute(clip)
             notes.forEach { note ->
-                val x = (note.startFrame / durationFrames).toFloat().coerceIn(0f, 1f) * size.width
+                val noteStartQuarterNotes = note.startMicroseconds * sourceBpm / 60_000_000.0
+                val noteLengthQuarterNotes =
+                    note.durationMicroseconds.coerceAtLeast(1L) * sourceBpm / 60_000_000.0
+                val x = (
+                    noteStartQuarterNotes / timelineQuarterNotes.coerceAtLeast(1e-9)
+                ).toFloat().coerceIn(0f, 1f) * size.width
                 val width = (
-                    (note.durationFrames.coerceAtLeast(24_000) / durationFrames).toFloat() * size.width
-                ).coerceAtLeast(4f)
+                    noteLengthQuarterNotes / timelineQuarterNotes.coerceAtLeast(1e-9) * size.width
+                ).toFloat().coerceAtLeast(4f)
                 val y = size.height - ((note.pitch.coerceIn(48, 83) - 47) / 36f) * size.height
                 drawRect(
                     LiveColors.midi,
@@ -2194,16 +2284,17 @@ private fun PianoRoll(
                     Size(width, size.height / rows - 4f),
                 )
             }
-            val positionSec = clip.positionSec.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
-            if (clip.playing && durationSec > 0.0) {
+            if (timelineQuarterNotes > 0.0) {
+                val displayQuarterNotes = clipDisplayPositionQuarterNotes(clip, bpm, nowMonotonicNanos)
                 val x = size.width *
-                    (positionSec / durationSec).toFloat().coerceIn(0f, 1f)
+                    (displayQuarterNotes / timelineQuarterNotes).toFloat().coerceIn(0f, 1f)
                 drawLine(accent, Offset(x, 0f), Offset(x, size.height), 2f)
             }
         }
         ClipPositionOverlay(
             clip = clip,
             bpm = bpm,
+            nowMonotonicNanos = nowMonotonicNanos,
             onOpenSettings = {
                 if (track != null) onOpenClipSettings(track, clip)
             },
@@ -2445,12 +2536,3 @@ private fun formatElapsedTime(sec: Double): String {
     else "%d:%02d".format(minutes, seconds)
 }
 
-private fun formatMusicalPosition(positionSec: Double, beatsPerMinute: Double): String {
-    val totalSixteenths = (
-        positionSec.coerceAtLeast(0.0) * beatsPerMinute.coerceAtLeast(1.0) / 60.0 * 4.0
-    ).toLong()
-    val bar = totalSixteenths / 16 + 1
-    val beat = totalSixteenths % 16 / 4 + 1
-    val sixteenth = totalSixteenths % 4 + 1
-    return "$bar:$beat:$sixteenth"
-}

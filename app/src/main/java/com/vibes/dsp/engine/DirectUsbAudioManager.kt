@@ -414,6 +414,19 @@ object DirectUsbAudioManager {
 
     suspend fun startConfigured(context: Context): Result<Unit> =
         lifecycleMutex.withLock {
+            if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
+                val ok = NativeEngine.getInstance().nativeStartAndroidOboeSession(
+                    inputDeviceId = AudioSettingsManager.getAndroidInputDeviceId(context),
+                    outputDeviceId = AudioSettingsManager.getAndroidOutputDeviceId(context),
+                    bufferFrames = AudioSettingsManager.getBufferSize(context)
+                )
+                if (ok) {
+                    availableInputChannels = 2
+                    return@withLock Result.success(Unit)
+                }
+                availableInputChannels = 0
+                return@withLock Result.failure(IllegalStateException("Android Oboe backend failed to start"))
+            }
             val persistedDeviceId = AudioSettingsManager.getDirectUsbDeviceId(context)
             val vendorId = AudioSettingsManager.getDirectUsbVendorId(context)
             val productId = AudioSettingsManager.getDirectUsbProductId(context)
@@ -969,8 +982,12 @@ object DirectUsbAudioManager {
 
     private fun disableInternal(context: Context) {
         val engine = NativeEngine.getInstance()
-        engine.nativeStopDirectUsbOutput()
-        engine.nativeCloseDirectUsbOutput()
+        if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
+            engine.stopEngine()
+        } else {
+            engine.nativeStopDirectUsbOutput()
+            engine.nativeCloseDirectUsbOutput()
+        }
         runCatching { engine.nativeFlushPgoProfile() }
         connection?.close()
         connection = null

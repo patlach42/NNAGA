@@ -234,11 +234,15 @@ data class ClipSlotInfo(
     val tempoMode: Int = ClipTempoMode.Original.ordinal,
     val defaultLoopLengthBars: Double = 1.0,
     val launchPending: Boolean = false,
+    val musicalQuarterNotes: Double = 0.0,
+    val capturedAtMonotonicNanos: Long = 0L,
+    val loopStartQuarterNotes: Double = 0.0,
+    val loopLengthQuarterNotes: Double = 4.0,
 )
 
 data class MidiNoteInfo(
-    val startFrame: Long,
-    val durationFrames: Long,
+    val startMicroseconds: Long,
+    val durationMicroseconds: Long,
     val pitch: Int,
     val velocity: Int
 )
@@ -258,12 +262,18 @@ data class RackTrackInfo(
     val recordPending: Boolean,
     val recording: Boolean,
     val punchArmed: Boolean,
-    val inputChannel: Int,
+    val inputSourceKind: Int,
+    val inputSourceFirstChannel: Int,
+    val inputSourceTrackId: Long,
+    val inputTap: Int,
     val midiLoaded: Boolean = false,
     val midiPlaying: Boolean = false,
     val selectedSlot: Int = 0,
     val defaultLoopLengthBars: Double = 1.0,
     val activeSlot: Int = -1,
+    val musicalQuarterNotes: Double = 0.0,
+    val sampleRate: Double = 0.0,
+    val capturedAtMonotonicNanos: Long = 0L,
 )
 
 data class TransportInfo(
@@ -271,7 +281,10 @@ data class TransportInfo(
     val positionSec: Double,
     val beatsPerMinute: Double = 120.0,
     val samplePosition: Long = 0L,
-    val transportFrame: Long = 0L
+    val transportFrame: Long = 0L,
+    val musicalQuarterNotes: Double = 0.0,
+    val sampleRate: Double = 0.0,
+    val capturedAtMonotonicNanos: Long = 0L
 )
 
 data class RackPluginEntry(
@@ -367,6 +380,12 @@ class NativeEngine private constructor() {
 
     /** Opens an app-permitted USB device FD using the selected transport driver. */
     external fun nativeOpenDirectUsbOutput(fileDescriptor: Int, driverCode: Int): Boolean
+    /** Starts Android Oboe/AAudio backend; device id 0 selects system default. */
+    external fun nativeStartAndroidOboeSession(
+        inputDeviceId: Int = 0,
+        outputDeviceId: Int = 0,
+        bufferFrames: Int = 0,
+    ): Boolean
     /** Starts direct USB capture for all negotiated input channels. */
     external fun nativeStartDirectUsbSession(
         sampleRate: Int,
@@ -594,7 +613,8 @@ class NativeEngine private constructor() {
     external fun nativeSetTrackInputArmed(trackId: Long, armed: Boolean): Boolean
     external fun nativeSetTrackInputArmLocked(trackId: Long, locked: Boolean): Boolean
     external fun nativeArmTrackExclusively(trackId: Long): Boolean
-    external fun nativeSetTrackInputChannel(trackId: Long, inputChannel: Int): Boolean
+    external fun nativeSetTrackInputHardwarePair(trackId: Long, firstChannel: Int): Boolean
+    external fun nativeSetTrackInputTrack(trackId: Long, sourceTrackId: Long, tap: Int): Boolean
     external fun nativeLoadTrackWav(trackId: Long, path: String, displayName: String): Boolean
     external fun nativeLoadTrackMidi(trackId: Long, path: String, displayName: String): Boolean
     external fun nativeUnloadTrackMidi(trackId: Long): Boolean
@@ -608,6 +628,8 @@ class NativeEngine private constructor() {
     external fun nativeSetTrackDefaultLoopLength(trackId: Long, bars: Double): Boolean
     external fun nativeSetSlotDefaultLoopLength(trackId: Long, slot: Int, bars: Double): Boolean
     external fun nativeSetClipLoopLength(trackId: Long, slot: Int, bars: Double): Boolean
+    external fun nativeSetClipLoopStartQuarterNotes(trackId: Long, slot: Int, value: Double): Boolean
+    external fun nativeSetClipLoopLengthQuarterNotes(trackId: Long, slot: Int, value: Double): Boolean
     external fun nativeSetClipLooping(trackId: Long, slot: Int, looping: Boolean): Boolean
     external fun nativeSetSlotEnterOnPunch(
         trackId: Long,
@@ -698,8 +720,10 @@ class NativeEngine private constructor() {
     fun setTrackInputArmLocked(trackId: Long, locked: Boolean): Boolean =
         nativeSetTrackInputArmLocked(trackId, locked)
     fun armTrackExclusively(trackId: Long): Boolean = nativeArmTrackExclusively(trackId)
-    fun setTrackInputChannel(trackId: Long, inputChannel: Int): Boolean =
-        nativeSetTrackInputChannel(trackId, inputChannel)
+    fun setTrackInputHardwarePair(trackId: Long, firstChannel: Int): Boolean =
+        nativeSetTrackInputHardwarePair(trackId, firstChannel)
+    fun setTrackInputTrack(trackId: Long, sourceTrackId: Long, tap: Int): Boolean =
+        nativeSetTrackInputTrack(trackId, sourceTrackId, tap.coerceIn(0, 1))
     fun loadTrackWav(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackWav(trackId, path, displayName)
     fun loadTrackMidi(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackMidi(trackId, path, displayName)
     fun unloadTrackMidi(trackId: Long): Boolean = nativeUnloadTrackMidi(trackId)
@@ -717,9 +741,13 @@ class NativeEngine private constructor() {
         nativeSetTrackDefaultLoopLength(trackId, bars)
     fun setSlotDefaultLoopLength(trackId: Long, slot: Int, bars: Double): Boolean =
         nativeSetSlotDefaultLoopLength(trackId, slot, bars)
-    fun setClipLoopLength(trackId: Long, slot: Int, bars: Double): Boolean =
+    fun setClipLoopLength(trackId: RackPathId, slot: Int, bars: Double): Boolean =
         nativeSetClipLoopLength(trackId, slot, bars)
-    fun setClipLooping(trackId: Long, slot: Int, looping: Boolean): Boolean =
+    fun setClipLoopStartQuarterNotes(trackId: RackPathId, slot: Int, value: Double): Boolean =
+        nativeSetClipLoopStartQuarterNotes(trackId, slot, value)
+    fun setClipLoopLengthQuarterNotes(trackId: RackPathId, slot: Int, value: Double): Boolean =
+        nativeSetClipLoopLengthQuarterNotes(trackId, slot, value)
+    fun setClipLooping(trackId: RackPathId, slot: Int, looping: Boolean): Boolean =
         nativeSetClipLooping(trackId, slot, looping)
     fun setSlotEnterOnPunch(
         trackId: Long,

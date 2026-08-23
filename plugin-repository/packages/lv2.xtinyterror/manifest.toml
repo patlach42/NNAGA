@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.xtinyterror"
+name = "XTinyTerror"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin XTinyTerror."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.xtinyterror/1.0.0.zip"
+sha256 = "b7ce7c6e6c36a17a554bb4925ebb5a5ec77f007e9aec1723bdb1a32cfda49a64"
+size = 842003
+
+[install]
+entry = "XTinyTerror.lv2/manifest.ttl"

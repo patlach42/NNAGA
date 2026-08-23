@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.vibes.dsp.engine.GpuDetector
+import com.vibes.dsp.engine.PluginRepositoryService
 import com.vibes.dsp.engine.NativeEngine
 import com.vibes.dsp.engine.RackManager
 import com.vibes.dsp.engine.Renderer
@@ -91,6 +92,8 @@ data class VstExecutableEntry(
 fun VstManagerScreen(
     onNavigateBack: () -> Unit,
     embedded: Boolean = false,
+    repositoryService: PluginRepositoryService? = null,
+    pendingRepositoryPackageId: String? = null,
     onWineSessionActiveChanged: (Boolean) -> Unit,
 ) {
     val context = LocalContext.current
@@ -114,6 +117,26 @@ fun VstManagerScreen(
 
     // Installer flow: full-screen overlay while installerVm.state != IDLE.
     val installerVm: VstInstallerViewModel = viewModel()
+    LaunchedEffect(pendingRepositoryPackageId, repositoryService) {
+        val packageId = pendingRepositoryPackageId ?: return@LaunchedEffect
+        val repository = repositoryService ?: return@LaunchedEffect
+        scope.launch {
+            RepositoryVstAdapter.stageAndHandle(
+                context = context,
+                repository = repository,
+                packageId = packageId,
+                installer = installerVm,
+            ) { result ->
+                when (result) {
+                    is RepositoryVstAdapter.Result.Error ->
+                        Toast.makeText(context, result.message, Toast.LENGTH_LONG).show()
+                    is RepositoryVstAdapter.Result.Installed ->
+                        Toast.makeText(context, "Installed ${result.displayName}", Toast.LENGTH_SHORT).show()
+                    is RepositoryVstAdapter.Result.Pending -> Unit
+                }
+            }
+        }
+    }
     val sharedManager = remember { WineSharedFolderManager.from(context) }
     var sharedSelected by remember { mutableStateOf(sharedManager.hasSelection) }
     val sharedPicker = rememberLauncherForActivityResult(
@@ -818,48 +841,43 @@ object VstRegistry {
             val nameIdx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
             if (c.moveToFirst() && nameIdx >= 0) c.getString(nameIdx) else "plugin.dll"
         } ?: "plugin.dll"
+        val tmp = File(context.cacheDir, "vst-import-${UUID.randomUUID()}.tmp")
+        return try {
+            cr.openInputStream(uri)?.use { input -> tmp.outputStream().use { input.copyTo(it) } }
+                ?: return ImportResult.Err("Could not open picked file")
+            importFile(context, tmp, displayName)
+        } finally {
+            tmp.delete()
+        }
+    }
 
+    /** Import a repository-staged file through the exact same PE/export checks
+     * and registry writer as the interactive file picker. */
+    fun importFile(context: Context, file: File, displayName: String): ImportResult {
+        if (!file.isFile) return ImportResult.Err("Staged plugin file is missing")
         val uuid = UUID.randomUUID().toString()
         val pluginDir = File(pluginsDir(context), uuid).apply { mkdirs() }
-        // Inspect first to learn VST2 vs VST3, then save with the right extension.
-        // The launcher (WineHostProcess.cpp) auto-switches between vst_host.exe
-        // and vst3_host.exe based on whether the first plugin path ends in
-        // ".vst3" — so the extension is load-bearing, not cosmetic.
-        val tmpFile = File(pluginDir, "plugin.tmp")
-        cr.openInputStream(uri)?.use { input ->
-            tmpFile.outputStream().use { input.copyTo(it) }
-        } ?: return ImportResult.Err("Could not open picked file")
-
-        val flags = NativeBridge.nativeInspectPluginExports(tmpFile.absolutePath)
+        val flags = NativeBridge.nativeInspectPluginExports(file.absolutePath)
         val isValidPe = (flags and PeFlag.VALID) != 0 && (flags and PeFlag.IS_DLL) != 0
-        val isVst2    = (flags and PeFlag.HAS_VSTPLUGINMAIN) != 0
-        val isVst3    = (flags and PeFlag.HAS_VST3_FACTORY) != 0
-        val is64Bit   = (flags and PeFlag.IS_64) != 0
-
+        val isVst2 = (flags and PeFlag.HAS_VSTPLUGINMAIN) != 0
+        val isVst3 = (flags and PeFlag.HAS_VST3_FACTORY) != 0
+        val is64Bit = (flags and PeFlag.IS_64) != 0
         if (!isValidPe) {
-            tmpFile.delete(); pluginDir.delete()
+            pluginDir.deleteRecursively()
             return ImportResult.Err("Not a valid Windows PE file")
         }
         if (!isVst2 && !isVst3) {
-            tmpFile.delete(); pluginDir.delete()
+            pluginDir.deleteRecursively()
             return ImportResult.Err("File is a DLL but exports no VST entry point")
         }
-
-        // VST3 plugins are stored with .vst3 extension so vst3_host.exe gets
-        // selected by the launcher. VST2 keeps .dll.
         val targetFile = File(pluginDir, if (isVst3) "plugin.vst3" else "plugin.dll")
-        tmpFile.renameTo(targetFile)
-
+        file.copyTo(targetFile, overwrite = true)
         val stem = displayName.removeSuffix(".dll").removeSuffix(".vst3")
         val entry = VstRegistryEntry(
-            uuid = uuid,
-            displayName = stem,
-            format = if (isVst3) "VST3" else "VST2",
-            dllPath = targetFile.absolutePath,
-            is64Bit = is64Bit,
+            uuid, stem, if (isVst3) "VST3" else "VST2",
+            targetFile.absolutePath, is64Bit,
         )
-        val all = read(context).toMutableList().also { it.add(entry) }
-        write(context, all)
+        write(context, read(context).toMutableList().also { it.add(entry) })
         return ImportResult.Ok(uuid, stem)
     }
 

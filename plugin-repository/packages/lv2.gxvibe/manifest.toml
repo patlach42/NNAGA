@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxvibe"
+name = "gx_vibe"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_vibe."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxvibe/1.0.0.zip"
+sha256 = "db038bf715ddbad6ffb26ff7e91ed2f9fb1856f1bce05c8f431960a58b4a39ff"
+size = 5897544
+
+[install]
+entry = "gx_vibe.lv2/manifest.ttl"

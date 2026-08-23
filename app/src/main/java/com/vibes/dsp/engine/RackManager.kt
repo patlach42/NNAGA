@@ -42,8 +42,10 @@ object RackManager {
     fun setTrackInputArmLocked(trackId: RackPathId, locked: Boolean): Boolean =
         native.setTrackInputArmLocked(trackId, locked)
     fun armTrackExclusively(trackId: RackPathId): Boolean = native.armTrackExclusively(trackId)
-    fun setTrackInputChannel(trackId: RackPathId, inputChannel: Int): Boolean =
-        native.setTrackInputChannel(trackId, inputChannel)
+    fun setTrackInputHardwarePair(trackId: RackPathId, firstChannel: Int): Boolean =
+        native.setTrackInputHardwarePair(trackId, firstChannel)
+    fun setTrackInputTrack(trackId: RackPathId, sourceTrackId: RackPathId, tap: Int): Boolean =
+        native.setTrackInputTrack(trackId, sourceTrackId, tap)
     fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = native.loadTrackWav(trackId, path, displayName)
     fun loadTrackMidi(trackId: RackPathId, path: String, displayName: String): Boolean =
         native.loadTrackMidi(trackId, path, displayName)
@@ -82,6 +84,10 @@ object RackManager {
         native.setSlotDefaultLoopLength(trackId, slot, bars)
     fun setClipLoopLength(trackId: RackPathId, slot: Int, bars: Double): Boolean =
         native.setClipLoopLength(trackId, slot, bars)
+    fun setClipLoopStartQuarterNotes(trackId: RackPathId, slot: Int, value: Double): Boolean =
+        native.setClipLoopStartQuarterNotes(trackId, slot, value)
+    fun setClipLoopLengthQuarterNotes(trackId: RackPathId, slot: Int, value: Double): Boolean =
+        native.setClipLoopLengthQuarterNotes(trackId, slot, value)
     fun setClipLooping(trackId: RackPathId, slot: Int, looping: Boolean): Boolean =
         native.setClipLooping(trackId, slot, looping)
     fun setSlotEnterOnPunch(

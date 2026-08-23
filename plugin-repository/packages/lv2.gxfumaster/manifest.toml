@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxfumaster"
+name = "gx_fumaster"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_fumaster."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxfumaster/1.0.0.zip"
+sha256 = "1c36c13440ee8cc431b10121c0fc9128a1b19fed5f8002c1a92786bf765ba2d1"
+size = 4270878
+
+[install]
+entry = "gx_fumaster.lv2/manifest.ttl"

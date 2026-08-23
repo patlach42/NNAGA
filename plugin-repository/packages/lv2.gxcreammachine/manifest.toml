@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxcreammachine"
+name = "GxCreamMachine"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxCreamMachine."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxcreammachine/1.0.0.zip"
+sha256 = "db95eae5ff1c57d9d57bfe54f9cf5a08565e75008bf71eb3c329e7e4497949e0"
+size = 1501436
+
+[install]
+entry = "GxCreamMachine.lv2/manifest.ttl"

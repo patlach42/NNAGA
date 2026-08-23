@@ -268,6 +268,27 @@ android {
         }
     }
 
+    fun filterBasePluginPayload(taskName: String, variant: String) {
+        tasks.matching { it.name == taskName }.configureEach {
+            outputs.upToDateWhen { false }
+            doLast {
+                val mergedAssets = file("build/intermediates/assets/$variant/merge${variant.replaceFirstChar { it.uppercase() }}Assets")
+                mergedAssets.resolve("lv2").deleteRecursively()
+                mergedAssets.resolve("plugin_libs.txt").delete()
+                mergedAssets.resolve("lv2_bundles.txt").delete()
+                mergedAssets.resolve("lv2_files.txt").delete()
+                val mergedJni = file("build/intermediates/merged_jni_libs/$variant/merge${variant.replaceFirstChar { it.uppercase() }}JniLibFolders/out")
+                val pluginPrefixes = listOf("libgx", "libGx", "libAIDA", "libNeural", "libneural", "librt-neural", "libCollisionDrive", "libFatFrog", "libMetalTone", "libXDarkTerror", "libXTinyTerror", "libImpulseLoader", "libPowerAmp", "libpoweramps", "libPreAmp", "libGxCabSim", "libdoubletracker")
+                mergedJni.walkTopDown().filter { it.isFile && pluginPrefixes.any(it.name::startsWith) }.forEach { it.delete() }
+            }
+        }
+    }
+
+    for (variant in listOf("fullDebug", "fullRelease", "playstoreDebug", "playstoreRelease")) {
+        filterBasePluginPayload("merge${variant.replaceFirstChar { it.uppercase() }}Assets", variant)
+        filterBasePluginPayload("merge${variant.replaceFirstChar { it.uppercase() }}JniLibFolders", variant)
+    }
+
     for (variant in listOf("fullDebug", "playstoreDebug")) {
         filterDebugAssets("merge${variant.replaceFirstChar { it.uppercase() }}Assets", variant)
         filterDebugJni("merge${variant.replaceFirstChar { it.uppercase() }}JniLibFolders", variant)
@@ -368,6 +389,7 @@ dependencies {
     // Networking & JSON
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("org.tomlj:tomlj:1.1.1")
 
     // Image loading
     implementation("io.coil-kt:coil-compose:2.5.0")

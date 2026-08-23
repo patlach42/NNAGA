@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxtubedelay"
+name = "gxtubedelay"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gxtubedelay."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxtubedelay/1.0.0.zip"
+sha256 = "6426bff2428825748e080f592d525bf4bf3cf2c688a96ec7f4c4dd0d389d93af"
+size = 4560559
+
+[install]
+entry = "gxtubedelay.lv2/manifest.ttl"

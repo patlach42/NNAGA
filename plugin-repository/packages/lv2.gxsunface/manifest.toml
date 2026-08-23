@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxsunface"
+name = "GxSunFace"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxSunFace."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxsunface/1.0.0.zip"
+sha256 = "c70bf5b68e6f3dc0c326d475d00020b9c5cedfba83f498aadb43b1300c2d305f"
+size = 1715679
+
+[install]
+entry = "GxSunFace.lv2/manifest.ttl"

@@ -91,8 +91,8 @@ float meterDecayForBlock(int32_t frames, float sampleRate) noexcept {
 AudioEngine::AudioEngine()
     : sampleRate_(48000.0f)
     , isRunning_(false)
+    , androidOboeBackend_(std::make_unique<AndroidOboeBackend>(rackGraph_))
 {
-    inputPtrs_[0] = nullptr;
     inputPtrs_[1] = nullptr;
     outputPtrs_[0] = nullptr;
     outputPtrs_[1] = nullptr;
@@ -527,8 +527,32 @@ AudioEngine::DirectUsbRuntimeStats AudioEngine::getDirectUsbRuntimeStats() const
     return out;
 }
 
+bool AudioEngine::startAndroidOboeSession(int32_t inputDeviceId, int32_t outputDeviceId, int32_t bufferFrames) {
+    std::lock_guard<std::mutex> lock(publicLifecycleMutex_);
+    if (!androidOboeBackend_) androidOboeBackend_ = std::make_unique<AndroidOboeBackend>(rackGraph_);
+    const bool started = androidOboeBackend_->start(
+        static_cast<int32_t>(sampleRate_), inputDeviceId, outputDeviceId, bufferFrames);
+    if (started) {
+        sampleRate_ = static_cast<float>(androidOboeBackend_->actualSampleRate());
+        callbackFrameCount_ = static_cast<uint32_t>(
+            androidOboeBackend_->actualFramesPerDataCallback());
+        publishedSampleRate_.store(sampleRate_, std::memory_order_release);
+        publishedCallbackFrameCount_.store(callbackFrameCount_, std::memory_order_release);
+        rackGraph_.setAvailableInputChannelCount(androidOboeBackend_->inputChannelCount());
+        isRunning_.store(true, std::memory_order_release);
+    }
+    return started;
+}
+
 void AudioEngine::stop() {
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
+    if (androidOboeBackend_ &&
+        (androidOboeBackend_->isRunning() || androidOboeBackend_->hasError())) {
+        isRunning_.store(false, std::memory_order_release);
+        androidOboeBackend_->stop();
+        androidOboeBackend_->clearError();
+        return;
+    }
     LOGI("stop() entered tid=%ld isRunning_=%d", getTid(),
          isRunning_ ? 1 : 0);
     const DirectUsbState usbState =

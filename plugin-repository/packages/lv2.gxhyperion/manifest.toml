@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxhyperion"
+name = "GxHyperion"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxHyperion."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxhyperion/1.0.0.zip"
+sha256 = "830ce123bcb0501fae925ba06e1eaef8547721c8ae538c2baec04b2b3820c503"
+size = 1374976
+
+[install]
+entry = "GxHyperion.lv2/manifest.ttl"

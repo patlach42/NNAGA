@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxtimray"
+name = "GxTimRay"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxTimRay."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxtimray/1.0.0.zip"
+sha256 = "093d2c7852105cecf2f7aafe500361822e71896d03d1ce956033d89102dd5d1f"
+size = 828678
+
+[install]
+entry = "GxTimRay.lv2/manifest.ttl"

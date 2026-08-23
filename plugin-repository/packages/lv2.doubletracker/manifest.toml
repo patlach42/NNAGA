@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.doubletracker"
+name = "doubletracker"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin doubletracker."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.doubletracker/1.0.0.zip"
+sha256 = "45611fa63bcffd039211f5e487c0861efee22ca9e1aab8fbf12a216f7a2edde8"
+size = 105472
+
+[install]
+entry = "doubletracker.lv2/manifest.ttl"

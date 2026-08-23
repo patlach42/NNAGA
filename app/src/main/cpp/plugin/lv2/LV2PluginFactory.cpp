@@ -61,71 +61,43 @@ LV2PluginFactory::~LV2PluginFactory() {
 }
 
 bool LV2PluginFactory::initialize() {
-    if (initialized_) {
-        return true;
+    // Refresh is a full world replacement; callers may install/remove bundles and rescan.
+    if (world_) {
+        lilv_world_free(world_);
+        world_ = nullptr;
     }
-
+    plugins_.clear();
+    initialized_ = false;
     world_ = lilv_world_new();
     if (!world_) {
         LOGE("Failed to create LV2 world");
         return false;
     }
     
-    // Scan path set by nativeSetLv2Path() (extracted assets), then fallback paths
+    // Scan only the explicitly managed root supplied by the repository/runtime.
     LOGI("LV2 scan path: '%s'", lv2Path_.c_str());
     if (!lv2Path_.empty()) {
-        // Create symlinks from bundle dirs to native lib dir before scanning
-        if (!nativeLibDir_.empty()) {
-            rewriteManifestPaths(lv2Path_);
-        }
+        if (!nativeLibDir_.empty()) rewriteManifestPaths(lv2Path_);
         scanPlugins(lv2Path_);
     }
-    const char* fallbackPaths[] = {
-        "/data/data/com.vibes.dsp/files/lv2",
-        "/sdcard/Android/data/com.vibes.dsp/files/lv2",
-        nullptr
-    };
-    for (int i = 0; fallbackPaths[i]; ++i) {
-        if (lv2Path_ != fallbackPaths[i]) {
-            scanPlugins(fallbackPaths[i]);
-        }
-    }
-    
-    // Parse specifications and plugin classes so get_all_plugins() returns discovered plugins
     lilv_world_load_specifications(world_);
     lilv_world_load_plugin_classes(world_);
-    
-    // Enumerate all discovered plugins
     const LilvPlugins* plugins = lilv_world_get_all_plugins(world_);
     int x11Count = 0, modguiCount = 0;
     LILV_FOREACH(plugins, i, plugins) {
         const LilvPlugin* plugin = lilv_plugins_get(plugins, i);
         PluginInfo info;
-
         const LilvNode* uri = lilv_plugin_get_uri(plugin);
         const LilvNode* name = lilv_plugin_get_name(plugin);
-
-        if (uri) {
-            info.id = lilv_node_as_string(uri);
-        }
-        if (name) {
-            info.name = lilv_node_as_string(name);
-        }
+        if (uri) info.id = lilv_node_as_string(uri);
+        if (name) info.name = lilv_node_as_string(name);
         info.format = "LV2";
-
-        // Get port count for info
         uint32_t numPorts = lilv_plugin_get_num_ports(plugin);
         info.ports.reserve(numPorts);
-
-        // Discover modgui (modgui.ttl + iconTemplate)
         discoverModgui(plugin, info);
-
-        // Discover X11UI (guiext:X11UI in the TTL). Always prefer X11 over modgui when both present.
         discoverX11UI(plugin, info);
-
         if (info.hasX11Ui) x11Count++;
         if (!info.modguiBasePath.empty()) modguiCount++;
-
         plugins_.push_back(info);
     }
 

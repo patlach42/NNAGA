@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxfuzzface"
+name = "gx_fuzzface"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_fuzzface."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxfuzzface/1.0.0.zip"
+sha256 = "2a84f917447d03d5545a59dc6c42a524eb44bfd30c59138795a8edac67b9e24d"
+size = 4432696
+
+[install]
+entry = "gx_fuzzface.lv2/manifest.ttl"

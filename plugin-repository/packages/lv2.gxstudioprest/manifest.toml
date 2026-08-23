@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxstudioprest"
+name = "gx_studiopre_st"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_studiopre_st."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxstudioprest/1.0.0.zip"
+sha256 = "86da6008d87faec3703979bc87933f04d00322e822ef5babe4f81ea2e1310e8e"
+size = 5368460
+
+[install]
+entry = "gx_studiopre_st.lv2/manifest.ttl"

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxfuzz"
+name = "gx_fuzz"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_fuzz."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxfuzz/1.0.0.zip"
+sha256 = "61f9e6f4b76d39c993ce7de12fef1238e472133a5f2924f2932bc8a950175b2e"
+size = 4523276
+
+[install]
+entry = "gx_fuzz.lv2/manifest.ttl"

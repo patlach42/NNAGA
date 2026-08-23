@@ -100,6 +100,21 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
 
     private var watchJob: Job? = null
+    /**
+     * Optional bridge used by repository installs. The callback is invoked exactly
+     * once when an interactive INSTALL session is accepted or abandoned; ordinary
+     * manager launches leave it unset.
+     */
+    private var repositoryCompletion: ((Boolean) -> Unit)? = null
+
+    fun setRepositoryCompletionCallback(callback: ((Boolean) -> Unit)?) {
+        repositoryCompletion = callback
+    }
+
+    private fun finishRepository(success: Boolean) {
+        repositoryCompletion?.invoke(success)
+        repositoryCompletion = null
+    }
 
     fun consumeError() { _errorMessage.value = null }
 
@@ -390,7 +405,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
 
                 for (p in vstPicks) {
                     if (envPrefix != null) registerVstInEnvironment(ctx, envPrefix, p, existingVsts)
-                    else                   registerVstClone(ctx, sourcePrefix, p, existingVsts)
+                    else registerVstClone(ctx, sourcePrefix, p, existingVsts)
                 }
 
                 VstRegistry.write(ctx, existingVsts)
@@ -405,6 +420,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
                 }
             }
             runCatching { NativeEngine.getInstance().nativeRefreshPluginRegistry() }
+            if (current.mode == Mode.INSTALL) finishRepository(true)
             reset()
         }
     }
@@ -541,6 +557,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
                 // PICK / DRAINING / DISCOVERING — wine already exited (or about
                 // to). Just reset; the manager's prefix stays.
                 watchJob?.cancel()
+                if (repositoryCompletion != null) finishRepository(false)
                 reset()
             }
             else -> {
@@ -555,6 +572,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
                     File(s.templatePrefixPath).deleteRecursively()
                 }
                 reset()
+                finishRepository(false)
             }
         }
     }
@@ -568,6 +586,7 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
                 File(s.templatePrefixPath).deleteRecursively()
             }
         }
+        if (s?.mode == Mode.INSTALL) finishRepository(false)
         reset()
     }
 

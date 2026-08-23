@@ -23,6 +23,8 @@
 #include <memory>
 #include <vector>
 #include <unordered_map>
+#include <shared_mutex>
+#include <mutex>
 #include "IPluginFactory.h"
 #include "IPlugin.h"
 
@@ -64,7 +66,7 @@ public:
      */
     PluginInfo getPluginInfo(const std::string& pluginId) const;
 
-private:
+    mutable std::shared_mutex mutex_;
     std::vector<std::unique_ptr<IPluginFactory>> factories_;
     std::unordered_map<std::string, PluginInfo> pluginCache_;
 };

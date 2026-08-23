@@ -8,10 +8,16 @@ package com.vibes.dsp.ui.vst
 import androidx.compose.runtime.Composable
 
 @Composable
-fun VstManagerTab(onWineSessionActiveChanged: (Boolean) -> Unit) {
+fun VstManagerTab(
+    repositoryService: com.vibes.dsp.engine.PluginRepositoryService,
+    pendingRepositoryPackageId: String? = null,
+    onWineSessionActiveChanged: (Boolean) -> Unit,
+) {
     VstManagerScreen(
         onNavigateBack = {},
         embedded = true,
+        repositoryService = repositoryService,
+        pendingRepositoryPackageId = pendingRepositoryPackageId,
         onWineSessionActiveChanged = onWineSessionActiveChanged,
     )
 }

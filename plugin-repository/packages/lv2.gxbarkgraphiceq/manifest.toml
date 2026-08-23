@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxbarkgraphiceq"
+name = "gx_barkgraphiceq"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_barkgraphiceq."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxbarkgraphiceq/1.0.0.zip"
+sha256 = "82429f3cfdf0594ab250742ed0980f60bd8c9064526dadf3a9c7d4df7bf669e5"
+size = 4278167
+
+[install]
+entry = "gx_barkgraphiceq.lv2/manifest.ttl"

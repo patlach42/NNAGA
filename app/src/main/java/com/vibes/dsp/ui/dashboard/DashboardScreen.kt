@@ -65,6 +65,8 @@ import androidx.compose.ui.unit.dp
 import com.vibes.dsp.R
 import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.ui.components.NnagaTextButton
+import com.vibes.dsp.engine.PluginRepositoryService
+import com.vibes.dsp.ui.dashboard.RepositoryPackageItem
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.settings.SettingsScreen
 import com.vibes.dsp.ui.settings.SettingsTab
@@ -95,7 +97,8 @@ enum class DashboardSection(val argument: String) {
 
 enum class DashboardTab(val argument: String, val label: String) {
     Main("main", "Main"),
-    Tone3000("tone3000", "TONE3000");
+    Tone3000("tone3000", "TONE3000"),
+    Repository("repository", "Repository");
 
     companion object {
         fun fromArgument(argument: String?): DashboardTab =
@@ -110,9 +113,13 @@ enum class DashboardTab(val argument: String, val label: String) {
 @Composable
 fun DashboardScreen(
     viewModel: RackViewModel,
-    onNavigateBack: () -> Unit,
+    repositoryViewModel: RepositoryViewModel,
+    repositoryService: PluginRepositoryService,
+    onRepositoryInstall: (RepositoryPackageItem) -> Unit,
+    pendingRepositoryPackageId: String? = null,
     onNavigateToToneDetail: (Tone, String?) -> Unit,
     initialSection: DashboardSection = DashboardSection.Dashboard,
+    onNavigateBack: () -> Unit,
     initialDashboardTab: DashboardTab = DashboardTab.Main,
     initialSettingsTab: SettingsTab = SettingsTab.Driver,
     initialTag: String? = null,
@@ -153,8 +160,10 @@ fun DashboardScreen(
             sectionStateHolder.SaveableStateProvider(selectedSection.argument) {
                 when (selectedSection) {
                     DashboardSection.Dashboard -> DashboardContent(
-                        selectedTab = selectedDashboardTab,
+                        repositoryViewModel = repositoryViewModel,
+                        onRepositoryInstall = onRepositoryInstall,
                         onTabSelected = { selectedDashboardTab = it },
+                        selectedTab = selectedDashboardTab,
                         onNavigateBack = onNavigateBack,
                         onNavigateToToneDetail = onNavigateToToneDetail,
                         initialTag = initialTag,
@@ -166,8 +175,9 @@ fun DashboardScreen(
                     )
                     DashboardSection.Settings -> SettingsScreen(
                         viewModel = viewModel,
+                        repositoryService = repositoryService,
+                        pendingRepositoryPackageId = pendingRepositoryPackageId,
                         initialTab = initialSettingsTab,
-                        onFullscreenChanged = { fullscreenContent = it },
                     )
                 }
             }
@@ -320,6 +330,8 @@ private fun TopLevelTab(
 
 @Composable
 private fun DashboardContent(
+    repositoryViewModel: RepositoryViewModel,
+    onRepositoryInstall: (RepositoryPackageItem) -> Unit,
     selectedTab: DashboardTab,
     onTabSelected: (DashboardTab) -> Unit,
     onNavigateBack: () -> Unit,
@@ -336,6 +348,11 @@ private fun DashboardContent(
         InnerTabs(selectedTab = selectedTab, onTabSelected = onTabSelected)
         tabStateHolder.SaveableStateProvider(selectedTab.argument) {
             when (selectedTab) {
+                DashboardTab.Repository -> RepositoryScreen(
+                    viewModel = repositoryViewModel,
+                    onInstallPackage = onRepositoryInstall,
+                    modifier = Modifier.weight(1f),
+                )
                 DashboardTab.Main -> BrandHome(modifier = Modifier.weight(1f))
                 DashboardTab.Tone3000 -> Tone3000Screen(
                     onNavigateBack = onNavigateBack,

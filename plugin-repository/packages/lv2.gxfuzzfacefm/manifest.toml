@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxfuzzfacefm"
+name = "gx_fuzzfacefm"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_fuzzfacefm."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxfuzzfacefm/1.0.0.zip"
+sha256 = "1b97b3fd8f3a2b3cdc7d01e9514912800f0647cf28f3dce017dce11e7510904b"
+size = 4458195
+
+[install]
+entry = "gx_fuzzfacefm.lv2/manifest.ttl"

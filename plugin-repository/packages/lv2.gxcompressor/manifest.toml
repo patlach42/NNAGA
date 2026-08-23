@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxcompressor"
+name = "gx_compressor"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_compressor."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxcompressor/1.0.0.zip"
+sha256 = "ea340637660273597e68a2bcbd0c58cd5931d0455949b3838ff5535bb7f7ade7"
+size = 4392424
+
+[install]
+entry = "gx_compressor.lv2/manifest.ttl"

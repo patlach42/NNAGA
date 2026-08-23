@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxsloopyblue"
+name = "GxSloopyBlue"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxSloopyBlue."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxsloopyblue/1.0.0.zip"
+sha256 = "9229b25a5e13f550c8ca2f41665aa8f230d32270f6d10ba2610ac4d4e5c15d5d"
+size = 833169
+
+[install]
+entry = "GxSloopyBlue.lv2/manifest.ttl"

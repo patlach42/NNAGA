@@ -126,6 +126,12 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun pollDirectUsbStats() {
         val stats = native.getDirectUsbStats()
         _directUsbStats.value = stats
+        if (AudioSettingsManager.getAudioBackend(getApplication()) == AudioBackend.AndroidOboe) {
+            val running = native.nativeIsEngineRunning()
+            _directUsbState.value = if (running) DirectUsbSessionState.Running else stats.state
+            _isEngineRunning.value = running
+            return
+        }
         _directUsbState.value = stats.state
         _isEngineRunning.value = stats.state == DirectUsbSessionState.Running
         if (stats.state == DirectUsbSessionState.Failed && stats.sessionId != 0L &&
@@ -282,17 +288,27 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun setTrackInputChannel(trackId: RackPathId, inputChannel: Int) {
-        _tracks.value = _tracks.value.map { track ->
-            if (track.id == trackId) track.copy(inputChannel = inputChannel) else track
+    fun setTrackInputHardwarePair(trackId: RackPathId, firstChannel: Int) {
+        _tracks.value = _tracks.value.map { t ->
+            if (t.id == trackId) t.copy(inputSourceKind = 0) else t
         }
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             rackControlMutex.withLock {
-                val ok = withContext(Dispatchers.IO) {
-                    RackManager.setTrackInputChannel(trackId, inputChannel)
+                if (!RackManager.setTrackInputHardwarePair(trackId, firstChannel)) {
+                    _errorMessage.value = "Failed to set hardware input pair"
                 }
-                if (!ok) {
-                    _errorMessage.value = "Failed to set track input channel"
+                refreshRackNow()
+            }
+        }
+    }
+    fun setTrackInputTrack(trackId: RackPathId, sourceTrackId: RackPathId, tap: Int) {
+        _tracks.value = _tracks.value.map { t ->
+            if (t.id == trackId) t.copy(inputSourceKind = 1, inputSourceTrackId = sourceTrackId, inputTap = tap) else t
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                if (!RackManager.setTrackInputTrack(trackId, sourceTrackId, tap)) {
+                    _errorMessage.value = "Invalid track input route (cycle or missing track)"
                 }
                 refreshRackNow()
             }
@@ -481,6 +497,27 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                 refreshRackNow()
                 refreshTransport()
                 refreshTrackTransport()
+            }
+        }
+    }
+    fun setClipLoopStartQuarterNotes(trackId: RackPathId, slot: Int, value: Double, result: (Boolean) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setClipLoopStartQuarterNotes(trackId, slot, value)
+                if (!ok) _errorMessage.value = "Failed to set clip loop start"
+                refreshTrackClipSlotsNow(trackId); refreshRackNow(); refreshTransport(); refreshTrackTransport()
+                withContext(Dispatchers.Main) { result(ok) }
+            }
+        }
+    }
+
+    fun setClipLoopLengthQuarterNotes(trackId: RackPathId, slot: Int, value: Double, result: (Boolean) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val ok = RackManager.setClipLoopLengthQuarterNotes(trackId, slot, value)
+                if (!ok) _errorMessage.value = "Failed to set clip loop length"
+                refreshTrackClipSlotsNow(trackId); refreshRackNow(); refreshTransport(); refreshTrackTransport()
+                withContext(Dispatchers.Main) { result(ok) }
             }
         }
     }
@@ -747,6 +784,19 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                     if (!result.isSuccess) _errorMessage.value =
                         "USB audio session unavailable: ${result.exceptionOrNull()?.message}"
                 }
+            }
+        }
+    }
+    fun setAudioBackend(backend: AudioBackend) {
+        viewModelScope.launch(Dispatchers.IO) {
+            lifecycleMutex.withLock {
+                if (native.nativeIsEngineRunning()) {
+                    _errorMessage.value = "Stop the audio engine before changing backend"
+                    return@withLock
+                }
+                AudioSettingsManager.setAudioBackend(getApplication(), backend)
+                _directUsbState.value = DirectUsbSessionState.Stopped
+                _errorMessage.value = null
             }
         }
     }

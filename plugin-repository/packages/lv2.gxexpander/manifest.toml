@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxexpander"
+name = "gx_expander"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_expander."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxexpander/1.0.0.zip"
+sha256 = "9a67ab5263a396b0dd932f86bf45adf8869dadc098c5cfbea7638a791c5eb002"
+size = 4384306
+
+[install]
+entry = "gx_expander.lv2/manifest.ttl"

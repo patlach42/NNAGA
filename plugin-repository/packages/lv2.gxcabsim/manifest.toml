@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxcabsim"
+name = "GxCabSim"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxCabSim."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxcabsim/1.0.0.zip"
+sha256 = "1031bbb307aefd993dc52192ee54cabdb0703bb62bb6c46014e4b583a1f834e8"
+size = 1037067
+
+[install]
+entry = "GxCabSim.lv2/manifest.ttl"

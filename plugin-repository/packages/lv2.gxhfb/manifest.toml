@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxhfb"
+name = "gx_hfb"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_hfb."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxhfb/1.0.0.zip"
+sha256 = "79d349c2cdd04c38db186f9ac7526bcdd3692778f431d6bd48b9c456c0d1c9a1"
+size = 4152875
+
+[install]
+entry = "gx_hfb.lv2/manifest.ttl"

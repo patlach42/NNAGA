@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxsuppatonebender"
+name = "GxSuppaToneBender"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxSuppaToneBender."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxsuppatonebender/1.0.0.zip"
+sha256 = "6ee97d3b9b2d998290e6baea684aac314ef1cdb6b28eb8d17ae18e87797b70c9"
+size = 1315299
+
+[install]
+entry = "GxSuppaToneBender.lv2/manifest.ttl"

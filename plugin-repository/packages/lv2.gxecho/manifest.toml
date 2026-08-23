@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxecho"
+name = "gx_echo"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_echo."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxecho/1.0.0.zip"
+sha256 = "cb4c66b01f540e0c5da776a67d012867be4a621ef8d64395deff69def397642f"
+size = 4588581
+
+[install]
+entry = "gx_echo.lv2/manifest.ttl"

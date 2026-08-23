@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxduckdelayst"
+name = "gx_duck_delay_st"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_duck_delay_st."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxduckdelayst/1.0.0.zip"
+sha256 = "a00826067cace0ab55af4f3c1f79777e1c120ad2c9ae0e606daefc311b91d47e"
+size = 4259637
+
+[install]
+entry = "gx_duck_delay_st.lv2/manifest.ttl"

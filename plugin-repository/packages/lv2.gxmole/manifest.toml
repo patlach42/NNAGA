@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxmole"
+name = "gx_mole"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_mole."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxmole/1.0.0.zip"
+sha256 = "08ea8ca4a9272ae786493d2ff51c4141c93fe8e97b35c8e28064dc915616849b"
+size = 3488760
+
+[install]
+entry = "gx_mole.lv2/manifest.ttl"

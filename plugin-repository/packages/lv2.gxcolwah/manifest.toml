@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxcolwah"
+name = "gx_colwah"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_colwah."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxcolwah/1.0.0.zip"
+sha256 = "7e8ae884dd22596e5f751ca5a6a5166a72152263cb3e524831f1bd73119395f6"
+size = 3483560
+
+[install]
+entry = "gx_colwah.lv2/manifest.ttl"

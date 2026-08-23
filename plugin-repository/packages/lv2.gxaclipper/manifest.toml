@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxaclipper"
+name = "gx_aclipper"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_aclipper."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxaclipper/1.0.0.zip"
+sha256 = "b0a049b9aed40c487f8e2d8e710728e3f30bc8b748de375c7079b5f7578fb561"
+size = 3483977
+
+[install]
+entry = "gx_aclipper.lv2/manifest.ttl"

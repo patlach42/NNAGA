@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxdigitaldelay"
+name = "gx_digital_delay"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_digital_delay."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxdigitaldelay/1.0.0.zip"
+sha256 = "08ff52df7548bd87f734dbc9b2054f0f90615f0db5f2a8b7a9d4626071495b3b"
+size = 5192972
+
+[install]
+entry = "gx_digital_delay.lv2/manifest.ttl"

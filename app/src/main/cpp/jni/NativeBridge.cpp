@@ -221,7 +221,7 @@ static bool parseMidiFile(const std::string& path, const std::string& name, std:
     }
     std::sort(tempos.begin(),tempos.end(),[](auto&a,auto&b){return a.tick<b.tick;}); std::sort(raw.begin(),raw.end(),[](auto&a,auto&b){return a.tick<b.tick;});
     auto clip=std::make_shared<MidiClip>(); clip->displayName=name; uint64_t lastTick=0, micros=0; uint32_t tempo=500000; size_t ti=0;
-    for(const auto& r:raw){while(ti+1<tempos.size()&&tempos[ti+1].tick<=r.tick){micros+=(tempos[ti+1].tick-lastTick)*tempo/division;lastTick=tempos[++ti].tick;tempo=tempos[ti].us;} micros+=(r.tick-lastTick)*tempo/division;lastTick=r.tick; MidiTimedEvent e; e.frame=static_cast<uint64_t>(micros*48/1000); e.event=r.ev; clip->events.push_back(e); clip->durationFrames=std::max(clip->durationFrames,e.frame+1);}
+    for(const auto& r:raw){while(ti+1<tempos.size()&&tempos[ti+1].tick<=r.tick){micros+=(tempos[ti+1].tick-lastTick)*tempo/division;lastTick=tempos[++ti].tick;tempo=tempos[ti].us;} micros+=(r.tick-lastTick)*tempo/division;lastTick=r.tick; MidiTimedEvent e; e.microseconds=micros; e.event=r.ev; clip->events.push_back(e); clip->durationMicroseconds=std::max(clip->durationMicroseconds,e.microseconds+1);}
     out=std::move(clip); return true;
 }
 
@@ -479,6 +479,15 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbInputChannelCount(
     return static_cast<jint>(g_ctx->directUsbOutput->captureChannelCount());
 }
 
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeStartAndroidOboeSession(
+        JNIEnv*, jobject, jint inputDeviceId, jint outputDeviceId, jint bufferFrames) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    return g_ctx->audioEngine->startAndroidOboeSession(
+        static_cast<int32_t>(inputDeviceId), static_cast<int32_t>(outputDeviceId),
+        static_cast<int32_t>(bufferFrames)) ? JNI_TRUE : JNI_FALSE;
+}
 
 JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
@@ -1003,12 +1012,21 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeArmTrackExclusively(
         static_cast<RackPathId>(trackId)) ? JNI_TRUE : JNI_FALSE;
 }
 
+
 JNIEXPORT jboolean JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputChannel(
-    JNIEnv*, jobject, jlong trackId, jint inputChannel) {
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputHardwarePair(
+    JNIEnv*, jobject, jlong trackId, jint firstChannel) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
-    return g_ctx->audioEngine->getRackGraph().setTrackInputChannel(trackId, inputChannel)
-        ? JNI_TRUE : JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setTrackInputHardwarePair(
+        static_cast<RackPathId>(trackId), static_cast<int32_t>(firstChannel)) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputTrack(
+    JNIEnv*, jobject, jlong trackId, jlong sourceTrackId, jint tap) {
+    if (!g_ctx || !g_ctx->audioEngine || tap < 0 || tap > 1) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setTrackInputTrack(
+        static_cast<RackPathId>(trackId), static_cast<RackPathId>(sourceTrackId),
+        static_cast<TrackInputTap>(tap)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -1055,7 +1073,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTrackClipSlots(
     jclass clazz = env->FindClass("com/vibes/dsp/engine/ClipSlotInfo");
     if (!clazz) return nullptr;
     jmethodID ctor = env->GetMethodID(
-        clazz, "<init>", "(JIZZLjava/lang/String;DZZZDJDZDIDZ)V");
+        clazz, "<init>", "(JIZZLjava/lang/String;DZZZDJDZDIDZDDJDD)V");
     if (!ctor) {
         env->DeleteLocalRef(clazz);
         return nullptr;
@@ -1072,7 +1090,10 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTrackClipSlots(
             slot.positionSec, static_cast<jlong>(slot.transportFrame),
             slot.loopLengthBars, slot.enterOnPunch ? JNI_TRUE : JNI_FALSE,
             slot.sourceBpm, static_cast<jint>(slot.tempoMode), slot.defaultLoopLengthBars,
-            slot.launchPending ? JNI_TRUE : JNI_FALSE);
+            slot.launchPending ? JNI_TRUE : JNI_FALSE,
+            slot.musicalQuarterNotes, slot.sampleRate,
+            static_cast<jlong>(slot.capturedAtMonotonicNanos),
+            slot.loopStartQuarterNotes, slot.loopLengthQuarterNotes);
         if (item) env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         if (name) env->DeleteLocalRef(name);
         if (item) env->DeleteLocalRef(item);
@@ -1095,8 +1116,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTrackClipMidiNotes(
     for (size_t index = 0; index < notes.size(); ++index) {
         const auto& note = notes[index];
         jobject item = env->NewObject(
-            clazz, ctor, static_cast<jlong>(note.startFrame),
-            static_cast<jlong>(note.durationFrames), static_cast<jint>(note.pitch),
+            clazz, ctor, static_cast<jlong>(note.startMicroseconds),
+            static_cast<jlong>(note.durationMicroseconds), static_cast<jint>(note.pitch),
             static_cast<jint>(note.velocity));
         env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         env->DeleteLocalRef(item);
@@ -1196,6 +1217,22 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetClipLoopLength(
     return g_ctx->audioEngine->getRackGraph().setClipLoopLength(
         static_cast<RackPathId>(trackId), static_cast<uint32_t>(slot),
         static_cast<double>(bars)) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetClipLoopStartQuarterNotes(
+    JNIEnv*, jobject, jlong trackId, jint slot, jdouble value) {
+    if (!g_ctx || !g_ctx->audioEngine || slot < 0) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setClipLoopStartQuarterNotes(
+        static_cast<RackPathId>(trackId), static_cast<uint32_t>(slot),
+        static_cast<double>(value)) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetClipLoopLengthQuarterNotes(
+    JNIEnv*, jobject, jlong trackId, jint slot, jdouble value) {
+    if (!g_ctx || !g_ctx->audioEngine || slot < 0) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setClipLoopLengthQuarterNotes(
+        static_cast<RackPathId>(trackId), static_cast<uint32_t>(slot),
+        static_cast<double>(value)) ? JNI_TRUE : JNI_FALSE;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -1308,8 +1345,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     const auto tracks = g_ctx->audioEngine->getRackGraph().getTracks();
     jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
+    if (!clazz) return nullptr;
     jmethodID ctor = env->GetMethodID(
-        clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIZZIDI)V");
+        clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIIJIZZIDIDDJ)V");
     if (!ctor) {
         env->DeleteLocalRef(clazz);
         return nullptr;
@@ -1328,11 +1366,17 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
             track.recordPending ? JNI_TRUE : JNI_FALSE,
             track.recording ? JNI_TRUE : JNI_FALSE,
             track.punchArmed ? JNI_TRUE : JNI_FALSE,
-            static_cast<jint>(track.inputChannel),
+            static_cast<jint>(track.inputSourceKind),
+            static_cast<jint>(track.inputSourceFirstChannel),
+            static_cast<jlong>(track.inputSourceTrackId),
+            static_cast<jint>(track.inputTap),
             track.midiLoaded ? JNI_TRUE : JNI_FALSE,
             track.midiPlaying ? JNI_TRUE : JNI_FALSE,
-            static_cast<jint>(track.selectedSlot), track.defaultLoopLengthBars,
-            static_cast<jint>(track.activeSlot));
+            static_cast<jint>(track.selectedSlot),
+            track.defaultLoopLengthBars,
+            static_cast<jint>(track.activeSlot),
+            track.musicalQuarterNotes, track.sampleRate,
+            static_cast<jlong>(track.capturedAtMonotonicNanos));
         if (item) env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         if (name) env->DeleteLocalRef(name);
         if (item) env->DeleteLocalRef(item);
@@ -1347,11 +1391,13 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTransportInfo(JNIEnv* env, jobje
         ? g_ctx->audioEngine->getRackGraph().getTransportSnapshot() : TransportSnapshot{};
     jclass clazz = env->FindClass("com/vibes/dsp/engine/TransportInfo");
     if (!clazz) return nullptr;
-    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZDDJJ)V");
+    jmethodID ctor = env->GetMethodID(clazz, "<init>", "(ZDDJJDDJ)V");
     return ctor ? env->NewObject(clazz, ctor, state.playing ? JNI_TRUE : JNI_FALSE,
                                  state.positionSec, state.beatsPerMinute,
                                  static_cast<jlong>(state.samplePosition),
-                                 static_cast<jlong>(state.transportFrame)) : nullptr;
+                                 static_cast<jlong>(state.transportFrame),
+                                 state.musicalQuarterNotes, state.sampleRate,
+                                 static_cast<jlong>(state.capturedAtMonotonicNanos)) : nullptr;
 }
 
 JNIEXPORT void JNICALL

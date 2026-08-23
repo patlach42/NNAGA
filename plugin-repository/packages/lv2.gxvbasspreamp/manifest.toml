@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxvbasspreamp"
+name = "GxVBassPreAmp"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxVBassPreAmp."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxvbasspreamp/1.0.0.zip"
+sha256 = "01d013443ec81bc046980c0667f305a600f00617dbd573ec2155ad9be3ff3b45"
+size = 1075643
+
+[install]
+entry = "GxVBassPreAmp.lv2/manifest.ttl"

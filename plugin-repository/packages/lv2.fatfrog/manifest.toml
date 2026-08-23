@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.fatfrog"
+name = "FatFrog"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin FatFrog."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.fatfrog/1.0.0.zip"
+sha256 = "8baf96f673d388ce53706b334adca0a0bfbdaa5086fa23175a472b21a1a4b723"
+size = 817527
+
+[install]
+entry = "FatFrog.lv2/manifest.ttl"

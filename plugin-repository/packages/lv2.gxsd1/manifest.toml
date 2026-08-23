@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxsd1"
+name = "GxSD1"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxSD1."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxsd1/1.0.0.zip"
+sha256 = "11ea9d16a17d5bd35c127308d8c438f652a52aee244896f637e47a8c7f6a32cd"
+size = 1402251
+
+[install]
+entry = "GxSD1.lv2/manifest.ttl"

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxhogsfoot"
+name = "gx_hogsfoot"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_hogsfoot."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxhogsfoot/1.0.0.zip"
+sha256 = "b733bd9f541852c07fb6e96dfcce0fe1c8508a94f8b344aa36afee97b4ed6c91"
+size = 4422202
+
+[install]
+entry = "gx_hogsfoot.lv2/manifest.ttl"

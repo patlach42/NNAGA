@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.neuralrack"
+name = "Neuralrack"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin Neuralrack."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.neuralrack/1.0.0.zip"
+sha256 = "961ccd20a90789ae1a07291aad19893979704531609841e61b9e31f916d0afd1"
+size = 1854678
+
+[install]
+entry = "Neuralrack.lv2/manifest.ttl"

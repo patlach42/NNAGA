@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxtuner"
+name = "gxtuner"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gxtuner."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxtuner/1.0.0.zip"
+sha256 = "6cb389fa21f6126cbade4d5823e480e5d74ba32d7e9ac253d782779b5c0e32cf"
+size = 3872588
+
+[install]
+entry = "gxtuner.lv2/manifest.ttl"

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxtremolo"
+name = "gx_tremolo"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_tremolo."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxtremolo/1.0.0.zip"
+sha256 = "d0fff79417693318b4ae5595ec0ba02e5383a73cce366b07d4251827ff428fca"
+size = 4508646
+
+[install]
+entry = "gx_tremolo.lv2/manifest.ttl"

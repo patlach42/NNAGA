@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxtape"
+name = "gxtape"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gxtape."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxtape/1.0.0.zip"
+sha256 = "140ab04857e1c98f6a9aabc63ca3c023aa2386e2cf23cb1fa3cfd22dd58f679a"
+size = 3636637
+
+[install]
+entry = "gxtape.lv2/manifest.ttl"

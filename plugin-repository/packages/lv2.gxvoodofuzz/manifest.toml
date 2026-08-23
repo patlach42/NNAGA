@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxvoodofuzz"
+name = "GxVoodoFuzz"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxVoodoFuzz."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxvoodofuzz/1.0.0.zip"
+sha256 = "d3881f01b7723d4ee6a0392a84e5b6a643522717fc57732ba5b7d3e1dd419c5f"
+size = 1460080
+
+[install]
+entry = "GxVoodoFuzz.lv2/manifest.ttl"

@@ -104,6 +104,10 @@ if(NOT EXISTS "${LOWLATENCY_AUDIO_ROOT}/CMakeLists.txt")
 endif()
 add_subdirectory("${LOWLATENCY_AUDIO_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/liblowlatencyaudio")
 
+# Android Oboe backend (AAudio first with Oboe fallback).
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/oboe"
+                 "${CMAKE_CURRENT_BINARY_DIR}/oboe")
+
 # Plugin abstraction layer
 add_library(plugin_abstraction STATIC
     plugin/PluginChain.cpp
@@ -152,10 +156,12 @@ add_library(utils STATIC
 # Audio engine
 add_library(audio_engine STATIC
     engine/AudioEngine.cpp
+    engine/AndroidOboeBackend.cpp
 )
 target_link_libraries(audio_engine
     utils
     lowlatencyaudio::lowlatencyaudio
+    oboe
 )
 target_compile_options(lowlatencyaudio PRIVATE -O3)
 

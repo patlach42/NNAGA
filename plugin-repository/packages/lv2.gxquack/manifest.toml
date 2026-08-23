@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxquack"
+name = "GxQuack"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxQuack."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxquack/1.0.0.zip"
+sha256 = "5855cf2de962f5a9039c44cd4344de960b440d93922ddc9a107ceadda5e71fb2"
+size = 1378715
+
+[install]
+entry = "GxQuack.lv2/manifest.ttl"

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxreverb"
+name = "gx_reverb"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_reverb."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxreverb/1.0.0.zip"
+sha256 = "33521d9fdbd4c955e5f50aab054ac8d4a14802543c0dbf4ef50ab46ce6e98659"
+size = 4950200
+
+[install]
+entry = "gx_reverb.lv2/manifest.ttl"

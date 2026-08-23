@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxdop250"
+name = "GxDOP250"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxDOP250."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxdop250/1.0.0.zip"
+sha256 = "8e5eeb2ff91ba18b7bb1594e157fb1dfd6e3672ad705a023ca484c7c4ac8e9fa"
+size = 1244366
+
+[install]
+entry = "GxDOP250.lv2/manifest.ttl"

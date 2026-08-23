@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxtubedistortion"
+name = "GxTubeDistortion"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxTubeDistortion."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxtubedistortion/1.0.0.zip"
+sha256 = "a464cc2bae65abc0600b6a6a51abb76f269d643a7e490ba0db38b4d4e4364746"
+size = 1210382
+
+[install]
+entry = "GxTubeDistortion.lv2/manifest.ttl"

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxshakatube"
+name = "GxShakaTube"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxShakaTube."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxshakatube/1.0.0.zip"
+sha256 = "c99bb1b6b395916d8743ae7c0313a57ac1eab9fea1244b5b668bacfdf46cc3d6"
+size = 902742
+
+[install]
+entry = "GxShakaTube.lv2/manifest.ttl"

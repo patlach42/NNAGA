@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxcabinet"
+name = "gx_cabinet"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_cabinet."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxcabinet/1.0.0.zip"
+sha256 = "a3e566712118b93419d350d51e241683a10bc4921959da3e30a61236ad656e84"
+size = 4916038
+
+[install]
+entry = "gx_cabinet.lv2/manifest.ttl"

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxvintagefuzzmaster"
+name = "GxVintageFuzzMaster"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxVintageFuzzMaster."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxvintagefuzzmaster/1.0.0.zip"
+sha256 = "8562ce5253f85f0ec33ce781a6fe5a4a89e9cc11c488468f601163cf33625ab4"
+size = 1567619
+
+[install]
+entry = "GxVintageFuzzMaster.lv2/manifest.ttl"

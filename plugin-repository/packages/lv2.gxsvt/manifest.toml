@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxsvt"
+name = "GxSVT"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxSVT."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxsvt/1.0.0.zip"
+sha256 = "e90daabde346f710d57ca68999aaca7c52ea0a55bef5a28667d1aade56693735"
+size = 1194318
+
+[install]
+entry = "GxSVT.lv2/manifest.ttl"

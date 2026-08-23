@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.xdarkterror"
+name = "XDarkTerror"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin XDarkTerror."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.xdarkterror/1.0.0.zip"
+sha256 = "e9bfd34c05f72c2552c48f46bd3b3e2e2a24de735ec0821e8734ce4403bfcc07"
+size = 851313
+
+[install]
+entry = "XDarkTerror.lv2/manifest.ttl"

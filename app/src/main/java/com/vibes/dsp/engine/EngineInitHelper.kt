@@ -69,7 +69,7 @@ object EngineInitHelper {
         if (isInitialized) return true
 
         val engine = NativeEngine.getInstance()
-        val lv2Dir = File(context.applicationContext.filesDir, "lv2")
+        val lv2Dir = File(context.applicationContext.filesDir, "plugin-repositories/installed/lv2")
         val lv2Path = lv2Dir.canonicalPath
         Log.d(TAG, "Setting LV2 path: $lv2Path")
         engine.nativeSetLv2Path(lv2Path)

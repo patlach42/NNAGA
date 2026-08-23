@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxcstb"
+name = "gx_cstb"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_cstb."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxcstb/1.0.0.zip"
+sha256 = "3f5d2a3f4650c7f9e778d3b8a18c256c4a40ae62949d017f1d5ad8a3c2412dde"
+size = 4857307
+
+[install]
+entry = "gx_cstb.lv2/manifest.ttl"

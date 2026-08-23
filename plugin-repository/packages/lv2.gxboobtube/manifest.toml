@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxboobtube"
+name = "GxBoobTube"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxBoobTube."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxboobtube/1.0.0.zip"
+sha256 = "33d49369670c48ea75da97ed1ee0650374e8ece35efa2fe28e5d19369ecdb77c"
+size = 890166
+
+[install]
+entry = "GxBoobTube.lv2/manifest.ttl"

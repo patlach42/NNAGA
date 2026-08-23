@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.neuralampmodeler"
+name = "neural_amp_modeler"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin neural_amp_modeler."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.neuralampmodeler/1.0.0.zip"
+sha256 = "8b641304953cad47398dddc4e33f17b510f93686a46a3217b9c55b1bc1bfe94c"
+size = 1551273
+
+[install]
+entry = "neural_amp_modeler.lv2/manifest.ttl"

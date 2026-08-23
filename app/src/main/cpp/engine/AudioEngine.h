@@ -29,6 +29,7 @@
 #include <vector>
 #include "plugin/PluginChain.h"
 #include <liblowlatencyaudio/DirectUsbOutput.h>
+#include "AndroidOboeBackend.h"
 #include "../plugin/RackGraph.h"
 namespace guitarrackcraft {
 
@@ -88,6 +89,7 @@ public:
                                bool thermalSafetyEnabled);
 
     void stop();
+    bool startAndroidOboeSession(int32_t inputDeviceId, int32_t outputDeviceId, int32_t bufferFrames);
     bool openDirectUsbDevice(int fd, int driverCode = 0);
     void closeDirectUsbDevice();
 
@@ -236,6 +238,7 @@ private:
 
 
     RackGraph rackGraph_;
+    std::unique_ptr<AndroidOboeBackend> androidOboeBackend_;
     float sampleRate_;
     uint32_t callbackFrameCount_ = 0;  // Power-of-2 frames per audio callback
     std::atomic<bool> isRunning_;

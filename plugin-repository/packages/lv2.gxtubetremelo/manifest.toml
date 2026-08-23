@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxtubetremelo"
+name = "gxtubetremelo"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gxtubetremelo."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxtubetremelo/1.0.0.zip"
+sha256 = "d24244bde5ca7397a9b8afea19e0d5f936c4ce14d2aab3ed7af6fa29c9cf490b"
+size = 4937668
+
+[install]
+entry = "gxtubetremelo.lv2/manifest.ttl"

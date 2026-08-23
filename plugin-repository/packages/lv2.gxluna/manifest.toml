@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxluna"
+name = "GxLuna"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxLuna."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxluna/1.0.0.zip"
+sha256 = "47af09397908fd4516f5fd3cc95b955a0f3194d03065c03c5ae32d7ed2f4eef0"
+size = 829973
+
+[install]
+entry = "GxLuna.lv2/manifest.ttl"

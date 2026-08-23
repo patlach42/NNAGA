@@ -18,6 +18,10 @@
  */
 
 package com.vibes.dsp.ui.rack
+import com.vibes.dsp.ui.formatMusicalPosition
+import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
+import com.vibes.dsp.ui.interpolatedElapsedSeconds
+import com.vibes.dsp.ui.rememberFrameClockNanos
 
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGestures
@@ -290,6 +294,7 @@ fun RackScreen(
     val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
     val transport by viewModel.transport.collectAsState()
     val clipSlots by viewModel.clipSlots.collectAsState()
+    val frameClockNanos = rememberFrameClockNanos(isVisible && transport.playing)
     val errorMessage by viewModel.errorMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
     val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
@@ -562,8 +567,8 @@ fun RackScreen(
         NnagaIconButton(onClick = { viewModel.transportRestart() },
         modifier = Modifier.size(48.dp)) { Icon(Icons.Default.SkipPrevious, "Restart global transport") }
         Text(
-            "${formatMusicalPosition(transport.positionSec, transport.beatsPerMinute)} · " +
-                formatElapsedTime(transport.positionSec),
+            "${formatMusicalPosition(interpolatedMusicalQuarterNotes(transport.musicalQuarterNotes, transport.beatsPerMinute, transport.playing, transport.capturedAtMonotonicNanos, frameClockNanos))} · " +
+                formatElapsedTime(interpolatedElapsedSeconds(transport.positionSec, transport.playing, transport.capturedAtMonotonicNanos, frameClockNanos)),
             modifier = Modifier.weight(1f),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -710,6 +715,10 @@ fun RackScreen(
             val selectedSlotPlaying = selectedClip?.playing ?: track.playing
             val selectedSlotLooping = selectedClip?.looping ?: track.looping
             val selectedSlotPositionSec = selectedClip?.positionSec ?: track.positionSec
+            val selectedSlotMusicalQuarterNotes =
+                selectedClip?.musicalQuarterNotes ?: track.musicalQuarterNotes
+            val selectedSlotCapturedAtNanos =
+                selectedClip?.capturedAtMonotonicNanos ?: track.capturedAtMonotonicNanos
             val selectedSlotPunchArmed = selectedClip?.enterOnPunch ?: track.punchArmed
             val slotLoopLengthBars = selectedClip?.defaultLoopLengthBars ?: track.defaultLoopLengthBars
             val defaultLoopLengthLabel = when (track.defaultLoopLengthBars) {
@@ -786,8 +795,8 @@ fun RackScreen(
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Text(
-                    "${formatMusicalPosition(selectedSlotPositionSec, transport.beatsPerMinute)} · " +
-                        formatElapsedTime(selectedSlotPositionSec),
+                    "${formatMusicalPosition(interpolatedMusicalQuarterNotes(selectedSlotMusicalQuarterNotes, transport.beatsPerMinute, transport.playing && selectedSlotPlaying, selectedSlotCapturedAtNanos, frameClockNanos))} · " +
+                        formatElapsedTime(interpolatedElapsedSeconds(selectedSlotPositionSec, transport.playing && selectedSlotPlaying, selectedSlotCapturedAtNanos, frameClockNanos)),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.weight(1f)
@@ -826,8 +835,8 @@ fun RackScreen(
                         }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("Input channel") },
-                            enabled = inputChannelCount > 0,
+                            text = { Text("Input source") },
+                            enabled = inputChannelCount > 0 || tracks.any { it.id != track.id },
                             onClick = { inputChannelMenuExpanded = true }
                         )
                     }
@@ -835,16 +844,31 @@ fun RackScreen(
                         expanded = inputChannelMenuExpanded,
                         onDismissRequest = { inputChannelMenuExpanded = false }
                     ) {
-                        repeat(inputChannelCount) { channel ->
+                        (0 until inputChannelCount step 2).forEach { firstChannel ->
                             NnagaSelectorMenuItem(
-                                text = "Input ${channel + 1}",
-                                selected = track.inputChannel == channel,
+                                text = "Hardware ${firstChannel + 1}/${firstChannel + 2}",
+                                selected = track.inputSourceKind == 0 &&
+                                    track.inputSourceFirstChannel == firstChannel,
                                 onClick = {
-                                    viewModel.setTrackInputChannel(track.id, channel)
+                                    viewModel.setTrackInputHardwarePair(track.id, firstChannel)
                                     inputChannelMenuExpanded = false
                                     inputMenuExpanded = false
-                                }
+                                },
                             )
+                        }
+                        tracks.filter { it.id != track.id }.forEach { source ->
+                            listOf(0 to "Pre", 1 to "Post").forEach { (tap, label) ->
+                                NnagaSelectorMenuItem(
+                                    text = "${source.id} $label-fader",
+                                    selected = track.inputSourceKind == 1 &&
+                                        track.inputSourceTrackId == source.id && track.inputTap == tap,
+                                    onClick = {
+                                        viewModel.setTrackInputTrack(track.id, source.id, tap)
+                                        inputChannelMenuExpanded = false
+                                        inputMenuExpanded = false
+                                    },
+                                )
+                            }
                         }
                     }
                 }
@@ -939,18 +963,6 @@ fun RackScreen(
                         }
                     }
                 }
-                NnagaIconButton(onClick = {
-                    viewModel.setClipLooping(track.id, selectedSlot, !selectedSlotLooping)
-                },
-                modifier = Modifier.semantics {
-                    contentDescription = "Loop selected clip"
-                    stateDescription = if (selectedSlotLooping) "Active" else "Inactive"
-                }) { Icon(
-                    Icons.Default.Repeat,
-                    contentDescription = null,
-                    tint = if (selectedSlotLooping) Color(0xFF2E7D32)
-                    else MaterialTheme.colorScheme.onSurfaceVariant
-                ) }
                 when {
                     selectedSlotWavLoaded || selectedSlotMidiLoaded -> {
                         NnagaIconButton(onClick = {
@@ -3480,15 +3492,6 @@ private fun formatElapsedTime(sec: Double): String {
     else "%d:%02d".format(minutes, seconds)
 }
 
-private fun formatMusicalPosition(positionSec: Double, beatsPerMinute: Double): String {
-    val totalSixteenths = (
-        positionSec.coerceAtLeast(0.0) * beatsPerMinute.coerceAtLeast(1.0) / 60.0 * 4.0
-    ).toLong()
-    val bar = totalSixteenths / 16 + 1
-    val beat = totalSixteenths % 16 / 4 + 1
-    val sixteenth = totalSixteenths % 4 + 1
-    return "$bar:$beat:$sixteenth"
-}
 private fun queryDisplayName(context: android.content.Context, uri: Uri): String? {
     return context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }

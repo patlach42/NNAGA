@@ -41,7 +41,13 @@ import com.vibes.dsp.ui.dashboard.DashboardSection
 import com.vibes.dsp.ui.dashboard.DashboardTab
 import com.vibes.dsp.ui.settings.SettingsTab
 import com.vibes.dsp.ui.tone3000.Tone
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import com.vibes.dsp.engine.NativeEngine
+import com.vibes.dsp.engine.PluginRepositoryService
+import com.vibes.dsp.ui.dashboard.RepositoryViewModel
 import com.vibes.dsp.ui.tone3000.ToneDetailScreen
+private const val PENDING_REPOSITORY_PACKAGE_ID = "pendingRepositoryPackageId"
 
 sealed class Screen(val route: String) {
     object Live : Screen("live")
@@ -100,6 +106,18 @@ fun AppNavigation(
     engineReady: Boolean,
     navController: NavHostController = rememberNavController()
 ) {
+    val context = LocalContext.current.applicationContext
+    val repositoryService = remember(context) {
+        PluginRepositoryService(
+            context = context,
+            nativeRefresh = {
+                runCatching { NativeEngine.getInstance().nativeRefreshPluginRegistry() }.getOrDefault(false)
+            },
+        )
+    }
+    val repositoryViewModel: RepositoryViewModel = viewModel(
+        factory = RepositoryViewModel.factory(repositoryService),
+    )
     val rackViewModel: RackViewModel = viewModel()
     LaunchedEffect(engineReady) {
         if (engineReady) rackViewModel.onNativeEngineReady()
@@ -157,9 +175,34 @@ fun AppNavigation(
         ) { entry ->
             val sourcePluginIndex = entry.arguments?.getInt("sourcePlugin") ?: -1
             val sourceSlot = entry.arguments?.getString("sourceSlot")
+            val pendingRepositoryPackageId =
+                entry.savedStateHandle.remove<String>(PENDING_REPOSITORY_PACKAGE_ID)
+                    ?: navController.previousBackStackEntry?.savedStateHandle?.remove(
+                        PENDING_REPOSITORY_PACKAGE_ID,
+                    )
             DashboardScreen(
                 viewModel = rackViewModel,
-                onNavigateBack = { navController.popBackStack() },
+                repositoryViewModel = repositoryViewModel,
+                repositoryService = repositoryService,
+                onRepositoryInstall = { item ->
+                    if (item.format == "wine_installer" ||
+                        item.format == "wine_archive" ||
+                        item.format == "wine_directory"
+                    ) {
+                        navController.currentBackStackEntry?.savedStateHandle?.set(
+                            PENDING_REPOSITORY_PACKAGE_ID,
+                            item.id,
+                        )
+                        navController.navigate(
+                            Screen.Dashboard.route(
+                                section = DashboardSection.Settings,
+                                settingsTab = SettingsTab.Vst,
+                            ),
+                        )
+                    } else {
+                        repositoryViewModel.install(item.id)
+                    }
+                },
                 onNavigateToToneDetail = { tone, architecture ->
                     navController.currentBackStackEntry?.savedStateHandle?.set("selected_tone", tone)
                     navController.navigate(
@@ -171,7 +214,9 @@ fun AppNavigation(
                         )
                     )
                 },
+                onNavigateBack = { navController.popBackStack() },
                 initialSection = DashboardSection.fromArgument(entry.arguments?.getString("section")),
+                pendingRepositoryPackageId = pendingRepositoryPackageId,
                 initialDashboardTab = DashboardTab.fromArgument(entry.arguments?.getString("dashboardTab")),
                 initialSettingsTab = SettingsTab.fromArgument(entry.arguments?.getString("settingsTab")),
                 initialTag = entry.arguments?.getString("tag"),

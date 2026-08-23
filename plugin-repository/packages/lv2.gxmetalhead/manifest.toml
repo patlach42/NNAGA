@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxmetalhead"
+name = "gxmetal_head"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gxmetal_head."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxmetalhead/1.0.0.zip"
+sha256 = "148107d31092050efdeef23c8da769854f97938e8d50804b9afdba3f38ece89b"
+size = 4226776
+
+[install]
+entry = "gxmetal_head.lv2/manifest.ttl"

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxsusta"
+name = "gx_susta"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_susta."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxsusta/1.0.0.zip"
+sha256 = "e9843b3560664c2ae8ce010b60d9c75bf439df1ec795aef5cc0e8d6f41c52125"
+size = 4477198
+
+[install]
+entry = "gx_susta.lv2/manifest.ttl"

@@ -21,6 +21,13 @@ package com.vibes.dsp.engine
 
 import android.content.Context
 
+enum class AudioBackend(val persisted: String) {
+    DirectUsb("direct_usb"), AndroidOboe("android_oboe");
+    companion object {
+        fun fromPersisted(value: String?): AudioBackend =
+            entries.firstOrNull { it.persisted == value } ?: DirectUsb
+    }
+}
 enum class UsbAudioDriver(val code: Int, val persisted: String) {
     Uac(0, "uac"), Line6(1, "line6");
     companion object {
@@ -46,10 +53,13 @@ data class DirectUsbBufferConfig(
 
 object AudioSettingsManager {
     private const val PREFS_NAME = "audio_settings"
+    private const val KEY_AUDIO_BACKEND = "audioBackend"
     private const val KEY_USB_DRIVER = "usbAudioDriver"
     private const val KEY_BUFFER_SIZE = "bufferSize"
     private const val KEY_LINE6_SHOW_ALL_USB_DEVICES = "line6ShowAllUsbDevices"
     private const val KEY_USB_DEVICE_ID = "directUsbDeviceId"
+    private const val KEY_ANDROID_INPUT_DEVICE_ID = "androidInputDeviceId"
+    private const val KEY_ANDROID_OUTPUT_DEVICE_ID = "androidOutputDeviceId"
     private const val KEY_USB_VENDOR_ID = "directUsbVendorId"
     private const val KEY_USB_PRODUCT_ID = "directUsbProductId"
     private const val KEY_USB_DEVICE_NAME = "directUsbDeviceName"
@@ -238,6 +248,12 @@ object AudioSettingsManager {
         prefs(context).edit().putInt(KEY_BUFFER_SIZE, normalizeBufferSize(size)).apply()
     }
 
+    fun getAudioBackend(context: Context): AudioBackend =
+        AudioBackend.fromPersisted(prefs(context).getString(KEY_AUDIO_BACKEND, AudioBackend.DirectUsb.persisted))
+
+    fun setAudioBackend(context: Context, backend: AudioBackend) {
+        prefs(context).edit().putString(KEY_AUDIO_BACKEND, backend.persisted).apply()
+    }
     fun getUsbAudioDriver(context: Context): UsbAudioDriver =
         UsbAudioDriver.fromPersisted(prefs(context).getString(KEY_USB_DRIVER, UsbAudioDriver.Uac.persisted))
 
@@ -257,6 +273,20 @@ object AudioSettingsManager {
 
     fun setDirectUsbDeviceId(context: Context, id: Int) {
         prefs(context).edit().putInt(KEY_USB_DEVICE_ID, id).apply()
+    }
+
+    fun getAndroidInputDeviceId(context: Context): Int =
+        prefs(context).getInt(KEY_ANDROID_INPUT_DEVICE_ID, 0)
+
+    fun setAndroidInputDeviceId(context: Context, id: Int) {
+        prefs(context).edit().putInt(KEY_ANDROID_INPUT_DEVICE_ID, id.coerceAtLeast(0)).apply()
+    }
+
+    fun getAndroidOutputDeviceId(context: Context): Int =
+        prefs(context).getInt(KEY_ANDROID_OUTPUT_DEVICE_ID, 0)
+
+    fun setAndroidOutputDeviceId(context: Context, id: Int) {
+        prefs(context).edit().putInt(KEY_ANDROID_OUTPUT_DEVICE_ID, id.coerceAtLeast(0)).apply()
     }
 
     fun getDirectUsbVendorId(context: Context): Int = prefs(context).getInt(KEY_USB_VENDOR_ID, 0)

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxampstereo"
+name = "gx_amp_stereo"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gx_amp_stereo."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxampstereo/1.0.0.zip"
+sha256 = "9c35e1be1045f1def6d604a8a76bae50826343af36670635c16be48dda71dd97"
+size = 5393777
+
+[install]
+entry = "gx_amp_stereo.lv2/manifest.ttl"

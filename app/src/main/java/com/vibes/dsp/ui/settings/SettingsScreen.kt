@@ -41,6 +41,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.vibes.dsp.BuildConfig
 import com.vibes.dsp.engine.AudioSettingsManager
+import com.vibes.dsp.engine.AudioBackend
+import com.vibes.dsp.engine.PluginRepositoryService
 import com.vibes.dsp.engine.UsbAudioDriver
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.vst.VstManagerTab
@@ -75,6 +77,8 @@ enum class SettingsTab(val argument: String, val label: String) {
 @Composable
 fun SettingsScreen(
     viewModel: RackViewModel,
+    repositoryService: PluginRepositoryService,
+    pendingRepositoryPackageId: String? = null,
     initialTab: SettingsTab = SettingsTab.Driver,
     modifier: Modifier = Modifier,
     onFullscreenChanged: (Boolean) -> Unit = {},
@@ -91,8 +95,30 @@ fun SettingsScreen(
         mutableStateOf(initialTab.takeIf { it in availableTabs } ?: SettingsTab.Driver)
     }
     var showDriverDialog by remember { mutableStateOf(false) }
+    var showBackendDialog by remember { mutableStateOf(false) }
     var fullscreenContent by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
+    if (showBackendDialog) {
+        val current = AudioSettingsManager.getAudioBackend(context)
+        AlertDialog(
+            onDismissRequest = { showBackendDialog = false },
+            title = { Text("Audio backend (${current.name})") },
+            text = { Text("Select Direct USB or Android Oboe") },
+            confirmButton = {
+                Row {
+                    NnagaTextButton(onClick = {
+                        viewModel.setAudioBackend(AudioBackend.DirectUsb)
+                        showBackendDialog = false
+                        showDriverDialog = true
+                    }) { Text("Direct USB") }
+                    NnagaTextButton(onClick = {
+                        viewModel.setAudioBackend(AudioBackend.AndroidOboe)
+                        showBackendDialog = false
+                    }) { Text("Android") }
+                }
+            },
+        )
+    }
 
     if (showDriverDialog) {
         val current = AudioSettingsManager.getUsbAudioDriver(context)
@@ -140,12 +166,12 @@ fun SettingsScreen(
                                 .combinedClickable(
                                     onClick = { selectedTab = tab },
                                     onLongClick = if (tab == SettingsTab.Driver) {
-                                        { showDriverDialog = true }
+                                        { showBackendDialog = true }
                                     } else {
                                         null
                                     },
                                     onLongClickLabel = if (tab == SettingsTab.Driver) {
-                                        "Choose USB driver"
+                                        "Choose audio backend"
                                     } else {
                                         null
                                     },
@@ -184,6 +210,8 @@ fun SettingsScreen(
                 embedded = true,
             )
             SettingsTab.Vst -> VstManagerTab(
+                repositoryService = repositoryService,
+                pendingRepositoryPackageId = pendingRepositoryPackageId,
                 onWineSessionActiveChanged = { active ->
                     fullscreenContent = active
                     onFullscreenChanged(active)

@@ -24,73 +24,46 @@ namespace guitarrackcraft {
 
 void PluginRegistry::registerFactory(std::unique_ptr<IPluginFactory> factory) {
     if (factory) {
+        std::unique_lock lock(mutex_);
         factories_.push_back(std::move(factory));
     }
 }
 
 bool PluginRegistry::initializeAll() {
+    std::unique_lock lock(mutex_);
     pluginCache_.clear();
     bool allSucceeded = true;
-
     for (auto& factory : factories_) {
-        if (!factory->initialize()) {
-            allSucceeded = false;
-            continue;
-        }
-
-        // Cache plugin info. Use the PluginInfo's own format (not the
-        // factory's primary format) so multi-format factories — VstFactory
-        // serving both VST2 and VST3 — produce correct "FORMAT:id" keys.
-        auto plugins = factory->enumeratePlugins();
-        for (const auto& plugin : plugins) {
+        if (!factory->initialize()) { allSucceeded = false; continue; }
+        for (const auto& plugin : factory->enumeratePlugins()) {
             const std::string& fmt = plugin.format.empty() ? factory->getFormat() : plugin.format;
-            std::string fullId = fmt + ":" + plugin.id;
-            pluginCache_[fullId] = plugin;
+            pluginCache_[fmt + ":" + plugin.id] = plugin;
         }
     }
-
     return allSucceeded;
 }
 
 std::vector<PluginInfo> PluginRegistry::getAllPlugins() const {
+    std::shared_lock lock(mutex_);
     std::vector<PluginInfo> allPlugins;
     allPlugins.reserve(pluginCache_.size());
-
-    for (const auto& pair : pluginCache_) {
-        allPlugins.push_back(pair.second);
-    }
-
+    for (const auto& pair : pluginCache_) allPlugins.push_back(pair.second);
     return allPlugins;
 }
 
 std::unique_ptr<IPlugin> PluginRegistry::createPlugin(const std::string& pluginId) const {
-    // Parse format:plugin_id
-    size_t colonPos = pluginId.find(':');
-    if (colonPos == std::string::npos) {
-        return nullptr;
-    }
-
-    std::string format = pluginId.substr(0, colonPos);
-    std::string id = pluginId.substr(colonPos + 1);
-
-    // Find factory for this format. Multi-format factories (e.g. VstFactory
-    // serving both VST2 and VST3) override acceptsFormat to claim more than
-    // one format string.
-    for (const auto& factory : factories_) {
-        if (factory->acceptsFormat(format)) {
-            return factory->createPlugin(id);
-        }
-    }
-
+    std::shared_lock lock(mutex_);
+    const size_t colonPos = pluginId.find(':');
+    if (colonPos == std::string::npos) return nullptr;
+    const std::string format = pluginId.substr(0, colonPos);
+    const std::string id = pluginId.substr(colonPos + 1);
+    for (const auto& factory : factories_) if (factory->acceptsFormat(format)) return factory->createPlugin(id);
     return nullptr;
 }
 
 PluginInfo PluginRegistry::getPluginInfo(const std::string& pluginId) const {
+    std::shared_lock lock(mutex_);
     auto it = pluginCache_.find(pluginId);
-    if (it != pluginCache_.end()) {
-        return it->second;
-    }
-    return PluginInfo{}; // Return empty info if not found
+    return it == pluginCache_.end() ? PluginInfo{} : it->second;
 }
-
 } // namespace guitarrackcraft

@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxtonemachine"
+name = "GxToneMachine"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin GxToneMachine."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxtonemachine/1.0.0.zip"
+sha256 = "0112d5a5a02d97fb2ef44446c4792c6d6a773f4bbba9d6f45f9b53f97b0cd0cd"
+size = 1295400
+
+[install]
+entry = "GxToneMachine.lv2/manifest.ttl"

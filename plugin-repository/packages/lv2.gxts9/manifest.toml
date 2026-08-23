@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxts9"
+name = "gxts9"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gxts9."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxts9/1.0.0.zip"
+sha256 = "4424536c9c29ca22660ca7a3b37910915554d5330cffc143d665498c2184f0e9"
+size = 3504113
+
+[install]
+entry = "gxts9.lv2/manifest.ttl"

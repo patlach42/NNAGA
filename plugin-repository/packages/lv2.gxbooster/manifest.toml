@@ -1,0 +1,17 @@
+schema = 1
+id = "lv2.gxbooster"
+name = "gxbooster"
+version = "1.0.0"
+format = "lv2"
+arch = ["arm64-v8a"]
+description = "Bundled LV2 plugin gxbooster."
+license = "GPL-3.0-or-later"
+
+[payload]
+kind = "archive"
+url = "../../payload/lv2.gxbooster/1.0.0.zip"
+sha256 = "61f356b7686e06454beef8cfc2a6a18eac4091e24b509d2345b64a4678be75ef"
+size = 4399870
+
+[install]
+entry = "gxbooster.lv2/manifest.ttl"
