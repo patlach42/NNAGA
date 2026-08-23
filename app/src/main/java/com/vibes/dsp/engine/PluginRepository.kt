@@ -29,7 +29,9 @@ internal fun resolveContainedRepositoryUrl(base: String, root: URI, relative: St
     val decoded = URI(u.scheme, u.userInfo, u.host, u.port, u.path, u.query, u.fragment)
     val r = URI(root.scheme, root.userInfo, root.host, root.port, root.path, null, null)
     require(decoded.scheme == r.scheme && decoded.host == r.host && decoded.port == r.port)
-    require(decoded.normalize().path.startsWith(r.normalize().path))
+    val rootPath = r.normalize().path.trimEnd('/') + "/"
+    val path = decoded.normalize().path
+    require(path == rootPath.dropLast(1) || path.startsWith(rootPath))
     return decoded.normalize().toString()
 }
 
@@ -75,11 +77,17 @@ data class VerifiedRepositoryPayload(
     val packageId: String,
     val manifest: PluginRepositoryService.RepoManifest,
     val file: File,
+    val token: String,
 )
 data class WineInstallOwnership(
     val vstUuids: List<String> = emptyList(),
     val executableUuids: List<String> = emptyList(),
     val prefixPaths: List<String> = emptyList(),
+)
+
+private data class StagedRepositoryPayload(
+    val manifest: PluginRepositoryService.RepoManifest,
+    val file: File,
 )
 
 class PluginRepositoryService(private val context: Context, private val nativeRefresh: (() -> Boolean)? = null, private val http: OkHttpClient = OkHttpClient(), private val removeWineOwnership: ((WineInstallOwnership) -> Boolean)? = null) : RepositoryService {
@@ -88,11 +96,9 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private val installedRoot = File(root, "installed")
     private val state = MutableStateFlow(RepositorySnapshot())
     private val cache = mutableMapOf<String, RepoManifest>()
-    private val stagedManifests = mutableMapOf<String, RepoManifest>()
+    private val stagedManifests = mutableMapOf<String, StagedRepositoryPayload>()
     private val mutex = Mutex()
     override val snapshot: StateFlow<RepositorySnapshot> = state
-    init { require(root.mkdirs() || root.isDirectory); require(installedRoot.mkdirs() || installedRoot.isDirectory); publish(loadSources(), emptyList(), null) }
-
     override suspend fun refreshAll() = withContext(Dispatchers.IO) { mutex.withLock { refreshAllLocked() } }
     private fun refreshAllLocked() {
         state.value = state.value.copy(isLoading = true, isRefreshing = true, errorMessage = null)
@@ -107,9 +113,10 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
                     val manifestUrl = resolveContained(indexUrl, repositoryRoot, path)
                     parseManifest(fetchText(manifestUrl), source.name, manifestUrl, repositoryRoot.toString())
                 }
-                sourceManifests.forEach { manifest ->
-                    require(ids.add("${manifest.format}:${manifest.id}")) { "Duplicate package identity: ${manifest.format}:${manifest.id}" }
-                }
+                val sourceIds = sourceManifests.map { "${it.format}:${it.id}" }
+                require(sourceIds.toSet().size == sourceIds.size) { "Duplicate package identity" }
+                require(sourceIds.none { it in ids }) { "Duplicate package identity" }
+                ids += sourceIds
                 manifests += sourceManifests
                 updated[index] = source.copy(lastError = null)
             } catch (e: Exception) {
@@ -142,59 +149,78 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
      * The returned file is app-private and remains available to the flavor
      * adapter until it reports final VST registry success.
      */
-    suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
+suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
         withContext(Dispatchers.IO) { mutex.withLock {
             val m = cache[packageId] ?: error("Package is not available: $packageId")
             validate(m); require(m.format != "lv2") { "LV2 packages use the native repository installer" }
             setPackageState(packageId, RepositoryPackageOperation.Installing, 0f, null)
-            val staged = File(root, ".pending-${m.format}-${m.id}-${m.version}.payload").canonicalFile
+            val token = UUID.randomUUID().toString()
+            val staged = File(root, ".pending-$token.payload").canonicalFile
             requireContained(staged, root)
-            val tmp = File(root, ".download-${UUID.randomUUID()}.tmp")
+            val tmp = File(root, ".download-$token.tmp")
             try {
-                download(resolveContained(m.repositoryRoot, URI(m.repositoryRoot), m.payloadUrl), tmp, m.payloadSize)
+                download(resolveContained(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl), tmp, m.payloadSize)
                 require(sha256(tmp) == m.payloadSha256) { "Payload SHA-256 mismatch" }
-                Files.move(tmp.toPath(), staged.toPath(), StandardCopyOption.REPLACE_EXISTING)
-                stagedManifests[packageId] = m
+                Files.move(tmp.toPath(), staged.toPath())
+                stagedManifests[token] = StagedRepositoryPayload(m, staged)
                 setPackageState(packageId, null, 1f, null)
-                VerifiedRepositoryPayload(packageId, m, staged)
+                VerifiedRepositoryPayload(packageId, m, staged, token)
             } catch (e: Exception) {
                 setPackageState(packageId, null, null, e.message ?: "Payload verification failed"); throw e
             } finally { tmp.delete() }
         } }
     fun discardStagedPayload(payload: VerifiedRepositoryPayload) {
-        payload.file.delete(); stagedManifests.remove(payload.packageId); setPackageState(payload.packageId, null, null, null)
+        val staged = stagedManifests.remove(payload.token)
+        if (staged != null && staged.file.canonicalFile == payload.file.canonicalFile) staged.file.delete()
+        else payload.file.delete()
+        setPackageState(payload.packageId, null, null, null)
     }
-    suspend fun completeStagedWineInstall(packageId: String, version: String, success: Boolean, error: String? = null, ownership: WineInstallOwnership = WineInstallOwnership()) =
+    suspend fun completeStagedWineInstall(payload: VerifiedRepositoryPayload, success: Boolean, error: String? = null, ownership: WineInstallOwnership = WineInstallOwnership()) =
         withContext(Dispatchers.IO) { mutex.withLock {
-            val m = stagedManifests.remove(packageId) ?: cache[packageId] ?: error("Package is not available: $packageId")
-            require(m.version == version)
-            val staged = File(root, ".pending-${m.format}-${m.id}-${m.version}.payload")
+            val stagedRecord = stagedManifests.remove(payload.token) ?: error("Staged payload is no longer available")
+            require(stagedRecord.file.canonicalFile == payload.file.canonicalFile)
+            val m = stagedRecord.manifest
+            require(m.version == payload.manifest.version)
+            val packageId = payload.packageId
+            val staged = stagedRecord.file
             if (!success) { staged.delete(); setPackageState(packageId, null, null, error ?: "Wine install cancelled"); return@withLock }
             val dir = File(installedRoot, "${m.format}/${m.id}").canonicalFile
             val target = File(dir, m.version).canonicalFile; requireContained(target, dir)
-            val tmp = File(dir, ".${m.version}.${UUID.randomUUID()}.staging")
+            val tmp = File(dir, ".${m.version}.${payload.token}.staging").canonicalFile
+            val backup = File(dir, ".${m.version}.${payload.token}.backup").canonicalFile
+            var committed = false
             try {
                 tmp.mkdirs(); writeMetadata(tmp, m, ownership); dir.mkdirs()
-                if (target.exists()) target.deleteRecursively()
-                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); staged.delete()
+                if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); committed = true
                 require(nativeRefresh?.invoke() != false) { "Native plugin registry refresh failed" }
+                val prior = dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }
+                    .mapNotNull(::readOwnership).fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) }
+                require(removeWineOwnership?.invoke(prior) != false) { "Prior Wine ownership removal failed" }
+                dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively)
+                backup.deleteRecursively(); staged.delete()
                 setPackageState(packageId, null, 1f, null); publishCurrent()
             } catch (e: Exception) {
-                tmp.deleteRecursively(); setPackageState(packageId, null, null, e.message ?: "Install failed"); throw e
-            }
+                if (committed) target.deleteRecursively()
+                if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                if (ownership.vstUuids.isNotEmpty() || ownership.executableUuids.isNotEmpty() || ownership.prefixPaths.isNotEmpty()) removeWineOwnership?.invoke(ownership)
+                nativeRefresh?.invoke(); setPackageState(packageId, null, null, e.message ?: "Install failed"); throw e
+            } finally { tmp.deleteRecursively(); backup.deleteRecursively(); staged.delete() }
         } }
 
 
     override suspend fun remove(packageId: String) = withContext(Dispatchers.IO) { mutex.withLock {
         setPackageState(packageId, RepositoryPackageOperation.Removing, 0f, null); val p=packageId.split(':', limit=2); require(p.size==2); val dir=File(installedRoot,"${p[0]}/${p[1]}").canonicalFile; requireContained(dir,installedRoot)
-        val backup=File(dir.parentFile,".${dir.name}.${UUID.randomUUID()}.backup"); val ownership = readOwnership(dir); try { if(dir.exists()) Files.move(dir.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); if (ownership != null) require(removeWineOwnership?.invoke(ownership) != false) { "Wine ownership removal failed" }; require(nativeRefresh?.invoke()!=false) { "Native registry refresh failed" }; backup.deleteRecursively(); setPackageState(packageId,null,1f,null) ; publishCurrent() } catch(e:Exception) { if(backup.exists()&&!dir.exists()) Files.move(backup.toPath(),dir.toPath(),StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(packageId,null,null,e.message?:"Remove failed"); throw e }
+        val backup=File(dir.parentFile,".${dir.name}.${UUID.randomUUID()}.backup")
+        val ownership = dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") }.mapNotNull(::readOwnership)
+            .fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) }
+        try { if(dir.exists()) Files.move(dir.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); require(removeWineOwnership?.invoke(ownership) != false) { "Wine ownership removal failed" }; require(nativeRefresh?.invoke()!=false) { "Native registry refresh failed" }; backup.deleteRecursively(); setPackageState(packageId,null,1f,null) ; publishCurrent() } catch(e:Exception) { if(backup.exists()&&!dir.exists()) Files.move(backup.toPath(),dir.toPath(),StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(packageId,null,null,e.message?:"Remove failed"); throw e }
     } }
     private suspend fun installOrUpdate(id:String, update:Boolean)=withContext(Dispatchers.IO) { mutex.withLock {
         val m=cache[id] ?: error("Package is not available: $id"); validate(m); val op=if(update) RepositoryPackageOperation.Updating else RepositoryPackageOperation.Installing; setPackageState(id,op,0f,null)
-        if(m.format!="lv2"){val msg=when(m.format){"wine_installer"->"Pending action: open Manage VST > Install from executable (interactive Wine installer required); package remains Available";"wine_archive","wine_directory"->"Pending action: open Manage VST > Import VST; PE export validation and registry import are required; package remains Available";else->"Unsupported package format"};setPackageState(id,null,null,msg);error(msg)}
         val dir=File(installedRoot,"${m.format}/${m.id}").canonicalFile; requireContained(dir,installedRoot); val target=File(dir,m.version).canonicalFile; requireContained(target,dir); require(!target.exists()||update)
         val stage=File(dir,".${m.version}.${UUID.randomUUID()}.staging"); val backup=File(dir,".${m.version}.${UUID.randomUUID()}.backup"); val tmp=File(root,".download-${UUID.randomUUID()}.tmp"); var moved=false
-        try { dir.mkdirs(); download(resolveContained(m.repositoryRoot, URI(m.repositoryRoot),m.payloadUrl),tmp,m.payloadSize); require(sha256(tmp)==m.payloadSha256) { "Payload SHA-256 mismatch" }; extractSafe(tmp,stage); validateEntry(stage,m.entry); writeMetadata(stage,m); if(target.exists()) Files.move(target.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); Files.move(stage.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE); moved=true; require(nativeRefresh?.invoke()!=false) { "Native plugin registry refresh failed" }; if(backup.exists()) backup.deleteRecursively(); dir.listFiles().orEmpty().filter { it.isDirectory&&!it.name.startsWith(".")&&it!=target }.forEach(File::deleteRecursively); setPackageState(id,null,1f,null); publishCurrent()
+        try { dir.mkdirs(); download(resolveContained(m.sourceUrl, URI(m.repositoryRoot),m.payloadUrl),tmp,m.payloadSize); require(sha256(tmp)==m.payloadSha256) { "Payload SHA-256 mismatch" }; extractSafe(tmp,stage); validateEntry(stage,m.entry); writeMetadata(stage,m); if(target.exists()) Files.move(target.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); Files.move(stage.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE); moved=true; require(nativeRefresh?.invoke()!=false) { "Native plugin registry refresh failed" }; if(backup.exists()) backup.deleteRecursively(); dir.listFiles().orEmpty().filter { it.isDirectory&&!it.name.startsWith(".")&&it!=target }.forEach(File::deleteRecursively); setPackageState(id,null,1f,null); publishCurrent()
         } catch(e:Exception){ if(moved) target.deleteRecursively(); if(backup.exists()&&!target.exists()) Files.move(backup.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(id,null,null,e.message?:"Install failed"); throw e }
         finally { tmp.delete(); stage.deleteRecursively(); backup.deleteRecursively() }
     } }
@@ -245,6 +271,11 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private fun inventory():Map<String,Installed>{ val out=mutableMapOf<String,Installed>(); installedRoot.listFiles().orEmpty().forEach{f->f.listFiles().orEmpty().forEach{id->id.listFiles().orEmpty().filter{it.isDirectory&&!it.name.startsWith(".")}.maxByOrNull{it.name}?.let{v->readMetadata(v)?.let{m->out["${m.format}:${m.id}"]=Installed(v.name,m)}}}}; return out }
     private fun writeMetadata(dir:File,m:RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir,META)),null)} }
     private fun readOwnership(dir:File): WineInstallOwnership? = runCatching { Properties().apply { load(FileInputStream(File(dir,META))) }.let { p -> WineInstallOwnership(p.getProperty("ownership.vstUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.executableUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.prefixPaths","").split(File.pathSeparator).filter(String::isNotBlank)) } }.getOrNull()
+    private fun mergeOwnership(a: WineInstallOwnership, b: WineInstallOwnership) = WineInstallOwnership(
+        (a.vstUuids + b.vstUuids).distinct(),
+        (a.executableUuids + b.executableUuids).distinct(),
+        (a.prefixPaths + b.prefixPaths).distinct(),
+    )
     private fun readMetadata(dir:File): RepoManifest? = runCatching {
         Properties().apply { load(FileInputStream(File(dir, META))) }.let { p ->
             RepoManifest(1, p.getProperty("id",""), p.getProperty("name",""), p.getProperty("version",""), p.getProperty("format",""), p.getProperty("description",""), "", "", 1, "", p.getProperty("kind","archive"), emptyList(), sourceName = "Installed")

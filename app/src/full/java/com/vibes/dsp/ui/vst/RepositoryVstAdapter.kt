@@ -76,7 +76,7 @@ object RepositoryVstAdapter {
                             WineInstallOwnership()
                         }
                         repository.completeStagedWineInstall(
-                            packageId, m.version, success,
+                            payload, success,
                             if (success) null else "Installer cancelled or failed",
                             ownership,
                         )
@@ -111,14 +111,13 @@ object RepositoryVstAdapter {
                 if (!refreshed) {
                     VstRegistry.remove(context, result.uuid)
                     repository.completeStagedWineInstall(
-                        packageId, m.version, false, "Native plugin registry refresh failed",
+                        payload, false, "Native plugin registry refresh failed",
                     )
                     onResult(Result.Error("Native plugin registry refresh failed"))
                 } else {
                     runCatching {
                         repository.completeStagedWineInstall(
-                            packageId,
-                            m.version,
+                            payload,
                             true,
                             ownership = WineInstallOwnership(vstUuids = listOf(result.uuid)),
                         )
@@ -131,7 +130,7 @@ object RepositoryVstAdapter {
                 }
             }
             is ImportResult.Err -> {
-                repository.completeStagedWineInstall(packageId, m.version, false, result.reason)
+                repository.completeStagedWineInstall(payload, false, result.reason)
                 onResult(Result.Error(result.reason))
             }
         }

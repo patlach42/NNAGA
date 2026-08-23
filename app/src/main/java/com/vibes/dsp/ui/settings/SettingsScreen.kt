@@ -109,15 +109,21 @@ fun SettingsScreen(
             confirmButton = {
                 Row {
                     NnagaTextButton(onClick = {
-                        selectedBackend = AudioBackend.DirectUsb
-                        viewModel.setAudioBackend(AudioBackend.DirectUsb)
-                        showBackendDialog = false
-                        showDriverDialog = true
+                        viewModel.setAudioBackend(AudioBackend.DirectUsb) { actual ->
+                            selectedBackend = actual
+                            if (actual == AudioBackend.DirectUsb) {
+                                showBackendDialog = false
+                                showDriverDialog = true
+                            }
+                        }
                     }) { Text("Direct USB") }
                     NnagaTextButton(onClick = {
-                        selectedBackend = AudioBackend.AndroidOboe
-                        viewModel.setAudioBackend(AudioBackend.AndroidOboe)
-                        showBackendDialog = false
+                        viewModel.setAudioBackend(AudioBackend.AndroidOboe) { actual ->
+                            selectedBackend = actual
+                            if (actual == AudioBackend.AndroidOboe) {
+                                showBackendDialog = false
+                            }
+                        }
                     }) { Text("Android") }
                 }
             },

@@ -244,6 +244,18 @@ bool AudioEngine::startDirectUsbSession(
         bool thermalSafetyEnabled) {
     directUsbThermalSafetyEnabled_.store(thermalSafetyEnabled, std::memory_order_release);
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
+    // An Oboe route error is reported asynchronously. Reconcile that failed
+    // session here, before Direct USB examines the shared running flag, so a
+    // stale Oboe identity cannot mask the USB backend or hijack stop().
+    if (androidOboeSession_.load(std::memory_order_acquire) &&
+        androidOboeBackend_ &&
+        (!androidOboeBackend_->isRunning() || androidOboeBackend_->hasError())) {
+        isRunning_.store(false, std::memory_order_release);
+        androidOboeBackend_->stop();
+        androidOboeSession_.store(false, std::memory_order_release);
+        cleanupEngineState();
+        publishedCallbackFrameCount_.store(0, std::memory_order_release);
+    }
     if (directUsbSession_.load(std::memory_order_acquire)) {
         return true;
     }
@@ -532,28 +544,34 @@ bool AudioEngine::startAndroidOboeSession(int32_t inputDeviceId, int32_t outputD
     if (!androidOboeBackend_) androidOboeBackend_ = std::make_unique<AndroidOboeBackend>(rackGraph_);
     const bool started = androidOboeBackend_->start(
         static_cast<int32_t>(sampleRate_), inputDeviceId, outputDeviceId, bufferFrames);
-    if (started) {
-        sampleRate_ = static_cast<float>(androidOboeBackend_->actualSampleRate());
-        callbackFrameCount_ = static_cast<uint32_t>(
-            androidOboeBackend_->actualFramesPerDataCallback());
-        publishedSampleRate_.store(sampleRate_, std::memory_order_release);
-        publishedCallbackFrameCount_.store(callbackFrameCount_, std::memory_order_release);
-        rackGraph_.setAvailableInputChannelCount(androidOboeBackend_->inputChannelCount());
-        cleanupStarted_.store(false, std::memory_order_release);
-        androidOboeSession_.store(true, std::memory_order_release);
-        isRunning_.store(true, std::memory_order_release);
+    if (!started) {
+        // start() stops any prior streams before reporting failure. Do not
+        // leave the old session identity visible after that transition.
+        androidOboeSession_.store(false, std::memory_order_release);
+        isRunning_.store(false, std::memory_order_release);
+        cleanupEngineState();
+        publishedCallbackFrameCount_.store(0, std::memory_order_release);
+        return false;
     }
-    return started;
+    sampleRate_ = static_cast<float>(androidOboeBackend_->actualSampleRate());
+    callbackFrameCount_ = static_cast<uint32_t>(
+        androidOboeBackend_->actualFramesPerDataCallback());
+    publishedSampleRate_.store(sampleRate_, std::memory_order_release);
+    publishedCallbackFrameCount_.store(callbackFrameCount_, std::memory_order_release);
+    rackGraph_.setAvailableInputChannelCount(androidOboeBackend_->inputChannelCount());
+    cleanupStarted_.store(false, std::memory_order_release);
+    androidOboeSession_.store(true, std::memory_order_release);
+    isRunning_.store(true, std::memory_order_release);
+    return true;
 }
 void AudioEngine::stop() {
     std::lock_guard<std::mutex> lifecycleCallLock(publicLifecycleMutex_);
-    if (androidOboeBackend_ &&
-        (androidOboeBackend_->isRunning() || androidOboeBackend_->hasError())) {
+    if (androidOboeSession_.load(std::memory_order_acquire)) {
         // Oboe closes streams only after callbacks have quiesced. Keep all
         // graph/plugin teardown on this lifecycle thread, never in Oboe's
         // error callback.
         isRunning_.store(false, std::memory_order_release);
-        androidOboeBackend_->stop();
+        if (androidOboeBackend_) androidOboeBackend_->stop();
         androidOboeSession_.store(false, std::memory_order_release);
         cleanupEngineState();
         publishedCallbackFrameCount_.store(0, std::memory_order_release);
@@ -583,11 +601,12 @@ void AudioEngine::stop() {
 }
 
 bool AudioEngine::isRunning() const {
-    // Oboe reports route/device failure from its callback thread. Reconcile
-    // the public engine flag lazily without doing lifecycle work on RT.
+    // Error callbacks only publish atomic state. Lifecycle reconciliation is
+    // performed by start/stop under publicLifecycleMutex_.
     if (androidOboeSession_.load(std::memory_order_acquire) &&
+        androidOboeBackend_ &&
         (!androidOboeBackend_->isRunning() || androidOboeBackend_->hasError())) {
-        isRunning_.store(false, std::memory_order_release);
+        return false;
     }
     return isRunning_.load(std::memory_order_acquire);
 }

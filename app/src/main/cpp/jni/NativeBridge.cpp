@@ -219,9 +219,14 @@ static bool parseMidiFile(const std::string& path, const std::string& name, std:
         }
         pos=end;
     }
-    std::sort(tempos.begin(),tempos.end(),[](auto&a,auto&b){return a.tick<b.tick;}); std::sort(raw.begin(),raw.end(),[](auto&a,auto&b){return a.tick<b.tick;});
-    auto clip=std::make_shared<MidiClip>(); clip->displayName=name; uint64_t lastTick=0, micros=0; uint32_t tempo=500000; clip->sourceBpm=60'000'000.0/static_cast<double>(tempo); size_t ti=0;
-    for(const auto& r:raw){while(ti+1<tempos.size()&&tempos[ti+1].tick<=r.tick){micros+=(tempos[ti+1].tick-lastTick)*tempo/division;lastTick=tempos[++ti].tick;tempo=tempos[ti].us;} micros+=(r.tick-lastTick)*tempo/division;lastTick=r.tick; MidiTimedEvent e; e.microseconds=micros; e.event=r.ev; clip->events.push_back(e); clip->durationMicroseconds=std::max(clip->durationMicroseconds,e.microseconds+1);}
+    std::stable_sort(tempos.begin(),tempos.end(),[](auto&a,auto&b){return a.tick<b.tick;}); std::sort(raw.begin(),raw.end(),[](auto&a,auto&b){return a.tick<b.tick;});
+    auto clip=std::make_shared<MidiClip>(); clip->displayName=name; uint64_t lastTick=0, micros=0; uint32_t tempo=500000; size_t ti=0;
+    while (ti+1<tempos.size() && tempos[ti+1].tick==0) ++ti;
+    tempo=tempos[ti].us;
+    if (tempo == 0) return false;
+    clip->sourceBpm=60'000'000.0/static_cast<double>(tempo);
+    ti=0;
+    for(const auto& r:raw){while(ti+1<tempos.size()&&tempos[ti+1].tick<=r.tick){micros+=(tempos[ti+1].tick-lastTick)*tempo/division;lastTick=tempos[++ti].tick;tempo=tempos[ti].us;if(tempo==0)return false;} micros+=(r.tick-lastTick)*tempo/division;lastTick=r.tick; MidiTimedEvent e; e.microseconds=micros; e.event=r.ev; clip->events.push_back(e); clip->durationMicroseconds=std::max(clip->durationMicroseconds,e.microseconds+1);}
     out=std::move(clip); return true;
 }
 

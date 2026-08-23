@@ -817,17 +817,22 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
-    fun setAudioBackend(backend: AudioBackend) {
+    fun setAudioBackend(backend: AudioBackend, onResult: (AudioBackend) -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
-            lifecycleMutex.withLock {
+            val actual = lifecycleMutex.withLock {
                 if (native.nativeIsEngineRunning()) {
                     _errorMessage.value = "Stop the audio engine before changing backend"
-                    return@withLock
+                    return@withLock AudioSettingsManager.getAudioBackend(getApplication())
                 }
                 AudioSettingsManager.setAudioBackend(getApplication(), backend)
-                _directUsbState.value = DirectUsbSessionState.Stopped
-                _errorMessage.value = null
+                val persisted = AudioSettingsManager.getAudioBackend(getApplication())
+                if (persisted == backend) {
+                    _directUsbState.value = DirectUsbSessionState.Stopped
+                    _errorMessage.value = null
+                }
+                persisted
             }
+            withContext(Dispatchers.Main) { onResult(actual) }
         }
     }
     fun setUsbAudioDriver(driver: UsbAudioDriver) {
