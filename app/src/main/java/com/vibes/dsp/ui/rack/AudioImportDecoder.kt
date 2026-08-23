@@ -16,6 +16,78 @@ import java.nio.ByteOrder
 internal object AudioImportDecoder {
     private const val IO_TIMEOUT_US = 10_000L
     private const val MAX_CHANNELS = 2
+    /**
+     * Reads PCM duration from a RIFF/WAVE file without loading audio data.
+     * Chunk payloads are skipped by seeking, so memory use is constant.
+     */
+    internal fun readWavDurationSeconds(file: File): Double? {
+        return runCatching {
+            RandomAccessFile(file, "r").use { raf ->
+                val fileLength = raf.length()
+                if (fileLength < 12L) return@use null
+                val header = ByteArray(12)
+                raf.readFully(header)
+                if (!header.copyOfRange(0, 4).contentEquals("RIFF".toByteArray()) ||
+                    !header.copyOfRange(8, 12).contentEquals("WAVE".toByteArray())
+                ) return@use null
+                val riffSize = leUInt32(header, 4)
+                val riffEnd = 8L + riffSize
+                if (riffEnd < 12L || riffEnd > fileLength) return@use null
+                var sampleRate = 0L
+                var blockAlign = 0L
+                var dataBytes = 0L
+                var fmtFound = false
+                var dataFound = false
+                val chunkHeader = ByteArray(8)
+                val fmt = ByteArray(16)
+                while (raf.filePointer + 8L <= riffEnd) {
+                    raf.readFully(chunkHeader)
+                    val chunkSize = leUInt32(chunkHeader, 4)
+                    val payloadStart = raf.filePointer
+                    val payloadEnd = payloadStart + chunkSize
+                    if (payloadEnd < payloadStart || payloadEnd > riffEnd) return@use null
+                    when {
+                        !fmtFound &&
+                            chunkHeader[0] == 'f'.code.toByte() && chunkHeader[1] == 'm'.code.toByte() &&
+                            chunkHeader[2] == 't'.code.toByte() && chunkHeader[3] == ' '.code.toByte() -> {
+                            if (chunkSize < 16L) return@use null
+                            raf.readFully(fmt)
+                            sampleRate = leUInt32(fmt, 4)
+                            blockAlign = leUInt16(fmt, 12).toLong()
+                            fmtFound = true
+                        }
+                        !dataFound &&
+                            chunkHeader[0] == 'd'.code.toByte() && chunkHeader[1] == 'a'.code.toByte() &&
+                            chunkHeader[2] == 't'.code.toByte() && chunkHeader[3] == 'a'.code.toByte() -> {
+                            dataBytes = chunkSize
+                            dataFound = true
+                        }
+                    }
+                    val paddedEnd = payloadEnd + (chunkSize and 1L)
+                    if (paddedEnd < payloadEnd || paddedEnd > riffEnd) return@use null
+                    raf.seek(paddedEnd)
+                    if (fmtFound && dataFound) break
+                }
+                if (!fmtFound || !dataFound) return@use null
+                if (sampleRate <= 0L || blockAlign <= 0L || dataBytes <= 0L) {
+                    null
+                } else {
+                    (dataBytes.toDouble() / (sampleRate.toDouble() * blockAlign.toDouble()))
+                        .takeIf { it.isFinite() && it > 0.0 }
+                }
+            }
+        }.getOrNull()
+    }
+
+    private fun leUInt16(bytes: ByteArray, offset: Int): Int =
+        (bytes[offset].toInt() and 0xff) or ((bytes[offset + 1].toInt() and 0xff) shl 8)
+
+    private fun leUInt32(bytes: ByteArray, offset: Int): Long =
+        (bytes[offset].toLong() and 0xffL) or
+            ((bytes[offset + 1].toLong() and 0xffL) shl 8) or
+            ((bytes[offset + 2].toLong() and 0xffL) shl 16) or
+            ((bytes[offset + 3].toLong() and 0xffL) shl 24)
+
 
     fun copyOrDecode(context: Context, uri: Uri, output: File) {
         val mime = context.contentResolver.getType(uri)?.lowercase()

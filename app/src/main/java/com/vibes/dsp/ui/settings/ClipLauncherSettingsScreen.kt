@@ -34,6 +34,9 @@ fun ClipLauncherSettingsScreen() {
     var autoDetectBpm by remember {
         mutableStateOf(ClipLauncherPreferences.getAutoDetectBpmFromFilename(context))
     }
+    var autoDetectLoopTempo by remember {
+        mutableStateOf(ClipLauncherPreferences.getAutoDetectLoopTempo(context))
+    }
 
     Column(
         modifier = Modifier
@@ -70,6 +73,35 @@ fun ClipLauncherSettingsScreen() {
                 },
                 modifier = Modifier.semantics {
                     contentDescription = "Detect BPM from WAV filename"
+                }
+            )
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .defaultMinSize(minHeight = SettingsDimensions.touchTarget),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "Autodetect loop tempo",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = "Estimate loop tempo from 2, 4, 8, or 16 bars within 50–200 BPM.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            NnagaSwitch(
+                checked = autoDetectLoopTempo,
+                onCheckedChange = { enabled ->
+                    autoDetectLoopTempo = enabled
+                    ClipLauncherPreferences.setAutoDetectLoopTempo(context, enabled)
+                },
+                modifier = Modifier.semantics {
+                    contentDescription = "Autodetect loop tempo"
                 }
             )
         }
