@@ -3,12 +3,14 @@
 #include "plugin/RackGraph.h"
 
 #include <array>
+#include <atomic>
 #include <limits>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 #include <utility>
 
@@ -52,6 +54,45 @@ public:
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
     uint32_t getNumOutputPorts() const override { return 2; }
+};
+class SnapshotGatePlugin final : public IPlugin {
+public:
+    SnapshotGatePlugin(std::atomic<bool>& blockNext,
+                       std::atomic<bool>& entered,
+                       std::atomic<bool>& release)
+        : blockNext_(blockNext), entered_(entered), release_(release) {}
+
+    void activate(float, uint32_t) override {}
+    void deactivate() override {}
+
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        if (blockNext_.exchange(false, std::memory_order_acq_rel)) {
+            entered_.store(true, std::memory_order_release);
+            while (!release_.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+        }
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = inputs[0][frame];
+            outputs[1][frame] = inputs[1][frame];
+        }
+        return 0;
+    }
+
+    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+
+private:
+    std::atomic<bool>& blockNext_;
+    std::atomic<bool>& entered_;
+    std::atomic<bool>& release_;
 };
 class MidiCapturingPlugin final : public IPlugin {
 public:
@@ -3251,4 +3292,158 @@ TEST(RackGraphInputRoutingTest, TrackRoutingRejectsSelfAndCyclicConnections) {
     EXPECT_EQ(secondSource.kind,
               guitarrackcraft::TrackInputSource::Kind::TrackOutput);
     EXPECT_EQ(secondSource.trackId, first);
+}
+
+TEST(RackGraphInputRoutingTest, RejectedRoutedSourceRemovalPreservesGraphAndChain) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId source = graph.getTracks().front().id;
+    const RackPathId destination = graph.addTrack();
+    ASSERT_NE(destination, 0u);
+    ASSERT_TRUE(graph.setTrackInputArmed(source, true));
+    ASSERT_TRUE(graph.setTrackInputHardwarePair(source, 0));
+    ASSERT_TRUE(graph.setTrackInputArmed(destination, true));
+    ASSERT_TRUE(graph.setTrackInputTrack(
+        destination, source, guitarrackcraft::TrackInputTap::PreFader));
+
+    const auto sourceChain = graph.getChain(source);
+    ASSERT_NE(sourceChain, nullptr);
+    ASSERT_EQ(sourceChain->addPlugin(std::make_unique<StereoOffsetPlugin>()), 0);
+
+    StereoBuffers beforeBuffers;
+    clearBuffers(beforeBuffers);
+    beforeBuffers.left.fill(1.5f);
+    beforeBuffers.right.fill(-2.0f);
+    graph.process(beforeBuffers.inputs, 2, beforeBuffers.outputs, 4);
+    const auto beforeLeft = beforeBuffers.outputLeft;
+    const auto beforeRight = beforeBuffers.outputRight;
+
+    EXPECT_FALSE(graph.removeTrack(source));
+
+    const auto tracks = graph.getTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    EXPECT_EQ(tracks[0].id, source);
+    EXPECT_EQ(tracks[1].id, destination);
+    const auto destinationSource = graph.getTrackInputSource(destination);
+    EXPECT_EQ(destinationSource.kind,
+              guitarrackcraft::TrackInputSource::Kind::TrackOutput);
+    EXPECT_EQ(destinationSource.trackId, source);
+    EXPECT_EQ(destinationSource.tap, guitarrackcraft::TrackInputTap::PreFader);
+    EXPECT_EQ(graph.getChain(source), sourceChain);
+
+    StereoBuffers afterBuffers;
+    clearBuffers(afterBuffers);
+    afterBuffers.left.fill(1.5f);
+    afterBuffers.right.fill(-2.0f);
+    graph.process(afterBuffers.inputs, 2, afterBuffers.outputs, 4);
+    for (uint32_t frame = 0; frame < 4; ++frame) {
+        EXPECT_FLOAT_EQ(afterBuffers.outputLeft[frame], beforeLeft[frame])
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(afterBuffers.outputRight[frame], beforeRight[frame])
+            << "right frame " << frame;
+    }
+}
+
+TEST(RackGraphSnapshotTest, TrackAndSlotSnapshotsDoNotMixCallbackGenerations) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.attachTrackWavSlot(track, 0, makeRampClip(128)));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    std::atomic<bool> blockNext{false};
+    std::atomic<bool> callbackEntered{false};
+    std::atomic<bool> releaseCallback{false};
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+    ASSERT_EQ(chain->addPlugin(std::make_unique<SnapshotGatePlugin>(
+                                   blockNext, callbackEntered, releaseCallback)),
+              0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    const auto beforeTracks = graph.getTracks();
+    ASSERT_EQ(beforeTracks.size(), 1u);
+    const auto beforeSlots = graph.getTrackClipSlots(track);
+    const auto* beforeSlot = findClipSlot(beforeSlots, 0);
+    ASSERT_NE(beforeSlot, nullptr);
+    ASSERT_TRUE(beforeSlot->playing);
+
+    blockNext.store(true, std::memory_order_release);
+    std::thread audio([&] {
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    });
+    for (uint32_t spin = 0;
+         spin < 100'000 && !callbackEntered.load(std::memory_order_acquire);
+         ++spin) {
+        std::this_thread::yield();
+    }
+    if (!callbackEntered.load(std::memory_order_acquire)) {
+        releaseCallback.store(true, std::memory_order_release);
+        audio.join();
+        FAIL() << "audio callback did not reach the snapshot barrier";
+        return;
+    }
+
+    std::vector<guitarrackcraft::TrackSnapshot> racedTracks;
+    std::vector<TrackClipSlotInfo> racedSlots;
+    std::atomic<bool> readerStarted{false};
+    std::thread reader([&] {
+        readerStarted.store(true, std::memory_order_release);
+        racedTracks = graph.getTracks();
+        racedSlots = graph.getTrackClipSlots(track);
+    });
+    for (uint32_t spin = 0;
+         spin < 100'000 && !readerStarted.load(std::memory_order_acquire);
+         ++spin) {
+        std::this_thread::yield();
+    }
+    if (!readerStarted.load(std::memory_order_acquire)) {
+        releaseCallback.store(true, std::memory_order_release);
+        audio.join();
+        reader.join();
+        FAIL() << "snapshot reader did not reach the callback barrier";
+        return;
+    }
+
+    // Let the reader contend with the callback's post-runtime/pre-publication
+    // window, then complete the callback so a seqlock reader can retry.
+    for (uint32_t spin = 0; spin < 10'000; ++spin) {
+        std::this_thread::yield();
+    }
+
+    releaseCallback.store(true, std::memory_order_release);
+    audio.join();
+    reader.join();
+
+    ASSERT_EQ(racedTracks.size(), 1u);
+    ASSERT_EQ(racedSlots.size(), 1u);
+    const auto& afterTrack = graph.getTracks().front();
+    const auto afterSlots = graph.getTrackClipSlots(track);
+    const auto* afterSlot = findClipSlot(afterSlots, 0);
+    ASSERT_NE(afterSlot, nullptr);
+    const auto& racedTrack = racedTracks.front();
+    const auto& racedSlot = racedSlots.front();
+
+
+    EXPECT_EQ(racedTrack.transportFrame, afterTrack.transportFrame);
+    EXPECT_DOUBLE_EQ(racedTrack.musicalQuarterNotes,
+                     afterTrack.musicalQuarterNotes);
+    EXPECT_DOUBLE_EQ(racedTrack.sampleRate, afterTrack.sampleRate);
+    EXPECT_EQ(racedTrack.capturedAtMonotonicNanos,
+              afterTrack.capturedAtMonotonicNanos);
+    EXPECT_EQ(racedSlot.transportFrame, afterSlot->transportFrame);
+    EXPECT_DOUBLE_EQ(racedSlot.musicalQuarterNotes,
+                     afterSlot->musicalQuarterNotes);
+    EXPECT_DOUBLE_EQ(racedSlot.sampleRate, afterSlot->sampleRate);
+    EXPECT_EQ(racedSlot.capturedAtMonotonicNanos,
+              afterSlot->capturedAtMonotonicNanos);
+    EXPECT_EQ(racedTrack.transportFrame, racedSlot.transportFrame);
+    EXPECT_DOUBLE_EQ(racedTrack.musicalQuarterNotes,
+                     racedSlot.musicalQuarterNotes);
+    EXPECT_EQ(racedTrack.capturedAtMonotonicNanos,
+              racedSlot.capturedAtMonotonicNanos);
 }

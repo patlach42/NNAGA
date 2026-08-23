@@ -84,8 +84,6 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
     std::lock_guard lock(controlMutex_);
     std::vector<TrackSnapshot> result;
     result.reserve(tracks_.size());
-    auto rate = sampleRate_.load();
-    if (rate <= 0) rate = 48000;
     for (size_t i = 0; i < tracks_.size(); ++i) {
         const auto& node = *tracks_[i];
         const uint32_t selected = node.selectedSlot.load(std::memory_order_relaxed);
@@ -97,16 +95,29 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
         const auto wav = mediaSlot < wavSlots.size() ? wavSlots[mediaSlot] : nullptr;
         const auto midi = mediaSlot < midiSlots.size() ? midiSlots[mediaSlot] : nullptr;
         const auto rt = hasActive && mediaSlot < node.clipRuntime.size() ? node.clipRuntime[mediaSlot] : nullptr;
-        const uint64_t frame = rt ? rt->statusFrame.load() : 0;
-        const bool playing = rt && rt->statusPlaying.load();
-        const bool looping = rt && rt->looping.load();
+        uint64_t frame = 0;
+        bool playing = false;
+        bool looping = false;
+        double localQn = 0.0;
+        double rate = 48000.0;
+        uint64_t captured = 0;
+        for (;;) {
+            const auto before = statusSequence_.load(std::memory_order_acquire);
+            if (before & 1U) continue;
+            rate = statusSampleRate_.load(std::memory_order_relaxed);
+            if (rate <= 0) rate = 48000.0;
+            frame = rt ? rt->statusFrame.load(std::memory_order_relaxed) : 0;
+            playing = rt && rt->statusPlaying.load(std::memory_order_relaxed);
+            looping = rt && rt->looping.load(std::memory_order_relaxed);
+            localQn = rt ? rt->localQuarterNotes.load(std::memory_order_acquire) : 0.0;
+            captured = statusCapturedAtNanos_.load(std::memory_order_relaxed);
+            if (before == statusSequence_.load(std::memory_order_acquire)) break;
+        }
         const std::string name = (i < clipLabelOverrides_.size() && mediaSlot < clipLabelOverrides_[i].size() &&
             !clipLabelOverrides_[i][mediaSlot].empty()) ? clipLabelOverrides_[i][mediaSlot] :
             (midi ? midi->displayName : (wav ? wav->displayName : std::string()));
         const double duration = midi ? static_cast<double>(midi->durationMicroseconds) / 1'000'000.0 :
             (wav ? clipDuration(*wav) : 0.0);
-        const double localQn = rt ? rt->localQuarterNotes.load(std::memory_order_acquire) : 0.0;
-        const auto captured = statusCapturedAtNanos_.load(std::memory_order_relaxed);
         result.push_back({node.id, node.volume.load(), node.inputArmed.load(), node.inputArmLocked.load(),
             static_cast<bool>(wav), name, duration, playing, looping, static_cast<double>(frame) / rate,
             frame, node.recordPending.load(),
@@ -124,7 +135,6 @@ std::vector<TrackClipSlotInfo> RackGraph::getTrackClipSlots(RackPathId id) const
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
     if(it==tracks_.end()) return {};
     const size_t i=static_cast<size_t>(it-tracks_.begin());
-    auto rate=sampleRate_.load(); if(rate<=0) rate=48000;
     const auto& wav=wavSlots_[i]; const auto& midi=midiSlots_[i];
     const auto& n=**it;
     const size_t count=std::max({wav.size(),midi.size(),n.clipRuntime.size(),n.slotConfig.size()});
@@ -134,9 +144,22 @@ std::vector<TrackClipSlotInfo> RackGraph::getTrackClipSlots(RackPathId id) const
         const std::string name=(i<clipLabelOverrides_.size()&&s<clipLabelOverrides_[i].size()&&!clipLabelOverrides_[i][s].empty())?clipLabelOverrides_[i][s]:(m?m->displayName:(w?w->displayName:std::string()));
         const bool audibleActive=n.activeSlot.load(std::memory_order_relaxed)==static_cast<int32_t>(s);
         const auto rt=s<n.clipRuntime.size()?n.clipRuntime[s]:nullptr;
-        const uint64_t frame = rt ? rt->statusFrame.load(std::memory_order_relaxed) : 0;
+        uint64_t frame = 0;
+        double localQn = 0.0;
+        double rate = 48000.0;
+        uint64_t captured = 0;
+        for (;;) {
+            const auto before = statusSequence_.load(std::memory_order_acquire);
+            if (before & 1U) continue;
+            rate = statusSampleRate_.load(std::memory_order_relaxed);
+            if (rate <= 0) rate = 48000.0;
+            frame = rt ? rt->statusFrame.load(std::memory_order_relaxed) : 0;
+            localQn = rt ? rt->localQuarterNotes.load(std::memory_order_acquire) : 0.0;
+            captured = statusCapturedAtNanos_.load(std::memory_order_relaxed);
+            if (before == statusSequence_.load(std::memory_order_acquire)) break;
+        }
         const double defaultLoopLength = s<n.slotConfig.size()&&n.slotConfig[s]?n.slotConfig[s]->defaultLoopLengthBars.load():n.defaultLoopLengthBars.load();
-        out.push_back({id,static_cast<uint32_t>(s),static_cast<bool>(w),static_cast<bool>(m),name,m?static_cast<double>(m->durationMicroseconds)/1'000'000.0:(w?clipDuration(*w):0.0),n.selectedSlot.load(std::memory_order_relaxed)==s,audibleActive&&rt&&rt->statusPlaying.load(),rt?rt->looping.load():false,static_cast<double>(frame)/rate,frame,rt?rt->loopLengthBars.load():defaultLoopLength,s<n.slotConfig.size()&&n.slotConfig[s]&&n.slotConfig[s]->enterOnPunch.load(),((w||m)&&rt)?rt->sourceBpm.load():0.0,rt?rt->tempoMode.load():0,defaultLoopLength,n.pendingSwitchSlot.load(std::memory_order_relaxed)==static_cast<int32_t>(s),rt?rt->localQuarterNotes.load(std::memory_order_acquire):0.0,rate,statusCapturedAtNanos_.load(std::memory_order_relaxed),rt?rt->loopStartQuarterNotes.load():0.0,rt?rt->loopLengthQuarterNotes.load():defaultLoopLength*4.0});
+        out.push_back({id,static_cast<uint32_t>(s),static_cast<bool>(w),static_cast<bool>(m),name,m?static_cast<double>(m->durationMicroseconds)/1'000'000.0:(w?clipDuration(*w):0.0),n.selectedSlot.load(std::memory_order_relaxed)==s,audibleActive&&rt&&rt->statusPlaying.load(),rt?rt->looping.load():false,static_cast<double>(frame)/rate,frame,rt?rt->loopLengthBars.load():defaultLoopLength,s<n.slotConfig.size()&&n.slotConfig[s]&&n.slotConfig[s]->enterOnPunch.load(),((w||m)&&rt)?rt->sourceBpm.load():0.0,rt?rt->tempoMode.load():0,defaultLoopLength,n.pendingSwitchSlot.load(std::memory_order_relaxed)==static_cast<int32_t>(s),localQn,rate,captured,rt?rt->loopStartQuarterNotes.load():0.0,rt?rt->loopLengthQuarterNotes.load():defaultLoopLength*4.0});
     }
     return out;
 }
@@ -531,8 +554,8 @@ void RackGraph::applyGlobalMailbox() noexcept {
     if (bpm != appliedBpmSerial_) { audioBpm_ = desiredBpm; appliedBpmSerial_ = bpm; }
 }
 
-void RackGraph::publishGlobalStatus(double rate) noexcept { const auto now = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()); statusSequence_.fetch_add(1, std::memory_order_acq_rel); statusPlaying_.store(audioPlaying_, std::memory_order_relaxed); statusBpm_.store(audioBpm_, std::memory_order_relaxed); statusSamplePosition_.store(audioSamplePosition_, std::memory_order_relaxed); statusTransportFrame_.store(audioTransportFrame_, std::memory_order_relaxed); statusMusicalQuarterNotes_.store(audioMusicalQuarterNotes_, std::memory_order_relaxed); statusSampleRate_.store(rate, std::memory_order_relaxed); statusCapturedAtNanos_.store(now, std::memory_order_relaxed); statusPositionSec_.store(audioElapsedSeconds_, std::memory_order_relaxed); statusSequence_.fetch_add(1, std::memory_order_release); }
-void RackGraph::advanceTransport(uint32_t frames) noexcept { applyGlobalMailbox(); double rate=sampleRate_.load(std::memory_order_relaxed); if(rate<=0) rate=48000.; audioSamplePosition_+=frames; if(audioPlaying_){ audioTransportFrame_+=frames; audioElapsedSeconds_ += static_cast<double>(frames) / rate; audioMusicalQuarterNotes_ += static_cast<double>(frames) * audioBpm_ / (rate * 60.0); } publishGlobalStatus(rate); }
+void RackGraph::publishGlobalStatus(double rate) noexcept { const auto now = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()); statusPlaying_.store(audioPlaying_, std::memory_order_relaxed); statusBpm_.store(audioBpm_, std::memory_order_relaxed); statusSamplePosition_.store(audioSamplePosition_, std::memory_order_relaxed); statusTransportFrame_.store(audioTransportFrame_, std::memory_order_relaxed); statusMusicalQuarterNotes_.store(audioMusicalQuarterNotes_, std::memory_order_relaxed); statusSampleRate_.store(rate, std::memory_order_relaxed); statusCapturedAtNanos_.store(now, std::memory_order_relaxed); statusPositionSec_.store(audioElapsedSeconds_, std::memory_order_relaxed); statusSequence_.fetch_add(1, std::memory_order_release); }
+void RackGraph::advanceTransport(uint32_t frames) noexcept { statusSequence_.fetch_add(1, std::memory_order_acq_rel); applyGlobalMailbox(); double rate=sampleRate_.load(std::memory_order_relaxed); if(rate<=0) rate=48000.; audioSamplePosition_+=frames; if(audioPlaying_){ audioTransportFrame_+=frames; audioElapsedSeconds_ += static_cast<double>(frames) / rate; audioMusicalQuarterNotes_ += static_cast<double>(frames) * audioBpm_ / (rate * 60.0); } publishGlobalStatus(rate); }
 uint64_t RackGraph::nextBoundary(uint64_t frame,double rate,double bpm,LaunchQuantization q) noexcept {if(q==LaunchQuantization::None)return frame;const double beats=q==LaunchQuantization::Bar?4.:q==LaunchQuantization::Quarter?1.:q==LaunchQuantization::Eighth?.5:.25;const uint64_t step=std::max<uint64_t>(1,static_cast<uint64_t>(std::llround(beats*rate*60./bpm)));return (frame/step+1)*step;}
 void RackGraph::process(
         const float* const* inputs, int inputChannelCount,
@@ -548,6 +571,7 @@ void RackGraph::process(
         hazardSnapshot_.store(nullptr, std::memory_order_seq_cst);
         return;
     }
+    statusSequence_.fetch_add(1, std::memory_order_acq_rel);
     applyGlobalMailbox();
     double rate = sampleRate_.load(std::memory_order_relaxed);
     if (rate <= 0.0) rate = 48000.0;
