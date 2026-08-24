@@ -70,6 +70,22 @@ internal fun parseRepositoryManifest(
         repositoryRoot = repositoryRoot,
     )
 }
+internal data class RepositorySourceRecord(
+    val id: String,
+    val name: String,
+    val url: String,
+    val enabled: Boolean,
+    val custom: Boolean,
+    val lastError: String?,
+)
+
+internal fun migrateRepositorySources(
+    stored: List<RepositorySourceRecord>,
+    builtin: RepositorySourceRecord,
+): List<RepositorySourceRecord> = stored.map { source ->
+    if (source.id == builtin.id) builtin.copy(enabled = source.enabled) else source
+}
+
 
 /** Repository installer. All state mutations happen on IO and publish immutable snapshots. */
 /** Verified repository payload handed to a flavor adapter for final installation. */
@@ -107,7 +123,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             if (!source.enabled) return@forEachIndexed
             try {
                 val indexUrl = source.url
-                val repositoryRoot = URI(indexUrl).resolve("./")
+                val repositoryRoot = URI(indexUrl).let { URI(it.scheme, it.userInfo, it.host, it.port, it.path, null, null) }.resolve("./")
                 val parsed = parseIndex(Toml.parse(fetchText(indexUrl)))
                 val sourceManifests = parsed.map { path ->
                     val manifestUrl = resolveContained(indexUrl, repositoryRoot, path)
@@ -128,7 +144,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     override suspend fun addSource(url: String) = withContext(Dispatchers.IO) { mutex.withLock {
         val u = normalizeSource(url); val s = loadSources()
         require(s.none { it.url == u }) { "Source already exists" }
-        saveSources(s + SourceRecord(sha256(u.toByteArray()).take(16), "Custom ${s.count { it.custom } + 1}", u, true, true, null))
+        saveSources(s + RepositorySourceRecord(sha256(u.toByteArray()).take(16), "Custom ${s.count { it.custom } + 1}", u, true, true, null))
         refreshAllLocked()
     } }
     override suspend fun setSourceEnabled(sourceId: String, enabled: Boolean) = withContext(Dispatchers.IO) { mutex.withLock {
@@ -226,7 +242,7 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
     } }
     private fun publishCurrent(){ publish(loadSources(), cache.values.toList(), null) }
     private fun publish(
-        sources: List<SourceRecord>,
+        sources: List<RepositorySourceRecord>,
         manifests: List<RepoManifest>,
         error: String?,
     ) {
@@ -292,24 +308,29 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
     private fun fetchText(url:String):String = if(url.startsWith("file:")) {
         File(URI(url)).inputStream().use { input -> val out=java.io.ByteArrayOutputStream(); copyBounded(input,out,MAX_RESPONSE); out.toString(Charsets.UTF_8.name()) }
     } else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(Request.Builder().url(url).build()).execute().use{r->
-        require(r.isSuccessful); val body=r.body ?: error("Empty response"); require(body.contentLength() in 1..MAX_RESPONSE)
+        require(r.isSuccessful) { "HTTP ${r.code} $url" }; val body=r.body ?: error("Empty response"); require(body.contentLength() in 1..MAX_RESPONSE)
         body.byteStream().use { input -> val out=java.io.ByteArrayOutputStream(); copyBounded(input,out,MAX_RESPONSE); out.toString(Charsets.UTF_8.name()) }
     }
-    private fun download(url:String,out:File,max:Long){if(url.startsWith("file:")){File(URI(url)).inputStream().use{copyBounded(it,out,max)}}else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(Request.Builder().url(url).build()).execute().use{r->require(r.isSuccessful);require((r.body?.contentLength()?:-1L) in 1..max);copyBounded(r.body!!.byteStream(),out,max)}}
+    private fun download(url:String,out:File,max:Long){if(url.startsWith("file:")){File(URI(url)).inputStream().use{copyBounded(it,out,max)}}else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(Request.Builder().url(url).build()).execute().use{r->require(r.isSuccessful) { "HTTP ${r.code} $url" };require((r.body?.contentLength()?:-1L) in 1..max);copyBounded(r.body!!.byteStream(),out,max)}}
     private fun copyBounded(input:java.io.InputStream,out:java.io.OutputStream,max:Long){val b=ByteArray(8192);var n=0L;while(true){val r=input.read(b);if(r<0)break;n+=r;require(n<=max);out.write(b,0,r)}}
     private fun copyBounded(input:java.io.InputStream,out:File,max:Long){out.outputStream().use { copyBounded(input,it,max) }}
     private fun extractSafe(zip:File,stage:File){stage.mkdirs();ZipInputStream(BufferedInputStream(FileInputStream(zip))).use{z->val seen=mutableSetOf<String>();var total=0L;var count=0;var e=z.nextEntry;while(e!=null){require(++count<=MAX_ENTRIES);val n=e.name.replace('\\','/');val c=File(stage,n).canonicalFile;require(n.isNotBlank()&&!n.startsWith('/')&&!n.split('/').contains(".."));require(seen.add(c.relativeTo(stage.canonicalFile).path));requireContained(c,stage);if(e.isDirectory)c.mkdirs()else{c.parentFile?.mkdirs();FileOutputStream(c).use{o->val b=ByteArray(8192);while(true){val r=z.read(b);if(r<0)break;total+=r;require(total<=MAX_EXTRACTED);o.write(b,0,r)}}};z.closeEntry();e=z.nextEntry}}}
     private fun validateEntry(stage:File,e:String){val f=File(stage,e).canonicalFile;requireContained(f,stage);require(f.isFile)}
     private fun requireContained(f:File,parent:File){require(f.toPath().startsWith(parent.canonicalFile.toPath()))}
-    private fun saveSources(s:List<SourceRecord>){prefs.edit().putStringSet(SOURCES,s.map{encode(it)}.toSet()).commit()}
-    private fun loadSources()=prefs.getStringSet(SOURCES,null)?.mapNotNull{decode(it)}?.ifEmpty{listOf(builtin())}?:listOf(builtin())
-    private fun builtin()=SourceRecord("builtin","NNAGA Base","https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml",true,false,null)
-    private fun encode(s:SourceRecord)=Base64.encodeToString(listOf(s.id,s.name,s.url,s.enabled,s.custom,s.lastError?:"").joinToString("\u0001").toByteArray(),Base64.NO_WRAP)
-    private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{SourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
-    private data class SourceRecord(val id:String,val name:String,val url:String,val enabled:Boolean,val custom:Boolean,val lastError:String?)
+    private fun saveSources(s:List<RepositorySourceRecord>){prefs.edit().putStringSet(SOURCES,s.map{encode(it)}.toSet()).commit()}
+    private fun loadSources():List<RepositorySourceRecord>{
+        val stored = prefs.getStringSet(SOURCES, null)?.mapNotNull(::decode)
+        if (stored == null || stored.isEmpty()) return listOf(builtin())
+        val migrated = migrateRepositorySources(stored, builtin())
+        if (migrated != stored) saveSources(migrated)
+        return migrated
+    }
+    private fun builtin()=RepositorySourceRecord("builtin","NNAGA Base",BUILTIN_INDEX_URL,true,false,null)
+    private fun encode(s:RepositorySourceRecord)=Base64.encodeToString(listOf(s.id,s.name,s.url,s.enabled,s.custom,s.lastError?:"").joinToString("\u0001").toByteArray(),Base64.NO_WRAP)
+    private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{RepositorySourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
     private data class Installed(val version:String,val manifest:RepoManifest)
     data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val sourceUrl:String="",val repositoryRoot:String="")
-    companion object{private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
+    companion object{private const val BUILTIN_INDEX_URL="https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-23";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
     private fun sha256(b:ByteArray)=digest(b.inputStream())
     private fun sha256(f:File)=digest(f.inputStream())
     private fun digest(i:java.io.InputStream):String { val md=MessageDigest.getInstance("SHA-256"); i.use { val buf=ByteArray(8192); while(true){val n=it.read(buf);if(n<0)break;md.update(buf,0,n)} }; return md.digest().joinToString(""){"%02x".format(it)} }

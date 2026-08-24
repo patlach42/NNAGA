@@ -21,6 +21,73 @@ class PluginRepositoryContractsTest {
             )
         }
     }
+    @Test
+    fun versionedIndexUsesQueryFreeRootForManifestAndPayloadResolution() {
+        val index = "https://plugins.example/repo/index.toml?v=2026-08-23"
+        val root = URI(index).resolve("./")
+
+        assertEquals("https://plugins.example/repo/", root.toString())
+        assertEquals(null, root.query)
+
+        val manifest = resolveContainedRepositoryUrl(index, root, "packages/example/manifest.toml")
+        val payload = resolveContainedRepositoryUrl(manifest, root, "../../payload/example/1.0.0.zip")
+
+        assertEquals("https://plugins.example/repo/packages/example/manifest.toml", manifest)
+        assertEquals("https://plugins.example/repo/payload/example/1.0.0.zip", payload)
+        assertEquals(null, URI(manifest).query)
+        assertEquals(null, URI(payload).query)
+        assertEquals(true, URI(manifest).path.startsWith(root.path))
+        assertEquals(true, URI(payload).path.startsWith(root.path))
+    }
+
+
+    @Test
+    fun migratesStaleBuiltinSourceToVersionedUrlAndClearsError() {
+        val staleBuiltin = RepositorySourceRecord(
+            id = "builtin",
+            name = "NNAGA Base",
+            url = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml",
+            enabled = false,
+            custom = false,
+            lastError = "HTTP 404 https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml",
+        )
+        val currentBuiltin = RepositorySourceRecord(
+            id = "builtin",
+            name = "NNAGA Base",
+            url = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-23",
+            enabled = true,
+            custom = false,
+            lastError = null,
+        )
+
+        val migrated = migrateRepositorySources(listOf(staleBuiltin), currentBuiltin)
+
+        assertEquals(listOf(currentBuiltin.copy(enabled = false)), migrated)
+    }
+
+    @Test
+    fun leavesCustomSourceRecordUnchangedDuringBuiltinMigration() {
+        val custom = RepositorySourceRecord(
+            id = "custom-source",
+            name = "Custom source",
+            url = "https://plugins.example/custom/index.toml",
+            enabled = true,
+            custom = true,
+            lastError = "HTTP 503 https://plugins.example/custom/index.toml",
+        )
+        val builtin = RepositorySourceRecord(
+            id = "builtin",
+            name = "NNAGA Base",
+            url = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-23",
+            enabled = true,
+            custom = false,
+            lastError = null,
+        )
+
+        val migrated = migrateRepositorySources(listOf(custom), builtin)
+
+        assertEquals(listOf(custom), migrated)
+    }
 
     @Test
     fun rejectsEncodedTraversalAndCrossOriginPayloadUrls() {
