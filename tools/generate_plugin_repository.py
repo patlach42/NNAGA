@@ -46,6 +46,10 @@ LICENSES = {
     "fil4": "GPL-2.0-only",
     "4keq2": "GPL-3.0-or-later",
 }
+EXTRA_TAGS = {
+    "fil4": ["Filter"],
+    "4keq2": ["Filter"],
+}
 
 
 def license_for(name: str) -> str:
@@ -220,7 +224,9 @@ def metadata_for(name: str) -> tuple[str, list[str], str]:
         or len(source) > 160
     ):
         source = _fallback_description(name, category)
-    return manufacturer, [category] if category else [], source
+    tags = [category] if category else []
+    tags.extend(tag for tag in EXTRA_TAGS.get(key, []) if tag not in tags)
+    return manufacturer, tags, source
 
 
 def toml_string(value: str) -> str:

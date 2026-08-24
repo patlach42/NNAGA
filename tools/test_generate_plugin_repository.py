@@ -144,6 +144,9 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
             "four_k_eq_2.lv2/manifest.ttl",
             manifests["lv2.fourkeq2"]["install"]["entry"],
         )
+        for package in ("lv2.fil4", "lv2.fourkeq2"):
+            self.assertIn("EQ", manifests[package]["tags"])
+            self.assertIn("Filter", manifests[package]["tags"])
 
     def test_target_plugins_use_per_plugin_spdx_licenses(self):
         manifests = self._generate_target_manifests()
