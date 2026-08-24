@@ -30,6 +30,8 @@ import android.hardware.usb.UsbDeviceConnection
 import android.hardware.usb.UsbManager
 import android.os.Build
 import android.util.Log
+import android.Manifest
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.Job
@@ -415,6 +417,16 @@ object DirectUsbAudioManager {
     suspend fun startConfigured(context: Context): Result<Unit> =
         lifecycleMutex.withLock {
             if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
+                if (ContextCompat.checkSelfPermission(
+                        context,
+                        Manifest.permission.RECORD_AUDIO,
+                    ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    availableInputChannels = 0
+                    return@withLock Result.failure(
+                        SecurityException("Microphone permission is required for Android audio"),
+                    )
+                }
                 val ok = NativeEngine.getInstance().nativeStartAndroidOboeSession(
                     inputDeviceId = AudioSettingsManager.getAndroidInputDeviceId(context),
                     outputDeviceId = AudioSettingsManager.getAndroidOutputDeviceId(context),

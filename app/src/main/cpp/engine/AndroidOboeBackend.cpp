@@ -1,6 +1,11 @@
 #include "AndroidOboeBackend.h"
 #include <algorithm>
 #include <cstring>
+#include <android/log.h>
+
+#define LOG_TAG "AndroidOboeBackend"
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
 
 namespace guitarrackcraft {
 
@@ -17,6 +22,8 @@ bool AndroidOboeBackend::start(int32_t sampleRate, int32_t inputDeviceId,
             // be mono, and forcing two channels makes Oboe reject the stream.
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
             ->setSharingMode(sharing)
+            ->setFormatConversionAllowed(true)
+            ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
             ->setErrorCallback(this);
         if (sampleRate > 0) builder.setSampleRate(sampleRate);
         if (inputDeviceId > 0) builder.setDeviceId(inputDeviceId);
@@ -27,6 +34,9 @@ bool AndroidOboeBackend::start(int32_t sampleRate, int32_t inputDeviceId,
     configureInput(in, oboe::SharingMode::Exclusive);
     auto result = in.openStream(input_);
     if (result != oboe::Result::OK) {
+        LOGE("input open (exclusive) failed: %s", oboe::convertToText(result));
+    }
+    if (result != oboe::Result::OK) {
         input_.reset();
         // Rebuild the builder for the shared retry; do not carry stale stream
         // configuration (especially a forced channel count) across attempts.
@@ -35,7 +45,11 @@ bool AndroidOboeBackend::start(int32_t sampleRate, int32_t inputDeviceId,
         sharedIn.setAudioApi(oboe::AudioApi::Unspecified);
         result = sharedIn.openStream(input_);
     }
-    if (result != oboe::Result::OK) { closeStreams(); return false; }
+    if (result != oboe::Result::OK) {
+        LOGE("input open failed after shared retry: %s", oboe::convertToText(result));
+        closeStreams();
+        return false;
+    }
 
     auto configureOutput = [&](oboe::AudioStreamBuilder& builder,
                                oboe::SharingMode sharing) {
@@ -44,6 +58,8 @@ bool AndroidOboeBackend::start(int32_t sampleRate, int32_t inputDeviceId,
             ->setChannelCount(2)
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
             ->setSharingMode(sharing)
+            ->setFormatConversionAllowed(true)
+            ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
             ->setDataCallback(this)
             ->setErrorCallback(this);
         if (sampleRate > 0) builder.setSampleRate(sampleRate);
@@ -55,13 +71,20 @@ bool AndroidOboeBackend::start(int32_t sampleRate, int32_t inputDeviceId,
     configureOutput(out, oboe::SharingMode::Exclusive);
     result = out.openStream(output_);
     if (result != oboe::Result::OK) {
+        LOGE("output open (exclusive) failed: %s", oboe::convertToText(result));
+    }
+    if (result != oboe::Result::OK) {
         output_.reset();
         oboe::AudioStreamBuilder sharedOut;
         configureOutput(sharedOut, oboe::SharingMode::Shared);
         sharedOut.setAudioApi(oboe::AudioApi::Unspecified);
         result = sharedOut.openStream(output_);
     }
-    if (result != oboe::Result::OK) { closeStreams(); return false; }
+    if (result != oboe::Result::OK) {
+        LOGE("output open failed after shared retry: %s", oboe::convertToText(result));
+        closeStreams();
+        return false;
+    }
 
     const int32_t rate = output_->getSampleRate() > 0 ? output_->getSampleRate() : sampleRate;
     const int32_t callbackFrames = output_->getFramesPerDataCallback() > 0
@@ -80,8 +103,17 @@ bool AndroidOboeBackend::start(int32_t sampleRate, int32_t inputDeviceId,
     graph_.setSampleRate(static_cast<float>(rate), static_cast<uint32_t>(capacity));
     graph_.setAvailableInputChannelCount(inputChannels);
     running_.store(true, std::memory_order_release);
-    if (input_->requestStart() != oboe::Result::OK || output_->requestStart() != oboe::Result::OK) {
-        stop(); return false;
+    const auto inputStartResult = input_->requestStart();
+    if (inputStartResult != oboe::Result::OK) {
+        LOGE("input requestStart failed: %s", oboe::convertToText(inputStartResult));
+    }
+    const auto outputStartResult = output_->requestStart();
+    if (outputStartResult != oboe::Result::OK) {
+        LOGE("output requestStart failed: %s", oboe::convertToText(outputStartResult));
+    }
+    if (inputStartResult != oboe::Result::OK || outputStartResult != oboe::Result::OK) {
+        stop();
+        return false;
     }
     return true;
 }

@@ -11,6 +11,11 @@
 
 package com.vibes.dsp.ui.settings
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -100,6 +105,31 @@ fun SettingsScreen(
     val context = androidx.compose.ui.platform.LocalContext.current
     var fullscreenContent by remember { mutableStateOf(false) }
     var selectedBackend by remember { mutableStateOf(AudioSettingsManager.getAudioBackend(context)) }
+    var backendError by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingAndroidSelection by remember { mutableStateOf(false) }
+    val requestAudioPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted && pendingAndroidSelection) {
+            viewModel.setAudioBackend(AudioBackend.AndroidOboe) { actual ->
+                selectedBackend = actual
+                if (actual == AudioBackend.AndroidOboe) showBackendDialog = false
+            }
+        } else if (!granted && pendingAndroidSelection) {
+            backendError = "Microphone permission is required for Android audio. Android backend was not changed."
+        }
+        pendingAndroidSelection = false
+    }
+    if (backendError != null) {
+        AlertDialog(
+            onDismissRequest = { backendError = null },
+            title = { Text("Microphone permission required") },
+            text = { Text(backendError.orEmpty()) },
+            confirmButton = {
+                NnagaTextButton(onClick = { backendError = null }) { Text("OK") }
+            },
+        )
+    }
     if (showBackendDialog) {
         val current = selectedBackend
         AlertDialog(
@@ -118,11 +148,19 @@ fun SettingsScreen(
                         }
                     }) { Text("Direct USB") }
                     NnagaTextButton(onClick = {
-                        viewModel.setAudioBackend(AudioBackend.AndroidOboe) { actual ->
-                            selectedBackend = actual
-                            if (actual == AudioBackend.AndroidOboe) {
-                                showBackendDialog = false
+                        pendingAndroidSelection = true
+                        if (ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.RECORD_AUDIO,
+                            ) == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            viewModel.setAudioBackend(AudioBackend.AndroidOboe) { actual ->
+                                selectedBackend = actual
+                                if (actual == AudioBackend.AndroidOboe) showBackendDialog = false
                             }
+                            pendingAndroidSelection = false
+                        } else {
+                            requestAudioPermission.launch(Manifest.permission.RECORD_AUDIO)
                         }
                     }) { Text("Android") }
                 }

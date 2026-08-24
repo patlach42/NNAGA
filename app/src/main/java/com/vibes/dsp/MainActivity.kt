@@ -19,9 +19,15 @@
 
 package com.vibes.dsp
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import com.vibes.dsp.engine.AudioBackend
+import com.vibes.dsp.engine.AudioSettingsManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
@@ -62,6 +68,9 @@ import java.io.FileOutputStream
 import java.io.InputStream
 
 class MainActivity : ComponentActivity() {
+    private val audioPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
 
     private sealed interface StartupState {
         data object Initializing : StartupState
@@ -106,6 +115,12 @@ class MainActivity : ComponentActivity() {
         NativeEngine.getInstance().nativeApplyCurrentThreadUiAffinity()
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        if (AudioSettingsManager.getAudioBackend(this) == AudioBackend.AndroidOboe &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
+                PackageManager.PERMISSION_GRANTED
+        ) {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         val display = getSystemService(WindowManager::class.java).defaultDisplay
         val sixtyHertzMode = display.supportedModes.firstOrNull {
