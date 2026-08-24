@@ -54,6 +54,7 @@ std::unique_ptr<RackGraph::GraphSnapshot> RackGraph::buildSnapshotLocked(const s
         view.selectedSlot = nodes[i]->selectedSlot.load(std::memory_order_relaxed);
         view.recordingSlot = nodes[i]->recordingSlot;
         view.recordLength = nodes[i]->recordLength;
+        view.recordingGeneration = nodes[i]->recordingGeneration;
         const auto s = view.selectedSlot;
         if (s < view.wavSlots.size()) view.clip = view.wavSlots[s];
         if (s < view.midiSlots.size()) view.midi = view.midiSlots[s];
@@ -88,6 +89,7 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
         const auto& node = *tracks_[i];
         const uint32_t selected = node.selectedSlot.load(std::memory_order_relaxed);
         const int32_t activeIndex = node.activeSlot.load(std::memory_order_relaxed);
+        const auto recordingPhase = node.recordingPhase.load(std::memory_order_acquire);
         const bool hasActive = activeIndex >= 0;
         const uint32_t mediaSlot = hasActive ? static_cast<uint32_t>(activeIndex) : selected;
         const auto& wavSlots = wavSlots_[i];
@@ -126,7 +128,12 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
             node.inputSource.firstChannel,
             node.recording.load(), node.punchArmed.load(),
             static_cast<bool>(midi), playing && static_cast<bool>(midi),
-            activeIndex, selected, node.defaultLoopLengthBars.load(), localQn, rate, captured});
+            activeIndex, selected, node.defaultLoopLengthBars.load(), localQn, rate, captured,
+            (recordingPhase == RecordingPhase::Armed ||
+             recordingPhase == RecordingPhase::Pending ||
+             recordingPhase == RecordingPhase::Recording)
+                ? static_cast<int32_t>(node.recordingSlot)
+                : -1});
     }
     return result;
 }
@@ -286,7 +293,52 @@ bool RackGraph::attachTrackWav(RackPathId id,std::shared_ptr<const WavClip> clip
 bool RackGraph::attachTrackMidi(RackPathId id,std::shared_ptr<const MidiClip> clip){return attachTrackMidiSlot(id,0,std::move(clip));}
 bool RackGraph::unloadTrackMidi(RackPathId id){return unloadTrackMidiSlot(id,0);}
 bool RackGraph::unloadTrackWav(RackPathId id){return unloadTrackWavSlot(id,0);}
-bool RackGraph::clearTrackWavs(){std::lock_guard lock(controlMutex_);auto copy=clips_;auto recs=recordingClips_;for(size_t i=0;i<copy.size();++i){copy[i].reset();recs[i].reset();tracks_[i]->recordPending.store(false);tracks_[i]->recording.store(false);tracks_[i]->punchArmed.store(false);tracks_[i]->recordComplete.store(false);}if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,copy,recs)))return false;clips_=std::move(copy);recordingClips_=std::move(recs);return true;}
+bool RackGraph::clearTrackWavs(){
+    std::lock_guard lock(controlMutex_);
+    bool cancelled = false;
+    for (size_t i = 0; i < tracks_.size(); ++i) {
+        const auto phase = tracks_[i]->recordingPhase.load(std::memory_order_acquire);
+        if (phase == RecordingPhase::Completing) {
+            if (cancelled) {
+                (void)publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_));
+            }
+            return false;
+        }
+        if (phase == RecordingPhase::Armed ||
+            phase == RecordingPhase::Pending ||
+            phase == RecordingPhase::Recording) {
+            if (!clearIncompleteRecordingLocked(i)) {
+                if (cancelled) {
+                    (void)publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_));
+                }
+                return false;
+            }
+            cancelled = true;
+        }
+    }
+    auto copy = clips_;
+    auto recs = recordingClips_;
+    for (size_t i = 0; i < copy.size(); ++i) {
+        copy[i].reset();
+        recs[i].reset();
+        auto& node = *tracks_[i];
+        ++node.recordingGeneration;
+        node.recordingGenerationActive.store(
+            node.recordingGeneration, std::memory_order_release);
+        node.recordingSlot = std::numeric_limits<uint32_t>::max();
+        node.recordingSlotAtomic.store(
+            std::numeric_limits<uint32_t>::max(), std::memory_order_release);
+        node.recordPending.store(false, std::memory_order_relaxed);
+        node.recording.store(false, std::memory_order_relaxed);
+        node.punchArmed.store(false, std::memory_order_relaxed);
+        node.recordComplete.store(false, std::memory_order_relaxed);
+        node.recordingPhase.store(RecordingPhase::Idle, std::memory_order_release);
+    }
+    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, copy, recs))) return false;
+    clips_ = std::move(copy);
+    recordingClips_ = std::move(recs);
+    return true;
+}
 bool RackGraph::startTrackRecordingLocked(RackPathId id,uint32_t slot,double bars,LaunchQuantization q,bool enterOnPunch){
     if(!(bars==.25||bars==1||bars==2||bars==4||bars==8||bars==16)) return false;
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
@@ -305,20 +357,37 @@ bool RackGraph::startTrackRecordingLocked(RackPathId id,uint32_t slot,double bar
     auto recs=recordingClips_; auto slots=wavSlots_; auto oldSlots=wavSlots_; if(slot>=slots[i].size()) slots[i].resize(static_cast<size_t>(slot)+1);
     recs[i]=rec; slots[i][slot]=rec;
     const auto oldSelected=n.selectedSlot.load();
-    const auto oldSlot=n.recordingSlot; const auto oldLength=n.recordLength; const auto oldQuant=n.recordQuantization;
-    const auto oldPending=n.recordPending.load(); const auto oldRecording=n.recording.load(); const auto oldComplete=n.recordComplete.load(); const auto oldPunch=n.punchArmed.load(); const auto oldFrame=n.recordFrame.load(); const auto oldStart=n.recordStartFrame.load();
-    n.selectedSlot.store(slot); n.clipRuntime[slot]=std::make_shared<ClipRuntime>(); n.clipRuntime[slot]->looping.store(true); n.clipRuntime[slot]->loopLengthBars.store(bars); n.recordingSlot=slot; n.recordLength=length; n.recordQuantization=static_cast<uint8_t>(q);
-    n.recordFrame.store(0); n.recordComplete.store(false); n.recording.store(false); n.recordPending.store(!enterOnPunch); n.punchArmed.store(enterOnPunch);
+    const auto oldSlot=n.recordingSlot; const auto oldLength=n.recordLength; const auto oldQuant=n.recordQuantization.load();
+    const auto oldPending=n.recordPending.load(); const auto oldRecording=n.recording.load(); const auto oldComplete=n.recordComplete.load(); const auto oldPunch=n.punchArmed.load(); const auto oldFrame=n.recordFrame.load(); const auto oldStart=n.recordStartFrame.load(); const auto oldPhase=n.recordingPhase.load(std::memory_order_acquire); const auto oldGeneration=n.recordingGeneration;
+    n.selectedSlot.store(slot); n.clipRuntime[slot]=std::make_shared<ClipRuntime>(); n.clipRuntime[slot]->looping.store(true); n.clipRuntime[slot]->loopLengthBars.store(bars); n.recordingSlot=slot; n.recordingSlotAtomic.store(slot, std::memory_order_release); n.recordLength=length; n.recordQuantization.store(static_cast<uint8_t>(q));
+    ++n.recordingGeneration;
+    n.recordFrame.store(0);
     const uint32_t calibrationFrames=enterOnPunch?std::max<uint32_t>(1,static_cast<uint32_t>(std::ceil(rate*0.01))):0;
     n.punchCalibrationFrames.store(calibrationFrames); n.punchCalibrationRemaining.store(calibrationFrames); n.punchNoiseSum.store(0.0f); n.punchThreshold.store(0.02f);
-    n.recordStartFrame.store(enterOnPunch?std::numeric_limits<uint64_t>::max():nextBoundary(statusTransportFrame_.load(std::memory_order_acquire),rate,bpm,q));
+    const auto transport = getTransportSnapshot();
+    const bool running = transport.playing;
+    const uint64_t currentFrame = transport.transportFrame;
+    const double currentQn = transport.musicalQuarterNotes;
+    const uint64_t boundary = running
+        ? nextBoundary(currentFrame, currentQn, rate, bpm, q)
+        : currentFrame;
+    n.recordStartFrame.store(enterOnPunch ? std::numeric_limits<uint64_t>::max() : boundary);
     wavSlots_=slots;
     if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs))){
         wavSlots_=std::move(oldSlots); n.clipRuntime=std::move(oldRuntime);
-        n.selectedSlot.store(oldSelected); n.recordingSlot=oldSlot; n.recordLength=oldLength; n.recordQuantization=oldQuant;
-        n.recordPending.store(oldPending); n.recording.store(oldRecording); n.punchArmed.store(oldPunch); n.recordComplete.store(oldComplete); n.recordFrame.store(oldFrame); n.recordStartFrame.store(oldStart); return false;
+        n.selectedSlot.store(oldSelected); n.recordingSlot=oldSlot; n.recordingSlotAtomic.store(oldSlot, std::memory_order_release); n.recordLength=oldLength; n.recordQuantization.store(oldQuant);
+        n.recordingGeneration=oldGeneration; n.recordPending.store(oldPending); n.recording.store(oldRecording); n.recordingPhase.store(oldPhase, std::memory_order_release); n.punchArmed.store(oldPunch); n.recordComplete.store(oldComplete); n.recordFrame.store(oldFrame); n.recordStartFrame.store(oldStart); return false;
     }
-    recordingClips_=std::move(recs); return true;
+    recordingClips_=std::move(recs);
+    n.recordingGenerationActive.store(n.recordingGeneration, std::memory_order_release);
+    n.recordComplete.store(false, std::memory_order_relaxed);
+    n.recording.store(false, std::memory_order_relaxed);
+    n.recordPending.store(!enterOnPunch, std::memory_order_relaxed);
+    n.punchArmed.store(enterOnPunch, std::memory_order_relaxed);
+    n.recordingPhase.store(
+        enterOnPunch ? RecordingPhase::Armed : RecordingPhase::Pending,
+        std::memory_order_release);
+    return true;
 }
 bool RackGraph::startTrackClipRecording(RackPathId id,uint32_t slot,LaunchQuantization q){
     std::lock_guard lock(controlMutex_);
@@ -424,14 +493,18 @@ bool RackGraph::setSlotEnterOnPunch(RackPathId id,uint32_t slot,bool armed,Launc
     if(!ensureSlotConfigLocked(n,slot)) return false;
     if(armed){
         if(slot<wavSlots_[i].size() && wavSlots_[i][slot]) return false;
-        if((n.punchArmed.load() || n.recordPending.load() || n.recording.load()) && n.recordingSlot!=slot){
+        const auto phase = n.recordingPhase.load(std::memory_order_acquire);
+        if (n.recordingSlot != slot &&
+            phase != RecordingPhase::Idle &&
+            phase != RecordingPhase::Complete) {
             const uint32_t old=n.recordingSlot;
-            if(old<wavSlots_[i].size() && recordingClips_[i] && wavSlots_[i][old].get()==recordingClips_[i].get()) wavSlots_[i][old].reset();
-            recordingClips_[i].reset(); n.recordPending.store(false); n.recording.store(false); n.recordComplete.store(false); n.punchArmed.store(false);
+            if (!clearIncompleteRecordingLocked(i)) return false;
             if(old<n.slotConfig.size() && n.slotConfig[old]) n.slotConfig[old]->enterOnPunch.store(false);
         }
-        for(size_t s=0;s<n.slotConfig.size();++s) if(n.slotConfig[s]) n.slotConfig[s]->enterOnPunch.store(s==slot);
-        n.recordingSlot=slot; n.recordQuantization=static_cast<uint8_t>(q); n.slotConfig[slot]->punchQuantization.store(static_cast<uint8_t>(q),std::memory_order_relaxed);
+        for(size_t s=0;s<n.slotConfig.size();++s) {
+            if(n.slotConfig[s]) n.slotConfig[s]->enterOnPunch.store(s==slot);
+        }
+        n.recordingSlot=slot; n.recordingSlotAtomic.store(slot, std::memory_order_release); n.recordQuantization.store(static_cast<uint8_t>(q)); n.slotConfig[slot]->punchQuantization.store(static_cast<uint8_t>(q),std::memory_order_relaxed);
     } else n.slotConfig[slot]->enterOnPunch.store(false);
     return publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));
 }
@@ -487,30 +560,74 @@ bool RackGraph::setClipSourceBpm(RackPathId id, uint32_t slot, double sourceBpm)
     (*it)->clipRuntime[slot]->sourceBpm.store(sourceBpm,std::memory_order_release);
     return true;
 }
+bool RackGraph::clearIncompleteRecordingLocked(size_t i) noexcept {
+    if (i >= tracks_.size() || i >= recordingClips_.size() || i >= wavSlots_.size()) return false;
+    auto& n = *tracks_[i];
+    auto phase = n.recordingPhase.load(std::memory_order_acquire);
+    while (phase == RecordingPhase::Armed ||
+           phase == RecordingPhase::Pending ||
+           phase == RecordingPhase::Recording) {
+        if (n.recordingPhase.compare_exchange_weak(
+                phase, RecordingPhase::Idle,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            ++n.recordingGeneration;
+            n.recordingGenerationActive.store(n.recordingGeneration, std::memory_order_release);
+            const auto slot = n.recordingSlot;
+            if (slot < wavSlots_[i].size() && recordingClips_[i] &&
+                wavSlots_[i][slot].get() == recordingClips_[i].get()) {
+                wavSlots_[i][slot].reset();
+            }
+            recordingClips_[i].reset();
+            n.recordingSlot = std::numeric_limits<uint32_t>::max();
+            n.recordingSlotAtomic.store(
+                std::numeric_limits<uint32_t>::max(), std::memory_order_release);
+            n.recordPending.store(false, std::memory_order_relaxed);
+            n.recording.store(false, std::memory_order_relaxed);
+            n.punchArmed.store(false, std::memory_order_relaxed);
+            n.recordComplete.store(false, std::memory_order_release);
+            n.recordStartFrame.store(
+                std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
+            n.recordFrame.store(0, std::memory_order_relaxed);
+            return true;
+        }
+    }
+    return false;
+}
 bool RackGraph::cancelTrackLoopRecording(RackPathId id){
     std::lock_guard lock(controlMutex_);
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
     if(it==tracks_.end()) return false;
-    const size_t i=static_cast<size_t>(it-tracks_.begin()); auto& n=**it;
-    if(!recordingClips_[i]||n.recordComplete.load()) return false;
-    auto recs=recordingClips_; auto slots=wavSlots_; auto oldSlots=wavSlots_;
-    const auto reserved=n.recordingSlot;
-    if(reserved<slots[i].size()&&slots[i][reserved].get()==recs[i].get()) slots[i][reserved].reset();
-    recs[i].reset(); n.recordPending.store(false); n.recording.store(false); n.punchArmed.store(false); n.recordComplete.store(false); n.recordingSlot=std::numeric_limits<uint32_t>::max();
-    wavSlots_=slots;
-    if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs))){ wavSlots_=std::move(oldSlots); return false; }
-    recordingClips_=std::move(recs); return true;
+    const size_t i=static_cast<size_t>(it-tracks_.begin());
+    auto& n=**it;
+    const auto phase=n.recordingPhase.load(std::memory_order_acquire);
+    if (!clearIncompleteRecordingLocked(i)) return false;
+    return publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));
 }
 void RackGraph::writeMailboxLocked(bool changePlay,bool playing,bool reset,bool changeBpm,double bpm){mailbox_.sequence.fetch_add(1);if(changePlay){mailbox_.desiredPlaying.store(playing);mailbox_.playSerial.fetch_add(1);}if(changeBpm){mailbox_.desiredBpm.store(std::clamp(std::isfinite(bpm)?bpm:120.,20.,400.));mailbox_.bpmSerial.fetch_add(1);}if(reset)mailbox_.resetSerial.fetch_add(1);mailbox_.sequence.fetch_add(1,std::memory_order_release);}
-bool RackGraph::setTransportPlaying(bool playing){std::lock_guard lock(controlMutex_);if(playing){auto recs=recordingClips_;bool changed=false;for(size_t i=0;i<recs.size();++i)if(tracks_[i]->punchArmed.load()){recs[i].reset();tracks_[i]->punchArmed.store(false);tracks_[i]->recordPending.store(false);tracks_[i]->recording.store(false);tracks_[i]->recordComplete.store(false);changed=true;}if(changed){publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs));recordingClips_=std::move(recs);}}else{auto recs=recordingClips_;bool changed=false;for(size_t i=0;i<recs.size();++i)if(recs[i] && !clips_[i] && !tracks_[i]->recordComplete.load(std::memory_order_acquire)){recs[i].reset();tracks_[i]->recordPending.store(false);tracks_[i]->recording.store(false);tracks_[i]->punchArmed.store(false);tracks_[i]->recordComplete.store(false);changed=true;}if(changed){publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recs));recordingClips_=std::move(recs);}}writeMailboxLocked(true,playing,false);return true;}bool RackGraph::restartTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,true,true);return true;}void RackGraph::setBeatsPerMinute(double bpm){std::lock_guard lock(controlMutex_);writeMailboxLocked(false,false,false,true,bpm);}
+bool RackGraph::setTransportPlaying(bool playing){
+    std::lock_guard lock(controlMutex_);
+    bool changed=false;
+    if (!playing) {
+        for (size_t i=0;i<tracks_.size();++i) {
+            if (clearIncompleteRecordingLocked(i)) changed=true;
+        }
+    }
+    if (changed) (void)publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));
+    writeMailboxLocked(true,playing,false);
+    return true;
+}
+bool RackGraph::restartTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,true,true);return true;}
+void RackGraph::setBeatsPerMinute(double bpm){std::lock_guard lock(controlMutex_);writeMailboxLocked(false,false,false,true,bpm);}
 std::vector<float> RackGraph::getTrackWaveformPeaks(RackPathId id, uint32_t maxBuckets) const {
+    std::lock_guard lock(controlMutex_);
     constexpr uint32_t kMaxBuckets = 512;
     if (maxBuckets == 0) return {};
-    std::lock_guard lock(controlMutex_);
     const auto it = std::find_if(tracks_.begin(), tracks_.end(),
                                  [&](const auto& node) { return node->id == id; });
     if (it == tracks_.end()) return {};
     const size_t trackIndex = static_cast<size_t>(it - tracks_.begin());
+    const auto phase = (*it)->recordingPhase.load(std::memory_order_acquire);
+    if (phase != RecordingPhase::Idle && phase != RecordingPhase::Complete) return {};
     const auto& slots = wavSlots_[trackIndex];
     const uint32_t selectedSlot = (*it)->selectedSlot.load(std::memory_order_relaxed);
     const auto clip = selectedSlot < slots.size() ? slots[selectedSlot] : nullptr;
@@ -567,7 +684,17 @@ void RackGraph::applyGlobalMailbox() noexcept {
 
 void RackGraph::publishGlobalStatus(double rate) noexcept { const auto now = static_cast<uint64_t>(std::chrono::steady_clock::now().time_since_epoch().count()); statusPlaying_.store(audioPlaying_, std::memory_order_relaxed); statusBpm_.store(audioBpm_, std::memory_order_relaxed); statusSamplePosition_.store(audioSamplePosition_, std::memory_order_relaxed); statusTransportFrame_.store(audioTransportFrame_, std::memory_order_relaxed); statusMusicalQuarterNotes_.store(audioMusicalQuarterNotes_, std::memory_order_relaxed); statusSampleRate_.store(rate, std::memory_order_relaxed); statusCapturedAtNanos_.store(now, std::memory_order_relaxed); statusPositionSec_.store(audioElapsedSeconds_, std::memory_order_relaxed); statusSequence_.fetch_add(1, std::memory_order_release); }
 void RackGraph::advanceTransport(uint32_t frames) noexcept { statusSequence_.fetch_add(1, std::memory_order_acq_rel); applyGlobalMailbox(); double rate=sampleRate_.load(std::memory_order_relaxed); if(rate<=0) rate=48000.; audioSamplePosition_+=frames; if(audioPlaying_){ audioTransportFrame_+=frames; audioElapsedSeconds_ += static_cast<double>(frames) / rate; audioMusicalQuarterNotes_ += static_cast<double>(frames) * audioBpm_ / (rate * 60.0); } publishGlobalStatus(rate); }
-uint64_t RackGraph::nextBoundary(uint64_t frame,double rate,double bpm,LaunchQuantization q) noexcept {if(q==LaunchQuantization::None)return frame;const double beats=q==LaunchQuantization::Bar?4.:q==LaunchQuantization::Quarter?1.:q==LaunchQuantization::Eighth?.5:.25;const uint64_t step=std::max<uint64_t>(1,static_cast<uint64_t>(std::llround(beats*rate*60./bpm)));return (frame/step+1)*step;}
+uint64_t RackGraph::nextBoundary(uint64_t frame,double quarterNotes,double rate,double bpm,LaunchQuantization q) noexcept {
+    if(q==LaunchQuantization::None)return frame;
+    const double quantum=q==LaunchQuantization::Bar?4.:q==LaunchQuantization::Quarter?1.:q==LaunchQuantization::Eighth?.5:.25;
+    const double position=std::max(0.0,quarterNotes);
+    double phase=std::fmod(position,quantum);
+    if(phase<0.0)phase+=quantum;
+    double remaining=quantum-phase;
+    if(remaining<=1e-9)remaining=quantum;
+    const uint64_t delta=std::max<uint64_t>(1,static_cast<uint64_t>(std::llround(remaining*rate*60./bpm)));
+    return frame+delta;
+}
 void RackGraph::process(
         const float* const* inputs, int inputChannelCount,
         float* const* outputs, uint32_t frames) noexcept {
@@ -583,7 +710,9 @@ void RackGraph::process(
         return;
     }
     statusSequence_.fetch_add(1, std::memory_order_acq_rel);
+    uint32_t transportStartOffset = frames;
     applyGlobalMailbox();
+    const bool transportPlayingAtBufferStart = audioPlaying_;
     double rate = sampleRate_.load(std::memory_order_relaxed);
     if (rate <= 0.0) rate = 48000.0;
     const double bpm = std::clamp(audioBpm_, 20.0, 400.0);
@@ -630,7 +759,7 @@ void RackGraph::process(
             }
             const auto q = static_cast<LaunchQuantization>(
                 rt.desiredQuantization.load(std::memory_order_relaxed));
-            const uint64_t boundary = audioPlaying_ ? nextBoundary(audioTransportFrame_, rate, bpm, q)
+            const uint64_t boundary = audioPlaying_ ? nextBoundary(audioTransportFrame_, audioMusicalQuarterNotes_, rate, bpm, q)
                                                      : std::numeric_limits<uint64_t>::max();
             pending = static_cast<int32_t>(s);
             pendingFrame = boundary;
@@ -663,6 +792,7 @@ void RackGraph::process(
             if (static_cast<uint32_t>(active) < slotCount && view.clipRuntime[static_cast<uint32_t>(active)]) {
                 auto& rt = *view.clipRuntime[static_cast<uint32_t>(active)];
                 rt.localFrame = 0; // cross-slot replacement always starts at frame zero
+                rt.localQuarterNotes.store(0.0, std::memory_order_relaxed);
                 rt.localPlaying = true;
                 rt.restartOnLaunch.store(false, std::memory_order_relaxed);
                 rt.pendingLaunchFrame = std::numeric_limits<uint64_t>::max();
@@ -715,6 +845,7 @@ void RackGraph::process(
                 if (static_cast<uint32_t>(active) < slotCount && view.clipRuntime[static_cast<uint32_t>(active)]) {
                     runtime = view.clipRuntime[static_cast<uint32_t>(active)].get();
                     runtime->localFrame = 0;
+                    runtime->localQuarterNotes.store(0.0, std::memory_order_relaxed);
                     runtime->localPlaying = true;
                     runtime->restartOnLaunch.store(false, std::memory_order_relaxed);
                     runtime->pendingLaunchFrame = std::numeric_limits<uint64_t>::max();
@@ -749,7 +880,11 @@ void RackGraph::process(
                 (hardwareMono ? (hardwareLeft ? hardwareLeft[frame] : 0.0f) :
                     (hardwareRight ? hardwareRight[frame] : 0.0f));
             source[0][frame] = source[1][frame] = 0.0f;
-            if (view.recordingClip && node.punchArmed.load(std::memory_order_relaxed)) {
+            const bool currentRecordingGeneration =
+                view.recordingGeneration ==
+                node.recordingGenerationActive.load(std::memory_order_acquire);
+            if (currentRecordingGeneration && view.recordingClip &&
+                node.punchArmed.load(std::memory_order_relaxed)) {
                 const float magnitude = std::max(std::fabs(liveLeft), std::fabs(liveRight));
                 auto remaining = node.punchCalibrationRemaining.load(std::memory_order_relaxed);
                 if (remaining > 0) {
@@ -761,61 +896,76 @@ void RackGraph::process(
                         node.punchThreshold.store(std::max(0.02f, node.punchNoiseSum.load(std::memory_order_relaxed) / calibration * 2.0f), std::memory_order_relaxed);
                     }
                 } else if (magnitude >= node.punchThreshold.load(std::memory_order_relaxed)) {
-                    node.punchArmed.store(false, std::memory_order_relaxed);
-                    const auto q = static_cast<LaunchQuantization>(node.recordQuantization);
-                    if (audioPlaying_ && q != LaunchQuantization::None) {
-                        node.recordPending.store(true, std::memory_order_relaxed);
-                        node.recordStartFrame.store(nextBoundary(globalFrame, rate, bpm, q), std::memory_order_relaxed);
-                    } else {
-                        node.recordPending.store(false, std::memory_order_relaxed);
-                        node.recording.store(true, std::memory_order_relaxed);
-                        node.recordFrame.store(0, std::memory_order_relaxed);
+                    RecordingPhase expected = RecordingPhase::Armed;
+                    if (node.recordingPhase.compare_exchange_strong(expected,
+                            (transportPlayingAtBufferStart &&
+                             node.recordQuantization.load(std::memory_order_relaxed) !=
+                                 static_cast<uint8_t>(LaunchQuantization::None))
+                                ? RecordingPhase::Pending : RecordingPhase::Recording,
+                            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                        node.punchArmed.store(false, std::memory_order_relaxed);
+                        const auto q = static_cast<LaunchQuantization>(node.recordQuantization.load(std::memory_order_relaxed));
+                        if (transportPlayingAtBufferStart && q != LaunchQuantization::None) {
+                            const double qn = audioMusicalQuarterNotes_ +
+                                static_cast<double>(globalFrame-audioTransportFrame_) * bpm/(rate*60.0);
+                            node.recordPending.store(true, std::memory_order_relaxed);
+                            node.recordStartFrame.store(
+                                nextBoundary(globalFrame, qn, rate, bpm, q),
+                                std::memory_order_relaxed);
+                        } else {
+                            node.recordPending.store(false, std::memory_order_relaxed);
+                            node.recording.store(true, std::memory_order_relaxed);
+                            node.recordFrame.store(0, std::memory_order_relaxed);
+                            if (!transportPlayingAtBufferStart) transportStartOffset = std::min<uint32_t>(transportStartOffset, frame);
+                            audioPlaying_ = true;
+                        }
                     }
-                    audioPlaying_ = true;
-                    mailbox_.desiredPlaying.store(true, std::memory_order_relaxed);
-                    statusPlaying_.store(true, std::memory_order_relaxed);
+            }
+            }
+            if (currentRecordingGeneration && view.recordingClip &&
+                node.recordPending.load(std::memory_order_relaxed) &&
+                globalFrame >= node.recordStartFrame.load(std::memory_order_relaxed)) {
+                RecordingPhase expected = RecordingPhase::Pending;
+                if (node.recordingPhase.compare_exchange_strong(expected, RecordingPhase::Recording,
+                        std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                    node.recordPending.store(false, std::memory_order_relaxed);
+                    node.recording.store(true, std::memory_order_relaxed);
+                    node.recordFrame.store(0, std::memory_order_relaxed);
+                    if (!audioPlaying_) {
+                        transportStartOffset = std::min<uint32_t>(transportStartOffset, frame);
+                        audioPlaying_ = true;
+                    }
                 }
             }
-            if (view.recordingClip && node.recordPending.load(std::memory_order_relaxed) &&
-                audioPlaying_ && globalFrame >= node.recordStartFrame.load(std::memory_order_relaxed)) {
-                node.recordPending.store(false, std::memory_order_relaxed);
-                node.recording.store(true, std::memory_order_relaxed);
-                node.recordFrame.store(0, std::memory_order_relaxed);
-            }
-            if (view.recordingClip && node.recording.load(std::memory_order_relaxed)) {
+            if (currentRecordingGeneration && view.recordingClip &&
+                node.recordingPhase.load(std::memory_order_relaxed) == RecordingPhase::Recording) {
                 const uint64_t rf = node.recordFrame.load(std::memory_order_relaxed);
                 if (rf < view.recordingClip->left.size()) {
                     view.recordingClip->left[rf] = liveLeft;
-                    if (rf < view.recordingClip->right.size())
-                        view.recordingClip->right[rf] = liveRight;
+                    if (rf < view.recordingClip->right.size()) view.recordingClip->right[rf] = liveRight;
                 }
                 source[0][frame] = liveLeft;
                 source[1][frame] = liveRight;
                 node.recordFrame.store(rf + 1, std::memory_order_relaxed);
                 if (rf + 1 >= view.recordLength) {
-                    node.recording.store(false, std::memory_order_relaxed);
-                    if (view.recordingSlot < slotCount && view.clipRuntime[view.recordingSlot]) {
-                        auto& rr = *view.clipRuntime[view.recordingSlot];
-                        rr.desiredPlaying.store(true, std::memory_order_relaxed);
-                        rr.looping.store(true, std::memory_order_relaxed);
-                        rr.localPlaying = true;
-                        rr.localFrame = 0;
-                        rr.statusPlaying.store(true, std::memory_order_relaxed);
-                        rr.statusFrame.store(0, std::memory_order_relaxed);
-                        active = static_cast<int32_t>(view.recordingSlot);
-                        pending = -1;
-                        pendingFrame = std::numeric_limits<uint64_t>::max();
-                        node.activeSlot.store(active, std::memory_order_relaxed);
-                        runtime = &rr;
-                        wav = view.recordingClip.get();
-                        runtime->sourceBpm.store(wav->sourceBpm, std::memory_order_relaxed);
-                        rr.loopStartQuarterNotes.store(0.0, std::memory_order_relaxed);
-                        rr.loopLengthQuarterNotes.store(
-                            static_cast<double>(view.recordLength) * wav->sourceBpm / (wav->sampleRate * 60.0),
-                            std::memory_order_relaxed);
-                        midi = nullptr;
-                        adapter.configure(static_cast<ClipTempoMode>(rr.tempoMode.load(std::memory_order_relaxed)),
-                            runtime->sourceBpm.load(std::memory_order_relaxed), bpm, wav->sampleRate, static_cast<uint32_t>(rate));
+                    RecordingPhase expected = RecordingPhase::Recording;
+                    if (node.recordingPhase.compare_exchange_strong(expected, RecordingPhase::Completing,
+                            std::memory_order_acq_rel, std::memory_order_relaxed)) {
+                        node.recording.store(false, std::memory_order_relaxed);
+                        if (view.recordingSlot < slotCount && view.clipRuntime[view.recordingSlot]) {
+                            auto& rr = *view.clipRuntime[view.recordingSlot];
+                            rr.localPlaying = true; rr.localFrame = 0; rr.statusPlaying.store(true, std::memory_order_relaxed);
+                            active = static_cast<int32_t>(view.recordingSlot); pending = -1;
+                            node.activeSlot.store(active, std::memory_order_relaxed);
+                            runtime = &rr; wav = view.recordingClip.get(); midi = nullptr;
+                            if (wav) {
+                                rr.sourceBpm.store(wav->sourceBpm, std::memory_order_relaxed);
+                                rr.loopLengthQuarterNotes.store(static_cast<double>(view.recordLength) * wav->sourceBpm / (wav->sampleRate * 60.0), std::memory_order_relaxed);
+                                adapter.configure(static_cast<ClipTempoMode>(rr.tempoMode.load(std::memory_order_relaxed)), rr.sourceBpm.load(std::memory_order_relaxed), bpm, wav->sampleRate, static_cast<uint32_t>(rate));
+                            }
+                        }
+                        node.recordComplete.store(true, std::memory_order_release);
+                        node.recordingPhase.store(RecordingPhase::Complete, std::memory_order_release);
                     }
                 }
                 continue;
@@ -919,21 +1069,28 @@ void RackGraph::process(
         else mixScaled(snapshot->mixLeft.data(), snapshot->mixRight.data(), trackSignal[0], trackSignal[1], frames, volume);
     }
     if (!directSingleTrack) {
-        if (!mixHasData) { std::memset(snapshot->mixLeft.data(), 0, frames * sizeof(float)); std::memset(snapshot->mixRight.data(), 0, frames * sizeof(float)); }
+        if (!mixHasData) {
+            std::memset(snapshot->mixLeft.data(), 0, frames * sizeof(float));
+            std::memset(snapshot->mixRight.data(), 0, frames * sizeof(float));
+        }
         const float* mix[2] = {snapshot->mixLeft.data(), snapshot->mixRight.data()};
         std::array<MidiEvent, 128> masterMidiOutput{};
         if (masterEmpty) copyScaled(outputs[0], outputs[1], mix[0], mix[1], frames, 1.0f);
-        else snapshot->master->process(mix, outputs, frames, context, nullptr, 0, masterMidiOutput.data(), masterMidiOutput.size());
+        else snapshot->master->process(
+            mix, outputs, frames, context, nullptr, 0,
+            masterMidiOutput.data(), masterMidiOutput.size());
     }
     audioSamplePosition_ += frames;
+    const uint32_t transportFrames = transportPlayingAtBufferStart ? frames :
+        (transportStartOffset < frames ? frames - transportStartOffset : 0);
     if (audioPlaying_) {
-        audioTransportFrame_ += frames;
-        audioElapsedSeconds_ += static_cast<double>(frames) / rate;
-        audioMusicalQuarterNotes_ += static_cast<double>(frames) * bpm / (rate * 60.0);
+        audioTransportFrame_ += transportFrames;
+        audioElapsedSeconds_ += static_cast<double>(transportFrames) / rate;
+        audioMusicalQuarterNotes_ += static_cast<double>(transportFrames) * bpm / (rate * 60.0);
     }
     publishGlobalStatus(rate);
     hazardSnapshot_.store(nullptr, std::memory_order_seq_cst);
-}
+    }
 void RackGraph::reclaimerLoop(){std::unique_lock lock(reclaimerMutex_);while(!reclaimerStop_){reclaimerWake_.wait_for(lock,std::chrono::milliseconds(10));lock.unlock();reclaimRetired();lock.lock();}}
 void RackGraph::reclaimRetired(){std::lock_guard lock(reclaimerMutex_);auto* hazard=hazardSnapshot_.load(std::memory_order_seq_cst);RetiredSnapshot** cursor=&retired_;while(*cursor){auto* item=*cursor;if(item->owner.get()!=hazard){*cursor=item->next;delete item;}else cursor=&item->next;}}
 } // namespace guitarrackcraft

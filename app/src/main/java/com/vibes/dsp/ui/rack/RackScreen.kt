@@ -712,13 +712,12 @@ fun RackScreen(
             val selectedSlotWavLoaded = selectedClip?.wavLoaded ?: track.wavLoaded
             val selectedSlotMidiLoaded = selectedClip?.midiLoaded ?: track.midiLoaded
             val selectedSlotPlaying = selectedClip?.playing ?: track.playing
-            val selectedSlotLooping = selectedClip?.looping ?: track.looping
             val selectedSlotPositionSec = selectedClip?.positionSec ?: track.positionSec
             val selectedSlotMusicalQuarterNotes =
                 selectedClip?.musicalQuarterNotes ?: track.musicalQuarterNotes
             val selectedSlotCapturedAtNanos =
                 selectedClip?.capturedAtMonotonicNanos ?: track.capturedAtMonotonicNanos
-            val selectedSlotPunchArmed = selectedClip?.enterOnPunch ?: track.punchArmed
+            val selectedSlotEnterOnPunch = selectedClip?.enterOnPunch == true
             val slotLoopLengthBars = selectedClip?.defaultLoopLengthBars ?: track.defaultLoopLengthBars
             val defaultLoopLengthLabel = when (track.defaultLoopLengthBars) {
                 0.25 -> "1/4"
@@ -731,6 +730,23 @@ fun RackScreen(
                 else -> "${slotLoopLengthBars.toInt()} bars"
             }
             val launchPending = selectedClip?.launchPending == true
+            val ownsRecordingReservation = track.recordingSlot == selectedSlot
+            val waitingForPunch = ownsRecordingReservation && track.punchArmed
+            val recordingPending = ownsRecordingReservation && track.recordPending
+            val activelyRecording = ownsRecordingReservation && track.recording
+            val recordingReservationActive = ownsRecordingReservation
+            val canStartRecording =
+                track.recordingSlot < 0 &&
+                    !track.punchArmed &&
+                    !track.recordPending &&
+                    !track.recording
+            val recordingQuantizationLabel = when (launchQuantization) {
+                TrackLaunchQuantization.Bar -> "Bar"
+                TrackLaunchQuantization.Quarter -> "Quarter"
+                TrackLaunchQuantization.Eighth -> "Eighth"
+                TrackLaunchQuantization.Sixteenth -> "Sixteenth"
+                TrackLaunchQuantization.None -> "None"
+            }
             val playIconAlpha = if (launchPending) {
                 val transition = rememberInfiniteTransition(label = "Pending track launch")
                 val alpha by transition.animateFloat(
@@ -746,7 +762,7 @@ fun RackScreen(
             } else {
                 1f
             }
-            val recordIconAlpha = if (track.recordPending) {
+            val recordIconAlpha = if (recordingPending) {
                 val transition = rememberInfiniteTransition(label = "Pending loop recording")
                 val alpha by transition.animateFloat(
                     initialValue = 1f,
@@ -885,7 +901,9 @@ fun RackScreen(
                     }
                 }
                 Box {
-                    val playEnabled = selectedSlotWavLoaded || selectedSlotMidiLoaded
+                    val playEnabled =
+                        (selectedSlotWavLoaded || selectedSlotMidiLoaded) &&
+                            !recordingReservationActive
                     Box(
                         modifier = Modifier
                             .size(48.dp)
@@ -920,7 +938,10 @@ fun RackScreen(
                             .semantics {
                                 if (!playEnabled) disabled()
                                 contentDescription = when {
-                                    !playEnabled -> "Selected clip play unavailable until audio is loaded"
+                                    recordingReservationActive ->
+                                        "Selected clip play unavailable while recording"
+                                    !playEnabled ->
+                                        "Selected clip play unavailable until audio is loaded"
                                     launchPending && selectedSlotPlaying -> "Restart pending for selected clip"
                                     launchPending -> "Launch pending for selected clip; cancel"
                                     selectedSlotPlaying -> "Restart selected clip"
@@ -976,25 +997,25 @@ fun RackScreen(
                     }
                 }
                 when {
-                    selectedSlotWavLoaded || selectedSlotMidiLoaded -> {
-                        NnagaIconButton(onClick = {
-                            viewModel.unloadTrackClipMedia(
-                                track.id,
-                                selectedSlot,
-                                wavLoaded = selectedSlotWavLoaded,
-                                midiLoaded = selectedSlotMidiLoaded
-                            )
-                        }) { Icon(Icons.Default.Close, contentDescription = "Unload media from selected clip") }
-                    }
-                    selectedSlotPunchArmed || (track.inputArmed && selectedSlotLooping) -> {
+                    recordingReservationActive ||
+                        (!selectedSlotWavLoaded && !selectedSlotMidiLoaded && track.inputArmed) -> {
                         Box {
                             Box(
                                 modifier = Modifier
                                     .size(48.dp)
+                                    .then(
+                                        if (recordingReservationActive || canStartRecording) {
+                                            Modifier
+                                        } else {
+                                            Modifier.alpha(0.38f)
+                                        }
+                                    )
                                     .combinedClickable(
-                                        enabled = !track.recordPending && !track.recording,
+                                        enabled = recordingReservationActive || canStartRecording,
                                         onClick = {
-                                            if (!selectedSlotPunchArmed) {
+                                            if (recordingReservationActive) {
+                                                viewModel.cancelTrackLoopRecording(track.id)
+                                            } else if (canStartRecording) {
                                                 viewModel.startTrackClipRecording(
                                                     track.id,
                                                     selectedSlot,
@@ -1004,27 +1025,40 @@ fun RackScreen(
                                             }
                                         },
                                         onLongClick = {
-                                            recordMenuExpanded = true
-                                            loopLengthMenuExpanded = false
+                                            if (!recordingReservationActive) {
+                                                recordMenuExpanded = true
+                                                loopLengthMenuExpanded = false
+                                            }
                                         }
                                     )
                                     .semantics {
-                                        contentDescription = "Record $slotLoopLengthLabel loop"
+                                        if (!recordingReservationActive && !canStartRecording) disabled()
+                                        contentDescription = if (recordingReservationActive) {
+                                            "Cancel recording"
+                                        } else {
+                                            "Record $slotLoopLengthLabel loop"
+                                        }
                                         stateDescription = when {
-                                            selectedSlotPunchArmed -> "Enter on punch armed"
-                                            track.recording -> "Recording"
-                                            track.recordPending -> "Recording pending"
+                                            waitingForPunch -> "Waiting for punch"
+                                            recordingPending -> "Recording pending"
+                                            activelyRecording -> "Recording"
+                                            recordingReservationActive -> "Recording pending"
+                                            !canStartRecording -> "Recording unavailable"
                                             else -> "Ready"
                                         }
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    Icons.Default.FiberManualRecord,
+                                    if (recordingReservationActive) {
+                                        Icons.Default.Stop
+                                    } else {
+                                        Icons.Default.FiberManualRecord
+                                    },
                                     contentDescription = null,
                                     tint = when {
-                                        selectedSlotPunchArmed -> PunchArmedColor
-                                        track.recordPending || track.recording ->
+                                        waitingForPunch -> PunchArmedColor
+                                        recordingPending || activelyRecording ->
                                             MaterialTheme.colorScheme.error
                                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                                     },
@@ -1053,16 +1087,39 @@ fun RackScreen(
                                     }
                                 )
                                 DropdownMenuItem(
+                                    text = { Text("Recording quantization: $recordingQuantizationLabel") },
+                                    enabled = false,
+                                    onClick = {}
+                                )
+                                TrackLaunchQuantization.entries.forEach { quantization ->
+                                    val label = when (quantization) {
+                                        TrackLaunchQuantization.Bar -> "Bar"
+                                        TrackLaunchQuantization.Quarter -> "Quarter"
+                                        TrackLaunchQuantization.Eighth -> "Eighth"
+                                        TrackLaunchQuantization.Sixteenth -> "Sixteenth"
+                                        TrackLaunchQuantization.None -> "None"
+                                    }
+                                    NnagaSelectorMenuItem(
+                                        text = label,
+                                        selected = launchQuantization == quantization,
+                                        onClick = {
+                                            launchQuantizationOrdinal = quantization.ordinal
+                                        }
+                                    )
+                                }
+                                DropdownMenuItem(
                                     text = { Text("Enter on punch") },
                                     leadingIcon = {
-                                        NnagaCheckbox(checked = selectedSlotPunchArmed,
-                                        onCheckedChange = null,)
+                                        NnagaCheckbox(
+                                            checked = selectedSlotEnterOnPunch,
+                                            onCheckedChange = null,
+                                        )
                                     },
                                     onClick = {
                                         viewModel.setSlotEnterOnPunch(
                                             track.id,
                                             selectedSlot,
-                                            armed = !selectedSlotPunchArmed,
+                                            armed = !selectedSlotEnterOnPunch,
                                             quantization = launchQuantization
                                         )
                                         recordMenuExpanded = false
@@ -1103,13 +1160,42 @@ fun RackScreen(
                             }
                         }
                     }
+                    selectedSlotWavLoaded || selectedSlotMidiLoaded -> {
+                        NnagaIconButton(onClick = {
+                            viewModel.unloadTrackClipMedia(
+                                track.id,
+                                selectedSlot,
+                                wavLoaded = selectedSlotWavLoaded,
+                                midiLoaded = selectedSlotMidiLoaded
+                            )
+                        }) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Unload media from selected clip"
+                            )
+                        }
+                    }
                     else -> {
                         NnagaIconButton(onClick = {
                             pendingAudioTarget = track.id to selectedSlot
                             audioFilePickerLauncher.launch(
-                                arrayOf("audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "audio/mp4", "audio/x-m4a", "application/x-midi", "audio/midi")
+                                arrayOf(
+                                    "audio/wav",
+                                    "audio/x-wav",
+                                    "audio/mpeg",
+                                    "audio/ogg",
+                                    "audio/mp4",
+                                    "audio/x-m4a",
+                                    "application/x-midi",
+                                    "audio/midi"
+                                )
                             )
-                        }) { Icon(Icons.Default.Folder, contentDescription = "Load audio for selected track") }
+                        }) {
+                            Icon(
+                                Icons.Default.Folder,
+                                contentDescription = "Load audio for selected track"
+                            )
+                        }
                     }
                 }
             }

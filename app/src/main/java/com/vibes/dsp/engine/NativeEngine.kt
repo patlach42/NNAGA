@@ -274,6 +274,7 @@ data class RackTrackInfo(
     val musicalQuarterNotes: Double = 0.0,
     val sampleRate: Double = 0.0,
     val capturedAtMonotonicNanos: Long = 0L,
+    val recordingSlot: Int = -1,
 )
 
 data class TransportInfo(

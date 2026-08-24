@@ -1370,7 +1370,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
     if (!clazz) return nullptr;
     jmethodID ctor = env->GetMethodID(
-        clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIIJIZZIDIDDJ)V");
+        clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIIJIZZIDIDDJI)V");
     if (!ctor) {
         env->DeleteLocalRef(clazz);
         return nullptr;
@@ -1399,7 +1399,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
             track.defaultLoopLengthBars,
             static_cast<jint>(track.activeSlot),
             track.musicalQuarterNotes, track.sampleRate,
-            static_cast<jlong>(track.capturedAtMonotonicNanos));
+            static_cast<jlong>(track.capturedAtMonotonicNanos),
+            static_cast<jint>(track.recordingSlot));
         if (item) env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         if (name) env->DeleteLocalRef(name);
         if (item) env->DeleteLocalRef(item);

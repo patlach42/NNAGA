@@ -647,10 +647,13 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             rackControlMutex.withLock {
-                val targets = _clipSlots.value[trackId].orEmpty()
-                    .filter { it.playing || it.launchPending }
-                val ok = targets.all { clip ->
-                    RackManager.setClipTransportPlaying(trackId, clip.slot, false, quantization)
+                var ok = true
+                _clipSlots.value[trackId].orEmpty().forEach { clip ->
+                    if ((clip.playing || clip.launchPending) &&
+                        !RackManager.setClipTransportPlaying(trackId, clip.slot, false, quantization)
+                    ) {
+                        ok = false
+                    }
                 }
                 if (!ok) _errorMessage.value = "Failed to stop track clip transport"
                 refreshTrackClipSlotsNow(trackId)
@@ -688,13 +691,36 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             rackControlMutex.withLock {
-                if (startGlobal) RackManager.setTransportPlaying(true)
                 val recorded = RackManager.startTrackClipRecording(trackId, slot, quantization)
+                if (recorded && startGlobal) RackManager.setTransportPlaying(true)
                 if (!recorded) _errorMessage.value = "Failed to start clip recording"
                 refreshTrackClipSlotsNow(trackId)
                 refreshRackNow()
                 refreshTransport()
                 refreshTrackTransport()
+            }
+        }
+    }
+
+    fun cancelTrackLoopRecording(trackId: RackPathId) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val reservationExpected = _tracks.value
+                    .firstOrNull { it.id == trackId }
+                    ?.recordingSlot
+                    ?.let { it >= 0 } == true
+                val cancelled = RackManager.cancelTrackLoopRecording(trackId)
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+                val reservationStillActive = _tracks.value
+                    .firstOrNull { it.id == trackId }
+                    ?.recordingSlot
+                    ?.let { it >= 0 } == true
+                if (reservationExpected && !cancelled && reservationStillActive) {
+                    _errorMessage.value = "Failed to cancel clip recording"
+                }
             }
         }
     }

@@ -1175,15 +1175,15 @@ TEST(RackGraphTransportTest, RelaunchingActiveClipWithNoneRestartsAtFrameZero) {
     ASSERT_TRUE(graph.setClipTransportPlaying(
         track, 0, true, guitarrackcraft::LaunchQuantization::None));
     clearBuffers(buffers);
-    graph.process(buffers.inputs, 2, buffers.outputs, 3);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
 
     EXPECT_FLOAT_EQ(buffers.outputLeft[0], 1.0f);
-    EXPECT_FLOAT_EQ(buffers.outputLeft[1], 2.0f);
-    EXPECT_FLOAT_EQ(buffers.outputLeft[2], 3.0f);
-    std::vector<guitarrackcraft::TrackSnapshot> tracks;
-    const auto& state = trackSnapshot(graph, track, tracks);
-    EXPECT_TRUE(state.playing);
-    EXPECT_EQ(state.transportFrame, 3u);
+    std::vector<TrackClipSlotInfo> slots = graph.getTrackClipSlots(track);
+    const auto* state = findClipSlot(slots, 0);
+    ASSERT_NE(state, nullptr);
+    EXPECT_TRUE(state->playing);
+    EXPECT_EQ(state->transportFrame, 1u);
+    EXPECT_NEAR(state->musicalQuarterNotes, 1.0 / 60.0, 1e-12);
 }
 
 TEST(RackGraphTransportTest,
@@ -1404,6 +1404,90 @@ TEST(RackGraphTransportTest, NoneStartsLoopRecordingAtCurrentTransportFrame) {
     EXPECT_FALSE(recording.recordPending);
     EXPECT_TRUE(recording.recording);
 }
+TEST(RackGraphTransportTest, StoppedLoopRecordingStartsAtFrameZeroForEveryQuantization) {
+    const std::array<guitarrackcraft::LaunchQuantization, 5> quantizations = {{
+        guitarrackcraft::LaunchQuantization::Bar,
+        guitarrackcraft::LaunchQuantization::Quarter,
+        guitarrackcraft::LaunchQuantization::Eighth,
+        guitarrackcraft::LaunchQuantization::Sixteenth,
+        guitarrackcraft::LaunchQuantization::None,
+    }};
+    for (const auto quantization : quantizations) {
+        SCOPED_TRACE(static_cast<int>(quantization));
+        RackGraph graph;
+        configure(graph);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        ASSERT_TRUE(startConfiguredClipRecording(
+            graph, track, 0.25, quantization, false));
+        std::vector<guitarrackcraft::TrackSnapshot> tracks;
+        EXPECT_TRUE(trackSnapshot(graph, track, tracks).recordPending);
+        EXPECT_FALSE(graph.getTransportSnapshot().playing);
+
+        ASSERT_TRUE(graph.setTransportPlaying(true));
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        buffers.left[0] = 0.25f;
+        buffers.right[0] = -0.5f;
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+        const auto& recording = trackSnapshot(graph, track, tracks);
+        EXPECT_FALSE(recording.recordPending);
+        EXPECT_TRUE(recording.recording);
+        EXPECT_EQ(graph.getTransportSnapshot().transportFrame, 1u);
+        EXPECT_FLOAT_EQ(buffers.outputLeft[0], 0.25f);
+        EXPECT_FLOAT_EQ(buffers.outputRight[0], -0.5f);
+    }
+}
+TEST(RackGraphTransportTest, QuantizedRecordingFollowsMusicalPhaseAfterBpmChange) {
+    struct QuantizationCase {
+        const char* name;
+        guitarrackcraft::LaunchQuantization quantization;
+        uint64_t expectedBoundary;
+    };
+    const std::array<QuantizationCase, 4> cases = {{
+        {"quarter", guitarrackcraft::LaunchQuantization::Quarter, 45},
+        {"eighth", guitarrackcraft::LaunchQuantization::Eighth, 45},
+        {"sixteenth", guitarrackcraft::LaunchQuantization::Sixteenth, 38},
+        {"bar", guitarrackcraft::LaunchQuantization::Bar, 135},
+    }};
+
+    for (const auto& testCase : cases) {
+        SCOPED_TRACE(testCase.name);
+        RackGraph graph;
+        configure(graph);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        ASSERT_TRUE(graph.setTransportPlaying(true));
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 30);
+        graph.setBeatsPerMinute(120.0);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+        const auto phase = graph.getTransportSnapshot();
+        ASSERT_EQ(phase.transportFrame, 31u);
+        EXPECT_NEAR(phase.musicalQuarterNotes, 8.0 / 15.0, 1e-12);
+        ASSERT_TRUE(startConfiguredClipRecording(
+            graph, track, 0.25, testCase.quantization, false));
+        std::vector<guitarrackcraft::TrackSnapshot> tracks;
+        EXPECT_TRUE(trackSnapshot(graph, track, tracks).recordPending);
+
+        while (graph.getTransportSnapshot().transportFrame <
+               testCase.expectedBoundary) {
+            graph.process(buffers.inputs, 2, buffers.outputs, 1);
+            EXPECT_TRUE(trackSnapshot(graph, track, tracks).recordPending);
+            EXPECT_FALSE(trackSnapshot(graph, track, tracks).recording);
+        }
+        ASSERT_EQ(graph.getTransportSnapshot().transportFrame,
+                  testCase.expectedBoundary);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        EXPECT_FALSE(trackSnapshot(graph, track, tracks).recordPending);
+        EXPECT_TRUE(trackSnapshot(graph, track, tracks).recording);
+    }
+}
+
+
 
 
 TEST(RackGraphTransportTest, ClipRecordingKeepsRequestedSlotAcrossSelectionAndCompletion) {
@@ -2428,16 +2512,19 @@ TEST(RackGraphTransportTest, LoopRecordingCapturesOneBarMonitorsAndLoopsImmediat
     EXPECT_EQ(looping.transportFrame, 1u);
 }
 
-TEST(RackGraphTransportTest, GlobalStopCancelsPendingAndInProgressLoopRecording) {
+TEST(RackGraphTransportTest, GlobalStopCancelsRecordingRemovesReservationAndAllowsSecondStart) {
     {
         RackGraph graph;
         configure(graph);
         const RackPathId track = graph.getTracks().front().id;
         ASSERT_TRUE(graph.setTrackInputArmed(track, true));
         ASSERT_TRUE(graph.setTransportPlaying(true));
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        ASSERT_TRUE(graph.getTransportSnapshot().playing);
         ASSERT_TRUE(startConfiguredClipRecording(
             graph, track, 1, guitarrackcraft::LaunchQuantization::Quarter, false));
-        StereoBuffers buffers;
         clearBuffers(buffers);
         graph.process(buffers.inputs, 2, buffers.outputs, 10);
         std::vector<guitarrackcraft::TrackSnapshot> tracks;
@@ -2447,9 +2534,21 @@ TEST(RackGraphTransportTest, GlobalStopCancelsPendingAndInProgressLoopRecording)
         clearBuffers(buffers);
         graph.process(buffers.inputs, 2, buffers.outputs, 1);
         const auto& stopped = trackSnapshot(graph, track, tracks);
-        EXPECT_TRUE(stopped.wavLoaded);
+        EXPECT_FALSE(stopped.wavLoaded);
         EXPECT_FALSE(stopped.recordPending);
         EXPECT_FALSE(stopped.recording);
+        const auto stoppedSlots = graph.getTrackClipSlots(track);
+        const auto* stoppedSlot = findClipSlot(stoppedSlots, 0);
+        ASSERT_NE(stoppedSlot, nullptr);
+        EXPECT_FALSE(stoppedSlot->wavLoaded);
+        ASSERT_TRUE(graph.startTrackClipRecording(
+            track, 0, guitarrackcraft::LaunchQuantization::Quarter));
+        EXPECT_TRUE(trackSnapshot(graph, track, tracks).wavLoaded);
+        EXPECT_TRUE(trackSnapshot(graph, track, tracks).recordPending);
+        const auto replacementSlots = graph.getTrackClipSlots(track);
+        const auto* replacementSlot = findClipSlot(replacementSlots, 0);
+        ASSERT_NE(replacementSlot, nullptr);
+        EXPECT_TRUE(replacementSlot->wavLoaded);
     }
 
     {
@@ -2470,9 +2569,21 @@ TEST(RackGraphTransportTest, GlobalStopCancelsPendingAndInProgressLoopRecording)
         clearBuffers(buffers);
         graph.process(buffers.inputs, 2, buffers.outputs, 1);
         const auto& stopped = trackSnapshot(graph, track, tracks);
-        EXPECT_TRUE(stopped.wavLoaded);
+        EXPECT_FALSE(stopped.wavLoaded);
         EXPECT_FALSE(stopped.recordPending);
         EXPECT_FALSE(stopped.recording);
+        const auto stoppedSlots = graph.getTrackClipSlots(track);
+        const auto* stoppedSlot = findClipSlot(stoppedSlots, 0);
+        ASSERT_NE(stoppedSlot, nullptr);
+        EXPECT_FALSE(stoppedSlot->wavLoaded);
+        ASSERT_TRUE(graph.startTrackClipRecording(
+            track, 0, guitarrackcraft::LaunchQuantization::Quarter));
+        EXPECT_TRUE(trackSnapshot(graph, track, tracks).wavLoaded);
+        EXPECT_TRUE(trackSnapshot(graph, track, tracks).recordPending);
+        const auto replacementSlots = graph.getTrackClipSlots(track);
+        const auto* replacementSlot = findClipSlot(replacementSlots, 0);
+        ASSERT_NE(replacementSlot, nullptr);
+        EXPECT_TRUE(replacementSlot->wavLoaded);
     }
 }
 
@@ -2508,11 +2619,14 @@ TEST(RackGraphTransportTest, CompletedLoopSurvivesGlobalStopAndExplicitRelaunch)
     const RackPathId track = graph.getTracks().front().id;
     ASSERT_TRUE(graph.setTrackInputArmed(track, true));
     ASSERT_TRUE(graph.setTransportPlaying(true));
-    ASSERT_TRUE(startConfiguredClipRecording(
-        graph, track, 1, guitarrackcraft::LaunchQuantization::Bar, false));
     StereoBuffers buffers;
     clearBuffers(buffers);
-    graph.process(buffers.inputs, 2, buffers.outputs, 240);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    ASSERT_EQ(graph.getTransportSnapshot().transportFrame, 1u);
+    ASSERT_TRUE(startConfiguredClipRecording(
+        graph, track, 1, guitarrackcraft::LaunchQuantization::Bar, false));
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 239);
     for (uint32_t frame = 0; frame < 240; ++frame) {
         buffers.left[frame] = 300.0f + static_cast<float>(frame);
         buffers.right[frame] = 300.0f + static_cast<float>(frame);
@@ -2586,6 +2700,56 @@ TEST(RackGraphTransportTest, LoopRecordingCapturesExactQuarterNoteLengthAtSixtyB
     graph.process(buffers.inputs, 2, buffers.outputs, 1);
     EXPECT_FLOAT_EQ(buffers.outputLeft[0], 100.0f);
     EXPECT_FLOAT_EQ(buffers.outputRight[0], 100.0f);
+}
+
+TEST(RackGraphTransportTest, LoopRecordingCanRestartAfterCompletedSlotUnload) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    ASSERT_TRUE(startConfiguredClipRecording(
+        graph, track, 0.25, guitarrackcraft::LaunchQuantization::None, false));
+    for (uint32_t frame = 0; frame < 60; ++frame) {
+        buffers.left[frame] = 1.0f + static_cast<float>(frame);
+        buffers.right[frame] = 1.0f + static_cast<float>(frame);
+    }
+    graph.process(buffers.inputs, 2, buffers.outputs, 60);
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    const auto& completed = trackSnapshot(graph, track, tracks);
+    ASSERT_TRUE(completed.wavLoaded);
+    EXPECT_FALSE(completed.recordPending);
+    EXPECT_FALSE(completed.recording);
+    EXPECT_DOUBLE_EQ(completed.wavDurationSec, 1.0);
+
+    ASSERT_TRUE(graph.unloadTrackWavSlot(track, 0));
+    auto slots = graph.getTrackClipSlots(track);
+    const auto* unloaded = findClipSlot(slots, 0);
+    ASSERT_NE(unloaded, nullptr);
+    EXPECT_FALSE(unloaded->wavLoaded);
+    EXPECT_FALSE(unloaded->looping);
+    EXPECT_FALSE(trackSnapshot(graph, track, tracks).wavLoaded);
+
+    ASSERT_TRUE(configureClipLoop(
+        graph, track, 0, 0.25, false, guitarrackcraft::LaunchQuantization::None));
+    EXPECT_TRUE(graph.startTrackClipRecording(
+        track, 0, guitarrackcraft::LaunchQuantization::None));
+
+    slots = graph.getTrackClipSlots(track);
+    const auto* secondReservation = findClipSlot(slots, 0);
+    ASSERT_NE(secondReservation, nullptr);
+    EXPECT_TRUE(secondReservation->wavLoaded);
+    EXPECT_TRUE(secondReservation->active);
+    EXPECT_TRUE(secondReservation->looping);
+    EXPECT_DOUBLE_EQ(secondReservation->durationSec, 1.0);
+    const auto& secondPending = trackSnapshot(graph, track, tracks);
+    EXPECT_TRUE(secondPending.wavLoaded);
+    EXPECT_TRUE(secondPending.recordPending);
+    EXPECT_FALSE(secondPending.recording);
 }
 
 TEST(RackGraphTransportTest, PunchRecordingRejectsInvalidPrerequisites) {
@@ -2733,6 +2897,46 @@ TEST(RackGraphTransportTest, PunchTriggerWhileStoppedStartsRecordingAtFrameZeroF
         EXPECT_EQ(graph.getTransportSnapshot().transportFrame, 1u);
     }
 }
+TEST(RackGraphTransportTest, StoppedPunchCapturesNonzeroOffsetTriggerAsFrameZeroAndCountsSuffix) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    ASSERT_TRUE(graph.setTrackInputHardwarePair(track, 0));
+    ASSERT_TRUE(startConfiguredClipRecording(
+        graph, track, 0.25, guitarrackcraft::LaunchQuantization::Quarter, true));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    buffers.left[0] = 0.0f;   // detector calibration
+    buffers.left[1] = 0.0f;   // quiet prefix
+    buffers.left[2] = 0.8f;   // trigger at a nonzero callback offset
+    buffers.left[3] = -0.4f;  // suffix
+    graph.process(buffers.inputs, 2, buffers.outputs, 4);
+
+    EXPECT_FLOAT_EQ(buffers.outputLeft[2], 0.8f);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[3], -0.4f);
+    const auto afterTrigger = graph.getTransportSnapshot();
+    EXPECT_TRUE(afterTrigger.playing);
+    EXPECT_EQ(afterTrigger.transportFrame, 2u);
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    EXPECT_TRUE(trackSnapshot(graph, track, tracks).recording);
+    EXPECT_TRUE(graph.getTrackWaveformPeaks(track, 4).empty());
+
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 58);
+    const auto& completed = trackSnapshot(graph, track, tracks);
+    EXPECT_FALSE(completed.recording);
+    EXPECT_FALSE(completed.recordPending);
+    EXPECT_EQ(graph.getTransportSnapshot().transportFrame, 60u);
+    const auto peaks = graph.getTrackWaveformPeaks(track, 4);
+    ASSERT_EQ(peaks.size(), 4u);
+    EXPECT_FLOAT_EQ(peaks[0], 0.8f);
+    EXPECT_FLOAT_EQ(peaks[1], 0.0f);
+    EXPECT_FLOAT_EQ(peaks[2], 0.0f);
+    EXPECT_FLOAT_EQ(peaks[3], 0.0f);
+}
+
 
 
 TEST(RackGraphTransportTest, PunchReservationsCanArmOnMultipleTracks) {
@@ -2950,7 +3154,7 @@ TEST(RackGraphTransportTest, PunchCapturesThresholdSampleAsFrameZeroAndResumesCl
     EXPECT_FLOAT_EQ(buffers.outputRight[0], triggerRight);
 }
 
-TEST(RackGraphTransportTest, ManualGlobalPlayCancelsArmedPunch) {
+TEST(RackGraphTransportTest, ManualGlobalPlayPreservesArmedPunchAndQuantizesQuarterTrigger) {
     RackGraph graph;
     configure(graph);
     const RackPathId track = graph.getTracks().front().id;
@@ -2959,16 +3163,32 @@ TEST(RackGraphTransportTest, ManualGlobalPlayCancelsArmedPunch) {
         graph, track, 0.25, guitarrackcraft::LaunchQuantization::Quarter, true));
     std::vector<guitarrackcraft::TrackSnapshot> tracks;
     ASSERT_TRUE(trackSnapshot(graph, track, tracks).punchArmed);
+
+    // Manual global Play starts the clock but must leave the armed punch live.
     ASSERT_TRUE(graph.setTransportPlaying(true));
+    EXPECT_TRUE(trackSnapshot(graph, track, tracks).punchArmed);
+
     StereoBuffers buffers;
     clearBuffers(buffers);
     graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    buffers.left[0] = 0.08f;
+    buffers.right[0] = -0.08f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
 
-    const auto& cancelled = trackSnapshot(graph, track, tracks);
-    EXPECT_FALSE(cancelled.punchArmed);
-    EXPECT_FALSE(cancelled.recordPending);
-    EXPECT_FALSE(cancelled.recording);
-    EXPECT_TRUE(cancelled.wavLoaded);
+    const auto& pending = trackSnapshot(graph, track, tracks);
+    EXPECT_FALSE(pending.punchArmed);
+    EXPECT_TRUE(pending.recordPending);
+    EXPECT_FALSE(pending.recording);
+    const uint64_t boundary = 60;
+    EXPECT_LT(graph.getTransportSnapshot().transportFrame, boundary);
+
+    graph.process(buffers.inputs, 2, buffers.outputs,
+                 boundary - graph.getTransportSnapshot().transportFrame);
+    EXPECT_TRUE(trackSnapshot(graph, track, tracks).recordPending);
+    EXPECT_FALSE(trackSnapshot(graph, track, tracks).recording);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    EXPECT_FALSE(trackSnapshot(graph, track, tracks).recordPending);
+    EXPECT_TRUE(trackSnapshot(graph, track, tracks).recording);
 }
 
 TEST(RackGraphTransportTest, CancelTrackLoopRecordingDisarmsPunch) {

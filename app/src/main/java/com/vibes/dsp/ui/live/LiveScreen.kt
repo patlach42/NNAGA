@@ -425,6 +425,8 @@ fun LiveScreen(
         slotsByTrack[track.id]?.firstOrNull { it.slot == selectedSlot }
             ?: emptyClipSlot(track, selectedSlot)
     }
+    val selectedClipRecording = selectedTrack?.recordingSlot == selectedSlot &&
+        (selectedTrack.punchArmed || selectedTrack.recordPending || selectedTrack.recording)
     LaunchedEffect(selectedTrack?.id) {
         if (selectedTrack != null && selectedTrack.id != selectedTrackId) {
             selectedTrackId = selectedTrack.id
@@ -432,10 +434,18 @@ fun LiveScreen(
         }
     }
 
-    LaunchedEffect(selectedTrack?.id, selectedSlot, selectedClip?.midiLoaded, selectedClip?.wavLoaded) {
+    LaunchedEffect(
+        selectedTrack?.id,
+        selectedSlot,
+        selectedClip?.midiLoaded,
+        selectedClip?.wavLoaded,
+        selectedClipRecording,
+    ) {
         selectedTrack ?: return@LaunchedEffect
         if (selectedClip?.midiLoaded == true) viewModel.loadTrackClipMidiNotes(selectedTrack.id, selectedSlot)
-        if (selectedClip?.wavLoaded == true) viewModel.loadTrackWaveform(selectedTrack.id)
+        if (selectedClip?.wavLoaded == true && !selectedClipRecording) {
+            viewModel.loadTrackWaveform(selectedTrack.id)
+        }
     }
 
     inputMenuTrack?.let { menuTrack ->
@@ -851,6 +861,9 @@ fun LiveScreen(
                                             startGlobal = !transport.playing,
                                         )
                                     },
+                                    onCancelRecording = { track ->
+                                        viewModel.cancelTrackLoopRecording(track.id)
+                                    },
                                     onOpenClipSettings = { track, clip ->
                                         openClipSettings(track.id, clip)
                                     },
@@ -869,7 +882,11 @@ fun LiveScreen(
                             "inspector" -> ClipInspector(
                                 track = selectedTrack,
                                 clip = selectedClip,
-                                peaks = peaksByTrack[selectedTrack?.id].orEmpty(),
+                                peaks = if (selectedClipRecording) {
+                                    emptyList()
+                                } else {
+                                    peaksByTrack[selectedTrack?.id].orEmpty()
+                                },
                                 notes = notesByClip[selectedTrack?.id to selectedSlot].orEmpty(),
                                 bpm = transport.beatsPerMinute,
                                 onTrackVolume = { track, volume -> viewModel.setTrackVolume(track.id, volume) },
@@ -1452,6 +1469,7 @@ private fun Launcher(
     onLoad: (RackTrackInfo, Int) -> Unit,
     onLaunch: (RackTrackInfo, Int) -> Unit,
     onRecordClip: (RackTrackInfo, Int) -> Unit,
+    onCancelRecording: (RackTrackInfo) -> Unit,
     onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onOpenSlotSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onTrackColor: (RackTrackInfo, Int) -> Unit,
@@ -1496,6 +1514,7 @@ private fun Launcher(
                     onLoad = { onLoad(track, it) },
                     onLaunch = { onLaunch(track, it) },
                     onRecordClip = { onRecordClip(track, it) },
+                    onCancelRecording = { onCancelRecording(track) },
                     onOpenClipSettings = { clip -> onOpenClipSettings(track, clip) },
                     onOpenSlotSettings = { clip -> onOpenSlotSettings(track, clip) },
                 )
@@ -1638,6 +1657,7 @@ private fun TrackSlots(
     onLoad: (Int) -> Unit,
     onLaunch: (Int) -> Unit,
     onRecordClip: (Int) -> Unit,
+    onCancelRecording: () -> Unit,
     onOpenClipSettings: (ClipSlotInfo) -> Unit,
     onOpenSlotSettings: (ClipSlotInfo) -> Unit,
 ) {
@@ -1659,6 +1679,7 @@ private fun TrackSlots(
                     onLoad = onLoad,
                     onLaunch = onLaunch,
                     onRecord = onRecordClip,
+                    onCancelRecording = onCancelRecording,
                     onOpenClipSettings = onOpenClipSettings,
                     onOpenSlotSettings = onOpenSlotSettings,
                 )
@@ -1755,18 +1776,24 @@ private fun ClipCard(
     onLoad: (Int) -> Unit,
     onLaunch: (Int) -> Unit,
     onRecord: (Int) -> Unit,
+    onCancelRecording: () -> Unit,
     onOpenClipSettings: (ClipSlotInfo) -> Unit,
     onOpenSlotSettings: (ClipSlotInfo) -> Unit,
 ) {
     val filled = slot.wavLoaded || slot.midiLoaded
-    val playing = filled && slot.playing
-    val recordingSlot = slot.active || (!filled && selected)
-    val recordingPending = recordingSlot && track.recordPending
-    val activelyRecording = recordingSlot && track.recording
-    val recording = recordingPending || activelyRecording
+    val ownsRecordingReservation = track.recordingSlot == slot.slot
+    val waitingForPunch = ownsRecordingReservation && track.punchArmed
+    val recordingPending = ownsRecordingReservation && track.recordPending
+    val activelyRecording = ownsRecordingReservation && track.recording
+    val recordingReservation = ownsRecordingReservation
+    val playing = filled && !recordingReservation && slot.playing
     val recordAction = !filled && track.inputArmed
-    val recordEnabled = recordAction && !track.recordPending && !track.recording
-    val playIconAlpha = if (slot.launchPending) {
+    val recordEnabled = recordAction &&
+        track.recordingSlot < 0 &&
+        !track.punchArmed &&
+        !track.recordPending &&
+        !track.recording
+    val playIconAlpha = if (slot.launchPending && !recordingReservation) {
         val transition = rememberInfiniteTransition(label = "Pending clip launch")
         val alpha by transition.animateFloat(
             initialValue = 1f,
@@ -1781,30 +1808,33 @@ private fun ClipCard(
     } else {
         1f
     }
-    val launchActionDescription = when {
+    val actionDescription = when {
+        recordingReservation -> "Cancel recording"
         slot.launchPending && playing -> "Restart pending for ${slot.displayName}"
         slot.launchPending -> "Launch pending for ${slot.displayName}"
         playing -> "Restart ${slot.displayName}"
         filled -> "Launch ${slot.displayName}"
-        activelyRecording -> "Recording into slot ${slot.slot + 1}"
-        recordingPending -> "Recording pending in slot ${slot.slot + 1}"
+        recordAction && !recordEnabled -> "Recording unavailable"
         recordAction -> "Record into slot ${slot.slot + 1}"
         else -> "Load clip into slot ${slot.slot + 1}"
     }
     val clipState = when {
-        activelyRecording -> "Recording"
+        waitingForPunch -> "Waiting for punch"
         recordingPending -> "Recording pending"
+        activelyRecording -> "Recording"
+        recordingReservation -> "Recording pending"
         slot.launchPending && playing -> "Restart pending"
         slot.launchPending -> "Launch pending"
         playing -> "Playing"
         filled -> "Loaded"
-        recordAction -> "Empty, armed for recording"
+        recordAction && !recordEnabled -> "Recording unavailable"
+        recordAction -> "Ready"
         else -> "Empty"
     }
     val accent = MaterialTheme.colorScheme.primary
     val background = when {
         !columnActive -> Color.Black
-        recording -> LiveColors.record.copy(alpha = 0.18f)
+        recordingReservation -> LiveColors.record.copy(alpha = 0.18f)
         playing -> accent.copy(alpha = 0.18f)
         slot.launchPending -> accent.copy(alpha = 0.10f)
         else -> LiveColors.card
@@ -1820,9 +1850,17 @@ private fun ClipCard(
             .combinedClickable(
                 role = Role.Button,
                 onClick = { onSelect(slot.slot) },
-                onLongClickLabel = if (filled) "Open clip settings" else "Open slot settings",
-                onLongClick = {
-                    if (filled) onOpenClipSettings(slot) else onOpenSlotSettings(slot)
+                onLongClickLabel = when {
+                    recordingReservation -> null
+                    filled -> "Open clip settings"
+                    else -> "Open slot settings"
+                },
+                onLongClick = if (recordingReservation) {
+                    null
+                } else {
+                    {
+                        if (filled) onOpenClipSettings(slot) else onOpenSlotSettings(slot)
+                    }
                 },
             ),
     ) {
@@ -1834,7 +1872,7 @@ private fun ClipCard(
                 Box(
                     Modifier.width(2.dp).height(28.dp).background(
                         when {
-                            recording -> LiveColors.record
+                            recordingReservation -> LiveColors.record
                             playing -> accent
                             recordAction && selected -> LiveColors.record.copy(alpha = 0.6f)
                             slot.launchPending -> accent.copy(alpha = 0.75f)
@@ -1844,9 +1882,17 @@ private fun ClipCard(
                     ),
                 )
                 Text(
-                    text = if (filled) slot.displayName else "",
+                    text = when {
+                        waitingForPunch -> "Waiting for punch"
+                        recordingPending -> "Recording pending"
+                        activelyRecording -> "Recording"
+                        recordingReservation -> "Recording pending"
+                        filled -> slot.displayName
+                        recordAction -> "Ready"
+                        else -> ""
+                    },
                     color = when {
-                        recording || recordAction -> LiveColors.record
+                        recordingReservation || recordAction -> LiveColors.record
                         playing || slot.launchPending || selected -> accent
                         filled -> LiveColors.text
                         else -> LiveColors.textDim
@@ -1854,29 +1900,35 @@ private fun ClipCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelMedium,
-                    fontWeight = if (playing || slot.launchPending || selected || recording) FontWeight.SemiBold else FontWeight.Normal,
+                    fontWeight = if (
+                        playing || slot.launchPending || selected || recordingReservation
+                    ) {
+                        FontWeight.SemiBold
+                    } else {
+                        FontWeight.Normal
+                    },
                     modifier = Modifier.padding(start = LiveDimensions.smallGap).weight(1f),
                 )
                 NnagaIconButton(
                     onClick = {
                         when {
+                            recordingReservation -> onCancelRecording()
                             filled -> onLaunch(slot.slot)
                             recordAction -> onRecord(slot.slot)
                             else -> onLoad(slot.slot)
                         }
                     },
-                    enabled = !recordAction || recordEnabled,
+                    enabled = recordingReservation || !recordAction || recordEnabled,
                     modifier = Modifier
                         .size(LiveDimensions.hitTarget)
                         .semantics {
-                            contentDescription = launchActionDescription
-                            if (slot.launchPending) {
-                                stateDescription = if (playing) "Restart pending" else "Launch pending"
-                            }
+                            contentDescription = actionDescription
+                            stateDescription = clipState
                         },
                 ) {
                     Icon(
                         imageVector = when {
+                            recordingReservation -> Icons.Default.Stop
                             filled && playing -> Icons.Default.Replay
                             filled -> Icons.Default.PlayArrow
                             recordAction -> Icons.Default.FiberManualRecord
@@ -1884,7 +1936,7 @@ private fun ClipCard(
                         },
                         contentDescription = null,
                         tint = when {
-                            recordAction || recording -> LiveColors.record
+                            recordingReservation || recordAction -> LiveColors.record
                             playing -> accent
                             filled -> LiveColors.textMuted
                             else -> LiveColors.textDim
