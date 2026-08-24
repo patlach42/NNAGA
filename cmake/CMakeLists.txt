@@ -212,6 +212,11 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/targets/fatfrog.cmake)
 
 # DoubleTracker (DSP-only, Faust)
 include(${CMAKE_CURRENT_SOURCE_DIR}/targets/doubletracker.cmake)
+# x42 fil4 (DSP + modgui)
+include(${CMAKE_CURRENT_SOURCE_DIR}/targets/fil4.cmake)
+
+# Dusk Audio 4K EQ 2 (DSP + host-generated controls)
+include(${CMAKE_CURRENT_SOURCE_DIR}/targets/dusk_4keq.cmake)
 
 # ─── Phase 4: Metadata + modgui ──────────────────────────────────────────────
 include(${CMAKE_CURRENT_SOURCE_DIR}/targets/metadata.cmake)
@@ -238,6 +243,8 @@ add_custom_target(all_plugins
         fatfrog_done
         doubletracker_done
         metadata_done
+        fil4_done
+        dusk_4keq_done
     COMMENT "All plugins built"
 )
 

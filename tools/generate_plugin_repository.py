@@ -39,6 +39,17 @@ IDENTITY_ALIASES = {
     "gxts9": "GxTubeScreamer",
     "aidadsp": "AIDA-X (headless)",
 }
+DISPLAY_NAMES = {
+    "four_k_eq_2": "4K EQ 2",
+}
+LICENSES = {
+    "fil4": "GPL-2.0-only",
+    "4keq2": "GPL-3.0-or-later",
+}
+
+
+def license_for(name: str) -> str:
+    return LICENSES.get(canonical_name(name), "GPL-3.0-or-later")
 
 
 def package_id(stem: str) -> str:
@@ -216,17 +227,18 @@ def toml_string(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def manifest(package: str, name: str, archive: bytes) -> str:
+def manifest(package: str, name: str, bundle_stem: str, archive: bytes) -> str:
     digest = hashlib.sha256(archive).hexdigest()
     manufacturer, tags, description = metadata_for(name)
     tags_text = "[" + ",".join(toml_string(tag) for tag in tags) + "]"
+    license_name = license_for(name)
     return (f'schema = 1\nid = "{package}"\nname = {toml_string(name)}\nversion = "{VERSION}"\n'
             f'format = "lv2"\narch = ["arm64-v8a"]\nmanufacturer = {toml_string(manufacturer)}\n'
             f'tags = {tags_text}\ndescription = {toml_string(description)}\n'
-            f'license = "GPL-3.0-or-later"\n\n'
+            f'license = {toml_string(license_name)}\n\n'
             f'[payload]\nkind = "archive"\nurl = "../../payload/{package}/{VERSION}.zip"\n'
             f'sha256 = "{digest}"\nsize = {len(archive)}\n\n'
-            f'[install]\nentry = {toml_string(name + ".lv2/manifest.ttl")}\n')
+            f'[install]\nentry = {toml_string(bundle_stem + ".lv2/manifest.ttl")}\n')
 
 
 
@@ -264,7 +276,9 @@ def generate(check: bool = False) -> int:
         if absent:
             continue
         archive = archive_bytes(bundle.name, files)
-        records.append((package, stem, archive, manifest(package, stem, archive)))
+        display_name = DISPLAY_NAMES.get(stem, stem)
+        records.append((package, display_name, archive,
+                        manifest(package, display_name, stem, archive)))
     if check:
         errors: list[str] = []
         expected_packages = {package for package, *_ in records}

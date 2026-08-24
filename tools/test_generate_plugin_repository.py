@@ -133,6 +133,77 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                 self.assertEqual(0, generator.generate(check=True))
                 self.assertEqual(before_check, self._snapshot(output))
 
+    def test_target_display_names_preserve_install_entries_and_identity(self):
+        manifests = self._generate_target_manifests()
+
+        self.assertEqual("fil4", manifests["lv2.fil4"]["name"])
+        self.assertEqual("x42", manifests["lv2.fil4"]["manufacturer"])
+        self.assertEqual("4K EQ 2", manifests["lv2.fourkeq2"]["name"])
+        self.assertEqual("Dusk Audio", manifests["lv2.fourkeq2"]["manufacturer"])
+        self.assertEqual(
+            "four_k_eq_2.lv2/manifest.ttl",
+            manifests["lv2.fourkeq2"]["install"]["entry"],
+        )
+
+    def test_target_plugins_use_per_plugin_spdx_licenses(self):
+        manifests = self._generate_target_manifests()
+
+        self.assertEqual("GPL-2.0-only", manifests["lv2.fil4"]["license"])
+        self.assertEqual("GPL-3.0-or-later", manifests["lv2.fourkeq2"]["license"])
+
+    def _generate_target_manifests(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            assets = root / "assets"
+            libs = root / "libs"
+            metadata = root / "plugin_metadata.json"
+            descriptions = root / "plugin_descriptions.json"
+            output = root / "output"
+            for stem, binary in (("fil4", "fil4.so"), ("four_k_eq_2", "four_k_eq_2.so")):
+                bundle = assets / f"{stem}.lv2"
+                bundle.mkdir(parents=True)
+                (bundle / "manifest.ttl").write_text(
+                    f"@prefix lv2: <http://lv2plug.in/ns/lv2core#> .\n"
+                    f"<http://example.test/{stem}> lv2:binary <{binary}> .\n",
+                    encoding="utf-8",
+                )
+                (bundle / f"{stem}.ttl").write_text("", encoding="utf-8")
+                (libs / f"lib{binary}").parent.mkdir(parents=True, exist_ok=True)
+                (libs / f"lib{binary}").write_bytes(f"{stem} binary".encode())
+            metadata.write_text(
+                json.dumps(
+                    {
+                        "authors": {"fil4": "x42", "4K EQ 2": "Dusk Audio"},
+                        "categories": {"fil4": "EQPlugin", "4K EQ 2": "EQPlugin"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            descriptions.write_text(
+                json.dumps(
+                    {
+                        "fil4": "Parametric equalizer with selectable filter shaping.",
+                        "4K EQ 2": "British console-style four-band equalizer.",
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(generator, "ASSETS", assets), patch.object(
+                generator, "LIBS", libs
+            ), patch.object(generator, "METADATA", metadata), patch.object(
+                generator, "DESCRIPTION_SOURCE", descriptions
+            ), patch.object(generator, "OUTPUT", output):
+                self.assertEqual(0, generator.generate())
+                return {
+                    package: tomllib.loads(
+                        (output / "packages" / package / "manifest.toml").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    for package in ("lv2.fil4", "lv2.fourkeq2")
+                }
+
     @staticmethod
     def _snapshot(root: Path):
         return {

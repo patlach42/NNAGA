@@ -8,6 +8,7 @@ All notable changes to NNAGA are documented here. This file follows the [Keep a 
 
 - NNAGA fork release workflow documentation and release checksums.
 - GitHub Release packaging for the signed `full` (VST) APK and its SHA-256 sidecar.
+- The external plugin catalog now ships x42 fil4 and Dusk Audio 4K EQ 2 as Android ARM64 LV2 packages.
 
 ### Changed
 

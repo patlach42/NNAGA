@@ -164,3 +164,15 @@
 [submodule "liblowlatencyaudio"]
 	path = liblowlatencyaudio
 	url = ../liblowlatencyaudio
+[submodule "3rd_party/fil4.lv2"]
+	path = 3rd_party/fil4.lv2
+	url = https://github.com/x42/fil4.lv2.git
+[submodule "3rd_party/dusk-audio-plugins"]
+	path = 3rd_party/dusk-audio-plugins
+	url = https://github.com/dusk-audio/dusk-audio-plugins.git
+[submodule "3rd_party/DAF"]
+	path = 3rd_party/DAF
+	url = https://github.com/dusk-audio/DAF.git
+[submodule "3rd_party/DAF-Widgets"]
+	path = 3rd_party/DAF-Widgets
+	url = https://github.com/dusk-audio/DAF-Widgets.git

@@ -1,0 +1,12 @@
+diff --git a/FourKEQUI.cpp b/FourKEQUI.cpp
+--- a/FourKEQUI.cpp
++++ b/FourKEQUI.cpp
+@@ -102,8 +102,10 @@
+     FourKEQUI()
+         : UI(DAF_UI_DEFAULT_WIDTH, DAF_UI_DEFAULT_HEIGHT)
+     {
++      #if ! defined(__ANDROID__)
+         supportersOverlay.setActionLink("Open crash log folder",
+                                         [] { DuskCrashLog::openLogFolder(); });
++      #endif
+         for (uint32_t i = 0; i < kParamCount; ++i)

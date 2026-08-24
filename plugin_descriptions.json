@@ -196,5 +196,7 @@
   "XDarkTerror": "Valve amplifier simulation",
   "XTinyTerror": "Valve amplifier simulation",
   "X_darkterror_": "Valve amplifier simulation",
-  "X_tinyterror_": "Valve amplifier simulation"
+  "X_tinyterror_": "Valve amplifier simulation",
+  "fil4": "Parametric equalizer with selectable high-pass, low-pass, and filter shaping.",
+  "4K EQ 2": "British console-style four-band equalizer with high-pass and low-pass filters."
 }
