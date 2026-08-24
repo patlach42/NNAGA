@@ -12,8 +12,10 @@
 package com.vibes.dsp.ui.dashboard
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -347,14 +349,27 @@ private fun DashboardContent(
     sourceSlot: String?,
 ) {
     val tabStateHolder = rememberSaveableStateHolder()
+    var manageRepositorySources by rememberSaveable { mutableStateOf(false) }
     Column(modifier = Modifier.fillMaxSize()) {
-        InnerTabs(selectedTab = selectedTab, onTabSelected = onTabSelected)
+        InnerTabs(
+            selectedTab = selectedTab,
+            onTabSelected = { tab ->
+                manageRepositorySources = false
+                onTabSelected(tab)
+            },
+            onManageRepositorySources = {
+                manageRepositorySources = true
+                onTabSelected(DashboardTab.Repository)
+            },
+        )
         tabStateHolder.SaveableStateProvider(selectedTab.argument) {
             when (selectedTab) {
                 DashboardTab.Repository -> RepositoryScreen(
                     viewModel = repositoryViewModel,
                     onInstallPackage = onRepositoryInstall,
                     onUpdatePackage = onRepositoryInstall,
+                    manageSources = manageRepositorySources,
+                    onCloseSourceManagement = { manageRepositorySources = false },
                     modifier = Modifier.weight(1f),
                 )
                 DashboardTab.Main -> BrandHome(modifier = Modifier.weight(1f))
@@ -374,10 +389,12 @@ private fun DashboardContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun InnerTabs(
     selectedTab: DashboardTab,
     onTabSelected: (DashboardTab) -> Unit,
+    onManageRepositorySources: () -> Unit,
 ) {
     Column {
         Row(
@@ -395,7 +412,20 @@ private fun InnerTabs(
                             this.selected = selected
                             role = Role.Tab
                         }
-                        .clickable(role = Role.Tab) { onTabSelected(tab) },
+                        .combinedClickable(
+                            role = Role.Tab,
+                            onLongClickLabel = if (tab == DashboardTab.Repository) {
+                                "Manage repository sources"
+                            } else {
+                                null
+                            },
+                            onLongClick = if (tab == DashboardTab.Repository) {
+                                onManageRepositorySources
+                            } else {
+                                null
+                            },
+                            onClick = { onTabSelected(tab) },
+                        ),
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(

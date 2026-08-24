@@ -4,6 +4,8 @@ name = "neural_amp_modeler"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "Neural Amp Modeler"
+tags = ["Simulator"]
 description = "Bundled LV2 plugin neural_amp_modeler."
 license = "GPL-3.0-or-later"
 

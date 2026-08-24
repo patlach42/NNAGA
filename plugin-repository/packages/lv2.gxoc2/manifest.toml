@@ -4,6 +4,8 @@ name = "gx_oc_2"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "Guitarix"
+tags = ["Pitch"]
 description = "Bundled LV2 plugin gx_oc_2."
 license = "GPL-3.0-or-later"
 

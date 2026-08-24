@@ -4,6 +4,8 @@ name = "gx_shimmizita"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "Guitarix"
+tags = ["Reverb"]
 description = "Bundled LV2 plugin gx_shimmizita."
 license = "GPL-3.0-or-later"
 

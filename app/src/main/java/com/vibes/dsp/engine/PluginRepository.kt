@@ -42,6 +42,12 @@ internal fun validateDeclaredContentLength(length: Long, max: Long, url: String)
 }
 
 
+internal fun validateFacetMetadata(manifest: PluginRepositoryService.RepoManifest) {
+    fun safe(value: String, max: Int) = value.isNotBlank() && value.length <= max && value.none { it.isISOControl() }
+    require(safe(manifest.manufacturer, 128))
+    require(manifest.tags.size <= 32 && manifest.tags.all { safe(it, 64) })
+}
+
 internal fun parseRepositoryIndex(t: org.tomlj.TomlParseResult): List<String> {
     require(!t.hasErrors()) { t.errors().joinToString("; ") }
     require(t.getLong("schema") == 1L)
@@ -59,6 +65,22 @@ internal fun parseRepositoryManifest(
     require(!toml.hasErrors()) { toml.errors().joinToString("; ") }
     val payload = toml.getTable("payload") ?: error("Missing payload")
     val install = toml.getTable("install") ?: error("Missing install")
+    val manufacturer = when {
+        !toml.contains("manufacturer") -> "Unknown"
+        else -> toml.getString("manufacturer")
+            ?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("Invalid manufacturer")
+    }
+    val tags: List<String> = when {
+        !toml.contains("tags") -> emptyList()
+        else -> (toml.getArray("tags")
+            ?: throw IllegalArgumentException("Invalid tags"))
+            .toList()
+            .map { value ->
+                value as? String
+                    ?: throw IllegalArgumentException("Invalid tags element")
+            }
+    }
     return PluginRepositoryService.RepoManifest(
         schema = toml.getLong("schema")?.toInt() ?: 0,
         id = toml.getString("id").orEmpty(),
@@ -72,10 +94,12 @@ internal fun parseRepositoryManifest(
         entry = install.getString("entry").orEmpty(),
         kind = payload.getString("kind").orEmpty(),
         arch = toml.getArray("arch")?.toList()?.map(Any::toString).orEmpty(),
+        manufacturer = manufacturer,
+        tags = tags,
         sourceName = source,
         sourceUrl = url,
         repositoryRoot = repositoryRoot,
-    )
+    ).also(::validateFacetMetadata)
 }
 internal data class RepositorySourceRecord(
     val id: String,
@@ -131,7 +155,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             try {
                 val indexUrl = source.url
                 val repositoryRoot = URI(indexUrl).let { URI(it.scheme, it.userInfo, it.host, it.port, it.path, null, null) }.resolve("./")
-                val parsed = parseIndex(Toml.parse(fetchText(indexUrl)))
+                val parsed = parseRepositoryIndex(Toml.parse(fetchText(indexUrl)))
                 val sourceManifests = parsed.map { path ->
                     val manifestUrl = resolveContained(indexUrl, repositoryRoot, path)
                     parseManifest(fetchText(manifestUrl), source.name, manifestUrl, repositoryRoot.toString())
@@ -278,6 +302,8 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
                 availableVersion = manifest.version,
                 installedVersion = installedVersion,
                 description = manifest.description,
+                manufacturer = manifest.manufacturer,
+                tags = manifest.tags,
                 status = status,
             )
         }
@@ -292,7 +318,7 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
         )
     }
     private fun inventory():Map<String,Installed>{ val out=mutableMapOf<String,Installed>(); installedRoot.listFiles().orEmpty().forEach{f->f.listFiles().orEmpty().forEach{id->id.listFiles().orEmpty().filter{it.isDirectory&&!it.name.startsWith(".")}.maxByOrNull{it.name}?.let{v->readMetadata(v)?.let{m->out["${m.format}:${m.id}"]=Installed(v.name,m)}}}}; return out }
-    private fun writeMetadata(dir:File,m:RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir,META)),null)} }
+    private fun writeMetadata(dir:File,m:RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("manufacturer",m.manufacturer);put("tags",m.tags.joinToString("\u001f"));put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir,META)),null)} }
     private fun readOwnership(dir:File): WineInstallOwnership? = runCatching { Properties().apply { load(FileInputStream(File(dir,META))) }.let { p -> WineInstallOwnership(p.getProperty("ownership.vstUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.executableUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.prefixPaths","").split(File.pathSeparator).filter(String::isNotBlank)) } }.getOrNull()
     private fun mergeOwnership(a: WineInstallOwnership, b: WineInstallOwnership) = WineInstallOwnership(
         (a.vstUuids + b.vstUuids).distinct(),
@@ -301,14 +327,14 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
     )
     private fun readMetadata(dir:File): RepoManifest? = runCatching {
         Properties().apply { load(FileInputStream(File(dir, META))) }.let { p ->
-            RepoManifest(1, p.getProperty("id",""), p.getProperty("name",""), p.getProperty("version",""), p.getProperty("format",""), p.getProperty("description",""), "", "", 1, "", p.getProperty("kind","archive"), emptyList(), sourceName = "Installed")
+            RepoManifest(1, p.getProperty("id",""), p.getProperty("name",""), p.getProperty("version",""), p.getProperty("format",""), p.getProperty("description",""), "", "", 1, "", p.getProperty("kind","archive"), emptyList(), sourceName = "Installed", manufacturer = p.getProperty("manufacturer","Unknown"), tags = p.getProperty("tags","").split("\u001f").filter(String::isNotBlank))
         }
     }.getOrNull()
     private fun setPackageState(id:String,op:RepositoryPackageOperation?,progress:Float?,error:String?){state.value=state.value.copy(packages=state.value.packages.map{if(it.id==id)it.copy(operation=op,progress=progress,errorMessage=error,status=if(error!=null)RepositoryPackageStatus.Error else it.status)else it})}
-    private fun validate(m:RepoManifest){require(m.schema==1&&m.id.isNotBlank()&&m.name.isNotBlank()&&m.version.isNotBlank());require(PACKAGE.matches(m.id)&&PACKAGE.matches(m.format)&&VERSION.matches(m.version));require(m.format in setOf("lv2","wine_installer","wine_archive","wine_directory"));require(m.kind==when(m.format){"lv2"->"archive";"wine_installer"->"installer";"wine_archive"->"archive";"wine_directory"->"directory";else->""}&&m.payloadSize in 1..MAX_DOWNLOAD);require(SHA.matches(m.payloadSha256));require(m.arch.contains("arm64-v8a"))}
-    private fun parseIndex(t:org.tomlj.TomlParseResult):List<String> = parseRepositoryIndex(t)
+    private fun validate(m:RepoManifest){validateFacetMetadata(m);require(m.schema==1&&m.id.isNotBlank()&&m.name.isNotBlank()&&m.version.isNotBlank());require(PACKAGE.matches(m.id)&&PACKAGE.matches(m.format)&&VERSION.matches(m.version));require(m.format in setOf("lv2","wine_installer","wine_archive","wine_directory"));require(m.kind==when(m.format){"lv2"->"archive";"wine_installer"->"installer";"wine_archive"->"archive";"wine_directory"->"directory";else->""}&&m.payloadSize in 1..MAX_DOWNLOAD);require(SHA.matches(m.payloadSha256));require(m.arch.contains("arm64-v8a"))}
     private fun parseManifest(text: String, source: String, url: String, repositoryRoot: String): RepoManifest =
         parseRepositoryManifest(text, source, url, repositoryRoot)
+    private fun parseIndex(t:org.tomlj.TomlParseResult):List<String> = parseRepositoryIndex(t)
     private fun normalizeSource(u:String):String{val x=URI(u.trim());require(x.scheme in setOf("https","file"));require(x.fragment==null&&x.query==null);return x.toString()}
     private fun resolveContained(base:String,root:URI,relative:String):String =
         resolveContainedRepositoryUrl(base, root, relative)
@@ -335,9 +361,9 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
     private fun builtin()=RepositorySourceRecord("builtin","NNAGA Base",BUILTIN_INDEX_URL,true,false,null)
     private fun encode(s:RepositorySourceRecord)=Base64.encodeToString(listOf(s.id,s.name,s.url,s.enabled,s.custom,s.lastError?:"").joinToString("\u0001").toByteArray(),Base64.NO_WRAP)
     private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{RepositorySourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
+    data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val sourceUrl:String="",val repositoryRoot:String="",val manufacturer:String="Unknown",val tags:List<String> = emptyList())
     private data class Installed(val version:String,val manifest:RepoManifest)
-    data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val sourceUrl:String="",val repositoryRoot:String="")
-    companion object{private const val BUILTIN_INDEX_URL="https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-23";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
+    companion object{private const val BUILTIN_INDEX_URL="https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-24";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
     private fun sha256(b:ByteArray)=digest(b.inputStream())
     private fun sha256(f:File)=digest(f.inputStream())
     private fun digest(i:java.io.InputStream):String { val md=MessageDigest.getInstance("SHA-256"); i.use { val buf=ByteArray(8192); while(true){val n=it.read(buf);if(n<0)break;md.update(buf,0,n)} }; return md.digest().joinToString(""){"%02x".format(it)} }

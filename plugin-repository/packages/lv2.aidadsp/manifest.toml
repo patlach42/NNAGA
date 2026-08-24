@@ -4,6 +4,8 @@ name = "aidadsp"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "Aida DSP"
+tags = ["Simulator"]
 description = "Bundled LV2 plugin aidadsp."
 license = "GPL-3.0-or-later"
 

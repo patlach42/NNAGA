@@ -4,6 +4,8 @@ name = "PreAmps"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "brummer10"
+tags = ["Mixer"]
 description = "Bundled LV2 plugin PreAmps."
 license = "GPL-3.0-or-later"
 

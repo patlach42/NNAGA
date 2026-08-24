@@ -4,6 +4,8 @@ name = "GxDOP250"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "GxPlugins"
+tags = ["Distortion"]
 description = "Bundled LV2 plugin GxDOP250."
 license = "GPL-3.0-or-later"
 

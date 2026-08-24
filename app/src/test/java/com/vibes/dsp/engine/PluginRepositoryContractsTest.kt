@@ -151,7 +151,7 @@ class PluginRepositoryContractsTest {
     }
 
     @Test
-    fun manifestParserPreservesPackageIdentityAndPayloadFields() {
+    fun manifestParserPreservesPackageIdentityPayloadAndFacetFields() {
         val manifest = parseRepositoryManifest(
             """
             schema = 1
@@ -161,6 +161,8 @@ class PluginRepositoryContractsTest {
             format = "lv2"
             description = "A deterministic test package"
             arch = ["arm64-v8a"]
+            manufacturer = "Acme Audio"
+            tags = ["Delay", "Creative"]
 
             [payload]
             url = "payload/example.zip"
@@ -183,7 +185,145 @@ class PluginRepositoryContractsTest {
         assertEquals(42L, manifest.payloadSize)
         assertEquals("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", manifest.payloadSha256)
         assertEquals("Example.lv2", manifest.entry)
+        assertEquals("Acme Audio", manifest.manufacturer)
+        assertEquals(listOf("Delay", "Creative"), manifest.tags)
         assertEquals("Test source", manifest.sourceName)
         assertEquals("https://plugins.example/repo/", manifest.repositoryRoot)
+    }
+
+    @Test
+    fun legacyManifestDefaultsFacetMetadata() {
+        val manifest = parseRepositoryManifest(
+            """
+            schema = 1
+            id = "legacy.plugin"
+            name = "Legacy Plugin"
+            version = "1.0.0"
+            format = "lv2"
+            description = "A legacy package without facet metadata"
+            arch = ["arm64-v8a"]
+
+            [payload]
+            url = "payload/legacy.zip"
+            sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            size = 42
+            kind = "archive"
+
+            [install]
+            entry = "Legacy.lv2"
+            """.trimIndent(),
+            source = "Legacy source",
+            url = "https://plugins.example/repo/legacy.toml",
+            repositoryRoot = "https://plugins.example/repo/",
+        )
+
+        assertEquals("Unknown", manifest.manufacturer)
+        assertEquals(emptyList<String>(), manifest.tags)
+    }
+
+    @Test
+    fun parserRejectsPresentBlankManufacturer() {
+        val malformed = """
+            schema = 1
+            id = "blank.manufacturer"
+            name = "Blank Manufacturer"
+            version = "1.0.0"
+            format = "lv2"
+            description = "Malformed facet fixture"
+            manufacturer = ""
+            tags = ["Delay"]
+
+            [payload]
+            url = "payload/blank-manufacturer.zip"
+            sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            size = 42
+            kind = "archive"
+
+            [install]
+            entry = "Blank.lv2"
+        """.trimIndent()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            parseRepositoryManifest(
+                malformed,
+                source = "Test source",
+                url = "https://plugins.example/repo/blank-manufacturer.toml",
+                repositoryRoot = "https://plugins.example/repo/",
+            )
+        }
+    }
+
+    @Test
+    fun parserRejectsNonStringTags() {
+        val malformed = """
+            schema = 1
+            id = "numeric.tag"
+            name = "Numeric Tag"
+            version = "1.0.0"
+            format = "lv2"
+            description = "Malformed facet fixture"
+            manufacturer = "Acme Audio"
+            tags = ["Delay", 7]
+
+            [payload]
+            url = "payload/numeric-tag.zip"
+            sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            size = 42
+            kind = "archive"
+
+            [install]
+            entry = "Numeric.lv2"
+        """.trimIndent()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            parseRepositoryManifest(
+                malformed,
+                source = "Test source",
+                url = "https://plugins.example/repo/numeric-tag.toml",
+                repositoryRoot = "https://plugins.example/repo/",
+            )
+        }
+    }
+
+    @Test
+    fun facetMetadataValidationRejectsMalformedAndUnboundedValues() {
+        val valid = parseRepositoryManifest(
+            """
+            schema = 1
+            id = "valid.plugin"
+            name = "Valid Plugin"
+            version = "1.0.0"
+            format = "lv2"
+            description = "Validation fixture"
+            manufacturer = "Acme Audio"
+            tags = ["Delay"]
+
+            [payload]
+            url = "payload/valid.zip"
+            sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            size = 42
+            kind = "archive"
+
+            [install]
+            entry = "Valid.lv2"
+            """.trimIndent(),
+            source = "Test source",
+            url = "https://plugins.example/repo/valid.toml",
+            repositoryRoot = "https://plugins.example/repo/",
+        )
+
+        listOf(
+            "blank manufacturer" to valid.copy(manufacturer = ""),
+            "overlong manufacturer" to valid.copy(manufacturer = "m".repeat(129)),
+            "control-character manufacturer" to valid.copy(manufacturer = "Acme\u0000Audio"),
+            "too many tags" to valid.copy(tags = List(33) { "tag" }),
+            "blank tag" to valid.copy(tags = listOf("")),
+            "overlong tag" to valid.copy(tags = listOf("t".repeat(65))),
+            "control-character tag" to valid.copy(tags = listOf("Delay\u0000")),
+        ).forEach { (case, manifest) ->
+            assertThrows(case, IllegalArgumentException::class.java) {
+                validateFacetMetadata(manifest)
+            }
+        }
     }
 }

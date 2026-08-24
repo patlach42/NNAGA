@@ -4,6 +4,8 @@ name = "gxbooster"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "Guitarix"
+tags = ["Utility"]
 description = "Bundled LV2 plugin gxbooster."
 license = "GPL-3.0-or-later"
 

@@ -4,6 +4,8 @@ name = "gx_cabinet"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "Guitarix"
+tags = ["Simulator"]
 description = "Bundled LV2 plugin gx_cabinet."
 license = "GPL-3.0-or-later"
 

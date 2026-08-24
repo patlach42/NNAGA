@@ -18,7 +18,10 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -61,6 +64,8 @@ data class RepositoryPackageItem(
     val operation: RepositoryPackageOperation? = null,
     val progress: Float? = null,
     val errorMessage: String? = null,
+    val manufacturer: String = "Unknown",
+    val tags: List<String> = emptyList(),
 )
 
 data class RepositorySnapshot(
@@ -90,6 +95,8 @@ interface RepositoryService {
 
 data class RepositoryActionState(
     val pendingActions: Set<String> = emptySet(),
+    val packageOperations: Map<String, RepositoryPackageOperation> = emptyMap(),
+    val packageErrors: Map<String, String> = emptyMap(),
     val errorMessage: String? = null,
 ) {
     fun isPending(key: String): Boolean = key in pendingActions
@@ -98,10 +105,32 @@ data class RepositoryActionState(
 class RepositoryViewModel(
     private val repository: RepositoryService,
 ) : ViewModel() {
-    val snapshot: StateFlow<RepositorySnapshot> = repository.snapshot
-
     private val _actionState = MutableStateFlow(RepositoryActionState())
     val actionState: StateFlow<RepositoryActionState> = _actionState.asStateFlow()
+
+    val snapshot: StateFlow<RepositorySnapshot> =
+        combine(repository.snapshot, actionState) { repositorySnapshot, actions ->
+            repositorySnapshot.copy(
+                packages = repositorySnapshot.packages.map { repositoryPackage ->
+                    val operation = actions.packageOperations[repositoryPackage.id]
+                    val error = actions.packageErrors[repositoryPackage.id]
+                    repositoryPackage.copy(
+                        status = if (error != null) {
+                            RepositoryPackageStatus.Error
+                        } else {
+                            repositoryPackage.status
+                        },
+                        operation = operation ?: repositoryPackage.operation,
+                        progress = if (operation != null) null else repositoryPackage.progress,
+                        errorMessage = error ?: repositoryPackage.errorMessage,
+                    )
+                },
+            )
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = repository.snapshot.value,
+        )
 
     init {
         refreshAll()
@@ -125,19 +154,61 @@ class RepositoryViewModel(
         runAction(sourceKey(sourceId)) { repository.removeSource(sourceId) }
 
     fun install(packageId: String) =
-        runAction(packageKey(packageId)) { repository.install(packageId) }
+        runPackageAction(packageId, RepositoryPackageOperation.Installing) {
+            repository.install(packageId)
+        }
 
     fun update(packageId: String) =
-        runAction(packageKey(packageId)) { repository.update(packageId) }
+        runPackageAction(packageId, RepositoryPackageOperation.Updating) {
+            repository.update(packageId)
+        }
 
     fun remove(packageId: String) =
-        runAction(packageKey(packageId)) { repository.remove(packageId) }
+        runPackageAction(packageId, RepositoryPackageOperation.Removing) {
+            repository.remove(packageId)
+        }
 
     fun clearActionError() {
         _actionState.update { it.copy(errorMessage = null) }
     }
 
-    private fun runAction(key: String, action: suspend () -> Unit) {
+    private fun runPackageAction(
+        packageId: String,
+        operation: RepositoryPackageOperation,
+        action: suspend () -> Unit,
+    ) {
+        val key = packageKey(packageId)
+        if (_actionState.value.isPending(key)) return
+        _actionState.update {
+            it.copy(
+                packageOperations = it.packageOperations + (packageId to operation),
+                packageErrors = it.packageErrors - packageId,
+            )
+        }
+        runAction(
+            key = key,
+            onError = { message ->
+                _actionState.update {
+                    it.copy(packageErrors = it.packageErrors + (packageId to message))
+                }
+            },
+            onFinally = {
+                _actionState.update {
+                    it.copy(packageOperations = it.packageOperations - packageId)
+                }
+            },
+        ) {
+            action()
+            repository.refreshAll()
+        }
+    }
+
+    private fun runAction(
+        key: String,
+        onError: (String) -> Unit = {},
+        onFinally: () -> Unit = {},
+        action: suspend () -> Unit,
+    ) {
         if (_actionState.value.isPending(key)) return
         _actionState.update {
             it.copy(
@@ -151,10 +222,13 @@ class RepositoryViewModel(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                val message = error.message ?: "Repository operation failed"
+                onError(message)
                 _actionState.update {
-                    it.copy(errorMessage = error.message ?: "Repository operation failed")
+                    it.copy(errorMessage = message)
                 }
             } finally {
+                onFinally()
                 _actionState.update {
                     it.copy(pendingActions = it.pendingActions - key)
                 }

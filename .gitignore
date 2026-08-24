@@ -32,6 +32,10 @@ gen/
 out/
 release/
 
+# Python bytecode caches
+__pycache__/
+*.py[cod]
+
 # Gradle files
 .gradle/
 build/

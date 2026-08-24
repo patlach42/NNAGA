@@ -11,27 +11,30 @@
 
 package com.vibes.dsp.ui.dashboard
 
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
@@ -53,20 +56,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaFilterChip
 import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.ui.components.NnagaOutlinedButton
 import com.vibes.dsp.ui.components.NnagaSwitch
 import com.vibes.dsp.ui.components.NnagaTextButton
 import com.vibes.dsp.ui.components.NnagaTonalButton
 import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
+import java.util.Locale
 
 private object RepositoryDimensions {
     val compactPadding = 8.dp
@@ -77,9 +81,6 @@ private object RepositoryDimensions {
     val divider = 1.dp
     val progressHeight = 2.dp
     val actionProgress = 16.dp
-    val sourcePaneWidth = 320.dp
-    val contentMaxWidth = 1080.dp
-    val wideBreakpoint = 720.dp
 }
 
 @Composable
@@ -87,15 +88,62 @@ fun RepositoryScreen(
     viewModel: RepositoryViewModel,
     onInstallPackage: (RepositoryPackageItem) -> Unit = { viewModel.install(it.id) },
     onUpdatePackage: (RepositoryPackageItem) -> Unit = { viewModel.update(it.id) },
+    manageSources: Boolean = false,
+    onCloseSourceManagement: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val snapshot by viewModel.snapshot.collectAsState()
     val actionState by viewModel.actionState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     var sourceUrl by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
+    var selectedManufacturer by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedTag by rememberSaveable { mutableStateOf<String?>(null) }
     var addWasPending by remember { mutableStateOf(false) }
     val addPending = actionState.isPending(RepositoryViewModel.ADD_SOURCE)
+    val refreshing = snapshot.isRefreshing ||
+        actionState.isPending(RepositoryViewModel.REFRESH_ALL)
+    val manufacturerOptions = remember(snapshot.packages) {
+        snapshot.packages
+            .map { it.manufacturer.trim() }
+            .filter { it.isNotEmpty() }
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val tagOptions = remember(snapshot.packages) {
+        snapshot.packages
+            .flatMap { it.tags }
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .sortedWith(String.CASE_INSENSITIVE_ORDER)
+    }
+    val selectedTags = remember(selectedTag) { selectedTag?.let(::setOf).orEmpty() }
+    val filteredPackages = remember(
+        snapshot.packages,
+        query,
+        selectedManufacturer,
+        selectedTags,
+    ) {
+        filterRepositoryPackages(
+            packages = snapshot.packages,
+            query = query,
+            manufacturer = selectedManufacturer,
+            tags = selectedTags,
+        )
+    }
+    val filtersActive = query.isNotBlank() || selectedManufacturer != null || selectedTag != null
 
+    LaunchedEffect(snapshot.isLoading, manufacturerOptions, tagOptions) {
+        if (!snapshot.isLoading) {
+            if (manufacturerOptions.none { it.equals(selectedManufacturer, ignoreCase = true) }) {
+                selectedManufacturer = null
+            }
+            if (tagOptions.none { it.equals(selectedTag, ignoreCase = true) }) {
+                selectedTag = null
+            }
+        }
+    }
     LaunchedEffect(actionState.errorMessage) {
         actionState.errorMessage?.let { message ->
             snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Long)
@@ -109,15 +157,36 @@ fun RepositoryScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            RepositoryToolbar(
-                sourceUrl = sourceUrl,
-                onSourceUrlChanged = { sourceUrl = it },
-                onAddSource = { viewModel.addSource(sourceUrl) },
-                onRefresh = viewModel::refreshAll,
-                addingSource = addPending,
-                refreshing = snapshot.isRefreshing ||
-                    actionState.isPending(RepositoryViewModel.REFRESH_ALL),
-            )
+            if (manageSources) {
+                RepositorySourceToolbar(
+                    sourceUrl = sourceUrl,
+                    onSourceUrlChanged = { sourceUrl = it },
+                    onAddSource = { viewModel.addSource(sourceUrl) },
+                    onRefresh = viewModel::refreshAll,
+                    onClose = onCloseSourceManagement,
+                    addingSource = addPending,
+                    refreshing = refreshing,
+                )
+            } else {
+                RepositoryCatalogToolbar(
+                    query = query,
+                    onQueryChanged = { query = it },
+                    manufacturers = manufacturerOptions,
+                    selectedManufacturer = selectedManufacturer,
+                    onManufacturerSelected = { selectedManufacturer = it },
+                    tags = tagOptions,
+                    selectedTag = selectedTag,
+                    onTagSelected = { selectedTag = it },
+                    onClear = {
+                        query = ""
+                        selectedManufacturer = null
+                        selectedTag = null
+                    },
+                    filtersActive = filtersActive,
+                    onRefresh = viewModel::refreshAll,
+                    refreshing = refreshing,
+                )
+            }
             snapshot.errorMessage
                 ?.takeIf { snapshot.sources.isNotEmpty() || snapshot.packages.isNotEmpty() }
                 ?.let { message ->
@@ -132,7 +201,10 @@ fun RepositoryScreen(
             )
             RepositoryContent(
                 snapshot = snapshot,
+                catalogPackages = filteredPackages,
+                filtersActive = filtersActive,
                 actionState = actionState,
+                manageSources = manageSources,
                 onRetry = viewModel::refreshAll,
                 onSourceEnabledChanged = viewModel::setSourceEnabled,
                 onRefreshSource = viewModel::refreshSource,
@@ -155,25 +227,25 @@ fun RepositoryScreen(
 }
 
 @Composable
-private fun RepositoryToolbar(
+private fun RepositorySourceToolbar(
     sourceUrl: String,
     onSourceUrlChanged: (String) -> Unit,
     onAddSource: () -> Unit,
     onRefresh: () -> Unit,
+    onClose: () -> Unit,
     addingSource: Boolean,
     refreshing: Boolean,
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .padding(RepositoryDimensions.compactPadding),
-        horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.compactPadding),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(RepositoryDimensions.compactPadding),
     ) {
         OutlinedTextField(
             value = sourceUrl,
             onValueChange = onSourceUrlChanged,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("Repository URL") },
             singleLine = true,
             enabled = !addingSource,
@@ -187,30 +259,168 @@ private fun RepositoryToolbar(
             shape = MaterialTheme.shapes.small,
             colors = nnagaOutlinedTextFieldColors(),
         )
-        NnagaButton(
-            onClick = onAddSource,
-            enabled = sourceUrl.isNotBlank() && !addingSource,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.compactPadding),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (addingSource) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(RepositoryDimensions.actionProgress),
-                    strokeWidth = RepositoryDimensions.progressHeight,
-                )
-            } else {
-                Icon(Icons.Default.Add, contentDescription = null)
+            NnagaButton(
+                onClick = onAddSource,
+                enabled = sourceUrl.isNotBlank() && !addingSource,
+            ) {
+                if (addingSource) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(RepositoryDimensions.actionProgress),
+                        strokeWidth = RepositoryDimensions.progressHeight,
+                    )
+                } else {
+                    Icon(Icons.Default.Add, contentDescription = null)
+                }
+                Spacer(modifier = Modifier.width(RepositoryDimensions.inlineSpacing))
+                Text("Add")
             }
-            Spacer(modifier = Modifier.width(RepositoryDimensions.inlineSpacing))
-            Text("Add")
+            RepositoryRefreshButton(onRefresh = onRefresh, refreshing = refreshing)
+            Spacer(modifier = Modifier.weight(1f))
+            NnagaTextButton(onClick = onClose) {
+                Text("Close")
+            }
         }
-        NnagaIconButton(onClick = onRefresh, enabled = !refreshing) {
-            if (refreshing) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(RepositoryDimensions.actionProgress),
-                    strokeWidth = RepositoryDimensions.progressHeight,
-                )
-            } else {
-                Icon(Icons.Default.Refresh, contentDescription = "Refresh all repositories")
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun RepositoryCatalogToolbar(
+    query: String,
+    onQueryChanged: (String) -> Unit,
+    manufacturers: List<String>,
+    selectedManufacturer: String?,
+    onManufacturerSelected: (String?) -> Unit,
+    tags: List<String>,
+    selectedTag: String?,
+    onTagSelected: (String?) -> Unit,
+    onClear: () -> Unit,
+    filtersActive: Boolean,
+    onRefresh: () -> Unit,
+    refreshing: Boolean,
+) {
+    val keyboardController = LocalSoftwareKeyboardController.current
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(RepositoryDimensions.compactPadding),
+        verticalArrangement = Arrangement.spacedBy(RepositoryDimensions.inlineSpacing),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.inlineSpacing),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = onQueryChanged,
+                modifier = Modifier.weight(1f),
+                label = { Text("Search plugins") },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+                trailingIcon = query.takeIf(String::isNotEmpty)?.let {
+                    {
+                        NnagaIconButton(onClick = { onQueryChanged("") }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear plugin search")
+                        }
+                    }
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Text,
+                    imeAction = ImeAction.Search,
+                ),
+                keyboardActions = KeyboardActions(
+                    onSearch = { keyboardController?.hide() },
+                ),
+                shape = MaterialTheme.shapes.small,
+                colors = nnagaOutlinedTextFieldColors(),
+            )
+            RepositoryRefreshButton(onRefresh = onRefresh, refreshing = refreshing)
+        }
+        if (manufacturers.isNotEmpty()) {
+            FacetRow(
+                label = "Manufacturer",
+                allLabel = "All manufacturers",
+                options = manufacturers,
+                selected = selectedManufacturer,
+                onSelected = onManufacturerSelected,
+            )
+        }
+        if (tags.isNotEmpty()) {
+            FacetRow(
+                label = "Tag",
+                allLabel = "All tags",
+                options = tags,
+                selected = selectedTag,
+                onSelected = onTagSelected,
+            )
+        }
+        if (filtersActive) {
+            NnagaTextButton(
+                onClick = onClear,
+                modifier = Modifier.align(Alignment.End),
+            ) {
+                Text("Clear filters")
             }
+        }
+    }
+}
+
+@Composable
+private fun FacetRow(
+    label: String,
+    allLabel: String,
+    options: List<String>,
+    selected: String?,
+    onSelected: (String?) -> Unit,
+) {
+    LazyRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.inlineSpacing),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        item(key = "$label:label") {
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        item(key = "$label:all") {
+            NnagaFilterChip(
+                text = allLabel,
+                selected = selected == null,
+                onClick = { onSelected(null) },
+            )
+        }
+        items(options, key = { "$label:${it.lowercase(Locale.ROOT)}" }) { option ->
+            NnagaFilterChip(
+                text = option,
+                selected = option.equals(selected, ignoreCase = true),
+                onClick = { onSelected(option.takeUnless { it.equals(selected, ignoreCase = true) }) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun RepositoryRefreshButton(
+    onRefresh: () -> Unit,
+    refreshing: Boolean,
+) {
+    NnagaIconButton(onClick = onRefresh, enabled = !refreshing) {
+        if (refreshing) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(RepositoryDimensions.actionProgress),
+                strokeWidth = RepositoryDimensions.progressHeight,
+            )
+        } else {
+            Icon(Icons.Default.Refresh, contentDescription = "Refresh all repositories")
         }
     }
 }
@@ -218,7 +428,10 @@ private fun RepositoryToolbar(
 @Composable
 private fun RepositoryContent(
     snapshot: RepositorySnapshot,
+    catalogPackages: List<RepositoryPackageItem>,
+    filtersActive: Boolean,
     actionState: RepositoryActionState,
+    manageSources: Boolean,
     onRetry: () -> Unit,
     onSourceEnabledChanged: (String, Boolean) -> Unit,
     onRefreshSource: (String) -> Unit,
@@ -241,55 +454,27 @@ private fun RepositoryContent(
                 modifier = modifier,
             )
         }
-        else -> BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-            val wide = maxWidth >= RepositoryDimensions.wideBreakpoint
-            if (wide) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .widthIn(max = RepositoryDimensions.contentMaxWidth)
-                        .align(Alignment.TopCenter),
-                ) {
-                    SourceList(
-                        sources = snapshot.sources,
-                        actionState = actionState,
-                        onEnabledChanged = onSourceEnabledChanged,
-                        onRefresh = onRefreshSource,
-                        onRemove = onRemoveSource,
-                        modifier = Modifier
-                            .width(RepositoryDimensions.sourcePaneWidth)
-                            .fillMaxHeight(),
-                    )
-                    Divider(
-                        modifier = Modifier
-                            .width(RepositoryDimensions.divider)
-                            .fillMaxHeight(),
-                        thickness = RepositoryDimensions.divider,
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                    )
-                    PackageList(
-                        packages = snapshot.packages,
-                        actionState = actionState,
-                        onInstall = onInstall,
-                        onUpdate = onUpdate,
-                        onRemove = onRemovePackage,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight(),
-                    )
-                }
-            } else {
-                CompactRepositoryList(
-                    snapshot = snapshot,
-                    actionState = actionState,
-                    onSourceEnabledChanged = onSourceEnabledChanged,
-                    onRefreshSource = onRefreshSource,
-                    onRemoveSource = onRemoveSource,
-                    onInstall = onInstall,
-                    onUpdate = onUpdate,
-                    onRemovePackage = onRemovePackage,
-                )
-            }
+        manageSources -> {
+            SourceList(
+                sources = snapshot.sources,
+                actionState = actionState,
+                onEnabledChanged = onSourceEnabledChanged,
+                onRefresh = onRefreshSource,
+                onRemove = onRemoveSource,
+                modifier = modifier.fillMaxSize(),
+            )
+        }
+        else -> {
+            PackageList(
+                packages = catalogPackages,
+                totalPackageCount = snapshot.packages.size,
+                filtersActive = filtersActive,
+                actionState = actionState,
+                onInstall = onInstall,
+                onUpdate = onUpdate,
+                onRemove = onRemovePackage,
+                modifier = modifier.fillMaxSize(),
+            )
         }
     }
 }
@@ -330,6 +515,8 @@ private fun SourceList(
 @Composable
 private fun PackageList(
     packages: List<RepositoryPackageItem>,
+    totalPackageCount: Int,
+    filtersActive: Boolean,
     actionState: RepositoryActionState,
     onInstall: (RepositoryPackageItem) -> Unit,
     onUpdate: (String) -> Unit,
@@ -341,10 +528,25 @@ private fun PackageList(
         contentPadding = PaddingValues(RepositoryDimensions.contentPadding),
         verticalArrangement = Arrangement.spacedBy(RepositoryDimensions.itemSpacing),
     ) {
-        item { SectionHeading("Packages", "Install and maintain plugins from enabled sources.") }
+        item(key = "package-heading") {
+            SectionHeading(
+                title = "Plugins",
+                description = if (filtersActive) {
+                    "${packages.size} of $totalPackageCount plugins match."
+                } else {
+                    "$totalPackageCount plugins from enabled sources."
+                },
+            )
+        }
         if (packages.isEmpty()) {
-            item {
-                EmptyMessage("Enable a source and refresh repositories to discover packages.")
+            item(key = "package-empty") {
+                EmptyMessage(
+                    if (totalPackageCount == 0) {
+                        "Enable a source and refresh repositories to discover plugins."
+                    } else {
+                        "No matching plugins. Clear filters or try another search."
+                    },
+                )
             }
         } else {
             items(packages, key = { it.id }) { repositoryPackage ->
@@ -362,57 +564,6 @@ private fun PackageList(
     }
 }
 
-@Composable
-private fun CompactRepositoryList(
-    snapshot: RepositorySnapshot,
-    actionState: RepositoryActionState,
-    onSourceEnabledChanged: (String, Boolean) -> Unit,
-    onRefreshSource: (String) -> Unit,
-    onRemoveSource: (String) -> Unit,
-    onInstall: (RepositoryPackageItem) -> Unit,
-    onUpdate: (String) -> Unit,
-    onRemovePackage: (String) -> Unit,
-) {
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(RepositoryDimensions.contentPadding),
-        verticalArrangement = Arrangement.spacedBy(RepositoryDimensions.itemSpacing),
-    ) {
-        item { SectionHeading("Sources", "Enable repositories that contribute packages.") }
-        if (snapshot.sources.isEmpty()) {
-            item { EmptyMessage("Add a repository URL above to discover plugin packages.") }
-        } else {
-            items(snapshot.sources, key = { "source:${it.id}" }) { source ->
-                SourceRow(
-                    source = source,
-                    pending = actionState.isPending(RepositoryViewModel.sourceKey(source.id)),
-                    onEnabledChanged = { onSourceEnabledChanged(source.id, it) },
-                    onRefresh = { onRefreshSource(source.id) },
-                    onRemove = { onRemoveSource(source.id) },
-                )
-            }
-        }
-        item {
-            Spacer(modifier = Modifier.height(RepositoryDimensions.compactPadding))
-            SectionHeading("Packages", "Install and maintain plugins from enabled sources.")
-        }
-        if (snapshot.packages.isEmpty()) {
-            item { EmptyMessage("Enable a source and refresh repositories to discover packages.") }
-        } else {
-            items(snapshot.packages, key = { "package:${it.id}" }) { repositoryPackage ->
-                PackageRow(
-                    repositoryPackage = repositoryPackage,
-                    pending = actionState.isPending(
-                        RepositoryViewModel.packageKey(repositoryPackage.id),
-                    ),
-                    onInstall = { onInstall(repositoryPackage) },
-                    onUpdate = { onUpdate(repositoryPackage.id) },
-                    onRemove = { onRemovePackage(repositoryPackage.id) },
-                )
-            }
-        }
-    }
-}
 
 @Composable
 private fun SourceRow(
@@ -514,13 +665,22 @@ private fun PackageRow(
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(
-                        text = "${repositoryPackage.format} · ${repositoryPackage.sourceName}",
+                        text = buildList {
+                            add(repositoryPackage.format)
+                            repositoryPackage.manufacturer
+                                .takeIf(String::isNotBlank)
+                                ?.let(::add)
+                            add(repositoryPackage.sourceName)
+                        }.joinToString(" · "),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
                 PackageStatusBadge(repositoryPackage.status)
             }
+            PackageTagBadges(repositoryPackage.tags)
             repositoryPackage.description?.takeIf { it.isNotBlank() }?.let { description ->
                 Text(
                     text = description,
@@ -573,6 +733,53 @@ private fun PackageRow(
                 onInstall = onInstall,
                 onUpdate = onUpdate,
                 onRemove = onRemove,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PackageTagBadges(tags: List<String>) {
+    val normalizedTags = remember(tags) {
+        tags.asSequence()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinctBy { it.lowercase(Locale.ROOT) }
+            .toList()
+    }
+    val visibleTags = normalizedTags.take(3)
+    if (visibleTags.isEmpty()) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = RepositoryDimensions.inlineSpacing),
+        horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.inlineSpacing),
+    ) {
+        visibleTags.forEach { tag ->
+            Surface(
+                modifier = Modifier.weight(1f, fill = false),
+                color = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                shape = MaterialTheme.shapes.extraSmall,
+            ) {
+                Text(
+                    text = tag,
+                    modifier = Modifier.padding(
+                        horizontal = RepositoryDimensions.compactPadding,
+                        vertical = RepositoryDimensions.inlineSpacing,
+                    ),
+                    style = MaterialTheme.typography.labelSmall,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (normalizedTags.size > visibleTags.size) {
+            Text(
+                text = "+${normalizedTags.size - visibleTags.size}",
+                modifier = Modifier.align(Alignment.CenterVertically),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
@@ -759,4 +966,41 @@ private fun operationLabel(operation: RepositoryPackageOperation): String = when
     RepositoryPackageOperation.Installing -> "Installing…"
     RepositoryPackageOperation.Updating -> "Updating…"
     RepositoryPackageOperation.Removing -> "Removing…"
+}
+
+internal fun filterRepositoryPackages(
+    packages: List<RepositoryPackageItem>,
+    query: String,
+    manufacturer: String?,
+    tags: Set<String>,
+): List<RepositoryPackageItem> {
+    val normalizedQuery = query.trim()
+    val normalizedManufacturer = manufacturer?.trim().orEmpty()
+    val normalizedTags = tags.asSequence()
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .toList()
+    if (
+        normalizedQuery.isEmpty() &&
+        normalizedManufacturer.isEmpty() &&
+        normalizedTags.isEmpty()
+    ) {
+        return packages
+    }
+    return packages.filter { repositoryPackage ->
+        val matchesQuery = normalizedQuery.isEmpty() ||
+            repositoryPackage.name.contains(normalizedQuery, ignoreCase = true) ||
+            repositoryPackage.description?.contains(normalizedQuery, ignoreCase = true) == true ||
+            repositoryPackage.manufacturer.contains(normalizedQuery, ignoreCase = true) ||
+            repositoryPackage.tags.any { it.contains(normalizedQuery, ignoreCase = true) }
+        val matchesManufacturer = normalizedManufacturer.isEmpty() ||
+            repositoryPackage.manufacturer.trim()
+                .equals(normalizedManufacturer, ignoreCase = true)
+        val matchesTags = normalizedTags.all { selectedTag ->
+            repositoryPackage.tags.any { tag ->
+                tag.trim().equals(selectedTag, ignoreCase = true)
+            }
+        }
+        matchesQuery && matchesManufacturer && matchesTags
+    }
 }

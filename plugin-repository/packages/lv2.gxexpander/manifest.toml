@@ -4,6 +4,8 @@ name = "gx_expander"
 version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
+manufacturer = "Guitarix"
+tags = ["Expander"]
 description = "Bundled LV2 plugin gx_expander."
 license = "GPL-3.0-or-later"
 
