@@ -8,6 +8,30 @@ import org.tomlj.Toml
 
 class PluginRepositoryContractsTest {
     @Test
+    fun validatesDeclaredContentLengthBoundaries() {
+        val max = 1024L
+        val url = "https://plugins.example/repo/index.toml"
+
+        listOf(
+            -1L to -1L,
+            1L to 1L,
+            max to max,
+        ).forEach { (declared, expected) ->
+            assertEquals(expected, validateDeclaredContentLength(declared, max, url))
+        }
+
+        listOf(0L, -2L, max + 1).forEach { declared ->
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                validateDeclaredContentLength(declared, max, url)
+            }
+            assertEquals(
+                "Invalid declared content length $declared (max $max) for $url",
+                error.message,
+            )
+        }
+    }
+
+    @Test
     fun resolvesPayloadsInsideFileAndHttpsRepositoryRoots() {
         val cases = listOf(
             URI("file:///repo/index.toml") to URI("file:///repo/"),

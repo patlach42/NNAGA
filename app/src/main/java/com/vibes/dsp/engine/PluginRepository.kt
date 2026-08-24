@@ -34,6 +34,13 @@ internal fun resolveContainedRepositoryUrl(base: String, root: URI, relative: St
     require(path == rootPath.dropLast(1) || path.startsWith(rootPath))
     return decoded.normalize().toString()
 }
+internal fun validateDeclaredContentLength(length: Long, max: Long, url: String): Long {
+    require(length == -1L || length in 1..max) {
+        "Invalid declared content length $length (max $max) for $url"
+    }
+    return length
+}
+
 
 internal fun parseRepositoryIndex(t: org.tomlj.TomlParseResult): List<String> {
     require(!t.hasErrors()) { t.errors().joinToString("; ") }
@@ -308,10 +315,10 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
     private fun fetchText(url:String):String = if(url.startsWith("file:")) {
         File(URI(url)).inputStream().use { input -> val out=java.io.ByteArrayOutputStream(); copyBounded(input,out,MAX_RESPONSE); out.toString(Charsets.UTF_8.name()) }
     } else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(Request.Builder().url(url).build()).execute().use{r->
-        require(r.isSuccessful) { "HTTP ${r.code} $url" }; val body=r.body ?: error("Empty response"); require(body.contentLength() in 1..MAX_RESPONSE)
+        require(r.isSuccessful) { "HTTP ${r.code} $url" }; val body=r.body ?: error("Empty response body for $url"); validateDeclaredContentLength(body.contentLength(), MAX_RESPONSE, url)
         body.byteStream().use { input -> val out=java.io.ByteArrayOutputStream(); copyBounded(input,out,MAX_RESPONSE); out.toString(Charsets.UTF_8.name()) }
     }
-    private fun download(url:String,out:File,max:Long){if(url.startsWith("file:")){File(URI(url)).inputStream().use{copyBounded(it,out,max)}}else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(Request.Builder().url(url).build()).execute().use{r->require(r.isSuccessful) { "HTTP ${r.code} $url" };require((r.body?.contentLength()?:-1L) in 1..max);copyBounded(r.body!!.byteStream(),out,max)}}
+    private fun download(url:String,out:File,max:Long){if(url.startsWith("file:")){File(URI(url)).inputStream().use{copyBounded(it,out,max)}}else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(Request.Builder().url(url).build()).execute().use{r->require(r.isSuccessful) { "HTTP ${r.code} $url" };val body=r.body ?: error("Empty response body for $url"); validateDeclaredContentLength(body.contentLength(), max, url); body.byteStream().use { copyBounded(it,out,max) }}}
     private fun copyBounded(input:java.io.InputStream,out:java.io.OutputStream,max:Long){val b=ByteArray(8192);var n=0L;while(true){val r=input.read(b);if(r<0)break;n+=r;require(n<=max);out.write(b,0,r)}}
     private fun copyBounded(input:java.io.InputStream,out:File,max:Long){out.outputStream().use { copyBounded(input,it,max) }}
     private fun extractSafe(zip:File,stage:File){stage.mkdirs();ZipInputStream(BufferedInputStream(FileInputStream(zip))).use{z->val seen=mutableSetOf<String>();var total=0L;var count=0;var e=z.nextEntry;while(e!=null){require(++count<=MAX_ENTRIES);val n=e.name.replace('\\','/');val c=File(stage,n).canonicalFile;require(n.isNotBlank()&&!n.startsWith('/')&&!n.split('/').contains(".."));require(seen.add(c.relativeTo(stage.canonicalFile).path));requireContained(c,stage);if(e.isDirectory)c.mkdirs()else{c.parentFile?.mkdirs();FileOutputStream(c).use{o->val b=ByteArray(8192);while(true){val r=z.read(b);if(r<0)break;total+=r;require(total<=MAX_EXTRACTED);o.write(b,0,r)}}};z.closeEntry();e=z.nextEntry}}}
