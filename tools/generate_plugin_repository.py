@@ -21,9 +21,10 @@ from pathlib import Path, PurePosixPath
 ASSETS = Path("app/src/main/assets/lv2")
 LIBS = Path("app/src/full/jniLibs/arm64-v8a")
 METADATA = Path("app/src/main/assets/plugin_metadata.json")
+DESCRIPTION_SOURCE = Path("plugin_descriptions.json")
 OUTPUT = Path("plugin-repository")
 VERSION = "1.0.0"
-RELEASE = "2026-08-24"
+RELEASE = "2026-08-25"
 BINARY_RE = re.compile(r"(?:lv2:binary|guiext:binary|ui:binary)\s+<([^>]+)>")
 IDENTITY_ALIASES = {
     "GxVoodoFuzz": "GxVoodooFuzz",
@@ -42,6 +43,18 @@ IDENTITY_ALIASES = {
 
 def package_id(stem: str) -> str:
     return "lv2." + re.sub(r"[^a-z0-9]", "", stem.lower())
+_FALLBACK_DESCRIPTIONS = {
+    "GxBoobTube": "Tube boost with gentle overdrive and compression.",
+    "GxKnightFuzz": "Dark, high-harmonic fuzz distortion.",
+    "GxSuperFuzz": "Harmonic-rich SuperFuzz-style distortion.",
+    "GxVoodoFuzz": "Fuzz, tone shaping, and boost.",
+    "gx_alembic": "Alembic-style tube preamp and tone stack.",
+    "gx_duck_delay": "Envelope-controlled ducking delay.",
+    "gx_duck_delay_st": "Stereo envelope-controlled ducking delay.",
+    "gx_studiopre": "Alembic-style tube studio preamp.",
+    "gx_studiopre_st": "Stereo Alembic-style tube studio preamp.",
+    "gx_w20": "W20-style tube preamp and tone stack.",
+}
 
 
 def leaves() -> list[Path]:
@@ -92,7 +105,77 @@ def archive_bytes(bundle_name: str, files: dict[str, bytes]) -> bytes:
 
 def canonical_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", value.casefold())
-def metadata_for(name: str) -> tuple[str, list[str]]:
+
+
+_GENERIC_DESCRIPTIONS = {
+    "amplifier simulation",
+    "amp/cabinet simulator",
+    "chorus effect",
+    "delay effect",
+    "distortion/overdrive effect",
+    "dynamic range compressor",
+    "equalizer",
+    "expander/gate",
+    "filter/tone shaping effect",
+    "flanger effect",
+    "modulation effect",
+    "noise gate",
+    "overdrive/distortion",
+    "overdrive pedal simulation",
+    "phaser effect",
+    "pitch shifting effect",
+    "reverb effect",
+    "signal analyser",
+    "tube amp simulation",
+    "valve amplifier simulation",
+}
+_BOILERPLATE_RE = re.compile(
+    r"\b(?:LV2\s+)?plugin(?:s)?\b|"
+    r"\b(?:archive|package|install(?:ation)?|bundle(?:d)?)\b",
+    re.IGNORECASE,
+)
+
+
+def normalize_description(value: str) -> str:
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    text = _BOILERPLATE_RE.sub("", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"([,.;:!?]){2,}", r"\1", text)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,;:-")
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text
+
+
+def _fallback_description(name: str, category: str) -> str:
+    if name in _FALLBACK_DESCRIPTIONS:
+        return _FALLBACK_DESCRIPTIONS[name]
+    kind = {
+        "Amplifier": "amplifier and cabinet tones",
+        "Analyser": "audio signal analysis",
+        "Chorus": "stereo chorus modulation",
+        "Compressor": "dynamic range control",
+        "Delay": "echo and delay effects",
+        "Distortion": "distortion and overdrive tones",
+        "EQ": "equalization and tone shaping",
+        "Envelope": "envelope-controlled wah effects",
+        "Expander": "expansion and noise-gate control",
+        "Filter": "filtering and tone shaping",
+        "Flanger": "flanger modulation",
+        "Gate": "noise-gate control",
+        "Modulator": "modulation effects",
+        "Phaser": "phaser modulation",
+        "Pitch": "pitch shifting",
+        "Reverb": "room and reverb effects",
+        "Simulator": "guitar amplifier and cabinet modeling",
+        "Utility": "utility tone and signal processing",
+        "Mixer": "mixing and signal routing",
+        "Plugin": "audio processing",
+    }.get(category, "audio processing")
+    return f"{name} provides {kind} for guitar and music production."
+
+
+def metadata_for(name: str) -> tuple[str, list[str], str]:
     data = json.loads(METADATA.read_text(encoding="utf-8"))
     def canonical_map(values: dict) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -104,6 +187,8 @@ def metadata_for(name: str) -> tuple[str, list[str]]:
         return out
     authors = canonical_map(data.get("authors", {}))
     categories = canonical_map(data.get("categories", {}))
+    description_data = json.loads(DESCRIPTION_SOURCE.read_text(encoding="utf-8"))
+    descriptions = canonical_map(description_data.get("descriptions", description_data))
     aliases: dict[str, str] = {}
     for stem, target in IDENTITY_ALIASES.items():
         key = canonical_name(stem)
@@ -115,9 +200,16 @@ def metadata_for(name: str) -> tuple[str, list[str]]:
     manufacturer = authors.get(key, "") or "Unknown"
     raw_category = categories.get(key, "")
     category = raw_category[:-6] if raw_category.endswith("Plugin") else raw_category
-    if not category and raw_category == "Plugin":
-        category = "Other"
-    return manufacturer, [category] if category else []
+    source = normalize_description(descriptions.get(key, ""))
+    if (
+        not source
+        or source.casefold() in _GENERIC_DESCRIPTIONS
+        or "provides" in source.casefold()
+        or "music production" in source.casefold()
+        or len(source) > 160
+    ):
+        source = _fallback_description(name, category)
+    return manufacturer, [category] if category else [], source
 
 
 def toml_string(value: str) -> str:
@@ -126,15 +218,16 @@ def toml_string(value: str) -> str:
 
 def manifest(package: str, name: str, archive: bytes) -> str:
     digest = hashlib.sha256(archive).hexdigest()
-    manufacturer, tags = metadata_for(name)
+    manufacturer, tags, description = metadata_for(name)
     tags_text = "[" + ",".join(toml_string(tag) for tag in tags) + "]"
     return (f'schema = 1\nid = "{package}"\nname = {toml_string(name)}\nversion = "{VERSION}"\n'
             f'format = "lv2"\narch = ["arm64-v8a"]\nmanufacturer = {toml_string(manufacturer)}\n'
-            f'tags = {tags_text}\ndescription = {toml_string(f"Bundled LV2 plugin {name}.")}\n'
+            f'tags = {tags_text}\ndescription = {toml_string(description)}\n'
             f'license = "GPL-3.0-or-later"\n\n'
             f'[payload]\nkind = "archive"\nurl = "../../payload/{package}/{VERSION}.zip"\n'
             f'sha256 = "{digest}"\nsize = {len(archive)}\n\n'
             f'[install]\nentry = {toml_string(name + ".lv2/manifest.ttl")}\n')
+
 
 
 def atomic_write(path: Path, content: bytes) -> None:

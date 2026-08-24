@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin GxClubDrive."
+description = "Overdrive Pedal Simulation based on a EF86 Pentode Valve Simulation."
 license = "GPL-3.0-or-later"
 
 [payload]

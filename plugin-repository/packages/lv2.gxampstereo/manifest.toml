@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Simulator"]
-description = "Bundled LV2 plugin gx_amp_stereo."
+description = "Amp/cabinet simulator."
 license = "GPL-3.0-or-later"
 
 [payload]

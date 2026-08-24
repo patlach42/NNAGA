@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "brummer10"
 tags = ["Reverb"]
-description = "Bundled LV2 plugin ImpulseLoader."
+description = "ImpulseLoader is a simple mono IR-File loader/convolver."
 license = "GPL-3.0-or-later"
 
 [payload]

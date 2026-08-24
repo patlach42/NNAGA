@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Analyser"]
-description = "Bundled LV2 plugin gxtuner."
+description = "Signal analyser."
 license = "GPL-3.0-or-later"
 
 [payload]

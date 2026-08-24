@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Aida DSP"
 tags = ["Simulator"]
-description = "Bundled LV2 plugin aidadsp."
+description = "AIDA-X is an Amp Model Player, allowing it to load models of AI trained music gear, which you can then play through!"
 license = "GPL-3.0-or-later"
 
 [payload]

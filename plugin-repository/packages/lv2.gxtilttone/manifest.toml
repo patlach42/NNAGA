@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin gxtilttone."
+description = "Simple Tilt tone control."
 license = "GPL-3.0-or-later"
 
 [payload]

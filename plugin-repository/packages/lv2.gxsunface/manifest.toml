@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin GxSunFace."
+description = "A classic fuzz face with some light modifications."
 license = "GPL-3.0-or-later"
 
 [payload]

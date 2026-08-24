@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin GxBottleRocket."
+description = "Analogue simulation of a tube preamp."
 license = "GPL-3.0-or-later"
 
 [payload]

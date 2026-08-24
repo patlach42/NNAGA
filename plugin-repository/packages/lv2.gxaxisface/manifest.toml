@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin GxAxisFace."
+description = "Simulation of the Axis Face Silicon Pedal."
 license = "GPL-3.0-or-later"
 
 [payload]

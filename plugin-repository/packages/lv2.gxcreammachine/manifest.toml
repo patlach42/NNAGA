@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Amplifier"]
-description = "Bundled LV2 plugin GxCreamMachine."
+description = "Simulation, based on a tube power amp circuit."
 license = "GPL-3.0-or-later"
 
 [payload]

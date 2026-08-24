@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin GxSuppaToneBender."
+description = "Analog simulation of the Vox (*) Suppa Tone Bender pedal as."
 license = "GPL-3.0-or-later"
 
 [payload]

@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Amplifier"]
-description = "Bundled LV2 plugin GxVBassPreAmp."
+description = "Analog Simulation of the 1984 (*) Vox Venue Bass 100 Pre Amp Section."
 license = "GPL-3.0-or-later"
 
 [payload]

@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin gx_bmp."
+description = "Distortion/overdrive effect."
 license = "GPL-3.0-or-later"
 
 [payload]

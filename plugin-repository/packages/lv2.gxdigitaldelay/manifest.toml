@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Delay"]
-description = "Bundled LV2 plugin gx_digital_delay."
+description = "Delay effect."
 license = "GPL-3.0-or-later"
 
 [payload]

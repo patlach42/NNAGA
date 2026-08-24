@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Aida DSP"
 tags = ["Simulator"]
-description = "Bundled LV2 plugin AIDA-X."
+description = "Simple loader for neural models using RTNeural inference engine."
 license = "GPL-3.0-or-later"
 
 [payload]

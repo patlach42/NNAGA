@@ -5,8 +5,8 @@ version = "1.0.0"
 format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Varcain"
-tags = ["Other"]
-description = "Bundled LV2 plugin doubletracker."
+tags = []
+description = "Emulated dual-take track, best with headphones."
 license = "GPL-3.0-or-later"
 
 [payload]

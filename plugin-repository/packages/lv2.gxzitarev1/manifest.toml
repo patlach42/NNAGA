@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Reverb"]
-description = "Bundled LV2 plugin gx_zita_rev1."
+description = "Reverb effect."
 license = "GPL-3.0-or-later"
 
 [payload]

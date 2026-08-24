@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "brummer10"
 tags = ["Simulator"]
-description = "Bundled LV2 plugin Neuralrack."
+description = "Dual neural model loader with six-band EQ and optional stereo impulse responses."
 license = "GPL-3.0-or-later"
 
 [payload]

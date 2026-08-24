@@ -36,6 +36,9 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                     {
                         "authors": {"Example": "Example Audio"},
                         "categories": {"Example": "DelayPlugin"},
+                        "descriptions": {
+                            "Example": "  Stereo delay for spacious guitar echoes  "
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -52,6 +55,8 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
             with patch.object(generator, "ASSETS", assets), patch.object(
                 generator, "LIBS", libs
             ), patch.object(generator, "METADATA", metadata), patch.object(
+                generator, "DESCRIPTION_SOURCE", metadata
+            ), patch.object(
                 generator, "OUTPUT", output
             ):
                 self.assertEqual(0, generator.generate())
@@ -73,16 +78,17 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                 index = tomllib.loads(index_path.read_text(encoding="utf-8"))
                 payload = payload_path.read_bytes()
                 self.assertEqual(
-                    ["packages/lv2.example/manifest.toml?v=2026-08-24"],
+                    ["packages/lv2.example/manifest.toml?v=2026-08-25"],
                     index["manifests"],
                 )
                 self.assertEqual("lv2.example", manifest["id"])
                 self.assertEqual("Example Audio", manifest["manufacturer"])
                 self.assertEqual(["Delay"], manifest["tags"])
                 self.assertEqual(
-                    hashlib.sha256(payload).hexdigest(),
-                    manifest["payload"]["sha256"],
+                    "Stereo delay for spacious guitar echoes.", manifest["description"]
                 )
+                self.assertNotIn("provides", manifest["description"].casefold())
+                self.assertNotIn("music production", manifest["description"].casefold())
                 self.assertEqual(len(payload), manifest["payload"]["size"])
                 with zipfile.ZipFile(io.BytesIO(payload)) as archive:
                     self.assertEqual(

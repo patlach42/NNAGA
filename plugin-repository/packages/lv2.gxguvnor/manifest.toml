@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin GxGuvnor."
+description = "Overdrive/distortion pedal simulation."
 license = "GPL-3.0-or-later"
 
 [payload]

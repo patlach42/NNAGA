@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Simulator"]
-description = "Bundled LV2 plugin GxUltraCab."
+description = "Cabinet simulator Lv2 stereo."
 license = "GPL-3.0-or-later"
 
 [payload]

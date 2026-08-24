@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Distortion"]
-description = "Bundled LV2 plugin GxHotBox."
+description = "Analouge simulation of a tube preamp with overdrive and interactive tone control."
 license = "GPL-3.0-or-later"
 
 [payload]

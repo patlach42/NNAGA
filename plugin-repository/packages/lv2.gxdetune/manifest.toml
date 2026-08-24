@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Pitch"]
-description = "Bundled LV2 plugin gx_detune."
+description = "Pitch shifting effect."
 license = "GPL-3.0-or-later"
 
 [payload]

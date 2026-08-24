@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Utility"]
-description = "Bundled LV2 plugin gxbooster."
+description = "A 2 band boost. With this you can boost the high and the low frequencies independently."
 license = "GPL-3.0-or-later"
 
 [payload]

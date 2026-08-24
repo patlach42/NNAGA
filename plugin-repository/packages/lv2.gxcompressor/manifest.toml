@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "Guitarix"
 tags = ["Compressor"]
-description = "Bundled LV2 plugin gx_compressor."
+description = "Dynamic range compressor."
 license = "GPL-3.0-or-later"
 
 [payload]

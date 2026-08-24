@@ -6,7 +6,7 @@ format = "lv2"
 arch = ["arm64-v8a"]
 manufacturer = "GxPlugins"
 tags = ["Amplifier"]
-description = "Bundled LV2 plugin GxMicroAmp."
+description = "The MicroAmp is designed to be a transparent clean volume booster."
 license = "GPL-3.0-or-later"
 
 [payload]
