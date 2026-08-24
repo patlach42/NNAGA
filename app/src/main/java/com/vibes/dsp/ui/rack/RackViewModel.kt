@@ -310,12 +310,25 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun setTrackInputHardwarePair(trackId: RackPathId, firstChannel: Int) {
         _tracks.value = _tracks.value.map { t ->
-            if (t.id == trackId) t.copy(inputSourceKind = 0) else t
+            if (t.id == trackId) t.copy(inputSourceKind = 0, inputSourceFirstChannel = firstChannel) else t
         }
         viewModelScope.launch(Dispatchers.IO) {
             rackControlMutex.withLock {
                 if (!RackManager.setTrackInputHardwarePair(trackId, firstChannel)) {
                     _errorMessage.value = "Failed to set hardware input pair"
+                }
+                refreshRackNow()
+            }
+        }
+    }
+    fun setTrackInputHardwareMono(trackId: RackPathId, channel: Int) {
+        _tracks.value = _tracks.value.map { t ->
+            if (t.id == trackId) t.copy(inputSourceKind = 2, inputSourceFirstChannel = channel) else t
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                if (!RackManager.setTrackInputHardwareMono(trackId, channel)) {
+                    _errorMessage.value = "Failed to set mono hardware input"
                 }
                 refreshRackNow()
             }
@@ -620,6 +633,26 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             rackControlMutex.withLock {
                 val ok = RackManager.setClipTransportPlaying(trackId, slot, playing, quantization)
                 if (!ok) _errorMessage.value = "Failed to set clip transport"
+                refreshTrackClipSlotsNow(trackId)
+                refreshRackNow()
+                refreshTransport()
+                refreshTrackTransport()
+            }
+        }
+    }
+
+    fun stopTrackClipTransport(
+        trackId: RackPathId,
+        quantization: TrackLaunchQuantization
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val targets = _clipSlots.value[trackId].orEmpty()
+                    .filter { it.playing || it.launchPending }
+                val ok = targets.all { clip ->
+                    RackManager.setClipTransportPlaying(trackId, clip.slot, false, quantization)
+                }
+                if (!ok) _errorMessage.value = "Failed to stop track clip transport"
                 refreshTrackClipSlotsNow(trackId)
                 refreshRackNow()
                 refreshTransport()

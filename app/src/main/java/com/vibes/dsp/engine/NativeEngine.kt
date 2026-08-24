@@ -616,6 +616,7 @@ class NativeEngine private constructor() {
     external fun nativeSetTrackInputArmLocked(trackId: Long, locked: Boolean): Boolean
     external fun nativeArmTrackExclusively(trackId: Long): Boolean
     external fun nativeSetTrackInputHardwarePair(trackId: Long, firstChannel: Int): Boolean
+    external fun nativeSetTrackInputHardwareMono(trackId: Long, channel: Int): Boolean
     external fun nativeSetTrackInputTrack(trackId: Long, sourceTrackId: Long, tap: Int): Boolean
     external fun nativeLoadTrackWav(trackId: Long, path: String, displayName: String): Boolean
     external fun nativeLoadTrackMidi(trackId: Long, path: String, displayName: String): Boolean
@@ -724,6 +725,8 @@ class NativeEngine private constructor() {
     fun armTrackExclusively(trackId: Long): Boolean = nativeArmTrackExclusively(trackId)
     fun setTrackInputHardwarePair(trackId: Long, firstChannel: Int): Boolean =
         nativeSetTrackInputHardwarePair(trackId, firstChannel)
+    fun setTrackInputHardwareMono(trackId: Long, channel: Int): Boolean =
+        nativeSetTrackInputHardwareMono(trackId, channel)
     fun setTrackInputTrack(trackId: Long, sourceTrackId: Long, tap: Int): Boolean =
         nativeSetTrackInputTrack(trackId, sourceTrackId, tap.coerceIn(0, 1))
     fun loadTrackWav(trackId: Long, path: String, displayName: String): Boolean = nativeLoadTrackWav(trackId, path, displayName)

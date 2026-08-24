@@ -503,6 +503,7 @@ void AudioEngine::finishDirectUsbCleanup() {
 }
 
 void AudioEngine::cleanupEngineState() {
+    rackGraph_.setAvailableInputChannelCount(0);
     if (cleanupStarted_.exchange(true, std::memory_order_acq_rel)) return;
     rackGraph_.pauseAndResetTransport();
     rackGraph_.deactivate();

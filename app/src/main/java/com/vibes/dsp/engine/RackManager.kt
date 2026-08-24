@@ -44,6 +44,8 @@ object RackManager {
     fun armTrackExclusively(trackId: RackPathId): Boolean = native.armTrackExclusively(trackId)
     fun setTrackInputHardwarePair(trackId: RackPathId, firstChannel: Int): Boolean =
         native.setTrackInputHardwarePair(trackId, firstChannel)
+    fun setTrackInputHardwareMono(trackId: RackPathId, channel: Int): Boolean =
+        native.setTrackInputHardwareMono(trackId, channel)
     fun setTrackInputTrack(trackId: RackPathId, sourceTrackId: RackPathId, tap: Int): Boolean =
         native.setTrackInputTrack(trackId, sourceTrackId, tap)
     fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = native.loadTrackWav(trackId, path, displayName)

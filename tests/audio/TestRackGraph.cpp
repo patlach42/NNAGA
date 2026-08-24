@@ -3266,6 +3266,82 @@ TEST(RackGraphInputRoutingTest, HardwareStereoPairZeroFillsMissingRightChannel) 
         EXPECT_FLOAT_EQ(buffers.outputRight[frame], 0.0f);
     }
 }
+TEST(RackGraphHardwareMonoTest, SelectedChannelIsDuplicatedToBothTrackOutputs) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+
+    FourChannelBuffers buffers;
+    clearBuffers(buffers);
+    for (uint32_t frame = 0; frame < 4; ++frame) {
+        buffers.channel0[frame] = 1.0f + static_cast<float>(frame);
+        buffers.channel1[frame] = 10.0f + static_cast<float>(frame);
+    }
+
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(track, 0));
+    graph.process(buffers.inputs, 4, buffers.outputs, 4);
+    for (uint32_t frame = 0; frame < 4; ++frame) {
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], buffers.channel0[frame])
+            << "channel 0 left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], buffers.channel0[frame])
+            << "channel 0 right frame " << frame;
+    }
+
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(track, 1));
+    graph.process(buffers.inputs, 4, buffers.outputs, 4);
+    for (uint32_t frame = 0; frame < 4; ++frame) {
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], buffers.channel1[frame])
+            << "channel 1 left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], buffers.channel1[frame])
+            << "channel 1 right frame " << frame;
+    }
+
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+    ASSERT_EQ(chain->addPlugin(std::make_unique<StereoOffsetPlugin>()), 0);
+    graph.process(buffers.inputs, 4, buffers.outputs, 4);
+    for (uint32_t frame = 0; frame < 4; ++frame) {
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], buffers.channel1[frame] + 10.0f)
+            << "plugin left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], buffers.channel1[frame] + 20.0f)
+            << "plugin right frame " << frame;
+    }
+
+    const auto tracks = graph.getTracks();
+    ASSERT_EQ(tracks.size(), 1u);
+    EXPECT_EQ(tracks.front().inputSourceKind, 2u);
+    EXPECT_EQ(tracks.front().inputSourceFirstChannel, 1);
+}
+
+TEST(RackGraphHardwareMonoTest, ChannelValidationAllowsPreconfigurationAndRejectsUnavailableChannels) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+
+    graph.setAvailableInputChannelCount(0);
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(track, 7));
+    EXPECT_FALSE(graph.setTrackInputHardwareMono(track, -1));
+    EXPECT_FALSE(graph.setTrackInputHardwareMono(track, 8));
+
+    auto tracks = graph.getTracks();
+    ASSERT_EQ(tracks.size(), 1u);
+    EXPECT_EQ(tracks.front().inputSourceKind, 2u);
+    EXPECT_EQ(tracks.front().inputSourceFirstChannel, 7);
+
+    graph.setAvailableInputChannelCount(2);
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(track, 1));
+    EXPECT_FALSE(graph.setTrackInputHardwareMono(track, 2));
+    tracks = graph.getTracks();
+    ASSERT_EQ(tracks.size(), 1u);
+    EXPECT_EQ(tracks.front().inputSourceFirstChannel, 1);
+    graph.setAvailableInputChannelCount(0);
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(track, 7));
+    tracks = graph.getTracks();
+    ASSERT_EQ(tracks.size(), 1u);
+    EXPECT_EQ(tracks.front().inputSourceFirstChannel, 7);
+}
+
 
 TEST(RackGraphInputRoutingTest, TrackRoutingHonorsPreAndPostFaderTaps) {
     const std::array<guitarrackcraft::TrackInputTap, 2> taps = {{

@@ -1037,6 +1037,13 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputHardwarePair(
         static_cast<RackPathId>(trackId), static_cast<int32_t>(firstChannel)) ? JNI_TRUE : JNI_FALSE;
 }
 JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputHardwareMono(
+    JNIEnv*, jobject, jlong trackId, jint channel) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    return g_ctx->audioEngine->getRackGraph().setTrackInputHardwareMono(
+        static_cast<RackPathId>(trackId), static_cast<int32_t>(channel)) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputTrack(
     JNIEnv*, jobject, jlong trackId, jlong sourceTrackId, jint tap) {
     if (!g_ctx || !g_ctx->audioEngine || tap < 0 || tap > 1) return JNI_FALSE;

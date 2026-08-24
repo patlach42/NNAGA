@@ -21,7 +21,7 @@ using RackPathId = uint64_t;
 constexpr RackPathId kMasterPathId = 0;
 enum class TrackInputTap : uint8_t { PreFader = 0, PostFader = 1 };
 struct TrackInputSource {
-    enum class Kind : uint8_t { HardwarePair = 0, TrackOutput = 1 };
+    enum class Kind : uint8_t { HardwarePair = 0, TrackOutput = 1, HardwareMono = 2 };
     Kind kind = Kind::HardwarePair;
     int32_t firstChannel = 0;
     RackPathId trackId = 0;
@@ -117,6 +117,7 @@ public:
     bool setTrackVolume(RackPathId, float); bool setTrackInputArmed(RackPathId, bool); bool setTrackInputArmLocked(RackPathId, bool); void setAvailableInputChannelCount(int32_t) noexcept;
     bool setTrackInputSource(RackPathId, const TrackInputSource&);
     bool setTrackInputHardwarePair(RackPathId, int32_t);
+    bool setTrackInputHardwareMono(RackPathId, int32_t);
     bool setTrackInputTrack(RackPathId, RackPathId, TrackInputTap);
     TrackInputSource getTrackInputSource(RackPathId) const;
     bool setTrackInputArmedExclusive(RackPathId);

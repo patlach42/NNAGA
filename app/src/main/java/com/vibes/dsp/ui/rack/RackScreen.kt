@@ -844,9 +844,21 @@ fun RackScreen(
                         expanded = inputChannelMenuExpanded,
                         onDismissRequest = { inputChannelMenuExpanded = false }
                     ) {
-                        (0 until inputChannelCount step 2).forEach { firstChannel ->
+                        (0 until inputChannelCount).forEach { channel ->
                             NnagaSelectorMenuItem(
-                                text = "Hardware ${firstChannel + 1}/${firstChannel + 2}",
+                                text = "Hardware ${channel + 1} (mono)",
+                                selected = track.inputSourceKind == 2 &&
+                                    track.inputSourceFirstChannel == channel,
+                                onClick = {
+                                    viewModel.setTrackInputHardwareMono(track.id, channel)
+                                    inputChannelMenuExpanded = false
+                                    inputMenuExpanded = false
+                                },
+                            )
+                        }
+                        (0 until (inputChannelCount - 1) step 2).forEach { firstChannel ->
+                            NnagaSelectorMenuItem(
+                                text = "Hardware ${firstChannel + 1}/${firstChannel + 2} (stereo)",
                                 selected = track.inputSourceKind == 0 &&
                                     track.inputSourceFirstChannel == firstChannel,
                                 onClick = {

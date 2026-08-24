@@ -98,6 +98,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.toArgb
@@ -142,6 +143,7 @@ import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.rack.RackPlugin
 import com.vibes.dsp.ui.theme.AppearancePreferences
 import kotlin.math.ceil
+import kotlin.math.floor
 import kotlin.math.roundToInt
 
 
@@ -442,10 +444,22 @@ fun LiveScreen(
             onDismissRequest = { inputMenuTrack = null },
             title = { Text("Input source") },
             text = {
-                Column {
-                    (0 until inputChannelCount step 2).forEach { firstChannel ->
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    (0 until inputChannelCount).forEach { channel ->
                         NnagaSelectorMenuItem(
-                            text = "Hardware ${firstChannel + 1}/${firstChannel + 2}",
+                            text = "Hardware ${channel + 1} (mono)",
+                            selected = track.inputSourceKind == 2 &&
+                                track.inputSourceFirstChannel == channel,
+                            onClick = {
+                                viewModel.setTrackInputHardwareMono(track.id, channel)
+                                inputMenuTrack = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    (0 until (inputChannelCount - 1) step 2).forEach { firstChannel ->
+                        NnagaSelectorMenuItem(
+                            text = "Hardware ${firstChannel + 1}/${firstChannel + 2} (stereo)",
                             selected = track.inputSourceKind == 0 &&
                                 track.inputSourceFirstChannel == firstChannel,
                             onClick = {
@@ -778,6 +792,7 @@ fun LiveScreen(
                                     slotsByTrack = slotsByTrack,
                                     selectedTrack = selectedTrack,
                                     selectedSlot = selectedSlot,
+                                    bpm = transport.beatsPerMinute,
                                     trackColors = tracks.mapIndexed { index, track ->
                                         track.id to (
                                             trackColorOverrides[track.id]
@@ -841,6 +856,9 @@ fun LiveScreen(
                                     },
                                     onOpenSlotSettings = { track, clip ->
                                         slotSettingsTarget = track.id to clip.slot
+                                    },
+                                    onStop = { track ->
+                                        viewModel.stopTrackClipTransport(track.id, launchQuantization)
                                     },
                                     onTrackColor = { track, argb ->
                                         LiveLayoutPreferences.setTrackColor(context, track.id, argb)
@@ -1425,6 +1443,7 @@ private fun Launcher(
     selectedTrack: RackTrackInfo?,
     selectedSlot: Int,
     trackColors: Map<Long, Int>,
+    bpm: Double,
     horizontalScrollState: androidx.compose.foundation.ScrollState,
     verticalScrollState: androidx.compose.foundation.ScrollState,
     modifier: Modifier,
@@ -1436,6 +1455,7 @@ private fun Launcher(
     onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onOpenSlotSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onTrackColor: (RackTrackInfo, Int) -> Unit,
+    onStop: (RackTrackInfo) -> Unit,
 ) {
     CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -1481,7 +1501,130 @@ private fun Launcher(
                 )
             }
         }
+        val activeClips = tracks.associateWith { track ->
+            val slots = slotsByTrack[track.id].orEmpty()
+            slots.firstOrNull { it.slot == track.activeSlot && it.playing }
+                ?: slots.firstOrNull { it.playing || it.launchPending }
+        }
+        if (activeClips.values.any { it != null }) {
+            Row(modifier = Modifier.fillMaxWidth().horizontalScroll(horizontalScrollState)) {
+                tracks.forEach { track ->
+                    TrackClipFooter(
+                        clip = activeClips[track],
+                        bpm = bpm,
+                        onStop = { onStop(track) },
+                    )
+                }
+            }
+        }
     }
+    }
+}
+
+@Composable
+private fun TrackClipFooter(
+    clip: ClipSlotInfo?,
+    bpm: Double,
+    onStop: (ClipSlotInfo) -> Unit,
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val nowMonotonicNanos = rememberFrameClockNanos(clip?.playing == true)
+    val timelineLength = if (clip?.looping == true) {
+        clip.loopLengthQuarterNotes.takeIf { it.isFinite() && it > 0.0 } ?: 0.0
+    } else if (clip != null) {
+        clipSourceLengthQuarterNotes(clip)
+    } else {
+        0.0
+    }
+    val timelinePosition = if (clip != null && timelineLength > 0.0) {
+        val displayPosition = clipDisplayPositionQuarterNotes(clip, bpm, nowMonotonicNanos)
+        if (clip.looping) {
+            (displayPosition - clip.loopStartQuarterNotes.coerceAtLeast(0.0))
+                .coerceIn(0.0, timelineLength)
+        } else {
+            displayPosition.coerceIn(0.0, timelineLength)
+        }
+    } else {
+        0.0
+    }
+    val progress = if (timelineLength > 0.0) {
+        (timelinePosition / timelineLength).toFloat()
+    } else {
+        0f
+    }
+    val barNumber = if (timelineLength > 0.0) {
+        (floor(timelinePosition / 4.0).toInt() + 1)
+            .coerceAtMost(ceil(timelineLength / 4.0).toInt().coerceAtLeast(1))
+    } else {
+        1
+    }
+
+    Surface(
+        color = LiveColors.raised,
+        modifier = Modifier
+            .requiredWidth(LiveDimensions.trackWidth)
+            .height(LiveDimensions.hitTarget)
+            .padding(end = LiveDimensions.hairline),
+    ) {
+        if (clip != null) {
+            Row(
+                modifier = Modifier.fillMaxSize().padding(horizontal = LiveDimensions.smallGap),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                NnagaIconButton(
+                    onClick = { onStop(clip) },
+                    modifier = Modifier
+                        .size(LiveDimensions.hitTarget)
+                        .semantics {
+                            contentDescription = "Stop ${clip.displayName}"
+                            stateDescription = when {
+                                clip.playing -> "Playing"
+                                clip.launchPending -> "Stop launch pending"
+                                else -> "Stopped"
+                            }
+                        },
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Stop,
+                        contentDescription = null,
+                        tint = accent,
+                        modifier = Modifier.size(LiveDimensions.icon),
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .size(30.dp)
+                        .semantics {
+                            contentDescription = "Clip loop progress"
+                            progressBarRangeInfo = ProgressBarRangeInfo(progress, 0f..1f)
+                            stateDescription = "Bar $barNumber"
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val strokeWidth = 2.dp.toPx()
+                        drawCircle(
+                            color = LiveColors.divider,
+                            style = Stroke(width = strokeWidth),
+                        )
+                        drawArc(
+                            color = accent,
+                            startAngle = -90f,
+                            sweepAngle = 360f * progress.coerceIn(0f, 1f),
+                            useCenter = false,
+                            style = Stroke(width = strokeWidth, cap = StrokeCap.Round),
+                        )
+                    }
+                    Text(
+                        text = barNumber.toString(),
+                        color = accent,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1905,8 +2048,11 @@ private fun TrackInspectorControls(
             onClick = onInputClick,
         ) {
             Text(
-                if (track.inputSourceKind == 1) "TRK ${track.inputSourceTrackId} ${if (track.inputTap == 0) "PRE" else "POST"}"
-                else "IN ${track.inputSourceFirstChannel + 1}/${track.inputSourceFirstChannel + 2}",
+                when (track.inputSourceKind) {
+                    1 -> "TRK ${track.inputSourceTrackId} ${if (track.inputTap == 0) "PRE" else "POST"}"
+                    2 -> "Hardware ${track.inputSourceFirstChannel + 1} (mono)"
+                    else -> "Hardware ${track.inputSourceFirstChannel + 1}/${track.inputSourceFirstChannel + 2} (stereo)"
+                },
                 style = MaterialTheme.typography.labelSmall,
             )
         }

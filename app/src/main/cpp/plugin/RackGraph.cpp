@@ -121,7 +121,7 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
         result.push_back({node.id, node.volume.load(), node.inputArmed.load(), node.inputArmLocked.load(),
             static_cast<bool>(wav), name, duration, playing, looping, static_cast<double>(frame) / rate,
             frame, node.recordPending.load(),
-            static_cast<uint8_t>(node.inputSource.kind == TrackInputSource::Kind::TrackOutput ? 1 : 0),
+            static_cast<uint8_t>(node.inputSource.kind),
             node.inputSource.trackId, static_cast<uint8_t>(node.inputSource.tap),
             node.inputSource.firstChannel,
             node.recording.load(), node.punchArmed.load(),
@@ -242,6 +242,11 @@ bool RackGraph::setTrackInputSource(RackPathId id, const TrackInputSource& sourc
     if (it == tracks_.end()) return false;
     if (source.kind == TrackInputSource::Kind::HardwarePair &&
         (source.firstChannel < 0 || (source.firstChannel & 1) != 0)) return false;
+    if (source.kind == TrackInputSource::Kind::HardwareMono) {
+        const auto channelCount = availableInputChannelCount_.load(std::memory_order_acquire);
+        if (source.firstChannel < 0 || source.firstChannel > 7 ||
+            (channelCount > 0 && source.firstChannel >= channelCount)) return false;
+    }
     const auto old = (*it)->inputSource;
     (*it)->inputSource = source;
     if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
@@ -254,6 +259,12 @@ bool RackGraph::setTrackInputHardwarePair(RackPathId id, int32_t firstChannel) {
     TrackInputSource source;
     source.kind = TrackInputSource::Kind::HardwarePair;
     source.firstChannel = firstChannel;
+    return setTrackInputSource(id, source);
+}
+bool RackGraph::setTrackInputHardwareMono(RackPathId id, int32_t channel) {
+    TrackInputSource source;
+    source.kind = TrackInputSource::Kind::HardwareMono;
+    source.firstChannel = channel;
     return setTrackInputSource(id, source);
 }
 bool RackGraph::setTrackInputTrack(RackPathId id, RackPathId sourceId, TrackInputTap tap) {
@@ -725,15 +736,18 @@ void RackGraph::process(
             }
             const bool hardwarePair = !routedLeft && inputs &&
                 view.inputSource.kind == TrackInputSource::Kind::HardwarePair;
+            const bool hardwareMono = !routedLeft && inputs &&
+                view.inputSource.kind == TrackInputSource::Kind::HardwareMono;
             const int32_t firstChannel = view.inputSource.firstChannel;
-            const float* hardwareLeft = hardwarePair && firstChannel >= 0 &&
+            const float* hardwareLeft = (hardwarePair || hardwareMono) && firstChannel >= 0 &&
                 firstChannel < inputChannelCount ? inputs[firstChannel] : nullptr;
             const float* hardwareRight = hardwarePair && firstChannel >= 0 &&
                 firstChannel + 1 < inputChannelCount ? inputs[firstChannel + 1] : nullptr;
             const float liveLeft = routedLeft ? routedLeft[frame] * routedGain :
                 (hardwareLeft ? hardwareLeft[frame] : 0.0f);
             const float liveRight = routedRight ? routedRight[frame] * routedGain :
-                (hardwareRight ? hardwareRight[frame] : 0.0f);
+                (hardwareMono ? (hardwareLeft ? hardwareLeft[frame] : 0.0f) :
+                    (hardwareRight ? hardwareRight[frame] : 0.0f));
             source[0][frame] = source[1][frame] = 0.0f;
             if (view.recordingClip && node.punchArmed.load(std::memory_order_relaxed)) {
                 const float magnitude = std::max(std::fabs(liveLeft), std::fabs(liveRight));
@@ -860,7 +874,8 @@ void RackGraph::process(
                     if (looping) runtime->localFrame %= length;
                     else runtime->localPlaying = false;
                 }
-            } else if (node.inputArmed.load(std::memory_order_relaxed) && (hardwarePair || routedLeft)) {
+            } else if (node.inputArmed.load(std::memory_order_relaxed) &&
+                       (hardwarePair || hardwareMono || routedLeft)) {
                 source[0][frame] = liveLeft;
                 source[1][frame] = liveRight;
             }
