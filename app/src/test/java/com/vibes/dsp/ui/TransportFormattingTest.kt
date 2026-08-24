@@ -7,12 +7,12 @@ class TransportFormattingTest {
     @Test
     fun formatMusicalPositionUsesCanonicalQuarterNoteBoundaries() {
         val cases = listOf(
-            0.0 to "1:1:1:0",
-            (1.0 / 960.0) to "1:1:1:1",
-            0.25 to "1:1:2:0",
-            1.0 to "1:2:1:0",
-            4.0 to "2:1:1:0",
-            4.25 to "2:1:2:0",
+            0.0 to "1:1:1",
+            (1.0 / 960.0) to "1:1:1",
+            0.25 to "1:1:2",
+            1.0 to "1:2:1",
+            4.0 to "2:1:1",
+            4.25 to "2:1:2",
         )
 
         cases.forEach { (quarterNotes, expected) ->

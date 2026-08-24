@@ -13,15 +13,14 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 
-/** Formats accumulated musical quarter notes on the canonical 960-subdivision grid. */
+/** Formats accumulated musical quarter notes as bar:beat:sixteenth on the canonical 960-unit grid. */
 fun formatMusicalPosition(musicalQuarterNotes: Double): String {
     val units = (musicalQuarterNotes.coerceAtLeast(0.0) * 960.0).toLong()
     val sixteenths = units / 240L
-    val subdivision = units % 240L
     val bar = sixteenths / 16L + 1L
     val beat = sixteenths / 4L % 4L + 1L
     val sixteenth = sixteenths % 4L + 1L
-    return "$bar:$beat:$sixteenth:$subdivision"
+    return "$bar:$beat:$sixteenth"
 }
 
 /** Returns display-only extrapolation from a captured native snapshot. */
