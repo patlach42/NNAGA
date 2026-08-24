@@ -177,7 +177,7 @@ bool RackGraph::attachTrackWavSlot(RackPathId id,uint32_t slot,std::shared_ptr<c
     ws[i][slot]=std::move(c); wavSlots_=ws;
     (*it)->clipRuntime[slot]=std::make_shared<ClipRuntime>();
     (*it)->clipRuntime[slot]->loopLengthBars.store(slot<(*it)->slotConfig.size()&&(*it)->slotConfig[slot] ? (*it)->slotConfig[slot]->defaultLoopLengthBars.load() : (*it)->defaultLoopLengthBars.load());
-    (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store((*it)->clipRuntime[slot]->loopLengthBars.load() * 4.0);
+    (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store(static_cast<double>(ws[i][slot]->left.size()) / static_cast<double>(ws[i][slot]->sampleRate) * importedBpm / 60.0);
     (*it)->clipRuntime[slot]->sourceBpm.store(importedBpm, std::memory_order_release);
     if(i>=clipLabelOverrides_.size())clipLabelOverrides_.resize(i+1);
     if(slot>=clipLabelOverrides_[i].size())clipLabelOverrides_[i].resize(static_cast<size_t>(slot)+1);
@@ -211,7 +211,7 @@ bool RackGraph::attachTrackMidiSlot(RackPathId id,uint32_t slot,std::shared_ptr<
     auto old=midiSlots_; auto oldRuntime=(*it)->clipRuntime; midiSlots_=ms;
     (*it)->clipRuntime[slot]=std::make_shared<ClipRuntime>();
     (*it)->clipRuntime[slot]->loopLengthBars.store(slot<(*it)->slotConfig.size()&&(*it)->slotConfig[slot] ? (*it)->slotConfig[slot]->defaultLoopLengthBars.load() : (*it)->defaultLoopLengthBars.load());
-    (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store((*it)->clipRuntime[slot]->loopLengthBars.load() * 4.0);
+    (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store(static_cast<double>(ms[i][slot]->durationMicroseconds) * ms[i][slot]->sourceBpm / 60'000'000.0);
     (*it)->clipRuntime[slot]->sourceBpm.store(ms[i][slot]->sourceBpm, std::memory_order_release);
     if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){midiSlots_=std::move(old);(*it)->clipRuntime=std::move(oldRuntime);return false;} return true;
 }

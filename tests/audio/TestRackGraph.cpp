@@ -815,6 +815,36 @@ TEST(RackGraphTransportTest, SlotDefaultLoopLengthSeedsClipRuntimePerSlot) {
     EXPECT_DOUBLE_EQ(secondConfigured->loopLengthBars, 8.0);
     EXPECT_DOUBLE_EQ(secondConfigured->defaultLoopLengthBars, 8.0);
 }
+TEST(RackGraphClipSlotConfigTest, ImportedMediaLoopLengthUsesFullSourceDurationForWavAndMidi) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    constexpr double defaultLoopBars = 4.0;
+    constexpr double expectedSourceQuarterNotes = 3.0;
+
+    ASSERT_TRUE(graph.setSlotDefaultLoopLength(track, 0, defaultLoopBars));
+    ASSERT_TRUE(graph.setSlotDefaultLoopLength(track, 1, defaultLoopBars));
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, 0, makeTempoRampClip(90, 120.0, "source-duration.wav")));
+    ASSERT_TRUE(graph.attachTrackMidiSlot(
+        track, 1, makeMidiClip(1'500'000, "source-duration.mid")));
+
+    const auto slots = graph.getTrackClipSlots(track);
+    const auto* wav = findClipSlot(slots, 0);
+    const auto* midi = findClipSlot(slots, 1);
+    ASSERT_NE(wav, nullptr);
+    ASSERT_NE(midi, nullptr);
+
+    EXPECT_DOUBLE_EQ(wav->defaultLoopLengthBars, defaultLoopBars);
+    EXPECT_DOUBLE_EQ(wav->loopLengthBars, defaultLoopBars);
+    EXPECT_DOUBLE_EQ(wav->loopStartQuarterNotes, 0.0);
+    EXPECT_DOUBLE_EQ(wav->loopLengthQuarterNotes, expectedSourceQuarterNotes);
+
+    EXPECT_DOUBLE_EQ(midi->defaultLoopLengthBars, defaultLoopBars);
+    EXPECT_DOUBLE_EQ(midi->loopLengthBars, defaultLoopBars);
+    EXPECT_DOUBLE_EQ(midi->loopStartQuarterNotes, 0.0);
+    EXPECT_DOUBLE_EQ(midi->loopLengthQuarterNotes, expectedSourceQuarterNotes);
+}
 
 TEST(RackGraphClipSlotConfigTest, SlotConfigSurvivesClipLifecycleAndClipStateStaysIndependent) {
     RackGraph graph;
