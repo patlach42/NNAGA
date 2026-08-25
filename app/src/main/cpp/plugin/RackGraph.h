@@ -100,7 +100,7 @@ struct TrackSnapshot {
     uint64_t capturedAtMonotonicNanos{};
     int32_t recordingSlot{-1};
 };
-enum class RecordingPhase : uint8_t { Idle, Armed, Pending, Recording, Completing, Complete };
+enum class RecordingPhase : uint8_t { Idle, Armed, Pending, Recording, Cancelling, Completing, Complete };
 struct TransportSnapshot { bool playing; double positionSec; double beatsPerMinute; uint64_t samplePosition; uint64_t transportFrame; double musicalQuarterNotes{0.0}; double sampleRate{0.0}; uint64_t capturedAtMonotonicNanos{0}; };
 
 class RackGraph {
@@ -204,6 +204,8 @@ public:
     void writeMailboxLocked(bool, bool, bool, bool=false, double=120); std::unique_ptr<GraphSnapshot> buildSnapshotLocked(const std::vector<std::shared_ptr<TrackNode>>&, const std::vector<std::shared_ptr<const WavClip>>&, const std::vector<std::shared_ptr<WavClip>>& = {}) const; bool publishSnapshotLocked(std::unique_ptr<GraphSnapshot>); bool startTrackRecordingLocked(RackPathId, uint32_t, double, LaunchQuantization, bool); static double clipDuration(const WavClip&); void reclaimerLoop(); void reclaimRetired();
     void applyGlobalMailbox() noexcept; void publishGlobalStatus(double) noexcept; static uint64_t nextBoundary(uint64_t, double, double, double, LaunchQuantization) noexcept;
     bool clearIncompleteRecordingLocked(size_t) noexcept;
+    bool reserveIncompleteRecordingLocked(size_t, RecordingPhase&) noexcept;
+    bool clearReservedRecordingLocked(size_t) noexcept;
     std::atomic<int32_t> availableInputChannelCount_{0};
     bool ensureClipRuntimeLocked(TrackNode&, uint32_t);
     bool ensureSlotConfigLocked(TrackNode&, uint32_t);

@@ -1019,8 +1019,7 @@ fun RackScreen(
                                                 viewModel.startTrackClipRecording(
                                                     track.id,
                                                     selectedSlot,
-                                                    launchQuantization,
-                                                    startGlobal = !transport.playing
+                                                    launchQuantization
                                                 )
                                             }
                                         },

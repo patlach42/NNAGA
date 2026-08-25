@@ -295,39 +295,41 @@ bool RackGraph::unloadTrackMidi(RackPathId id){return unloadTrackMidiSlot(id,0);
 bool RackGraph::unloadTrackWav(RackPathId id){return unloadTrackWavSlot(id,0);}
 bool RackGraph::clearTrackWavs(){
     std::lock_guard lock(controlMutex_);
-    bool cancelled = false;
+    std::vector<size_t> reserved;
+    reserved.reserve(tracks_.size());
     for (size_t i = 0; i < tracks_.size(); ++i) {
-        const auto phase = tracks_[i]->recordingPhase.load(std::memory_order_acquire);
-        if (phase == RecordingPhase::Completing) {
-            if (cancelled) {
-                (void)publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_));
-            }
-            return false;
-        }
-        if (phase == RecordingPhase::Armed ||
-            phase == RecordingPhase::Pending ||
-            phase == RecordingPhase::Recording) {
-            if (!clearIncompleteRecordingLocked(i)) {
-                if (cancelled) {
-                    (void)publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_));
+        for (;;) {
+            RecordingPhase original = RecordingPhase::Idle;
+            if (reserveIncompleteRecordingLocked(i, original)) {
+                if (original == RecordingPhase::Armed ||
+                    original == RecordingPhase::Pending ||
+                    original == RecordingPhase::Recording) {
+                    reserved.push_back(i);
                 }
+                break;
+            }
+            if (original != RecordingPhase::Completing &&
+                original != RecordingPhase::Cancelling) {
                 return false;
             }
-            cancelled = true;
+            std::this_thread::yield();
         }
+    }
+    for (size_t i : reserved) {
+        (void)clearReservedRecordingLocked(i);
     }
     auto copy = clips_;
     auto recs = recordingClips_;
     for (size_t i = 0; i < copy.size(); ++i) {
         copy[i].reset();
         recs[i].reset();
+        const bool wasReserved = std::find(reserved.begin(), reserved.end(), i) != reserved.end();
+        if (wasReserved) continue;
         auto& node = *tracks_[i];
         ++node.recordingGeneration;
-        node.recordingGenerationActive.store(
-            node.recordingGeneration, std::memory_order_release);
+        node.recordingGenerationActive.store(node.recordingGeneration, std::memory_order_release);
         node.recordingSlot = std::numeric_limits<uint32_t>::max();
-        node.recordingSlotAtomic.store(
-            std::numeric_limits<uint32_t>::max(), std::memory_order_release);
+        node.recordingSlotAtomic.store(std::numeric_limits<uint32_t>::max(), std::memory_order_release);
         node.recordPending.store(false, std::memory_order_relaxed);
         node.recording.store(false, std::memory_order_relaxed);
         node.punchArmed.store(false, std::memory_order_relaxed);
@@ -344,11 +346,12 @@ bool RackGraph::startTrackRecordingLocked(RackPathId id,uint32_t slot,double bar
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
     if(it==tracks_.end()) return false;
     auto& n=**it; const size_t i=static_cast<size_t>(it-tracks_.begin()); auto oldRuntime=n.clipRuntime;
+    const auto phase = n.recordingPhase.load(std::memory_order_acquire);
+    if (recordingClips_[i] && phase != RecordingPhase::Complete) return false;
     if(!n.inputArmed.load() || clips_[i]) return false;
     if(i>=wavSlots_.size() || i>=midiSlots_.size()) return false;
     if(slot<wavSlots_[i].size() && wavSlots_[i][slot]) return false;
     if(slot<midiSlots_[i].size() && midiSlots_[i][slot]) return false;
-    if (recordingClips_[i] && !n.recordComplete.load(std::memory_order_acquire)) return false;
     if(!ensureClipRuntimeLocked(n,slot)) return false;
     const double rate=sampleRate_.load(), bpm=mailbox_.desiredBpm.load();
     if(rate<=0 || bpm<=0) return false;
@@ -560,46 +563,59 @@ bool RackGraph::setClipSourceBpm(RackPathId id, uint32_t slot, double sourceBpm)
     (*it)->clipRuntime[slot]->sourceBpm.store(sourceBpm,std::memory_order_release);
     return true;
 }
-bool RackGraph::clearIncompleteRecordingLocked(size_t i) noexcept {
+bool RackGraph::reserveIncompleteRecordingLocked(size_t i, RecordingPhase& original) noexcept {
     if (i >= tracks_.size() || i >= recordingClips_.size() || i >= wavSlots_.size()) return false;
-    auto& n = *tracks_[i];
-    auto phase = n.recordingPhase.load(std::memory_order_acquire);
-    while (phase == RecordingPhase::Armed ||
-           phase == RecordingPhase::Pending ||
-           phase == RecordingPhase::Recording) {
-        if (n.recordingPhase.compare_exchange_weak(
-                phase, RecordingPhase::Idle,
+    auto& phase = tracks_[i]->recordingPhase;
+    original = phase.load(std::memory_order_acquire);
+    while (original == RecordingPhase::Armed ||
+           original == RecordingPhase::Pending ||
+           original == RecordingPhase::Recording) {
+        if (phase.compare_exchange_weak(
+                original, RecordingPhase::Cancelling,
                 std::memory_order_acq_rel, std::memory_order_acquire)) {
-            ++n.recordingGeneration;
-            n.recordingGenerationActive.store(n.recordingGeneration, std::memory_order_release);
-            const auto slot = n.recordingSlot;
-            if (slot < wavSlots_[i].size() && recordingClips_[i] &&
-                wavSlots_[i][slot].get() == recordingClips_[i].get()) {
-                wavSlots_[i][slot].reset();
-            }
-            recordingClips_[i].reset();
-            n.recordingSlot = std::numeric_limits<uint32_t>::max();
-            n.recordingSlotAtomic.store(
-                std::numeric_limits<uint32_t>::max(), std::memory_order_release);
-            n.recordPending.store(false, std::memory_order_relaxed);
-            n.recording.store(false, std::memory_order_relaxed);
-            n.punchArmed.store(false, std::memory_order_relaxed);
-            n.recordComplete.store(false, std::memory_order_release);
-            n.recordStartFrame.store(
-                std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
-            n.recordFrame.store(0, std::memory_order_relaxed);
             return true;
         }
     }
-    return false;
+    return original == RecordingPhase::Idle || original == RecordingPhase::Complete;
+}
+bool RackGraph::clearReservedRecordingLocked(size_t i) noexcept {
+    if (i >= tracks_.size() || i >= recordingClips_.size() || i >= wavSlots_.size()) return false;
+    auto& n = *tracks_[i];
+    if (n.recordingPhase.load(std::memory_order_acquire) != RecordingPhase::Cancelling) return false;
+    ++n.recordingGeneration;
+    n.recordingGenerationActive.store(n.recordingGeneration, std::memory_order_release);
+    const auto slot = n.recordingSlot;
+    if (slot < wavSlots_[i].size() && recordingClips_[i] &&
+        wavSlots_[i][slot].get() == recordingClips_[i].get()) {
+        wavSlots_[i][slot].reset();
+    }
+    recordingClips_[i].reset();
+    n.recordingSlot = std::numeric_limits<uint32_t>::max();
+    n.recordingSlotAtomic.store(std::numeric_limits<uint32_t>::max(), std::memory_order_release);
+    n.recordPending.store(false, std::memory_order_relaxed);
+    n.recording.store(false, std::memory_order_relaxed);
+    n.punchArmed.store(false, std::memory_order_relaxed);
+    n.recordComplete.store(false, std::memory_order_release);
+    n.recordStartFrame.store(std::numeric_limits<uint64_t>::max(), std::memory_order_relaxed);
+    n.recordFrame.store(0, std::memory_order_relaxed);
+    n.recordingPhase.store(RecordingPhase::Idle, std::memory_order_release);
+    return true;
+}
+bool RackGraph::clearIncompleteRecordingLocked(size_t i) noexcept {
+    RecordingPhase original = RecordingPhase::Idle;
+    if (!reserveIncompleteRecordingLocked(i, original) ||
+        (original != RecordingPhase::Armed &&
+         original != RecordingPhase::Pending &&
+         original != RecordingPhase::Recording)) {
+        return false;
+    }
+    return clearReservedRecordingLocked(i);
 }
 bool RackGraph::cancelTrackLoopRecording(RackPathId id){
     std::lock_guard lock(controlMutex_);
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
     if(it==tracks_.end()) return false;
     const size_t i=static_cast<size_t>(it-tracks_.begin());
-    auto& n=**it;
-    const auto phase=n.recordingPhase.load(std::memory_order_acquire);
     if (!clearIncompleteRecordingLocked(i)) return false;
     return publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));
 }
@@ -964,7 +980,7 @@ void RackGraph::process(
                                 adapter.configure(static_cast<ClipTempoMode>(rr.tempoMode.load(std::memory_order_relaxed)), rr.sourceBpm.load(std::memory_order_relaxed), bpm, wav->sampleRate, static_cast<uint32_t>(rate));
                             }
                         }
-                        node.recordComplete.store(true, std::memory_order_release);
+                        node.recordComplete.store(true, std::memory_order_relaxed);
                         node.recordingPhase.store(RecordingPhase::Complete, std::memory_order_release);
                     }
                 }

@@ -686,13 +686,11 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun startTrackClipRecording(
         trackId: RackPathId,
         slot: Int,
-        quantization: TrackLaunchQuantization,
-        startGlobal: Boolean
+        quantization: TrackLaunchQuantization
     ) {
         viewModelScope.launch(Dispatchers.IO) {
             rackControlMutex.withLock {
                 val recorded = RackManager.startTrackClipRecording(trackId, slot, quantization)
-                if (recorded && startGlobal) RackManager.setTransportPlaying(true)
                 if (!recorded) _errorMessage.value = "Failed to start clip recording"
                 refreshTrackClipSlotsNow(trackId)
                 refreshRackNow()

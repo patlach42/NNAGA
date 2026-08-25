@@ -858,7 +858,6 @@ fun LiveScreen(
                                             track.id,
                                             slot,
                                             launchQuantization,
-                                            startGlobal = !transport.playing,
                                         )
                                     },
                                     onCancelRecording = { track ->

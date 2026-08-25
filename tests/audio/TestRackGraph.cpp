@@ -1439,6 +1439,34 @@ TEST(RackGraphTransportTest, StoppedLoopRecordingStartsAtFrameZeroForEveryQuanti
         EXPECT_FLOAT_EQ(buffers.outputRight[0], -0.5f);
     }
 }
+TEST(RackGraphTransportTest, StoppedRecordingStartsGlobalTransportWithoutUiPlay) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    ASSERT_TRUE(startConfiguredClipRecording(
+        graph, track, 0.25, guitarrackcraft::LaunchQuantization::None, false));
+
+    // The native recording request reserves the loop while stopped; no
+    // separate transport Play command is issued by this test.
+    EXPECT_FALSE(graph.getTransportSnapshot().playing);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    buffers.left[0] = 0.25f;
+    buffers.right[0] = -0.5f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    std::vector<guitarrackcraft::TrackSnapshot> tracks;
+    const auto& recording = trackSnapshot(graph, track, tracks);
+    EXPECT_FALSE(recording.recordPending);
+    EXPECT_TRUE(recording.recording);
+    EXPECT_TRUE(graph.getTransportSnapshot().playing);
+    EXPECT_EQ(graph.getTransportSnapshot().transportFrame, 1u);
+    EXPECT_FLOAT_EQ(buffers.outputLeft[0], 0.25f);
+    EXPECT_FLOAT_EQ(buffers.outputRight[0], -0.5f);
+}
+
 TEST(RackGraphTransportTest, QuantizedRecordingFollowsMusicalPhaseAfterBpmChange) {
     struct QuantizationCase {
         const char* name;
@@ -2751,6 +2779,7 @@ TEST(RackGraphTransportTest, LoopRecordingCanRestartAfterCompletedSlotUnload) {
     EXPECT_TRUE(secondPending.recordPending);
     EXPECT_FALSE(secondPending.recording);
 }
+
 
 TEST(RackGraphTransportTest, PunchRecordingRejectsInvalidPrerequisites) {
     struct PunchCase {
