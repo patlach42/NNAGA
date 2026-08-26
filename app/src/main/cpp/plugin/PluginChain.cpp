@@ -373,25 +373,25 @@ void PluginChain::injectAtom(int pluginIndex, const void* data, uint32_t size) {
 }
 
 PluginChain::ChainState PluginChain::saveChainState() {
-    std::shared_lock lock(chainMutex_);
+    std::unique_lock lock(chainMutex_);
     ChainState cs;
     cs.plugins.reserve(plugins_.size());
     for (auto& slot : plugins_) {
         auto ps = slot.plugin->saveState();
-        // Retain the factory format for a complete plugin-state snapshot.
-        // Plugins that do not override saveState() return an empty
-        // PluginState, so identify them from the current factory metadata.
-        if (ps.format.empty()) {
-            ps.format = slot.plugin->getInfo().format;
-        }
+        const auto info = slot.plugin->getInfo();
+        if (ps.format.empty()) ps.format = info.format;
         if (ps.pluginUri.empty()) {
-            // Strip any "FORMAT:" prefix from the factory identifier.
-            auto id = slot.plugin->getInfo().id;
-            auto colon = id.find(':');
-            if (colon != std::string::npos && id.substr(0, colon) == ps.format) {
-                ps.pluginUri = id.substr(colon + 1);
-            } else {
-                ps.pluginUri = id;
+            auto id = info.id;
+            const auto colon = id.find(':');
+            ps.pluginUri = (colon != std::string::npos && id.substr(0, colon) == ps.format)
+                ? id.substr(colon + 1) : std::move(id);
+        }
+        // saveState implementations may omit controls; capture the complete
+        // current control surface so a snapshot is sufficient to recreate it.
+        if (ps.controlPortValues.empty()) {
+            for (const auto& port : info.ports) {
+                if (port.isInput && port.isControl && !port.isReadOnly)
+                    ps.controlPortValues.emplace_back(port.index, slot.plugin->getParameter(port.index));
             }
         }
         cs.plugins.push_back(std::move(ps));

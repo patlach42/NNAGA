@@ -49,6 +49,8 @@ target_link_libraries(x11_unit_tests PRIVATE x11_core gtest_main)
 enable_testing()
 # Allocation-free direct audio callback tests.
 add_subdirectory(audio)
+add_subdirectory(codec)
+add_subdirectory(ysfx)
 set(GRC_LV2_ROOT "${CPP_SRC_DIR}/libs/lv2" CACHE PATH
     "Directory containing LV2 headers and host libraries")
 find_path(LV2_TEST_LILV_INCLUDE_DIR

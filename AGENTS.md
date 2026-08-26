@@ -14,6 +14,12 @@ NNAGA is an Android real-time guitar-effects rack. It hosts LV2 effects through 
 
 **Real-time rule:** Do not allocate, block, or take contended exclusive locks in audio callbacks. `PluginChain` intentionally uses `try_lock` and passes audio through on contention; expensive teardown belongs off the RT path.
 
+## Obsidian Workflow
+
+- Follow an Obsidian-first workflow for NNAGA: store session notes, decisions, and research under `vault://_/NNAGA`.
+- Put all loose incoming notes in `vault://_/NNAGA/Inbox`; no manual filename is required for Inbox notes.
+- Agents are responsible for reviewing and triaging Inbox notes, then moving or renaming them to the appropriate destination: `Tasks`, `Decisions`, `Sessions`, or `Research`.
+
 ## Key Directories
 
 - `app/src/main/java/com/vibes/dsp/` — Compose UI, ViewModels, Android lifecycle, JNI facades.

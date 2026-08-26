@@ -52,6 +52,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.vibes.dsp.engine.AudioEngine
 import com.vibes.dsp.engine.EngineInitHelper
+import com.vibes.dsp.engine.RackStateStore
 import com.vibes.dsp.engine.NativeEngine
 import com.vibes.dsp.ui.components.NnagaButton
 import com.vibes.dsp.ui.loading.PluginExtractScreen
@@ -62,10 +63,12 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : ComponentActivity() {
     private val audioPermissionLauncher = registerForActivityResult(
@@ -81,6 +84,10 @@ class MainActivity : ComponentActivity() {
     private var startupState by mutableStateOf<StartupState>(StartupState.Initializing)
     private var extractedCount by mutableIntStateOf(0)
     private var extractTotalCount by mutableIntStateOf(0)
+    private val rackStateStore by lazy { RackStateStore(applicationContext) }
+    private companion object {
+        val rackStateRestoreAttempted = AtomicBoolean(false)
+    }
 
     override fun onNewIntent(intent: android.content.Intent?) {
         super.onNewIntent(intent)
@@ -179,6 +186,7 @@ class MainActivity : ComponentActivity() {
                     prepareLv2AndInitEngine()
                 }
                 if (initialized) {
+                    restoreRackStateOnce()
                     startupState = StartupState.Ready
                     refreshPluginRegistryAfterBackgroundSetup()
                     maybeRunAhbSpike()
@@ -198,6 +206,35 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    private suspend fun restoreRackStateOnce() {
+        if (!rackStateRestoreAttempted.compareAndSet(false, true)) return
+        withContext(Dispatchers.IO) {
+            val bytes = rackStateStore.load() ?: return@withContext
+            try {
+                val diagnostic = NativeEngine.getInstance().importRackState(bytes)
+                if (diagnostic == null) {
+                    android.util.Log.i("RackStateStore", "Restored rack state (${bytes.size} bytes)")
+                } else {
+                    android.util.Log.e("RackStateStore", "Native rack state restore rejected: $diagnostic")
+                    rackStateStore.quarantine(diagnostic)
+                }
+            } catch (t: Throwable) {
+                android.util.Log.e("RackStateStore", "Rack state restore failed", t)
+                rackStateStore.quarantine(t.message ?: "restore failed")
+            }
+        }
+    }
+
+    private suspend fun saveRackState() = withContext(Dispatchers.IO) {
+        try {
+            val bytes = NativeEngine.getInstance().exportRackState()
+            rackStateStore.save(bytes)
+            android.util.Log.i("RackStateStore", "Saved rack state (${bytes.size} bytes)")
+        } catch (t: Throwable) {
+            android.util.Log.e("RackStateStore", "Rack state save failed", t)
+        }
+    }
+
 
     /**
      * A full-flavor VST setup starts from Application.onCreate. Wait for it only
@@ -378,30 +415,19 @@ class MainActivity : ComponentActivity() {
             val match = withContext(Dispatchers.IO) {
                 rm.getAvailablePlugins().firstOrNull {
                     it.name.contains(want, ignoreCase = true) ||
-                    it.fullId.contains(want, ignoreCase = true) ||
-                    it.id.contains(want, ignoreCase = true)
+                        it.fullId.contains(want, ignoreCase = true) ||
+                        it.id.contains(want, ignoreCase = true)
                 }
-            }
-            if (match == null) {
-                android.util.Log.w("Autostart", "no plugin matches '$want'")
-                return
-            }
-            // Re-add to the MAIN rack (audio chain) so it behaves like a restored
-            // session, not just the editor window. Guard on empty rack so config
-            // changes / re-creates don't stack duplicates. Heavy (loads plugin) -> IO.
-            // Debug toggle: cache/autostart_norack present => editor only (clean,
-            // single vst_host log for pipe tracing). Absent (normal) => add to rack.
-            if (!File(cacheDir, "autostart_norack").exists()) {
-                withContext(Dispatchers.IO) {
-                    val trackId = rm.getTracks().firstOrNull()?.id
-                    if (trackId == null) {
-                        android.util.Log.w("Autostart", "no rack track available")
-                    } else if (rm.getRackSize(trackId) == 0) {
-                        val pos = rm.addPlugin(trackId, match.fullId)
-                        android.util.Log.i("Autostart", "added ${match.name} to rack at pos=$pos")
-                    } else {
-                        android.util.Log.i("Autostart", "rack already has ${rm.getRackSize(trackId)} plugin(s), skip add")
-                    }
+            } ?: return
+            withContext(Dispatchers.IO) {
+                val trackId = rm.getTracks().firstOrNull()?.id
+                if (trackId == null) {
+                    android.util.Log.w("Autostart", "no rack track available")
+                } else if (rm.getRackSize(trackId) == 0) {
+                    val pos = rm.addPlugin(trackId, match.fullId)
+                    android.util.Log.i("Autostart", "added ${match.name} to rack at pos=$pos")
+                } else {
+                    android.util.Log.i("Autostart", "rack already has ${rm.getRackSize(trackId)} plugin(s), skip add")
                 }
             }
             android.util.Log.i("Autostart", "opening editor for ${match.name} (${match.fullId})")
@@ -419,6 +445,15 @@ class MainActivity : ComponentActivity() {
             android.util.Log.d("MainActivity", "Native engine already initialized; skipping LV2 extraction")
             return true
         }
+        val jsfxRoot = File(applicationContext.filesDir, "jsfx/Effects")
+        val jsfxData = File(applicationContext.filesDir, "jsfx/Data")
+        if (!jsfxRoot.exists() && !jsfxRoot.mkdirs()) {
+            android.util.Log.w("MainActivity", "Could not create JSFX root: ${jsfxRoot.absolutePath}")
+        }
+        if (!jsfxData.exists() && !jsfxData.mkdirs()) {
+            android.util.Log.w("MainActivity", "Could not create JSFX data root: ${jsfxData.absolutePath}")
+        }
+        NativeEngine.getInstance().setJsfxRoot(jsfxRoot.absolutePath)
         EngineInitHelper.preloadLilv(applicationInfo.nativeLibraryDir)
         extractLV2Assets()
         return EngineInitHelper.initEngine(this) { extracted, total ->
@@ -453,8 +488,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
-        super.onStop()
+        if (EngineInitHelper.isInitialized) {
+            runBlocking { saveRackState() }
+        }
         android.util.Log.i("AudioLifecycle", "MainActivity.onStop (isFinishing=$isFinishing)")
+        super.onStop()
     }
 
     override fun onDestroy() {

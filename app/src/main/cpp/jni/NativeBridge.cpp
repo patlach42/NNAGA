@@ -29,6 +29,7 @@
 #include <fstream>
 #include <iterator>
 #include <memory>
+#include <filesystem>
 #include <mutex>
 #include <set>
 #include <string>
@@ -44,6 +45,7 @@
 #include "../plugin/IPluginFactory.h"
 #include "../plugin/lv2/LV2PluginFactory.h"
 
+#include "../jsfx/JsfxPluginFactory.h"
 // VST hosting (full flavor only — gated by CMake -DHAS_VST_HOST from
 // productFlavors.full.externalNativeBuild). Header comes from :vsthost_lib's
 // prefab package (vsthost_lib::vsthost target → -I<prefab>/include/vsthost/).
@@ -55,6 +57,7 @@
 #include "../x11/X11NativeDisplay.h"
 #include "../x11/X11Worker.h"
 #include "../x11/DisplayState.h"
+#include "NativeContextAccess.h"
 #include <liblowlatencyaudio/ThreadUtils.h>
 
 #define LOG_TAG "NativeBridge"
@@ -72,9 +75,10 @@ struct NativeContext {
     std::mutex rackControlMutex;
     std::string lv2Path;
     std::string nativeLibDir;
+    std::string pluginLibDir;
     std::string filesDir;
     std::string x11LibsDir;
-    std::string pluginLibDir;  // PAD-extracted plugin .so (playstore flavor)
+    std::string jsfxRoot;
 };
 
 static NativeContext* g_ctx = nullptr;
@@ -85,11 +89,18 @@ static NativeContext* g_ctx = nullptr;
 static std::once_flag g_ctxOnce;
 
 static NativeContext* ensureCtx() {
-    std::call_once(g_ctxOnce, [] {
-        g_ctx = new NativeContext();
-    });
+    std::call_once(g_ctxOnce, [] { g_ctx = new NativeContext(); });
     return g_ctx;
 }
+
+NativeContext* nnagaNativeContext() noexcept { return g_ctx; }
+PluginRegistry* nnagaNativePluginRegistry() noexcept { return g_ctx ? g_ctx->pluginRegistry.get() : nullptr; }
+RackGraph* nnagaNativeRackGraph() noexcept {
+    return g_ctx && g_ctx->audioEngine ? &g_ctx->audioEngine->getRackGraph() : nullptr;
+}
+std::mutex* nnagaNativeRackMutex() noexcept { return g_ctx ? &g_ctx->rackControlMutex : nullptr; }
+bool nnagaNativeEngineRunning() noexcept { return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->isRunning(); }
+const std::string& nnagaNativeJsfxRoot() noexcept { static const std::string empty; return g_ctx ? g_ctx->jsfxRoot : empty; }
 
 static PluginUIManager* getPluginUIManagerLocked(NativeContext& ctx, jlong pathId,
                                                   PluginChain* chain) {
@@ -306,6 +317,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetFilesDir(JNIEnv* env, jobject th
 }
 
 JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetJsfxRoot(JNIEnv* env, jobject, jstring path) {
+    auto* ctx = ensureCtx();
+    if (!path) { ctx->jsfxRoot.clear(); return; }
+    const char* value = env->GetStringUTFChars(path, nullptr);
+    if (value) { ctx->jsfxRoot = value; env->ReleaseStringUTFChars(path, value); }
+}
+
+JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeSetX11LibsDir(JNIEnv* env, jobject thiz, jstring path) {
     if (!path) {
         ensureCtx()->x11LibsDir.clear();
@@ -387,8 +406,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
     auto lv2Factory = std::make_unique<LV2PluginFactory>(g_ctx->lv2Path, g_ctx->nativeLibDir, g_ctx->filesDir, g_ctx->pluginLibDir);
     g_ctx->pluginRegistry->registerFactory(std::move(lv2Factory));
 
+    if (!g_ctx->jsfxRoot.empty()) {
+        const std::string dataRoot = std::filesystem::path(g_ctx->jsfxRoot).parent_path() / "Data";
+        g_ctx->pluginRegistry->registerFactory(
+            std::make_unique<JsfxPluginFactory>(g_ctx->jsfxRoot, dataRoot));
+    }
 #if HAS_VST_HOST
     // Register VST factory (full flavor only — VST hosting via wine + FEX).
+
     // Plugin enumeration reads filesDir/vst_plugins/registry.json which the
     // Manage VST UI (Phase D) writes on user import/remove.
     const std::string wineRoot   = g_ctx->filesDir + "/wine";

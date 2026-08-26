@@ -25,6 +25,8 @@
 #include <cstdint>
 #include <condition_variable>
 #include <deque>
+#include <type_traits>
+#include <utility>
 #include <vector>
 #include <memory>
 #include <shared_mutex>
@@ -66,18 +68,48 @@ public:
     void setParameter(int pluginIndex, uint32_t portIndex, float value);
     float getParameter(int pluginIndex, uint32_t portIndex) const;
 
+    template <typename Callback>
+    decltype(auto) visitPlugin(size_t index, Callback&& callback) {
+        std::shared_lock lock(chainMutex_);
+        if (index >= plugins_.size()) {
+            using Result = std::invoke_result_t<Callback, IPlugin&>;
+            if constexpr (std::is_void_v<Result>) return;
+            else return Result{};
+        }
+        return std::forward<Callback>(callback)(*plugins_[index].plugin);
+    }
+    template <typename Callback>
+    decltype(auto) visitPlugin(size_t index, Callback&& callback) const {
+        std::shared_lock lock(chainMutex_);
+        if (index >= plugins_.size()) {
+            using Result = std::invoke_result_t<Callback, const IPlugin&>;
+            if constexpr (std::is_void_v<Result>) return;
+            else return Result{};
+        }
+        return std::forward<Callback>(callback)(*plugins_[index].plugin);
+    }
+
+    template <typename Callback>
+    bool visitPluginInstance(uint64_t instanceId, Callback&& callback) {
+        std::shared_lock lock(chainMutex_);
+        for (auto& slot : plugins_) {
+            if (slot.instanceId == instanceId) {
+                std::forward<Callback>(callback)(*slot.plugin);
+                return true;
+            }
+        }
+        return false;
+    }
+
     void setPluginFilePath(int pluginIndex, const std::string& propertyUri, const std::string& path);
 
     /** Inject an atom message into a plugin (thread-safe, holds shared_lock). */
     void injectAtom(int pluginIndex, const void* data, uint32_t size);
 
-    /** Save state of all plugins in the chain. */
+    /** Save state of all plugins, including every control port value. */
     struct ChainState { std::vector<PluginState> plugins; };
     ChainState saveChainState();
-
-    /** Restore state for a single plugin by index. Takes exclusive lock. */
     bool restorePluginState(int index, const PluginState& state);
-
     /** Expose chain mutex so UI code can take a shared_lock during port reads. */
     std::shared_mutex* getChainMutex() { return &chainMutex_; }
 

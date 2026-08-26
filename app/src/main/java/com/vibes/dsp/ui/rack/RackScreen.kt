@@ -124,6 +124,8 @@ import com.vibes.dsp.engine.RackManager
 import com.vibes.dsp.engine.X11Bridge
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.UiType
+import com.vibes.dsp.engine.JsfxBridge
+import com.vibes.dsp.engine.PluginUiPreferenceManager
 import com.vibes.dsp.engine.DirectUsbSessionState
 import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.MASTER_PATH_ID
@@ -138,6 +140,7 @@ import com.vibes.dsp.ui.components.NnagaSwitch
 import com.vibes.dsp.ui.components.NnagaTextButton
 import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import com.vibes.dsp.ui.modgui.InlineModguiView
+import com.vibes.dsp.ui.jsfx.JsfxPluginUi
 import com.vibes.dsp.ui.x11.PluginX11UiView
 import com.vibes.dsp.ui.x11.X11DisplayManager
 import com.vibes.dsp.BuildConfig
@@ -170,6 +173,9 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import kotlin.math.roundToInt
+private const val FALLBACK_JSFX_WIDTH = 640
+private const val FALLBACK_JSFX_HEIGHT = 360
+
 
 private val PunchArmedColor = Color(0xFFFFC107)
 
@@ -1779,22 +1785,51 @@ fun PluginCard(
         ) {
             // Parameter controls / plugin UI — always in composition to avoid re-renders
             if (pluginInfo != null) {
+                val context = LocalContext.current
                 val isVstPlugin = pluginInfo.format == "VST2" || pluginInfo.format == "VST3"
                 var x11DisplayNumber by remember(pluginInfo.fullId) {
                     mutableStateOf(
                         if (pluginInfo.hasX11Ui && !isVstPlugin) X11DisplayManager.allocateDisplay() else -1
                     )
                 }
-                // Determine which UI modes are available
-                val availableUiTypes = remember(pluginInfo) {
+                val jsfxGfxAvailable by produceState<Boolean?>(
+                    initialValue = null,
+                    key1 = pathId,
+                    key2 = plugin.instanceId,
+                ) {
+                    value = if (pluginInfo.format == "JSFX") {
+                        withContext(Dispatchers.IO) {
+                            runCatching { JsfxBridge.nativeHasGfx(pathId, plugin.instanceId) }.getOrDefault(false)
+                        }
+                    } else {
+                        false
+                    }
+                }
+                val availableUiTypes = remember(pluginInfo, jsfxGfxAvailable) {
                     buildList {
                         if (pluginInfo.hasX11Ui) add(UiType.X11)
                         if (pluginInfo.hasModgui) add(UiType.MODGUI)
+                        if (pluginInfo.format == "JSFX" && jsfxGfxAvailable == true) add(UiType.JSFX)
                         add(UiType.SLIDERS)
                     }
                 }
+                val storedUiType = remember(pluginInfo.fullId) {
+                    PluginUiPreferenceManager.getStoredUiType(context = context, pluginFullId = pluginInfo.fullId)
+                }
                 var currentUiMode by rememberSaveable(pluginInfo.fullId) {
-                    mutableStateOf(viewModel.getPreferredUiTypeForPlugin(pluginInfo))
+                    mutableStateOf(
+                        if (storedUiType == UiType.JSFX) UiType.SLIDERS
+                        else viewModel.getPreferredUiTypeForPlugin(pluginInfo)
+                    )
+                }
+                LaunchedEffect(jsfxGfxAvailable, storedUiType) {
+                    if (jsfxGfxAvailable == true &&
+                        (storedUiType == null || storedUiType == UiType.JSFX)
+                    ) {
+                        currentUiMode = UiType.JSFX
+                    } else if (jsfxGfxAvailable == false && currentUiMode == UiType.JSFX) {
+                        currentUiMode = UiType.SLIDERS
+                    }
                 }
                 LaunchedEffect(pluginIndex, pluginInfo, currentUiMode) {
                     Log.i("NNAGA.UI", "Plugin[$pluginIndex] ${pluginInfo.name}: chosen UI mode=$currentUiMode (preferred=${pluginInfo.preferredUiType}, available=${pluginInfo.guiTypes})")
@@ -1809,6 +1844,8 @@ fun PluginCard(
                 var x11UIScale by remember { mutableStateOf(1f) }
                 var modguiContentWidth by remember { mutableStateOf(0) }
                 var modguiContentHeight by remember { mutableStateOf(0) }
+                var jsfxPreferredWidth by remember { mutableStateOf(FALLBACK_JSFX_WIDTH) }
+                var jsfxPreferredHeight by remember { mutableStateOf(FALLBACK_JSFX_HEIGHT) }
                 val chromeIconSize = if (compact) 16.dp else 20.dp
                 val chromeHorizontalPadding = if (compact) 0.dp else 4.dp
                 val chromeVerticalPadding = if (compact) 0.dp else 4.dp
@@ -1842,6 +1879,7 @@ fun PluginCard(
                                     val icon = when (uiType) {
                                         UiType.X11 -> Icons.Default.DesktopWindows
                                         UiType.MODGUI -> Icons.Default.Dashboard
+                                        UiType.JSFX -> Icons.Default.Extension
                                         UiType.SLIDERS -> Icons.Default.Tune
                                     }
                                     DropdownMenuItem(
@@ -1940,7 +1978,9 @@ fun PluginCard(
                     val isVstFsCandidate = (pluginInfo.format == "VST2" || pluginInfo.format == "VST3") &&
                         com.vibes.dsp.BuildConfig.HAS_VST_HOST &&
                         isLandscapeOrientation
-                    val showFullscreenButton = currentUiMode == UiType.X11 || currentUiMode == UiType.MODGUI ||
+                    val showFullscreenButton = currentUiMode == UiType.X11 ||
+                        currentUiMode == UiType.MODGUI ||
+                        currentUiMode == UiType.JSFX ||
                         isVstFsCandidate
                     if (showFullscreenButton) {
                         PluginChromeButton(
@@ -1964,9 +2004,10 @@ fun PluginCard(
                                         Pair((encoded ushr 32).toInt(), (encoded and 0xffffffffL).toInt())
                                     }
                                     currentUiMode == UiType.X11 -> Pair(x11PluginNaturalW, x11PluginNaturalH)
+                                    currentUiMode == UiType.JSFX -> Pair(jsfxPreferredWidth, jsfxPreferredHeight)
                                     else -> Pair(modguiContentWidth, modguiContentHeight)
                                 }
-                                onOpenFullscreen(pluginIndex, UiType.X11, w, h)
+                                onOpenFullscreen(pluginIndex, currentUiMode, w, h)
                             },
                             icon = Icons.Default.Fullscreen,
                             contentDescription = "Fullscreen"
@@ -2035,7 +2076,6 @@ fun PluginCard(
                 }
 
                 // --- X11 UI file picker (ui:requestValue) ---
-                val context = LocalContext.current
                 val scope = rememberCoroutineScope()
                 var x11FileRequestPending by remember { mutableStateOf<Triple<Long, Int, String>?>(null) }
                 var showX11FilePicker by remember { mutableStateOf(false) }
@@ -2257,6 +2297,53 @@ fun PluginCard(
                             vstWinePickerLeftRackForTone3000 = false
                         }
                     )
+                }
+
+                if (pluginInfo.format == "JSFX" && jsfxGfxAvailable == true) {
+                    val jsfxModeActive = currentUiMode == UiType.JSFX
+                    Box(
+                        modifier = if (isFullscreen && jsfxModeActive) {
+                            Modifier.fillMaxWidth().height(screenHeight)
+                        } else {
+                            Modifier.fillMaxWidth()
+                        }
+                    ) {
+                        JsfxPluginUi(
+                            pathId = pathId,
+                            pluginInstanceId = plugin.instanceId,
+                            pluginName = pluginInfo.name,
+                            isVisible = (expanded || isFullscreen) && jsfxModeActive && isRackVisible &&
+                                (!isAnyPluginFullscreen || isFullscreen),
+                            isFullscreen = isFullscreen && jsfxModeActive,
+                            modifier = if (isFullscreen && jsfxModeActive) {
+                                Modifier.fillMaxSize()
+                            } else {
+                                Modifier.fillMaxWidth()
+                            },
+                            onPreferredSize = { width, height ->
+                                jsfxPreferredWidth = width
+                                jsfxPreferredHeight = height
+                            },
+                        )
+                        if (isFullscreen && jsfxModeActive) {
+                            NnagaIconButton(
+                                onClick = onExitFullscreen,
+                                modifier = Modifier
+                                    .align(Alignment.TopStart)
+                                    .padding(16.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.scrim.copy(alpha = 0.5f),
+                                        CircleShape,
+                                    ),
+                            ) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Exit fullscreen",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                )
+                            }
+                        }
+                    }
                 }
 
                 // CRITICAL: Always keep PluginX11UiView in composition to avoid TextureView destruction.
@@ -2589,6 +2676,9 @@ fun PluginCard(
                     }
                     UiType.MODGUI -> {
                         // Modgui is always present above, nothing extra needed
+                    }
+                    UiType.JSFX -> {
+                        // The SurfaceView remains composed above and is resumed by visibility state.
                     }
                     UiType.SLIDERS -> {
                       Column(modifier = Modifier.padding(horizontal = 4.dp)) {

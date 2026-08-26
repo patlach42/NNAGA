@@ -58,6 +58,8 @@ enum class UiType(val displayName: String) {
     X11("Native"),
     /** Web-based modgui rendered in a WebView. */
     MODGUI("Modgui"),
+    /** In-process JSFX graphics rendered by ysfx. */
+    JSFX("JSFX"),
     /** Plain Compose sliders / toggles (always available). */
     SLIDERS("Sliders")
 }

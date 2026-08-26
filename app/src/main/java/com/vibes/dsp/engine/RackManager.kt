@@ -33,6 +33,9 @@ object RackManager {
     fun getRackPluginInfo(pathId: RackPathId, index: Int): PluginInfo? = native.getRackPluginInfo(pathId, index)
     fun getRackPluginInstanceId(pathId: RackPathId, index: Int): Long = native.getRackPluginInstanceId(pathId, index)
     fun getRackPlugins(pathId: RackPathId): Array<RackPluginEntry> = native.getRackPlugins(pathId)
+    fun exportRackState(): ByteArray = native.exportRackState()
+    fun importRackState(bytes: ByteArray): String? = native.importRackState(bytes)
+
 
     fun addTrack(): RackPathId = native.addTrack()
     fun removeTrack(trackId: RackPathId): Boolean = native.removeTrack(trackId)

@@ -108,6 +108,22 @@ add_subdirectory("${LOWLATENCY_AUDIO_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/liblowl
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/oboe"
                  "${CMAKE_CURRENT_BINARY_DIR}/oboe")
 
+# ysfx JSFX engine (portable EEL plus graphics API; host supplies Android UI).
+set(YSFX_PORTABLE ON CACHE BOOL "" FORCE)
+set(YSFX_GFX ON CACHE BOOL "" FORCE)
+set(YSFX_PLUGIN OFF CACHE BOOL "" FORCE)
+set(YSFX_TESTS OFF CACHE BOOL "" FORCE)
+set(YSFX_TOOLS OFF CACHE BOOL "" FORCE)
+set(YSFX_SKIP_CHECKSUM ON CACHE BOOL "" FORCE)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/ysfx"
+                 "${CMAKE_CURRENT_BINARY_DIR}/ysfx")
+foreach(ysfx_android_target ysfx-private lice wdl-base eel2)
+    if(TARGET ${ysfx_android_target})
+        target_compile_options(${ysfx_android_target} PRIVATE
+            "-include${CMAKE_CURRENT_SOURCE_DIR}/jsfx/ysfx_android_compat.h")
+    endif()
+endforeach()
+
 # Plugin abstraction layer
 add_library(plugin_abstraction STATIC
     plugin/PluginChain.cpp
@@ -115,9 +131,15 @@ add_library(plugin_abstraction STATIC
     plugin/PluginRegistry.cpp
     plugin/PluginUIGuard.cpp
     plugin/PluginUIManager.cpp
+    plugin/RackStateCodec.cpp
+    jsfx/JsfxPlugin.cpp
+    jsfx/JsfxPluginFactory.cpp
 )
+target_include_directories(plugin_abstraction PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/ysfx/include")
 target_link_libraries(plugin_abstraction PRIVATE
-    lowlatencyaudio::lowlatencyaudio)
+    lowlatencyaudio::lowlatencyaudio
+    ysfx)
 
 # LV2 backend (conditional compilation)
 if(LV2_AVAILABLE)
@@ -242,6 +264,14 @@ add_library(x11_native_display STATIC
     x11/X11Framebuffer.cpp
     x11/X11PropertyStore.cpp
 )
+
+add_library(guitarrackcraft SHARED
+    jni/NativeBridge.cpp
+    jni/NativeContextAccess.cpp
+    jni/JsfxBridge.cpp
+    jni/RackStateBridge.cpp
+    jsfx/JsfxUiHost.cpp
+)
 target_link_libraries(x11_native_display
     log
     android
@@ -250,9 +280,6 @@ target_link_libraries(x11_native_display
     lowlatencyaudio::lowlatencyaudio
 )
 
-add_library(guitarrackcraft SHARED
-    jni/NativeBridge.cpp
-)
 
 target_link_libraries(guitarrackcraft
     plugin_abstraction
@@ -260,8 +287,10 @@ target_link_libraries(guitarrackcraft
     lv2_backend
     x11_native_display
     xshm_stub
+    ysfx
     log
     android
+    nativewindow
 )
 
 # The final shared-library link consumes ThinLTO bitcode from the three

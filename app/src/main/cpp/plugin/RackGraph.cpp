@@ -7,6 +7,7 @@
 #include <cstring>
 #include <functional>
 #include <unordered_map>
+#include <unordered_set>
 namespace guitarrackcraft {
 namespace {
 constexpr uint32_t kChannels = 2;
@@ -683,7 +684,125 @@ TransportSnapshot RackGraph::getTransportSnapshot() const {
 std::shared_ptr<PluginChain> RackGraph::getChain(RackPathId id) const{std::lock_guard lock(controlMutex_);if(id==kMasterPathId)return master_;auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});return it==tracks_.end()?nullptr:(*it)->chain;}
 void RackGraph::setSampleRate(float rate,uint32_t buffer){std::lock_guard lock(controlMutex_);sampleRate_.store(rate);bufferSize_=buffer;for(auto& n:tracks_){n->sourceLeft.resize(buffer);n->sourceRight.resize(buffer);n->outputLeft.resize(buffer);n->outputRight.resize(buffer);n->chain->setSampleRate(rate,buffer);}master_->setSampleRate(rate,buffer);(void)publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
 void RackGraph::activate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->activate();master_->activate();}void RackGraph::deactivate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->deactivate();master_->deactivate();}void RackGraph::pauseAndResetTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,false,true);}
-RackGraph::State RackGraph::saveState(){std::lock_guard lock(controlMutex_);State s;for(auto& n:tracks_)s.tracks.push_back({n->volume.load(),n->inputArmed.load(),n->chain->saveChainState()});s.master=master_->saveChainState();return s;}
+RackGraph::State RackGraph::saveState(){std::lock_guard lock(controlMutex_);State s; s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); for(auto& n:tracks_){State::Track t; t.id=n->id; t.volume=n->volume.load(); t.inputArmed=n->inputArmed.load(); t.inputArmLocked=n->inputArmLocked.load(); t.inputSource=n->inputSource; t.chain=n->chain->saveChainState(); s.tracks.push_back(std::move(t));}s.master=master_->saveChainState();return s;}
+bool RackGraph::restoreState(
+        const State& state,
+        const PluginRegistry& registry,
+        std::string& diagnostic) {
+    std::lock_guard lock(controlMutex_);
+    if (statusPlaying_.load(std::memory_order_acquire) ||
+        mailbox_.desiredPlaying.load(std::memory_order_acquire)) {
+        diagnostic = "engine-running";
+        return false;
+    }
+    if (state.tracks.empty()) {
+        diagnostic = "no-tracks";
+        return false;
+    }
+
+    std::unordered_set<RackPathId> ids;
+    std::vector<std::shared_ptr<TrackNode>> nodes;
+    std::vector<std::shared_ptr<const WavClip>> clips;
+    std::vector<std::shared_ptr<WavClip>> recordingClips;
+    std::vector<std::vector<std::shared_ptr<const WavClip>>> wavSlots;
+    std::vector<std::shared_ptr<const MidiClip>> midiClips;
+    std::vector<std::vector<std::shared_ptr<const MidiClip>>> midiSlots;
+    std::vector<std::vector<std::string>> labels;
+    nodes.reserve(state.tracks.size());
+
+    const float sampleRate = sampleRate_.load();
+    const auto restoreChain = [&](const PluginChain::ChainState& saved,
+                                  const std::shared_ptr<PluginChain>& chain) {
+        if (sampleRate > 0.0f) chain->setSampleRate(sampleRate, bufferSize_);
+        for (const auto& pluginState : saved.plugins) {
+            if (pluginState.format.empty() || pluginState.pluginUri.empty()) {
+                diagnostic = "invalid-plugin-id";
+                return false;
+            }
+            auto plugin = registry.createPlugin(
+                pluginState.format + ":" + pluginState.pluginUri);
+            if (!plugin) {
+                diagnostic = "plugin-create-failed:" + pluginState.format +
+                             ":" + pluginState.pluginUri;
+                return false;
+            }
+            const int index = chain->addPlugin(std::move(plugin));
+            if (index < 0 || !chain->restorePluginState(index, pluginState)) {
+                diagnostic = "plugin-restore-failed:" + pluginState.format +
+                             ":" + pluginState.pluginUri;
+                return false;
+            }
+        }
+        return true;
+    };
+
+    for (const auto& saved : state.tracks) {
+        if (saved.id == kMasterPathId || !ids.insert(saved.id).second ||
+            !std::isfinite(saved.volume)) {
+            diagnostic = "invalid-track";
+            return false;
+        }
+        auto node = std::make_shared<TrackNode>();
+        node->id = saved.id;
+        node->volume.store(saved.volume);
+        node->inputArmed.store(saved.inputArmed);
+        node->inputArmLocked.store(saved.inputArmLocked);
+        node->inputSource = saved.inputSource;
+        node->chain = std::make_shared<PluginChain>();
+        if (!restoreChain(saved.chain, node->chain)) return false;
+        node->sourceLeft.resize(bufferSize_);
+        node->sourceRight.resize(bufferSize_);
+        node->outputLeft.resize(bufferSize_);
+        node->outputRight.resize(bufferSize_);
+
+        nodes.push_back(std::move(node));
+        clips.push_back(nullptr);
+        recordingClips.push_back(nullptr);
+        midiClips.push_back(nullptr);
+        wavSlots.emplace_back();
+        midiSlots.emplace_back();
+        labels.emplace_back();
+    }
+
+    auto master = std::make_shared<PluginChain>();
+    if (!restoreChain(state.master, master)) return false;
+
+    auto snapshot = buildSnapshotLocked(nodes, clips, recordingClips);
+    if (!snapshot) {
+        diagnostic = "invalid-routing";
+        return false;
+    }
+    snapshot->master = master;
+    if (!publishSnapshotLocked(std::move(snapshot))) {
+        diagnostic = "publish-failed";
+        return false;
+    }
+
+    tracks_ = std::move(nodes);
+    clips_ = std::move(clips);
+    recordingClips_ = std::move(recordingClips);
+    midiClips_ = std::move(midiClips);
+    wavSlots_ = std::move(wavSlots);
+    midiSlots_ = std::move(midiSlots);
+    clipLabelOverrides_ = std::move(labels);
+    master_ = std::move(master);
+    nextTrackId_ = 1;
+    for (const auto& node : tracks_) {
+        nextTrackId_ = std::max(nextTrackId_, node->id + 1);
+    }
+    writeMailboxLocked(
+        true, state.transportPlaying, false, true, state.beatsPerMinute);
+    applyGlobalMailbox();
+    audioSamplePosition_ = state.samplePosition;
+    audioTransportFrame_ = state.transportFrame;
+    audioMusicalQuarterNotes_ = state.musicalQuarterNotes;
+    double rate = sampleRate_.load(std::memory_order_relaxed);
+    if (rate <= 0.0) rate = 48000.0;
+    audioElapsedSeconds_ = static_cast<double>(audioSamplePosition_) / rate;
+    publishGlobalStatus(rate);
+    diagnostic.clear();
+    return true;
+}
 void RackGraph::applyGlobalMailbox() noexcept {
     const auto sequence = mailbox_.sequence.load(std::memory_order_acquire);
     if (sequence & 1U) return;

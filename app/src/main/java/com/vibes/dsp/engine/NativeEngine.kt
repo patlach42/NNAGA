@@ -348,6 +348,11 @@ class NativeEngine private constructor() {
      * Set the path to the app's files directory. Call before nativeInit() if needed.
      */
     external fun nativeSetFilesDir(path: String)
+    /**
+     * Set the JSFX effects root. Must be called before nativeInit().
+     */
+    external fun nativeSetJsfxRoot(path: String)
+
 
     /**
      * Set the path to extracted X11 SONAME libs (libX11.so.6 etc.) so plugin UI load can copy them into the bundle dir.
@@ -367,6 +372,15 @@ class NativeEngine private constructor() {
      * Call nativeSetLv2Path() first with the extracted assets path to enable LV2 plugins.
      */
     external fun nativeInit(): Boolean
+    /** Export the complete rack state as a versioned native blob. */
+    external fun nativeExportRackState(): ByteArray
+
+    /**
+     * Import a complete rack state. Returns null on success, otherwise a
+     * diagnostic explaining why the blob was rejected.
+     */
+    external fun nativeImportRackState(bytes: ByteArray): String?
+
 
     /** Re-runs each PluginFactory's initialize() and rebuilds the registry's
      *  plugin cache. Used by the Manage VST UI (full flavor) so an imported
@@ -715,6 +729,9 @@ class NativeEngine private constructor() {
     fun getRackPluginInfo(pathId: Long, index: Int): PluginInfo? = nativeGetRackPluginInfo(pathId, index)
     fun getRackPluginInstanceId(pathId: Long, index: Int): Long = nativeGetRackPluginInstanceId(pathId, index)
     fun getRackPlugins(pathId: Long): Array<RackPluginEntry> = nativeGetRackPlugins(pathId)
+    fun setJsfxRoot(path: String) = nativeSetJsfxRoot(path)
+    fun exportRackState(): ByteArray = nativeExportRackState()
+    fun importRackState(bytes: ByteArray): String? = nativeImportRackState(bytes)
 
     fun addTrack(): Long = nativeAddTrack()
     fun removeTrack(trackId: Long): Boolean = nativeRemoveTrack(trackId)

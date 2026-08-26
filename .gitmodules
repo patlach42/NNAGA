@@ -176,3 +176,6 @@
 [submodule "3rd_party/DAF-Widgets"]
 	path = 3rd_party/DAF-Widgets
 	url = https://github.com/dusk-audio/DAF-Widgets.git
+[submodule "3rd_party/ysfx"]
+	path = 3rd_party/ysfx
+	url = https://github.com/JoepVanlier/ysfx.git

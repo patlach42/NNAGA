@@ -22,7 +22,7 @@ package com.vibes.dsp.engine
 import android.content.Context
 
 /**
- * Persists the last UI type (Native / Modgui / Sliders) chosen by the user per plugin.
+ * Persists the last UI type (Native / Modgui / JSFX / Sliders) chosen by the user per plugin.
  * Keyed by [PluginInfo.fullId]. When a plugin is added again later, the app uses this
  * stored UI if it is still available for that plugin.
  */

@@ -15,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "PluginRegistry.h"
 namespace guitarrackcraft {
 
 using RackPathId = uint64_t;
@@ -107,12 +108,20 @@ class RackGraph {
 public:
     struct State {
         struct Track {
-            float volume;
-            bool inputArmed;
+            RackPathId id = 0;
+            float volume = 1.0f;
+            bool inputArmed = false;
+            bool inputArmLocked = false;
+            TrackInputSource inputSource{};
             PluginChain::ChainState chain;
         };
         std::vector<Track> tracks;
         PluginChain::ChainState master;
+        double beatsPerMinute = 120.0;
+        bool transportPlaying = false;
+        uint64_t transportFrame = 0;
+        uint64_t samplePosition = 0;
+        double musicalQuarterNotes = 0.0;
     };
     RackGraph(); ~RackGraph();
     RackPathId addTrack(); bool removeTrack(RackPathId); std::vector<TrackSnapshot> getTracks() const; std::vector<TrackClipSlotInfo> getTrackClipSlots(RackPathId) const; std::vector<MidiNoteInfo> getTrackClipMidiNotes(RackPathId,uint32_t) const;
@@ -135,6 +144,8 @@ public:
     bool setClipLoopStartQuarterNotes(RackPathId, uint32_t, double);
     bool setClipLoopLengthQuarterNotes(RackPathId, uint32_t, double);
     bool setClipLooping(RackPathId, uint32_t, bool);
+    void process(const float* const*, int, float* const*, uint32_t) noexcept; void advanceTransport(uint32_t) noexcept; State saveState();
+    bool restoreState(const State&, const PluginRegistry&, std::string& diagnostic);
     bool setSlotEnterOnPunch(RackPathId, uint32_t, bool, LaunchQuantization);
     bool setClipTransportPlaying(RackPathId, uint32_t, bool, LaunchQuantization);
     bool setClipTempoMode(RackPathId, uint32_t, ClipTempoMode);
@@ -143,7 +154,6 @@ public:
     std::vector<float> getTrackWaveformPeaks(RackPathId, uint32_t maxBuckets) const;
     std::shared_ptr<PluginChain> getChain(RackPathId) const;
     void setSampleRate(float, uint32_t); void activate(); void deactivate(); void pauseAndResetTransport();
-    void process(const float* const*, int, float* const*, uint32_t) noexcept; void advanceTransport(uint32_t) noexcept; State saveState();
     struct SlotConfig {
         std::atomic<double> defaultLoopLengthBars{1.0};
         std::atomic<bool> enterOnPunch{false};
