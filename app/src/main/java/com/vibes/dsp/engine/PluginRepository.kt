@@ -117,6 +117,54 @@ internal fun migrateRepositorySources(
     if (source.id == builtin.id) builtin.copy(enabled = source.enabled) else source
 }
 
+/**
+ * Preloads the mandatory DSP libraries referenced by LV2 manifests in [bundle].
+ *
+ * Android's linker requires libraries extracted under filesDir to be loaded with
+ * their absolute path before Lilv attempts to dlopen them.  UI binaries use a
+ * different predicate and are intentionally not loaded here.
+ */
+internal fun preloadLv2Binaries(bundle: File, loader: (String) -> Unit) {
+    val root = bundle.canonicalFile
+    require(root.isDirectory) { "LV2 bundle is not a directory: $root" }
+    val binaries = linkedSetOf<String>()
+    root.walkTopDown()
+        .filter { it.isFile && it.extension.equals("ttl", ignoreCase = true) }
+        .forEach { ttl ->
+            val ttlFile = ttl.canonicalFile
+            require(ttlFile.toPath().startsWith(root.toPath())) {
+                "LV2 manifest escapes bundle: ${ttl.path}"
+            }
+            Regex("""\blv2:binary\s*<([^>]+)>""").findAll(ttlFile.readText(Charsets.UTF_8)).forEach { match ->
+                val reference = match.groupValues[1].trim()
+                val uri = runCatching { URI(reference) }.getOrElse {
+                    throw IllegalArgumentException("Invalid LV2 DSP binary reference: $reference", it)
+                }
+                require(reference.isNotEmpty() && !uri.isAbsolute && uri.fragment == null && uri.query == null) {
+                    "Unsafe LV2 DSP binary reference: $reference"
+                }
+                require(reference.lowercase().endsWith(".so")) {
+                    "LV2 DSP binary is not a shared library: $reference"
+                }
+                val binary = File(root, reference).canonicalFile
+                require(binary.toPath().startsWith(root.toPath())) {
+                    "LV2 DSP binary escapes bundle: $reference"
+                }
+                check(binary.isFile && binary.length() > 0) {
+                    "Missing or empty LV2 DSP binary: $reference"
+                }
+                binaries += binary.path
+            }
+        }
+    binaries.forEach { path ->
+        try {
+            loader(path)
+        } catch (e: UnsatisfiedLinkError) {
+            throw IllegalStateException("Failed to preload LV2 DSP binary: $path", e)
+        }
+    }
+}
+
 
 /** Repository installer. All state mutations happen on IO and publish immutable snapshots. */
 /** Verified repository payload handed to a flavor adapter for final installation. */
@@ -263,14 +311,52 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
             .fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) }
         try { if(dir.exists()) Files.move(dir.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); require(removeWineOwnership?.invoke(ownership) != false) { "Wine ownership removal failed" }; require(nativeRefresh?.invoke()!=false) { "Native registry refresh failed" }; backup.deleteRecursively(); setPackageState(packageId,null,1f,null) ; publishCurrent() } catch(e:Exception) { if(backup.exists()&&!dir.exists()) Files.move(backup.toPath(),dir.toPath(),StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(packageId,null,null,e.message?:"Remove failed"); throw e }
     } }
-    private suspend fun installOrUpdate(id:String, update:Boolean)=withContext(Dispatchers.IO) { mutex.withLock {
-        val m=cache[id] ?: error("Package is not available: $id"); validate(m); val op=if(update) RepositoryPackageOperation.Updating else RepositoryPackageOperation.Installing; setPackageState(id,op,0f,null)
-        val dir=File(installedRoot,"${m.format}/${m.id}").canonicalFile; requireContained(dir,installedRoot); val target=File(dir,m.version).canonicalFile; requireContained(target,dir); require(!target.exists()||update)
-        val stage=File(dir,".${m.version}.${UUID.randomUUID()}.staging"); val backup=File(dir,".${m.version}.${UUID.randomUUID()}.backup"); val tmp=File(root,".download-${UUID.randomUUID()}.tmp"); var moved=false
-        try { dir.mkdirs(); download(resolveContained(m.sourceUrl, URI(m.repositoryRoot),m.payloadUrl),tmp,m.payloadSize); require(sha256(tmp)==m.payloadSha256) { "Payload SHA-256 mismatch" }; extractSafe(tmp,stage); validateEntry(stage,m.entry); writeMetadata(stage,m); if(target.exists()) Files.move(target.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); Files.move(stage.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE); moved=true; require(nativeRefresh?.invoke()!=false) { "Native plugin registry refresh failed" }; if(backup.exists()) backup.deleteRecursively(); dir.listFiles().orEmpty().filter { it.isDirectory&&!it.name.startsWith(".")&&it!=target }.forEach(File::deleteRecursively); setPackageState(id,null,1f,null); publishCurrent()
-        } catch(e:Exception){ if(moved) target.deleteRecursively(); if(backup.exists()&&!target.exists()) Files.move(backup.toPath(),target.toPath(),StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(id,null,null,e.message?:"Install failed"); throw e }
-        finally { tmp.delete(); stage.deleteRecursively(); backup.deleteRecursively() }
-    } }
+    private suspend fun installOrUpdate(id: String, update: Boolean) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            val m = cache[id] ?: error("Package is not available: $id")
+            validate(m)
+            val op = if (update) RepositoryPackageOperation.Updating else RepositoryPackageOperation.Installing
+            setPackageState(id, op, 0f, null)
+            val dir = File(installedRoot, "${m.format}/${m.id}").canonicalFile
+            requireContained(dir, installedRoot)
+            val target = File(dir, m.version).canonicalFile
+            requireContained(target, dir)
+            require(!target.exists() || update)
+            val stage = File(dir, ".${m.version}.${UUID.randomUUID()}.staging")
+            val backup = File(dir, ".${m.version}.${UUID.randomUUID()}.backup")
+            val tmp = File(root, ".download-${UUID.randomUUID()}.tmp")
+            var moved = false
+            try {
+                dir.mkdirs()
+                download(resolveContained(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl), tmp, m.payloadSize)
+                require(sha256(tmp) == m.payloadSha256) { "Payload SHA-256 mismatch" }
+                extractSafe(tmp, stage)
+                validateEntry(stage, m.entry)
+                writeMetadata(stage, m)
+                if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                Files.move(stage.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                moved = true
+                if (m.format == "lv2") preloadLv2Binaries(target, System::load)
+                require(nativeRefresh?.invoke() != false) { "Native plugin registry refresh failed" }
+                if (backup.exists()) backup.deleteRecursively()
+                dir.listFiles().orEmpty()
+                    .filter { it.isDirectory && !it.name.startsWith(".") && it != target }
+                    .forEach(File::deleteRecursively)
+                setPackageState(id, null, 1f, null)
+                publishCurrent()
+            } catch (e: Exception) {
+                if (moved) target.deleteRecursively()
+                if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                nativeRefresh?.invoke()
+                setPackageState(id, null, null, e.message ?: "Install failed")
+                throw e
+            } finally {
+                tmp.delete()
+                stage.deleteRecursively()
+                backup.deleteRecursively()
+            }
+        }
+    }
     private fun publishCurrent(){ publish(loadSources(), cache.values.toList(), null) }
     private fun publish(
         sources: List<RepositorySourceRecord>,
