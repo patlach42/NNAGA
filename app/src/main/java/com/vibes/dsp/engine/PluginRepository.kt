@@ -467,7 +467,34 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             errorMessage = error,
         )
     }
-    private fun inventory():Map<String,Installed>{ val out=mutableMapOf<String,Installed>(); listOf(installedRoot, jsfxInstalledRoot).forEach { base -> base.listFiles().orEmpty().forEach{f->f.listFiles().orEmpty().forEach{id->id.listFiles().orEmpty().filter{it.isDirectory&&!it.name.startsWith(".")}.maxByOrNull{it.name}?.let{v->readMetadata(v)?.let{m->out["${m.format}:${m.id}"]=Installed(v.name,m)}}}} }; return out }
+    private fun inventory(): Map<String, Installed> {
+        val out = mutableMapOf<String, Installed>()
+        installedRoot.listFiles().orEmpty().forEach { format ->
+            format.listFiles().orEmpty().forEach { id ->
+                id.listFiles().orEmpty()
+                    .filter { it.isDirectory && !it.name.startsWith(".") }
+                    .maxByOrNull { it.name }
+                    ?.let { versionDir ->
+                        readMetadata(versionDir)?.let { manifest ->
+                            out["${manifest.format}:${manifest.id}"] = Installed(versionDir.name, manifest)
+                        }
+                    }
+            }
+        }
+        jsfxInstalledRoot.listFiles().orEmpty()
+            .filter { it.isDirectory && !it.name.startsWith(".") }
+            .forEach { id ->
+                id.listFiles().orEmpty()
+                    .filter { it.isDirectory && !it.name.startsWith(".") }
+                    .maxByOrNull { it.name }
+                    ?.let { versionDir ->
+                        readMetadata(versionDir)?.let { manifest ->
+                            out["jsfx:${id.name}"] = Installed(versionDir.name, manifest)
+                        }
+                    }
+            }
+        return out
+    }
     private fun writeMetadata(dir:File,m:RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("manufacturer",m.manufacturer);put("tags",m.tags.joinToString("\u001f"));put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir,META)),null)} }
     private fun readOwnership(dir:File): WineInstallOwnership? = runCatching { Properties().apply { load(FileInputStream(File(dir,META))) }.let { p -> WineInstallOwnership(p.getProperty("ownership.vstUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.executableUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.prefixPaths","").split(File.pathSeparator).filter(String::isNotBlank)) } }.getOrNull()
     private fun mergeOwnership(a: WineInstallOwnership, b: WineInstallOwnership) = WineInstallOwnership(

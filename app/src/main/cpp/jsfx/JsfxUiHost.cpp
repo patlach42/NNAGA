@@ -365,7 +365,9 @@ void JsfxUiHost::run() {
                         converted[column * 4] = source[column * 4 + 2];
                         converted[column * 4 + 1] = source[column * 4 + 1];
                         converted[column * 4 + 2] = source[column * 4];
-                        converted[column * 4 + 3] = source[column * 4 + 3];
+                        // JSFX/LICE may leave pixels with zero alpha. Android's
+                        // SurfaceView is an opaque host, so make rendered RGB visible.
+                        converted[column * 4 + 3] = 0xFF;
                     }
                     std::memcpy(
                         static_cast<uint8_t*>(output.bits) + static_cast<size_t>(row) * output.stride * 4,
