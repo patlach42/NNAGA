@@ -382,6 +382,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             val tmp = File(root, ".download-${UUID.randomUUID()}.tmp")
             var moved = false
             try {
+                require(root.isDirectory || root.mkdirs()) { "Failed to create repository directory: $root" }
                 dir.mkdirs()
                 download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl, m.format == "jsfx"), tmp, m.payloadSize)
                 require(sha256(tmp) == m.payloadSha256) { "Payload SHA-256 mismatch" }
