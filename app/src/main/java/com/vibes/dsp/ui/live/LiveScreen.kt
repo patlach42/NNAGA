@@ -757,6 +757,11 @@ fun LiveScreen(
                         tempoInput = transport.beatsPerMinute.toString()
                         showTempoDialog = true
                     },
+                    launchQuantization = launchQuantization,
+                    onLaunchQuantizationClick = { showQuantizationMenu = true },
+                    onDeleteSelectedTrack = selectedTrack?.let { track ->
+                        { viewModel.removeTrack(track.id) }
+                    },
                 )
             }
             val displayedTiles = tileOrder.filter { it in visibleTiles }
@@ -888,7 +893,6 @@ fun LiveScreen(
                                 },
                                 notes = notesByClip[selectedTrack?.id to selectedSlot].orEmpty(),
                                 bpm = transport.beatsPerMinute,
-                                onTrackVolume = { track, volume -> viewModel.setTrackVolume(track.id, volume) },
                                 onTrackInput = { inputMenuTrack = it },
                                 onTrackArm = { track ->
                                     viewModel.setTrackInputArmed(track.id, !track.inputArmed)
@@ -896,18 +900,9 @@ fun LiveScreen(
                                 onTrackArmLock = { track ->
                                     viewModel.setTrackInputArmLocked(track.id, !track.inputArmLocked)
                                 },
-                                onTrackDelete = { track -> viewModel.removeTrack(track.id) },
                                 onOpenClipSettings = { track, clip ->
                                     openClipSettings(track.id, clip)
                                 },
-                                onOpenSlotSettings = { track, slot ->
-                                    slotSettingsTarget = track.id to slot.slot
-                                },
-                                onClipLoop = { track, clip ->
-                                    viewModel.setClipLooping(track.id, clip.slot, !clip.looping)
-                                },
-                                launchQuantization = launchQuantization,
-                                onLaunchQuantizationClick = { showQuantizationMenu = true },
                                 modifier = Modifier.fillMaxSize(),
                             )
                             "devices" -> DevicesTile(
@@ -1333,10 +1328,21 @@ private fun TransportBar(
     onStop: () -> Unit,
     onRestart: () -> Unit,
     onBpm: () -> Unit,
+    launchQuantization: TrackLaunchQuantization,
+    onLaunchQuantizationClick: () -> Unit,
+    onDeleteSelectedTrack: (() -> Unit)?,
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val nowMonotonicNanos = rememberFrameClockNanos(playing)
     val stopped = !playing && positionSec <= 0.001
+    val launchQuantizationLabel = when (launchQuantization) {
+        TrackLaunchQuantization.Bar -> "1 BAR"
+        TrackLaunchQuantization.Quarter -> "1/4"
+        TrackLaunchQuantization.Eighth -> "1/8"
+        TrackLaunchQuantization.Sixteenth -> "1/16"
+        TrackLaunchQuantization.None -> "OFF"
+    }
+    var showMenu by remember { mutableStateOf(false) }
     Surface(color = LiveColors.raised) {
         Row(
             modifier = Modifier.fillMaxWidth().height(LiveDimensions.transport)
@@ -1407,6 +1413,37 @@ private fun TransportBar(
                     style = MaterialTheme.typography.labelMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
+            }
+            Box {
+                NnagaIconButton(
+                    onClick = { showMenu = true },
+                    modifier = Modifier.size(LiveDimensions.hitTarget),
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Transport options",
+                        tint = LiveColors.textMuted,
+                        modifier = Modifier.size(LiveDimensions.icon),
+                    )
+                }
+                DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                    DropdownMenuItem(
+                        text = { Text("Launch quantize · $launchQuantizationLabel") },
+                        onClick = {
+                            showMenu = false
+                            onLaunchQuantizationClick()
+                        },
+                    )
+                    onDeleteSelectedTrack?.let { onDelete ->
+                        DropdownMenuItem(
+                            text = { Text("Delete track") },
+                            onClick = {
+                                showMenu = false
+                                onDelete()
+                            },
+                        )
+                    }
+                }
             }
         }
     }
@@ -1958,17 +1995,11 @@ private fun ClipInspector(
     clip: ClipSlotInfo?,
     peaks: List<Float>,
     notes: List<MidiNoteInfo>,
-    onTrackVolume: (RackTrackInfo, Float) -> Unit,
     onTrackInput: (RackTrackInfo) -> Unit,
     onTrackArm: (RackTrackInfo) -> Unit,
     onTrackArmLock: (RackTrackInfo) -> Unit,
-    onTrackDelete: (RackTrackInfo) -> Unit,
     onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
-    onOpenSlotSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
-    onClipLoop: (RackTrackInfo, ClipSlotInfo) -> Unit,
     bpm: Double,
-    launchQuantization: TrackLaunchQuantization,
-    onLaunchQuantizationClick: () -> Unit,
     modifier: Modifier,
 ) {
     val nowMonotonicNanos = rememberFrameClockNanos(clip?.playing == true)
@@ -1981,20 +2012,9 @@ private fun ClipInspector(
             ) {
                 TrackInspectorControls(
                     track = track,
-                    clip = clip,
-                    onVolumeChange = { value -> track?.let { onTrackVolume(it, value) } },
                     onInputClick = { track?.let(onTrackInput) },
                     onArmClick = { track?.let(onTrackArm) },
                     onArmLockClick = { track?.let(onTrackArmLock) },
-                    onDeleteClick = { track?.let(onTrackDelete) },
-                    onSlotSettingsClick = {
-                        if (track != null && clip != null) onOpenSlotSettings(track, clip)
-                    },
-                    onLoopClick = {
-                        if (track != null && clip != null) onClipLoop(track, clip)
-                    },
-                    launchQuantization = launchQuantization,
-                    onLaunchQuantizationClick = onLaunchQuantizationClick,
                 )
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -2012,31 +2032,15 @@ private fun ClipInspector(
 @OptIn(ExperimentalFoundationApi::class)
 private fun TrackInspectorControls(
     track: RackTrackInfo?,
-    clip: ClipSlotInfo?,
-    onVolumeChange: (Float) -> Unit,
     onInputClick: () -> Unit,
     onArmClick: () -> Unit,
     onArmLockClick: () -> Unit,
-    onDeleteClick: () -> Unit,
-    onSlotSettingsClick: () -> Unit,
-    onLoopClick: () -> Unit,
-    launchQuantization: TrackLaunchQuantization,
-    onLaunchQuantizationClick: () -> Unit,
 ) {
     if (track == null) {
         InspectorMessage("Select a track")
         return
     }
-    val launchQuantizationLabel = when (launchQuantization) {
-        TrackLaunchQuantization.Bar -> "1 BAR"
-        TrackLaunchQuantization.Quarter -> "1/4"
-        TrackLaunchQuantization.Eighth -> "1/8"
-        TrackLaunchQuantization.Sixteenth -> "1/16"
-        TrackLaunchQuantization.None -> "OFF"
-    }
     var showArmLockMenu by remember { mutableStateOf(false) }
-    val clipHasMedia = clip?.wavLoaded == true || clip?.midiLoaded == true
-    var showMore by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier.fillMaxSize().padding(horizontal = LiveDimensions.smallGap),
         verticalAlignment = Alignment.CenterVertically,
@@ -2106,90 +2110,6 @@ private fun TrackInspectorControls(
                 },
                 style = MaterialTheme.typography.labelSmall,
             )
-        }
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    "VOLUME",
-                    color = LiveColors.textDim,
-                    style = MaterialTheme.typography.labelSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                Text(
-                    "${(track.volume * 100).roundToInt()}%",
-                    color = MaterialTheme.colorScheme.primary,
-                    style = MaterialTheme.typography.labelSmall,
-                )
-            }
-            CompactHorizontalFader(
-                value = track.volume,
-                onValueChange = onVolumeChange,
-                label = "Track volume",
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-            )
-        }
-        NnagaIconButton(
-            onClick = onLoopClick,
-            enabled = clipHasMedia,
-            modifier = Modifier
-                .size(LiveDimensions.hitTarget)
-                .background(
-                    if (clip?.looping == true) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-                    else Color.Transparent,
-                    RoundedCornerShape(2.dp),
-                )
-                .semantics {
-                    contentDescription = "Toggle selected clip looping"
-                    stateDescription = when {
-                        !clipHasMedia -> "Unavailable, slot is empty"
-                        clip?.looping == true -> "Active"
-                        else -> "Inactive"
-                    }
-                    if (!clipHasMedia) disabled()
-                },
-        ) {
-            Icon(
-                Icons.Default.Repeat,
-                contentDescription = null,
-                tint = if (clip?.looping == true) MaterialTheme.colorScheme.primary else LiveColors.textDim,
-                modifier = Modifier.size(LiveDimensions.icon),
-            )
-        }
-        Box {
-            NnagaIconButton(
-                onClick = { showMore = true },
-                modifier = Modifier.size(LiveDimensions.hitTarget),
-            ) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = "More slot and track options",
-                    tint = LiveColors.textMuted,
-                    modifier = Modifier.size(LiveDimensions.icon),
-                )
-            }
-            DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
-                DropdownMenuItem(
-                    text = { Text("Launch quantize · $launchQuantizationLabel") },
-                    onClick = {
-                        showMore = false
-                        onLaunchQuantizationClick()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Slot settings") },
-                    onClick = {
-                        showMore = false
-                        onSlotSettingsClick()
-                    },
-                )
-                DropdownMenuItem(
-                    text = { Text("Delete track") },
-                    onClick = {
-                        showMore = false
-                        onDeleteClick()
-                    },
-                )
-            }
         }
     }
 }
