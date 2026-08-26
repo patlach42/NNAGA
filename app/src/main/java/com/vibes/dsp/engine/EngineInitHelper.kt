@@ -88,6 +88,14 @@ object EngineInitHelper {
         // BEFORE nativeInit(), because some DSP plugins (e.g. full AIDA-X via DPF)
         // link against libX11.so.6 and lilv's dlopen will fail without it.
         engine.ensureX11LibsDir(context)
+        if (lv2Dir.isDirectory) {
+            try {
+                preloadLv2Binaries(lv2Dir, System::load, allowRewrittenFileUris = true)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to preload installed LV2 DSP binaries from ${lv2Dir.absolutePath}", e)
+                return false
+            }
+        }
         val ok = engine.nativeInit()
         if (!ok) {
             Log.e(TAG, "Failed to initialize native engine")

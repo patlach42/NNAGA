@@ -34,6 +34,41 @@ class Lv2BinaryPreloadContractsTest {
     }
 
     @Test
+    fun preloadsRewrittenCanonicalFileUriAfterRestartWhenEnabled() {
+        withBundle(
+            ttl = """
+                @prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+                <urn:test:plugin> lv2:binary <./plugin.so> .
+            """.trimIndent(),
+            ttlPath = "neural_amp_modeler.lv2/manifest.ttl",
+            files = listOf("neural_amp_modeler.lv2/plugin.so"),
+        ) { bundle ->
+            val binary = File(bundle, "neural_amp_modeler.lv2/plugin.so").canonicalFile
+            File(bundle, "neural_amp_modeler.lv2/manifest.ttl").writeText(
+                """
+                    @prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+                    <urn:test:plugin> lv2:binary <${binary.toURI()}> .
+                """.trimIndent(),
+            )
+            val loaded = mutableListOf<String>()
+
+            assertThrows(IllegalArgumentException::class.java) {
+                preloadLv2Binaries(bundle, loaded::add)
+            }
+            assertEquals(emptyList<String>(), loaded)
+
+            preloadLv2Binaries(
+                bundle,
+                loaded::add,
+                allowRewrittenFileUris = true,
+            )
+
+            assertEquals(listOf(binary.path), loaded)
+        }
+    }
+
+
+    @Test
     fun rejectsMissingDspBinaryBeforeInvokingLoader() {
         withBundle(
             ttl = """
@@ -52,10 +87,11 @@ class Lv2BinaryPreloadContractsTest {
     }
 
     @Test
-    fun rejectsTraversalAndAbsoluteDspBinaryUris() {
+    fun rejectsTraversalAbsoluteAndNonFileDspBinaryUris() {
         val cases = listOf(
             "traversal" to "../outside.so",
             "absolute URI" to "file:///tmp/outside.so",
+            "non-file URI" to "https://example.test/plugin.so",
         )
 
         cases.forEach { (name, reference) ->
@@ -73,6 +109,32 @@ class Lv2BinaryPreloadContractsTest {
     }
 
     @Test
+    fun skipsRewrittenFileUriOutsideBundleWhenEnabled() {
+        val external = Files.createTempFile("lv2-external-", ".so").toFile()
+        try {
+            external.writeBytes(byteArrayOf(0x01))
+            withBundle(
+                ttl = """
+                    @prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+                    <urn:test:plugin> lv2:binary <${external.canonicalFile.toURI()}> .
+                """.trimIndent(),
+            ) { bundle ->
+                val loaded = mutableListOf<String>()
+
+                preloadLv2Binaries(
+                    bundle,
+                    loaded::add,
+                    allowRewrittenFileUris = true,
+                )
+
+                assertEquals(emptyList<String>(), loaded)
+            }
+        } finally {
+            external.delete()
+        }
+    }
+
+    @Test
     fun propagatesDspLoaderFailure() {
         val failure = IllegalStateException("synthetic loader failure")
         withBundle(
@@ -83,7 +145,7 @@ class Lv2BinaryPreloadContractsTest {
             files = listOf("dsp/libtest.so"),
         ) { bundle ->
             val error = assertThrows(IllegalStateException::class.java) {
-                preloadLv2Binaries(bundle) { throw failure }
+                preloadLv2Binaries(bundle, { throw failure })
             }
 
             assertEquals(failure, error)

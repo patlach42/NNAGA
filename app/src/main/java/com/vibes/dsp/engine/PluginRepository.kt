@@ -125,28 +125,51 @@ internal fun migrateRepositorySources(
  * different predicate and are intentionally not loaded here.
  */
 internal fun preloadLv2Binaries(bundle: File, loader: (String) -> Unit) {
+    preloadLv2Binaries(bundle, loader, false)
+}
+
+internal fun preloadLv2Binaries(
+    bundle: File,
+    loader: (String) -> Unit,
+    allowRewrittenFileUris: Boolean,
+) {
     val root = bundle.canonicalFile
     require(root.isDirectory) { "LV2 bundle is not a directory: $root" }
     val binaries = linkedSetOf<String>()
     root.walkTopDown()
         .filter { it.isFile && it.extension.equals("ttl", ignoreCase = true) }
-        .forEach { ttl ->
+        .forEach ttlLoop@ { ttl ->
             val ttlFile = ttl.canonicalFile
             require(ttlFile.toPath().startsWith(root.toPath())) {
                 "LV2 manifest escapes bundle: ${ttl.path}"
             }
-            Regex("""\blv2:binary\s*<([^>]+)>""").findAll(ttlFile.readText(Charsets.UTF_8)).forEach { match ->
+            Regex("""\blv2:binary\s*<([^>]+)>""").findAll(ttlFile.readText(Charsets.UTF_8)).forEach matchLoop@ { match ->
                 val reference = match.groupValues[1].trim()
                 val uri = runCatching { URI(reference) }.getOrElse {
                     throw IllegalArgumentException("Invalid LV2 DSP binary reference: $reference", it)
                 }
-                require(reference.isNotEmpty() && !uri.isAbsolute && uri.fragment == null && uri.query == null) {
+                require(reference.isNotEmpty() && uri.fragment == null && uri.query == null) {
                     "Unsafe LV2 DSP binary reference: $reference"
                 }
-                require(reference.lowercase().endsWith(".so")) {
-                    "LV2 DSP binary is not a shared library: $reference"
+                val binary = if (!uri.isAbsolute) {
+                    require(reference.lowercase().endsWith(".so")) {
+                        "LV2 DSP binary is not a shared library: $reference"
+                    }
+                    File(ttlFile.parentFile, reference).canonicalFile
+                } else {
+                    require(allowRewrittenFileUris && uri.scheme.equals("file", ignoreCase = true)) {
+                        "Unsafe LV2 DSP binary reference: $reference"
+                    }
+                    if (!uri.rawAuthority.isNullOrEmpty()) return@matchLoop
+                    val rewritten = runCatching { File(uri).canonicalFile }.getOrElse {
+                        throw IllegalArgumentException("Invalid LV2 DSP binary reference: $reference", it)
+                    }
+                    if (!rewritten.toPath().startsWith(root.toPath())) return@matchLoop
+                    require(reference.lowercase().endsWith(".so")) {
+                        "LV2 DSP binary is not a shared library: $reference"
+                    }
+                    rewritten
                 }
-                val binary = File(ttlFile.parentFile, reference).canonicalFile
                 require(binary.toPath().startsWith(root.toPath())) {
                     "LV2 DSP binary escapes bundle: $reference"
                 }
