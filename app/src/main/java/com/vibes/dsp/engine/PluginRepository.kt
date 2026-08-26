@@ -334,6 +334,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             require(m.version == payload.manifest.version)
             val packageId = payload.packageId
             val staged = stagedRecord.file
+            if (!success) { staged.delete(); setPackageState(packageId, null, null, error ?: "Wine install cancelled"); return@withLock }
             val dir = File(installedRoot, "${m.format}/${m.id}").canonicalFile
             val target = File(dir, m.version).canonicalFile; requireContained(target, dir)
             val tmp = File(dir, ".${m.version}.${payload.token}.staging").canonicalFile
@@ -349,6 +350,12 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
                 require(removeWineOwnership?.invoke(prior) != false) { "Prior Wine ownership removal failed" }
                 dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively)
                 backup.deleteRecursively(); staged.delete()
+                setPackageState(packageId, null, 1f, null); publishCurrent()
+            } catch (e: Exception) {
+                if (committed) target.deleteRecursively()
+                if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                if (ownership.vstUuids.isNotEmpty() || ownership.executableUuids.isNotEmpty() || ownership.prefixPaths.isNotEmpty()) removeWineOwnership?.invoke(ownership)
+                nativeRefresh?.invoke(); setPackageState(packageId, null, null, e.message ?: "Install failed"); throw e
             } finally { tmp.deleteRecursively(); backup.deleteRecursively(); staged.delete() }
         } }
 
