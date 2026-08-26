@@ -14,6 +14,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.foundation.Image
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -76,6 +77,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -122,6 +124,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.vibes.dsp.R
 import com.vibes.dsp.engine.ClipSlotInfo
 import com.vibes.dsp.engine.ClipTempoMode
 import com.vibes.dsp.engine.DirectUsbAudioManager
@@ -1073,7 +1076,11 @@ private fun NnagaToolbarButton(
             modifier = Modifier.height(LiveDimensions.control),
         ) {
             Box(Modifier.padding(horizontal = LiveDimensions.gap), contentAlignment = Alignment.Center) {
-                Text("NNAGA", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Black)
+                Image(
+                    painter = painterResource(R.drawable.nnaga_brand_mark),
+                    contentDescription = "NNAGA",
+                    modifier = Modifier.size(32.dp),
+                )
             }
         }
     }
