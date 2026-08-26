@@ -206,6 +206,28 @@ fun VstManagerScreen(
         }
     }
 
+    val zipPickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            blockingOperation = "Preparing ZIP archive"
+            val staged = try {
+                withContext(Dispatchers.IO) {
+                    if (!VstHostSetup.ensureWineRoot(context)) return@withContext null
+                    stageZipInstaller(context, uri)
+                }
+            } finally {
+                blockingOperation = null
+            }
+            if (staged == null) {
+                Toast.makeText(context, "Couldn't stage the ZIP archive", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            installerVm.installFromZip(staged.absolutePath, staged.nameWithoutExtension)
+        }
+    }
+
     // "Install into this environment…" — run a picked installer INSIDE an
     // existing manager's prefix so the plugin lands where the manager's licence
     // lives (the activation catches). pendingEnv carries which environment the
@@ -547,6 +569,14 @@ fun VstManagerScreen(
                     Text("Install from .exe…")
                 }
                 Spacer(Modifier.height(8.dp))
+                NnagaOutlinedButton(
+                    onClick = { zipPickerLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
+                    enabled = blockingOperation == null,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Install from .zip…")
+                }
+                Spacer(Modifier.height(8.dp))
                 Text(
                     "For multi-part installers (Inno Setup, NSIS with .bin payloads), " +
                     "select the .exe AND its companion .bin files together.",
@@ -749,6 +779,20 @@ private fun stageInstaller(context: Context, uris: List<Uri>): File? {
     // Fallback: if no .exe was picked, use the first staged file (lets us
     // surface a clear error from the installer flow rather than a NPE here).
     return exeFile ?: dir.listFiles()?.firstOrNull()
+}
+
+/** Stage one archive into app-private storage with a fixed safe filename. */
+private fun stageZipInstaller(context: Context, uri: Uri): File? {
+    val dir = File(context.filesDir, "installers/${UUID.randomUUID().toString().take(8)}")
+        .apply { mkdirs() }
+    val target = File(dir, "archive.zip")
+    return runCatching {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            target.outputStream().use { input.copyTo(it) }
+        } ?: return null
+        if (target.length() == 0L) return null
+        target
+    }.getOrNull()
 }
 
 /** Find the rack position of the VST with [uuid] (if added) and launch

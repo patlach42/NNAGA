@@ -20,10 +20,16 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+import java.io.BufferedInputStream
+import java.io.FileInputStream
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipException
+import java.util.Locale
 
 /**
  * Drives both the "Install from .exe" flow and the "Launch executable"
@@ -151,6 +157,34 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
             runWineSession(ctx, stagedExePath, templatePath)
+        }
+    }
+
+    /** Install a staged Wine VST archive without launching Wine. */
+    fun installFromZip(stagedZipPath: String, displayName: String) {
+        if (_state.value != State.IDLE) {
+            Log.w(TAG, "installFromZip called while state=${_state.value}; ignoring")
+            return
+        }
+        val ctx = getApplication<Application>()
+        val installerId = UUID.randomUUID().toString().take(8)
+        val templatePath = "${ctx.filesDir.absolutePath}/wineprefix_installer_$installerId"
+        _session.value = Session(
+            mode = Mode.INSTALL, id = installerId, displayName = displayName,
+            stagedExePath = stagedZipPath, templatePrefixPath = templatePath,
+            displayNumber = INSTALLER_DISPLAY_NUMBER,
+        )
+        _state.value = State.PREPARING
+        watchJob = viewModelScope.launch {
+            val prepared = withContext(Dispatchers.IO) {
+                prepareTemplate(ctx, templatePath) &&
+                    extractZipSafely(File(stagedZipPath), File(templatePath, "drive_c"))
+            }
+            if (!prepared) {
+                bailOut("Archive setup failed: invalid or unsafe ZIP archive.")
+                return@launch
+            }
+            discoverSession(ctx)
         }
     }
 
@@ -334,13 +368,15 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = State.DRAINING
         delay(2_000)  // let wineserver write its last registry entries
 
+        discoverSession(ctx)
+    }
+
+    /** Scan the prepared prefix and enter the shared PICK lifecycle. */
+    private suspend fun discoverSession(ctx: Context) {
         _state.value = State.DISCOVERING
         val session = _session.value ?: run { reset(); return }
         val scanPaths = VstScanPathManager.readScanPaths(ctx)
         val found = withContext(Dispatchers.IO) {
-            // LAUNCH: filter against VSTs ALREADY registered for this prefix
-            // (not the pre-launch snapshot) so discarded/wipe-recovered plugins
-            // resurface. INSTALL: empty set (the template starts blank anyway).
             val alreadyRegistered =
                 if (session.mode == Mode.LAUNCH)
                     VstRegistry.read(ctx)
@@ -352,9 +388,6 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         }
         _discovered.value = found
         if (found.isEmpty()) {
-            // INSTALL: nothing got installed (bail). LAUNCH: no NEW VSTs after the
-            // manager run — that's fine, user just closed the manager without
-            // installing anything new. Reset silently.
             if (session.mode == Mode.INSTALL) {
                 bailOut("Installer finished but no VST DLLs were found in the prefix.")
             } else {
@@ -650,6 +683,61 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Safely unpack a ZIP below [destination], enforcing archive limits. */
+    private fun extractZipSafely(archive: File, destination: File): Boolean {
+        val root = destination.canonicalFile
+        val seen = HashSet<String>()
+        var entries = 0
+        var totalBytes = 0L
+        return runCatching {
+            if (!archive.isFile) throw ZipException("archive missing")
+            root.mkdirs()
+            ZipInputStream(BufferedInputStream(FileInputStream(archive))).use { zip ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    if (++entries > MAX_ZIP_ENTRIES) throw ZipException("too many entries")
+                    val raw = entry.name.replace('\\', '/')
+                    if (raw.startsWith("/") || raw.matches(Regex("^[A-Za-z]:.*"))) {
+                        throw ZipException("absolute path")
+                    }
+                    val parts = raw.split('/')
+                    if (parts.any { it == ".." }) throw ZipException("path traversal")
+                    val relative = parts.filter { it.isNotEmpty() && it != "." }.joinToString("/")
+                    if (relative.isEmpty()) continue
+                    val key = relative.lowercase(Locale.ROOT)
+                    if (!seen.add(key)) throw ZipException("duplicate path")
+                    val target = File(root, relative).canonicalFile
+                    if (target != root && !target.path.startsWith(root.path + File.separator)) {
+                        throw ZipException("canonical escape")
+                    }
+                    if (entry.isDirectory) {
+                        if (target.exists() && !target.isDirectory) throw ZipException("file/dir collision")
+                        target.mkdirs()
+                    } else {
+                        if (target.exists()) throw ZipException("duplicate output")
+                        target.parentFile?.mkdirs()
+                        target.outputStream().use { out ->
+                            while (true) {
+                                val n = zip.read(buffer)
+                                if (n < 0) break
+                                totalBytes += n
+                                if (totalBytes > MAX_ZIP_BYTES) throw ZipException("archive too large")
+                                out.write(buffer, 0, n)
+                            }
+                        }
+                    }
+                    zip.closeEntry()
+                }
+            }
+            true
+        }.getOrElse {
+            if (it is CancellationException) throw it
+            Log.e(TAG, "extractZipSafely failed", it)
+            false
+        }
+    }
+
     /** Scan configured roots inside the prefix's drive_c/ for candidate plugin files AND
      *  (in INSTALL mode) installer candidates. Filters to PE files exporting
      *  VSTPluginMain or GetPluginFactory (for VSTs) or PE EXEs over a small size
@@ -790,10 +878,14 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
          *  modest single-file managers. */
         private const val EXE_MIN_BYTES = 200L * 1024L
 
+        private const val MAX_ZIP_ENTRIES = 10_000
+        private const val MAX_ZIP_BYTES = 2L * 1024L * 1024L * 1024L
+
         /** Wine-shipped builtin executables that live OUTSIDE system32/syswow64
          *  (so the path-prefix skip doesn't catch them) and would otherwise
          *  flood the PICK list as bogus "manager" candidates. Observed polluting
          *  the iLok License Support install: every prefix carries these regardless
+
          *  of what was installed, so a real manager (e.g. iloktool.exe) gets
          *  buried among them. Match by exact basename. */
         private val WINE_BUILTIN_EXES = setOf(
