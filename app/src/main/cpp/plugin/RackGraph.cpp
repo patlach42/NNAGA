@@ -104,18 +104,27 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
         double localQn = 0.0;
         double rate = 48000.0;
         uint64_t captured = 0;
-        for (;;) {
-            const auto before = statusSequence_.load(std::memory_order_acquire);
-            if (before & 1U) continue;
+        constexpr unsigned kMaxStatusReadAttempts = 8;
+        const auto readStatus = [&] {
             rate = statusSampleRate_.load(std::memory_order_relaxed);
             if (rate <= 0) rate = 48000.0;
             frame = rt ? rt->statusFrame.load(std::memory_order_relaxed) : 0;
             playing = rt && rt->statusPlaying.load(std::memory_order_relaxed);
             looping = rt && rt->looping.load(std::memory_order_relaxed);
-            localQn = rt ? rt->localQuarterNotes.load(std::memory_order_acquire) : 0.0;
+            localQn = rt ? rt->localQuarterNotes.load(std::memory_order_relaxed) : 0.0;
             captured = statusCapturedAtNanos_.load(std::memory_order_relaxed);
-            if (before == statusSequence_.load(std::memory_order_acquire)) break;
+        };
+        bool stableStatus = false;
+        for (unsigned attempt = 0; attempt < kMaxStatusReadAttempts; ++attempt) {
+            const auto before = statusSequence_.load(std::memory_order_acquire);
+            if (before & 1U) continue;
+            readStatus();
+            if (before == statusSequence_.load(std::memory_order_acquire)) {
+                stableStatus = true;
+                break;
+            }
         }
+        if (!stableStatus) readStatus();
         const std::string name = (i < clipLabelOverrides_.size() && mediaSlot < clipLabelOverrides_[i].size() &&
             !clipLabelOverrides_[i][mediaSlot].empty()) ? clipLabelOverrides_[i][mediaSlot] :
             (midi ? midi->displayName : (wav ? wav->displayName : std::string()));

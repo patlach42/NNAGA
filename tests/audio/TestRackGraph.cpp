@@ -94,6 +94,38 @@ private:
     std::atomic<bool>& entered_;
     std::atomic<bool>& release_;
 };
+class ReentrantTrackSnapshotPlugin final : public IPlugin {
+public:
+    ReentrantTrackSnapshotPlugin(RackGraph& graph, size_t& observedTrackCount)
+        : graph_(graph), observedTrackCount_(observedTrackCount) {}
+
+    void activate(float, uint32_t) override {}
+    void deactivate() override {}
+
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        observedTrackCount_ = graph_.getTracks().size();
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = inputs[0][frame];
+            outputs[1][frame] = inputs[1][frame];
+        }
+        return 0;
+    }
+
+    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+
+private:
+    RackGraph& graph_;
+    size_t& observedTrackCount_;
+};
+
 class MidiCapturingPlugin final : public IPlugin {
 public:
     void activate(float, uint32_t) override {}
@@ -3801,4 +3833,25 @@ TEST(RackGraphSnapshotTest, TrackAndSlotSnapshotsDoNotMixCallbackGenerations) {
                      racedSlot.musicalQuarterNotes);
     EXPECT_EQ(racedTrack.capturedAtMonotonicNanos,
               racedSlot.capturedAtMonotonicNanos);
+}
+
+TEST(RackGraphStatusSnapshotTest,
+     GetTracksTerminatesWhenAudioStatusSequenceRemainsOdd) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    size_t observedTrackCount = 0;
+
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+    ASSERT_EQ(chain->addPlugin(std::make_unique<ReentrantTrackSnapshotPlugin>(
+                                   graph, observedTrackCount)),
+              0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    EXPECT_EQ(observedTrackCount, 1u);
+    EXPECT_EQ(graph.getTracks().size(), 1u);
 }
