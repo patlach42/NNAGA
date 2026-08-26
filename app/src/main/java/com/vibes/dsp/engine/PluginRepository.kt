@@ -146,7 +146,7 @@ internal fun preloadLv2Binaries(bundle: File, loader: (String) -> Unit) {
                 require(reference.lowercase().endsWith(".so")) {
                     "LV2 DSP binary is not a shared library: $reference"
                 }
-                val binary = File(root, reference).canonicalFile
+                val binary = File(ttlFile.parentFile, reference).canonicalFile
                 require(binary.toPath().startsWith(root.toPath())) {
                     "LV2 DSP binary escapes bundle: $reference"
                 }

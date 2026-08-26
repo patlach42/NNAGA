@@ -8,21 +8,28 @@ import org.junit.Test
 
 class Lv2BinaryPreloadContractsTest {
     @Test
-    fun preloadsCanonicalDspBinariesAndIgnoresUiBinaryPredicates() {
+    fun preloadsCanonicalNestedNamDspBinaryAndIgnoresUiBinaryPredicates() {
         withBundle(
             ttl = """
                 @prefix lv2: <http://lv2plug.in/ns/lv2core#> .
                 @prefix ui: <http://lv2plug.in/ns/extensions/ui#> .
-                <urn:test:plugin> lv2:binary <dsp/../dsp/libtest.so> ;
+                <urn:test:plugin> lv2:binary <./plugin.so> ;
                     ui:binary <ui/test_ui.so> .
             """.trimIndent(),
-            files = listOf("dsp/libtest.so", "ui/test_ui.so"),
+            ttlPath = "neural_amp_modeler.lv2/manifest.ttl",
+            files = listOf(
+                "neural_amp_modeler.lv2/plugin.so",
+                "neural_amp_modeler.lv2/ui/test_ui.so",
+            ),
         ) { bundle ->
             val loaded = mutableListOf<String>()
 
             preloadLv2Binaries(bundle, loaded::add)
 
-            assertEquals(listOf(File(bundle, "dsp/libtest.so").canonicalPath), loaded)
+            assertEquals(
+                listOf(File(bundle, "neural_amp_modeler.lv2/plugin.so").canonicalPath),
+                loaded,
+            )
         }
     }
 
@@ -85,12 +92,16 @@ class Lv2BinaryPreloadContractsTest {
 
     private fun withBundle(
         ttl: String,
+        ttlPath: String = "manifest.ttl",
         files: List<String> = emptyList(),
         block: (File) -> Unit,
     ) {
         val bundle = Files.createTempDirectory("lv2-preload-contract").toFile()
         try {
-            File(bundle, "manifest.ttl").writeText(ttl)
+            File(bundle, ttlPath).apply {
+                parentFile?.mkdirs()
+                writeText(ttl)
+            }
             files.forEach { relativePath ->
                 File(bundle, relativePath).apply {
                     parentFile?.mkdirs()
