@@ -63,7 +63,99 @@ class PluginRepositoryContractsTest {
         assertEquals(true, URI(manifest).path.startsWith(root.path))
         assertEquals(true, URI(payload).path.startsWith(root.path))
     }
+    @Test
+    fun resolvesExternalHttpsPayloadsButKeepsManifestContainmentStrict() {
+        val root = URI("https://plugins.example/repo/")
+        val index = "https://plugins.example/repo/index.toml"
+        val externalPayload =
+            "https://raw.githubusercontent.com/JoepVanlier/JSFX/7d9b1456fbe4543406a4e927c89453a212cab3eb/Basics/BandJoiner.jsfx"
 
+        assertEquals(
+            externalPayload,
+            resolveRepositoryPayloadUrl(index, root, externalPayload, allowExternalHttps = true),
+        )
+        assertEquals(
+            "https://plugins.example/repo/payload/example.jsfx",
+            resolveRepositoryPayloadUrl(
+                index,
+                root,
+                "payload/example.jsfx",
+                allowExternalHttps = true,
+            ),
+        )
+
+        listOf(
+            "non-HTTPS absolute URL" to
+                "http://raw.githubusercontent.com/JoepVanlier/JSFX/main/Basics/BandJoiner.jsfx",
+            "file URL" to "file:///tmp/example.jsfx",
+            "protocol-relative URL" to "//attacker.example/example.jsfx",
+            "encoded traversal" to "https://plugins.example/repo/%2e%2e/escape.jsfx",
+            "credential-bearing URL" to "https://user:secret@attacker.example/example.jsfx",
+            "query-bearing URL" to "https://attacker.example/example.jsfx?ref=main",
+            "fragment-bearing URL" to "https://attacker.example/example.jsfx#fragment",
+        ).forEach { (case, payload) ->
+            assertThrows(case, IllegalArgumentException::class.java) {
+                resolveRepositoryPayloadUrl(index, root, payload, allowExternalHttps = true)
+            }
+        }
+
+        assertThrows(IllegalArgumentException::class.java) {
+            resolveRepositoryPayloadUrl(index, root, externalPayload, allowExternalHttps = false)
+        }
+        listOf(
+            "https://attacker.example/manifest.toml",
+            "http://attacker.example/manifest.toml",
+            "file:///tmp/manifest.toml",
+        ).forEach { manifest ->
+            assertThrows(IllegalArgumentException::class.java) {
+                resolveContainedRepositoryUrl(index, root, manifest)
+            }
+        }
+    }
+
+    @Test
+    fun jsfxManifestRequiresFilePayloadAndSafeJsfxEntry() {
+        val valid = jsfxManifest()
+
+        validateRepositoryManifest(valid)
+
+        listOf(
+            "non-jsfx format" to valid.copy(format = "JSFX"),
+            "archive payload kind" to valid.copy(kind = "archive"),
+            "archive entry extension" to valid.copy(entry = "Effects/example.zip"),
+            "uppercase entry extension" to valid.copy(entry = "Effects/example.JSFX"),
+            "absolute entry" to valid.copy(entry = "/Effects/example.jsfx"),
+            "traversal entry" to valid.copy(entry = "Effects/../escape.jsfx"),
+            "backslash traversal entry" to valid.copy(entry = "Effects\\..\\escape.jsfx"),
+            "empty entry" to valid.copy(entry = ""),
+            "directory entry" to valid.copy(entry = "Effects/"),
+        ).forEach { (case, manifest) ->
+            assertThrows(case, IllegalArgumentException::class.java) {
+                validateRepositoryManifest(manifest)
+            }
+        }
+    }
+
+    private fun jsfxManifest() = PluginRepositoryService.RepoManifest(
+        schema = 1,
+        id = "example.jsfx",
+        name = "Example JSFX",
+        version = "1.0.0",
+        format = "jsfx",
+        description = "A deterministic JSFX fixture",
+        payloadUrl =
+            "https://raw.githubusercontent.com/JoepVanlier/JSFX/7d9b1456fbe4543406a4e927c89453a212cab3eb/Basics/BandJoiner.jsfx",
+        payloadSha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        payloadSize = 42,
+        entry = "Effects/example.jsfx",
+        kind = "file",
+        arch = listOf("arm64-v8a"),
+        sourceName = "Test source",
+        sourceUrl = "https://plugins.example/repo/example.toml",
+        repositoryRoot = "https://plugins.example/repo/",
+        manufacturer = "Acme Audio",
+        tags = listOf("JSFX"),
+    )
 
     @Test
     fun migratesStaleBuiltinSourceToVersionedUrlAndClearsError() {

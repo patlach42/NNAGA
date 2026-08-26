@@ -34,6 +34,16 @@ internal fun resolveContainedRepositoryUrl(base: String, root: URI, relative: St
     require(path == rootPath.dropLast(1) || path.startsWith(rootPath))
     return decoded.normalize().toString()
 }
+internal fun resolveRepositoryPayloadUrl(base: String, root: URI, payload: String, allowExternalHttps: Boolean): String {
+    val raw = URI(payload)
+    if (allowExternalHttps && raw.isAbsolute) {
+        require(raw.scheme.equals("https", ignoreCase = true) && !raw.host.isNullOrBlank()) { "Payload URL must be absolute HTTPS: $payload" }
+        require(raw.userInfo == null && raw.query == null && raw.fragment == null && raw.path.isNotBlank()) { "Unsafe payload URL: $payload" }
+        require(raw.normalize().path == raw.path && !raw.rawPath.orEmpty().contains("%2e", ignoreCase = true)) { "Unsafe payload URL: $payload" }
+        return raw.normalize().toString()
+    }
+    return resolveContainedRepositoryUrl(base, root, payload)
+}
 internal fun validateDeclaredContentLength(length: Long, max: Long, url: String): Long {
     require(length == -1L || length in 1..max) {
         "Invalid declared content length $length (max $max) for $url"
@@ -100,6 +110,28 @@ internal fun parseRepositoryManifest(
         sourceUrl = url,
         repositoryRoot = repositoryRoot,
     ).also(::validateFacetMetadata)
+}
+internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoManifest) {
+    val packagePattern = Regex("[a-z0-9][a-z0-9._-]{0,127}")
+    val versionPattern = Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
+    val shaPattern = Regex("[0-9a-f]{64}")
+    validateFacetMetadata(manifest)
+    require(manifest.schema == 1 && manifest.id.isNotBlank() && manifest.name.isNotBlank())
+    require(packagePattern.matches(manifest.id) && packagePattern.matches(manifest.format) && versionPattern.matches(manifest.version))
+    val expectedKind = when (manifest.format) {
+        "lv2" -> "archive"
+        "wine_installer" -> "installer"
+        "wine_archive" -> "archive"
+        "wine_directory" -> "directory"
+        "jsfx" -> "file"
+        else -> ""
+    }
+    require(expectedKind.isNotEmpty() && manifest.kind == expectedKind && manifest.payloadSize in 1..512L * 1024 * 1024)
+    require(shaPattern.matches(manifest.payloadSha256) && manifest.arch.contains("arm64-v8a"))
+    if (manifest.format == "jsfx") {
+        val entry = manifest.entry.replace('\\', '/')
+        require(entry.isNotBlank() && !entry.startsWith('/') && !entry.split('/').contains("..") && entry.endsWith(".jsfx"))
+    }
 }
 internal data class RepositorySourceRecord(
     val id: String,
@@ -212,6 +244,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val root = File(context.filesDir, "plugin-repositories")
     private val installedRoot = File(root, "installed")
+    private val jsfxInstalledRoot = File(context.filesDir, "jsfx/Effects/repository")
     private val state = MutableStateFlow(RepositorySnapshot())
     private val cache = mutableMapOf<String, RepoManifest>()
     private val stagedManifests = mutableMapOf<String, StagedRepositoryPayload>()
@@ -267,17 +300,17 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
      * The returned file is app-private and remains available to the flavor
      * adapter until it reports final VST registry success.
      */
-suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
+    suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
         withContext(Dispatchers.IO) { mutex.withLock {
             val m = cache[packageId] ?: error("Package is not available: $packageId")
-            validate(m); require(m.format != "lv2") { "LV2 packages use the native repository installer" }
+            validate(m); require(m.format != "lv2" && m.format != "jsfx") { "This payload uses the native repository installer" }
             setPackageState(packageId, RepositoryPackageOperation.Installing, 0f, null)
             val token = UUID.randomUUID().toString()
             val staged = File(root, ".pending-$token.payload").canonicalFile
             requireContained(staged, root)
             val tmp = File(root, ".download-$token.tmp")
             try {
-                download(resolveContained(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl), tmp, m.payloadSize)
+                download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl, false), tmp, m.payloadSize)
                 require(sha256(tmp) == m.payloadSha256) { "Payload SHA-256 mismatch" }
                 Files.move(tmp.toPath(), staged.toPath())
                 stagedManifests[token] = StagedRepositoryPayload(m, staged)
@@ -301,7 +334,6 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
             require(m.version == payload.manifest.version)
             val packageId = payload.packageId
             val staged = stagedRecord.file
-            if (!success) { staged.delete(); setPackageState(packageId, null, null, error ?: "Wine install cancelled"); return@withLock }
             val dir = File(installedRoot, "${m.format}/${m.id}").canonicalFile
             val target = File(dir, m.version).canonicalFile; requireContained(target, dir)
             val tmp = File(dir, ".${m.version}.${payload.token}.staging").canonicalFile
@@ -317,31 +349,24 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
                 require(removeWineOwnership?.invoke(prior) != false) { "Prior Wine ownership removal failed" }
                 dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively)
                 backup.deleteRecursively(); staged.delete()
-                setPackageState(packageId, null, 1f, null); publishCurrent()
-            } catch (e: Exception) {
-                if (committed) target.deleteRecursively()
-                if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                if (ownership.vstUuids.isNotEmpty() || ownership.executableUuids.isNotEmpty() || ownership.prefixPaths.isNotEmpty()) removeWineOwnership?.invoke(ownership)
-                nativeRefresh?.invoke(); setPackageState(packageId, null, null, e.message ?: "Install failed"); throw e
             } finally { tmp.deleteRecursively(); backup.deleteRecursively(); staged.delete() }
         } }
 
 
     override suspend fun remove(packageId: String) = withContext(Dispatchers.IO) { mutex.withLock {
-        setPackageState(packageId, RepositoryPackageOperation.Removing, 0f, null); val p=packageId.split(':', limit=2); require(p.size==2); val dir=File(installedRoot,"${p[0]}/${p[1]}").canonicalFile; requireContained(dir,installedRoot)
+        setPackageState(packageId, RepositoryPackageOperation.Removing, 0f, null); val p=packageId.split(':', limit=2); require(p.size==2 && PACKAGE.matches(p[0])); val removeRoot = if (p[0] == "jsfx") jsfxInstalledRoot else installedRoot; val relative = if (p[0] == "jsfx") p[1] else "${p[0]}/${p[1]}"; val dir=File(removeRoot,relative).canonicalFile; requireContained(dir,removeRoot)
         val backup=File(dir.parentFile,".${dir.name}.${UUID.randomUUID()}.backup")
-        val ownership = dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") }.mapNotNull(::readOwnership)
-            .fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) }
+        val ownership = if (p[0].startsWith("wine_")) dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") }.mapNotNull(::readOwnership).fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) } else WineInstallOwnership()
         try { if(dir.exists()) Files.move(dir.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); require(removeWineOwnership?.invoke(ownership) != false) { "Wine ownership removal failed" }; require(nativeRefresh?.invoke()!=false) { "Native registry refresh failed" }; backup.deleteRecursively(); setPackageState(packageId,null,1f,null) ; publishCurrent() } catch(e:Exception) { if(backup.exists()&&!dir.exists()) Files.move(backup.toPath(),dir.toPath(),StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(packageId,null,null,e.message?:"Remove failed"); throw e }
     } }
     private suspend fun installOrUpdate(id: String, update: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
             val m = cache[id] ?: error("Package is not available: $id")
             validate(m)
-            val op = if (update) RepositoryPackageOperation.Updating else RepositoryPackageOperation.Installing
-            setPackageState(id, op, 0f, null)
-            val dir = File(installedRoot, "${m.format}/${m.id}").canonicalFile
-            requireContained(dir, installedRoot)
+            val installRoot = if (m.format == "jsfx") jsfxInstalledRoot else installedRoot
+            val relative = if (m.format == "jsfx") m.id else "${m.format}/${m.id}"
+            val dir = File(installRoot, relative).canonicalFile
+            requireContained(dir, installRoot)
             val target = File(dir, m.version).canonicalFile
             requireContained(target, dir)
             require(!target.exists() || update)
@@ -351,10 +376,18 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
             var moved = false
             try {
                 dir.mkdirs()
-                download(resolveContained(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl), tmp, m.payloadSize)
+                download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl, m.format == "jsfx"), tmp, m.payloadSize)
                 require(sha256(tmp) == m.payloadSha256) { "Payload SHA-256 mismatch" }
-                extractSafe(tmp, stage)
-                validateEntry(stage, m.entry)
+                if (m.format == "jsfx") {
+                    val payload = File(stage, m.entry).canonicalFile
+                    requireContained(payload, stage)
+                    payload.parentFile?.mkdirs()
+                    Files.move(tmp.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                    require(payload.isFile)
+                } else {
+                    extractSafe(tmp, stage)
+                    validateEntry(stage, m.entry)
+                }
                 writeMetadata(stage, m)
                 if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
                 Files.move(stage.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
@@ -426,7 +459,7 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
             errorMessage = error,
         )
     }
-    private fun inventory():Map<String,Installed>{ val out=mutableMapOf<String,Installed>(); installedRoot.listFiles().orEmpty().forEach{f->f.listFiles().orEmpty().forEach{id->id.listFiles().orEmpty().filter{it.isDirectory&&!it.name.startsWith(".")}.maxByOrNull{it.name}?.let{v->readMetadata(v)?.let{m->out["${m.format}:${m.id}"]=Installed(v.name,m)}}}}; return out }
+    private fun inventory():Map<String,Installed>{ val out=mutableMapOf<String,Installed>(); listOf(installedRoot, jsfxInstalledRoot).forEach { base -> base.listFiles().orEmpty().forEach{f->f.listFiles().orEmpty().forEach{id->id.listFiles().orEmpty().filter{it.isDirectory&&!it.name.startsWith(".")}.maxByOrNull{it.name}?.let{v->readMetadata(v)?.let{m->out["${m.format}:${m.id}"]=Installed(v.name,m)}}}} }; return out }
     private fun writeMetadata(dir:File,m:RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("manufacturer",m.manufacturer);put("tags",m.tags.joinToString("\u001f"));put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir,META)),null)} }
     private fun readOwnership(dir:File): WineInstallOwnership? = runCatching { Properties().apply { load(FileInputStream(File(dir,META))) }.let { p -> WineInstallOwnership(p.getProperty("ownership.vstUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.executableUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.prefixPaths","").split(File.pathSeparator).filter(String::isNotBlank)) } }.getOrNull()
     private fun mergeOwnership(a: WineInstallOwnership, b: WineInstallOwnership) = WineInstallOwnership(
@@ -440,7 +473,7 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
         }
     }.getOrNull()
     private fun setPackageState(id:String,op:RepositoryPackageOperation?,progress:Float?,error:String?){state.value=state.value.copy(packages=state.value.packages.map{if(it.id==id)it.copy(operation=op,progress=progress,errorMessage=error,status=if(error!=null)RepositoryPackageStatus.Error else it.status)else it})}
-    private fun validate(m:RepoManifest){validateFacetMetadata(m);require(m.schema==1&&m.id.isNotBlank()&&m.name.isNotBlank()&&m.version.isNotBlank());require(PACKAGE.matches(m.id)&&PACKAGE.matches(m.format)&&VERSION.matches(m.version));require(m.format in setOf("lv2","wine_installer","wine_archive","wine_directory"));require(m.kind==when(m.format){"lv2"->"archive";"wine_installer"->"installer";"wine_archive"->"archive";"wine_directory"->"directory";else->""}&&m.payloadSize in 1..MAX_DOWNLOAD);require(SHA.matches(m.payloadSha256));require(m.arch.contains("arm64-v8a"))}
+    private fun validate(m:RepoManifest){ validateRepositoryManifest(m) }
     private fun parseManifest(text: String, source: String, url: String, repositoryRoot: String): RepoManifest =
         parseRepositoryManifest(text, source, url, repositoryRoot)
     private fun parseIndex(t:org.tomlj.TomlParseResult):List<String> = parseRepositoryIndex(t)
@@ -472,7 +505,7 @@ suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
     private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{RepositorySourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
     data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val sourceUrl:String="",val repositoryRoot:String="",val manufacturer:String="Unknown",val tags:List<String> = emptyList())
     private data class Installed(val version:String,val manifest:RepoManifest)
-    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-25";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
+    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-27";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
     private fun sha256(b:ByteArray)=digest(b.inputStream())
     private fun sha256(f:File)=digest(f.inputStream())
     private fun digest(i:java.io.InputStream):String { val md=MessageDigest.getInstance("SHA-256"); i.use { val buf=ByteArray(8192); while(true){val n=it.read(buf);if(n<0)break;md.update(buf,0,n)} }; return md.digest().joinToString(""){"%02x".format(it)} }

@@ -1,0 +1,19 @@
+schema = 1
+id = "jsfx.saike-routing-utility"
+name = "Saike Routing Utility"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["routing", "monitoring", "utility"]
+description = "Monitor routing utility with mono, dim, mute, and channel controls."
+license = "MIT"
+
+[payload]
+kind = "file"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/7d9b1456fbe4543406a4e927c89453a212cab3eb/Basics/Saike_Routing_Utility.jsfx"
+sha256 = "68db1318710f30364bf63c7077b1d68da614b3eb04b0c8e42aa623c0f912dce4"
+size = 31144
+
+[install]
+entry = "Saike_Routing_Utility.jsfx"

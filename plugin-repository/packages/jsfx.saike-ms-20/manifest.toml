@@ -1,0 +1,19 @@
+schema = 1
+id = "jsfx.saike-ms-20"
+name = "Saike MS-20"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["filter", "synthesizer", "non-linear"]
+description = "Analog-style MS-20 filter emulation with nonlinear processing."
+license = "MIT"
+
+[payload]
+kind = "file"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/7d9b1456fbe4543406a4e927c89453a212cab3eb/Basics/MS-20.jsfx"
+sha256 = "93be6d9368261d6c977aa00b80899af1d400ac80cd1c1a2585f707b08d15764c"
+size = 19877
+
+[install]
+entry = "MS-20.jsfx"
