@@ -349,11 +349,13 @@ void JsfxUiHost::run() {
         ysfx_gfx_update_mouse(
             effect, modifiers, mouseX, mouseY, buttons, wheel, horizontalWheel);
         ysfx_gfx_set_window_state(effect, focused, visible, mouseOver);
-        const bool changed = (visible || redrawRequested) && ysfx_gfx_run(effect);
+        const bool shouldRun = (visible || redrawRequested);
+        const bool changed = shouldRun && ysfx_gfx_run(effect);
+        const bool shouldPresent = changed || redrawRequested;
         const uint32_t requestedFps = std::clamp(ysfx_get_requested_framerate(effect), 1u, 240u);
         frameInterval = std::chrono::milliseconds(std::max(1u, 1000u / requestedFps));
 
-        if (changed && visible && window) {
+        if (shouldPresent && visible && window) {
             ANativeWindow_Buffer output{};
             if (ANativeWindow_lock(window, &output, nullptr) == 0) {
                 const uint32_t rows = std::min(height, static_cast<uint32_t>(output.height));
@@ -377,6 +379,7 @@ void JsfxUiHost::run() {
                 ANativeWindow_unlockAndPost(window);
             }
         }
+
         if (window) ANativeWindow_release(window);
         lock.lock();
         state->effectCallActive = false;
