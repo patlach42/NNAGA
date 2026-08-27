@@ -14,7 +14,7 @@ kind = "files"
 size = 3685
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/f24522100de06fdcd9165db2aa7874c4cd49d831/Utility/Interaural%20Panning.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/f24522100de06fdcd9165db2aa7874c4cd49d831/Utility/Interaural%20Panning.jsfx"
 sha256 = "fa229bcd6e423e043657c32f763223242a39c83a1ba8b5f21913957eb56645b4"
 size = 3685
 path = "Interaural Panning.jsfx"

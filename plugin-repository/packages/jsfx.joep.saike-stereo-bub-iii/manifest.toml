@@ -14,7 +14,7 @@ kind = "files"
 size = 18451
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/36753944d642560f26b6480fc7f49431953ca686/Basics/Saike%20Stereo%20Bub%20III.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/36753944d642560f26b6480fc7f49431953ca686/Basics/Saike%20Stereo%20Bub%20III.jsfx"
 sha256 = "5da4779acef15ec4dae3a620ad1b7881426e8dc34eccc1d994b51ef52fd042e1"
 size = 18451
 path = "Saike Stereo Bub III.jsfx"

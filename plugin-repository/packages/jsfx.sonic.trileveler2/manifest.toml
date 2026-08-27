@@ -14,31 +14,31 @@ kind = "files"
 size = 356463
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/TriLeveler2.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/TriLeveler2.jsfx"
 sha256 = "23e5b076d0880601e1e6a500f19fb1baa9ced04540ecf04612c942f764ccb031"
 size = 20191
 path = "TriLeveler2.jsfx"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/trileveler_gfx/bg.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/trileveler_gfx/bg.png"
 sha256 = "b805d770c324054a6b9e99ed1ddc2b95638763fff6ae4bfdeebf95aa687e5e4b"
 size = 47982
 path = "trileveler_gfx/bg.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/trileveler_gfx/conf.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/trileveler_gfx/conf.png"
 sha256 = "20e12df28ba796b253c217f296285cc0d60155661c2f013ddac33b6980f74c67"
 size = 23129
 path = "trileveler_gfx/conf.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/trileveler_gfx/knob_sm.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/trileveler_gfx/knob_sm.png"
 sha256 = "36c8f83992ab3e88ec1b105553c41042a9cddbbd11459679a5f9d456f0550206"
 size = 1183
 path = "trileveler_gfx/knob_sm.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/docs/TriLeveler2.pdf"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/docs/TriLeveler2.pdf"
 sha256 = "1da18aff05694f8e70620c7960e60d513fe20d12223d7906edfeb103242bdd78"
 size = 263978
 path = "docs/TriLeveler2.pdf"

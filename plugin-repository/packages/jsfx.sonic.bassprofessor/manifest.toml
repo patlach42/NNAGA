@@ -14,37 +14,37 @@ kind = "files"
 size = 443639
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Bassprofessor.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Bassprofessor.jsfx"
 sha256 = "15b2bc8f7ead3e15f3d0e175fef3787830093b88ac7ed8f6d7cb4805403032f6"
 size = 13379
 path = "Bassprofessor.jsfx"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/bg.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/bg.png"
 sha256 = "dd53d425e164f652510f0ffbda8a7c38c11b676e2244beeb6959a4d8491f529c"
 size = 168609
 path = "bassprofessor_gfx/bg.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/knob.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/knob.png"
 sha256 = "79a7e535a8487acb9a01be4bc9fce9b8c32fee26861198809ebb578d7bd5ba00"
 size = 180357
 path = "bassprofessor_gfx/knob.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/knob2.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/knob2.png"
 sha256 = "93481106956bb6d0afcfec78d5518a3f86289738bda67be545eb2456e895b5d9"
 size = 64645
 path = "bassprofessor_gfx/knob2.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/knob3.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/knob3.png"
 sha256 = "f9961c4549eefe58eb341215b69efb8433fb5ed3c20ce9e828acf0fed9a09417"
 size = 15918
 path = "bassprofessor_gfx/knob3.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/led.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/bassprofessor_gfx/led.png"
 sha256 = "a3250a6bd48e0392ae98d856f6ca71663ed3daa2e190f414eba7265f0e7a3329"
 size = 731
 path = "bassprofessor_gfx/led.png"

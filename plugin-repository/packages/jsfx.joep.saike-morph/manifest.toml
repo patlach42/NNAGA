@@ -14,7 +14,7 @@ kind = "files"
 size = 33650
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/5cf8ec39ef56c9a1960d2b802be33c13d74bf228/Basics/Saike_Morph.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/5cf8ec39ef56c9a1960d2b802be33c13d74bf228/Basics/Saike_Morph.jsfx"
 sha256 = "1bf59410f4b2dab4933fadef0f9bbea4bfd94a276823f4d20c018a9abbac0f29"
 size = 33650
 path = "Saike_Morph.jsfx"

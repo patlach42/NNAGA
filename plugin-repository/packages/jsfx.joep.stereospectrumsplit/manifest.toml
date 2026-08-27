@@ -14,7 +14,7 @@ kind = "files"
 size = 10420
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/0eeb6f249e4c48143bd75a3db4c2317ee41152da/SpectrumAnalyzer/StereoSpectrumSplit.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/0eeb6f249e4c48143bd75a3db4c2317ee41152da/SpectrumAnalyzer/StereoSpectrumSplit.jsfx"
 sha256 = "fff3cd5ca23716f115cd99984047590b76fff3af1c6622f8ad722d3905c8097f"
 size = 10420
 path = "StereoSpectrumSplit.jsfx"

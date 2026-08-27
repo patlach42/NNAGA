@@ -14,7 +14,7 @@ kind = "files"
 size = 19877
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/f13d210af3e5fff22012701e94540921dbac6af0/Basics/MS-20.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/f13d210af3e5fff22012701e94540921dbac6af0/Basics/MS-20.jsfx"
 sha256 = "93be6d9368261d6c977aa00b80899af1d400ac80cd1c1a2585f707b08d15764c"
 size = 19877
 path = "MS-20.jsfx"

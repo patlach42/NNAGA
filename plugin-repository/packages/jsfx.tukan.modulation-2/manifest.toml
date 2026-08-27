@@ -14,7 +14,7 @@ kind = "files"
 size = 103267
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Modulation%202%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Modulation%202%20(Tukan)"
 sha256 = "b430ba486e6f55f5c1cfd8721ee2ae1fb6cf24f39215223a3653eeb2ef8c4b74"
 size = 103267
 path = "Modulation 2 (Tukan).jsfx"

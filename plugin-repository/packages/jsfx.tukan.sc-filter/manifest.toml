@@ -14,7 +14,7 @@ kind = "files"
 size = 45142
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/SC%20Filter%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/SC%20Filter%20(Tukan)"
 sha256 = "e79c88878d4e38a062a42ae1b51dd0d554e2a3a4d6b885a1024f95a4d2abedc3"
 size = 45142
 path = "SC Filter (Tukan).jsfx"

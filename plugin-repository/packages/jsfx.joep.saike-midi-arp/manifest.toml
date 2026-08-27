@@ -14,25 +14,25 @@ kind = "files"
 size = 74367
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/9348b4203c1f80e500c95172f13addfe5e24e9eb/saike_midi_arp/saike_midi_arp.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/9348b4203c1f80e500c95172f13addfe5e24e9eb/saike_midi_arp/saike_midi_arp.jsfx"
 sha256 = "3f5eb43f8c9856ebea9b95c85d605fbe6e0a957aeb2ea4b67d3087885e82e1e9"
 size = 58603
 path = "saike_midi_arp.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/9348b4203c1f80e500c95172f13addfe5e24e9eb/saike_midi_arp/midi_arp_dependencies/saike_arp_midi_handling.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/9348b4203c1f80e500c95172f13addfe5e24e9eb/saike_midi_arp/midi_arp_dependencies/saike_arp_midi_handling.jsfx-inc"
 sha256 = "34eb69c8f625db9d90a84d3f9f79952016646b445e79c1c692125e328c2bbc81"
 size = 4095
 path = "midi_arp_dependencies/saike_arp_midi_handling.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/9348b4203c1f80e500c95172f13addfe5e24e9eb/saike_midi_arp/midi_arp_dependencies/saike_midi_arp_gfx_funcs.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/9348b4203c1f80e500c95172f13addfe5e24e9eb/saike_midi_arp/midi_arp_dependencies/saike_midi_arp_gfx_funcs.jsfx-inc"
 sha256 = "947327b941ae8c491220da7044583eba076b2067779397ca0b12eb1e65079746"
 size = 7722
 path = "midi_arp_dependencies/saike_midi_arp_gfx_funcs.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/9348b4203c1f80e500c95172f13addfe5e24e9eb/saike_midi_arp/midi_arp_dependencies/saike_midi_arp_pattern_handling.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/9348b4203c1f80e500c95172f13addfe5e24e9eb/saike_midi_arp/midi_arp_dependencies/saike_midi_arp_pattern_handling.jsfx-inc"
 sha256 = "f0a339fa7bbc494564c2a2ae40e69a9cffa3e80a936eb5a4d78e6f725bfc5ccb"
 size = 3947
 path = "midi_arp_dependencies/saike_midi_arp_pattern_handling.jsfx-inc"

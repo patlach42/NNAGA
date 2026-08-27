@@ -14,7 +14,7 @@ kind = "files"
 size = 11620
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Skope2.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Skope2.jsfx"
 sha256 = "0a1ff93ea333f80b7364255bab44ee18451f0f5a5c3a6fb888dad0f14dd1f864"
 size = 11620
 path = "Skope2.jsfx"

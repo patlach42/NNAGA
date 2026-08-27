@@ -14,7 +14,7 @@ kind = "files"
 size = 122886
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/SumChannel%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/SumChannel%20(Tukan)"
 sha256 = "e361f9534f1a50c0690a524b71e5f018a78616651559a454f54f6eafdde3002e"
 size = 122886
 path = "SUM CHANNEL (Tukan).jsfx"

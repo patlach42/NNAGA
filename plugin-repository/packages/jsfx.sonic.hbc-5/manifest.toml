@@ -14,43 +14,43 @@ kind = "files"
 size = 206913
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/HBC-5.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/HBC-5.jsfx"
 sha256 = "83730ca331b767965e5f8c6a7ab61e5a736f80d2ceef4c9823d744b52101e8aa"
 size = 21062
 path = "HBC-5.jsfx"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/bg.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/bg.png"
 sha256 = "567434721fb1e4ddc73a91c5cfbf8671aa19009c45504470ea060460a8baf6e2"
 size = 182588
 path = "hbc5_gfx/bg.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/lr.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/lr.png"
 sha256 = "60c1feb6101edfa4d3ffa1432227ba928704a72efc5e0b574878807157e0b996"
 size = 293
 path = "hbc5_gfx/lr.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/ms.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/ms.png"
 sha256 = "37d6974370da9815162449370eaa40df5a6aad37d1ed6d8c13a2d62e1761bd1c"
 size = 446
 path = "hbc5_gfx/ms.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/sliderknob.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/sliderknob.png"
 sha256 = "842dd9eef2f9e9d181706b333ee4cbf83082a93681b58b4bef62b53e02b282a5"
 size = 762
 path = "hbc5_gfx/sliderknob.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/sur1.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/sur1.png"
 sha256 = "ea7767afdb5be6e20d7bc01094990d3085ce97a0105147fe24bf0bcecd85bb44"
 size = 882
 path = "hbc5_gfx/sur1.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/sur2.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc5_gfx/sur2.png"
 sha256 = "6e86a9aadcf70cd83ade7a757c191b988c342e237c0cd38ba3ce7145437c2106"
 size = 880
 path = "hbc5_gfx/sur2.png"

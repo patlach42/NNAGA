@@ -14,43 +14,43 @@ kind = "files"
 size = 545443
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/SLAX.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/SLAX.jsfx"
 sha256 = "cbe1d986c792531ae53b7d853e2188ab80fea4eea3b87cea5fdf28a49e6c94c6"
 size = 9607
 path = "SLAX.jsfx"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/bg.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/bg.png"
 sha256 = "9005c7c336fd385e804a50feb1ee729b31f81879cf42a9fc342866eefc4f8a61"
 size = 84414
 path = "slax_gfx/bg.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/bigpot.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/bigpot.png"
 sha256 = "54164fdaf784d223b575133d2f446387616f4cc565bece73b3f9d443bdccb04c"
 size = 271986
 path = "slax_gfx/bigpot.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/needles.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/needles.png"
 sha256 = "38cb82cc8698ca260ec7e02ffa36cff64d9473ce4917a5be96c90b8445716632"
 size = 126859
 path = "slax_gfx/needles.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/opt.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/opt.png"
 sha256 = "a18943bb531c44f982365918284708778d3b09ef8d5f9d0686b9437789324b71"
 size = 26170
 path = "slax_gfx/opt.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/optbut.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/optbut.png"
 sha256 = "b4b70a3001efc2b87acdf2da3f4a7e731e14bd95cfcd2cde2586ed97e0225aa6"
 size = 483
 path = "slax_gfx/optbut.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/prepot.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/slax_gfx/prepot.png"
 sha256 = "400898b63866878d24865f9eb37b05c0fb2c83034e5d967a9568cf56e0f60ead"
 size = 25924
 path = "slax_gfx/prepot.png"

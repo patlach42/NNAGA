@@ -14,103 +14,103 @@ kind = "files"
 size = 125230
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/saike_duskverb.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/saike_duskverb.jsfx"
 sha256 = "2c441d8353b9f650278f69891f021920e93ec4bebccb45b3c9c74a739661bb60"
 size = 24240
 path = "saike_duskverb.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/bigfont_caps.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/bigfont_caps.png"
 sha256 = "6bf4b48da7438a98268521a0c9483eeb98f04385edb8a1368066d20285a2299f"
 size = 2193
 path = "DuskVerb_Dependencies/bigfont_caps.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/bigfont_caps3.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/bigfont_caps3.png"
 sha256 = "3b8657d81087debc2b76095f94fe34da6626681f064de50db02156a62bc26958"
 size = 2120
 path = "DuskVerb_Dependencies/bigfont_caps3.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_0.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_0.png"
 sha256 = "06352ab4b04f72ef013d0528ccd48b8b8fc715e068210effdae9cbc2198f208d"
 size = 3168
 path = "DuskVerb_Dependencies/camp_0.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_1.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_1.png"
 sha256 = "17e9ae4870fb7e248c6dbafd9055b987aab72d31507b5aa03794a6e6e5689faa"
 size = 6643
 path = "DuskVerb_Dependencies/camp_1.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_2.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_2.png"
 sha256 = "ad08ddfa9d2067fb5150fcb2b55ec36bb140594b9433f58ec2b71ee51e80e9c1"
 size = 1181
 path = "DuskVerb_Dependencies/camp_2.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_3.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_3.png"
 sha256 = "d37fb865c721b6ee8f3b1b9b438e87b5d2e860135983d39c5d023fe2d3bfa204"
 size = 5215
 path = "DuskVerb_Dependencies/camp_3.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_4.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_4.png"
 sha256 = "f8cdbc389dfb8f7089562d05c01d4592773d6ba2c316e91070a45f42498d00d7"
 size = 5241
 path = "DuskVerb_Dependencies/camp_4.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_5.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/camp_5.png"
 sha256 = "864c665b1bfda9cc239cb8e6144ad9d1ebb645484039baf1a71528800c34fd7b"
 size = 6469
 path = "DuskVerb_Dependencies/camp_5.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/font.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/font.png"
 sha256 = "872a066383d4a7d5b73b4bc03e572f6d6fd4f4717a55da79a640f853de2d493d"
 size = 416
 path = "DuskVerb_Dependencies/font.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_freq.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_freq.jsfx-inc"
 sha256 = "97893398386c7a8447b4c589755fa6a8ffe7129270bdbe729efd3bcdb30217b7"
 size = 3281
 path = "DuskVerb_Dependencies/saike_dusk_freq.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_grainlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_grainlib.jsfx-inc"
 sha256 = "7957803f3e33143a1cdb5497d15a2b97bc9ec7321bfeb35f1162bb7723ffcadc"
 size = 10654
 path = "DuskVerb_Dependencies/saike_dusk_grainlib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_hadamard_diffusers.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_hadamard_diffusers.jsfx-inc"
 sha256 = "364e7c04862aba0c45ddf68586267010966a6ca9fd95d48a81c9051337e6083a"
 size = 13426
 path = "DuskVerb_Dependencies/saike_dusk_hadamard_diffusers.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_lowres_gfx.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_lowres_gfx.jsfx-inc"
 sha256 = "c52df5ec3f1697630adcdaf84f1eadf55da7423862d00c9f83c3a951a0155094"
 size = 12355
 path = "DuskVerb_Dependencies/saike_dusk_lowres_gfx.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_octaver.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_octaver.jsfx-inc"
 sha256 = "ffb2c35109d187a56d134c1cd23dc8f70511db04f1ea01011f1e110999e0cd4a"
 size = 7908
 path = "DuskVerb_Dependencies/saike_dusk_octaver.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_pitchlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/DuskVerb_Dependencies/saike_dusk_pitchlib.jsfx-inc"
 sha256 = "fddb7984e0ab7ed2d2932006017985008e6d71db337d010d78f59e68e6538cc2"
 size = 10303
 path = "DuskVerb_Dependencies/saike_dusk_pitchlib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/saike_duskverb.jsfx.rpl"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8d3533b2f295be93927cec3a9e4ed387d712f99b/DuskVerb/saike_duskverb.jsfx.rpl"
 sha256 = "f54274f5561fc3f2139a1972db9e62859d6471f0edba4798985954664ab3830f"
 size = 10417
 path = "saike_duskverb.jsfx.rpl"

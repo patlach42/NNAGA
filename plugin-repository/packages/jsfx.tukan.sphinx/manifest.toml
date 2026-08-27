@@ -14,7 +14,7 @@ kind = "files"
 size = 23558
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Sphinx%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Sphinx%20(Tukan)"
 sha256 = "af4fced904e30e97eb722ba0d3d175ccdb4f4fd76e19f2d669313915b1640626"
 size = 23558
 path = "Sphinx (Tukan).jsfx"

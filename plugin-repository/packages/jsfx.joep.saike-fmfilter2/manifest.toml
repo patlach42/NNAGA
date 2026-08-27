@@ -14,7 +14,7 @@ kind = "files"
 size = 97413
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/1e972149df86bd69cc3fab52af855f29aaf16021/Yutani/Saike_FMFilter2.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/1e972149df86bd69cc3fab52af855f29aaf16021/Yutani/Saike_FMFilter2.jsfx"
 sha256 = "200472af45f966aabff5339aa019976f410b7bdcde7a3f54b3679e33cdeb3924"
 size = 97413
 path = "Saike_FMFilter2.jsfx"

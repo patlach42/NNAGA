@@ -14,25 +14,25 @@ kind = "files"
 size = 260310
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Leet%20Delay%202.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Leet%20Delay%202.jsfx"
 sha256 = "7e3b254ce5a32fe1c4318ffaa9a0755170b8c8ea59a704373173d38f5c572ce7"
 size = 16125
 path = "Leet Delay 2.jsfx"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/leet_delay_gfx/bg.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/leet_delay_gfx/bg.png"
 sha256 = "137471ce07353eef6204c9d13b96f278e0369f403bdfc06ae6335376c55896d9"
 size = 242768
 path = "leet_delay_gfx/bg.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/leet_delay_gfx/knob_but.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/leet_delay_gfx/knob_but.png"
 sha256 = "3cb347918dbfe29b39285eafbfac66d36192b6b1fa00232cbff5a2963fdf6408"
 size = 401
 path = "leet_delay_gfx/knob_but.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/leet_delay_gfx/knob_sm.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/leet_delay_gfx/knob_sm.png"
 sha256 = "b90e92a5c8b6f3dba837f21c2e4fe4b811d56f71b3780eadccacf3ca8b153a97"
 size = 1016
 path = "leet_delay_gfx/knob_sm.png"

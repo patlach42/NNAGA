@@ -14,7 +14,7 @@ kind = "files"
 size = 54951
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Compressor%203%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Compressor%203%20(Tukan)"
 sha256 = "83407ce9bd5763862b41d804d9d9994d078e3eceb56f250463dd648a20d94a5c"
 size = 54951
 path = "Compressor 3 (Tukan).jsfx"

@@ -14,7 +14,7 @@ kind = "files"
 size = 26617
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Goniometer%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Goniometer%20(Tukan)"
 sha256 = "bd00dcd6b9ef5cc02ff8a88002e9290d465a2f9a3a5644e4526df1e59c4c4e6b"
 size = 26617
 path = "Goniometer (Tukan).jsfx"

@@ -14,37 +14,37 @@ kind = "files"
 size = 55801
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad.jsfx"
 sha256 = "5391beae4918eed6c3b43b648eb7dd95e1a24f5a99363891ae73b0a42e81cf34"
 size = 13586
 path = "jsdrumpad.jsfx"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad.jsfx.RPL"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad.jsfx.RPL"
 sha256 = "b1924313930c8a61c87d4466617244b8d2345b4675ee1a9af1a4a672d2c6adfe"
 size = 4036
 path = "jsdrumpad.jsfx.RPL"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad/dp.envlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad/dp.envlib.jsfx-inc"
 sha256 = "15e1772f7dd9606d7dcfc947fabecbcef8b1262f6cc0aa3876be6da17c0b160a"
 size = 3986
 path = "jsdrumpad/dp.envlib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad/dp.gfxlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad/dp.gfxlib.jsfx-inc"
 sha256 = "e263152b3df7a70b022e869247632e9667dfa2f272163e3ee0d4d81c19ddb482"
 size = 2945
 path = "jsdrumpad/dp.gfxlib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad/dp.mouselib.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad/dp.mouselib.jsfx-inc"
 sha256 = "7353b55f47747169f58e501172d0da8f6a7851cd3cd63cd2609425e1b4b15c38"
 size = 771
 path = "jsdrumpad/dp.mouselib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad/dp.svf_filter.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumpad/dp.svf_filter.jsfx-inc"
 sha256 = "6bb6670c831267b8a75f6a0515b8e4ba350c3c138a813057ab332016dcd50b79"
 size = 30477
 path = "jsdrumpad/dp.svf_filter.jsfx-inc"

@@ -14,7 +14,7 @@ kind = "files"
 size = 58643
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Bus%20Comp%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Bus%20Comp%20(Tukan)"
 sha256 = "ec4f4e6641eaaf29eaea80cfba3df8d95cc04fada8d05fe584f9d26325c1e728"
 size = 58643
 path = "Bus Comp (Tukan).jsfx"

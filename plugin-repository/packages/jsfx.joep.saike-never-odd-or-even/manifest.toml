@@ -14,19 +14,19 @@ kind = "files"
 size = 136204
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/5cb5de185752362d233abcae8a4af3f32b3e18cb/Basics/saike_never_odd_or_even.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/5cb5de185752362d233abcae8a4af3f32b3e18cb/Basics/saike_never_odd_or_even.jsfx"
 sha256 = "c93b7678de39aeb1092052a7ef21f78c2a86cc00e672414e7250b41495d741e5"
 size = 6717
 path = "saike_never_odd_or_even.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/5cb5de185752362d233abcae8a4af3f32b3e18cb/Basics/nooo_deps/nooo_agc.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/5cb5de185752362d233abcae8a4af3f32b3e18cb/Basics/nooo_deps/nooo_agc.jsfx-inc"
 sha256 = "d64c518ccd09bef20b7dcd623ee441f73e2cbc433a2f5997de5281738d9112a1"
 size = 2534
 path = "nooo_deps/nooo_agc.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/5cb5de185752362d233abcae8a4af3f32b3e18cb/Basics/nooo_deps/nooo_upsamplers.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/5cb5de185752362d233abcae8a4af3f32b3e18cb/Basics/nooo_deps/nooo_upsamplers.jsfx-inc"
 sha256 = "c254b307e71bc409106230ca26907f0f0eaba9522b7ca76139022bb427811a66"
 size = 126953
 path = "nooo_deps/nooo_upsamplers.jsfx-inc"

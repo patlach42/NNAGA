@@ -14,7 +14,7 @@ kind = "files"
 size = 91362
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/ConsoleMeter%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/ConsoleMeter%20(Tukan)"
 sha256 = "7cd7c07017f9cf8c6c1e7188e7c0290d0aabfb78d636b089918644f06fead096"
 size = 91362
 path = "ConsoleMeter (Tukan).jsfx"

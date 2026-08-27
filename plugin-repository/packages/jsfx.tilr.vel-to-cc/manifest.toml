@@ -14,7 +14,7 @@ kind = "files"
 size = 1998
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/b1160b5d78ce3c25eebb5dcd98ff8c0220ff93c1/MIDI/Vel%20to%20CC.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/b1160b5d78ce3c25eebb5dcd98ff8c0220ff93c1/MIDI/Vel%20to%20CC.jsfx"
 sha256 = "1b7eb0b38df3a53038fb6d5b607663a72f02eace048827a9be73f84212ef6e51"
 size = 1998
 path = "Vel to CC.jsfx"

@@ -14,7 +14,7 @@ kind = "files"
 size = 46913
 
 [[payload.files]]
-url = "https://github.com/JClones/JSFXClones/raw/c7d1a1e9ebe0c6aaf187d1650054ac4f4043ce8e/jsfx/JClones_Molot.jsfx"
+url = "https://raw.githubusercontent.com/JClones/JSFXClones/c7d1a1e9ebe0c6aaf187d1650054ac4f4043ce8e/jsfx/JClones_Molot.jsfx"
 sha256 = "ca4897a87c28cbc2c0231c4db840ce6d233d23e04003f99cb8a10adf3711a9a0"
 size = 46913
 path = "JClones_Molot.jsfx"

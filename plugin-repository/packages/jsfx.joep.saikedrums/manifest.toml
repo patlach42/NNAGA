@@ -14,55 +14,55 @@ kind = "files"
 size = 177706
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums.jsfx"
 sha256 = "78dfacdb607029148be02591c01a6827da9f0bbeb680534d4d9d80cbd0f55e50"
 size = 55375
 path = "saikedrums.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/font.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/font.png"
 sha256 = "872a066383d4a7d5b73b4bc03e572f6d6fd4f4717a55da79a640f853de2d493d"
 size = 416
 path = "saikedrums_dependencies/font.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_basic_filters.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_basic_filters.jsfx-inc"
 sha256 = "e86c0202aedc7e6d54395ed607a278629fff2141a0de8058b4b2860033331763"
 size = 3554
 path = "saikedrums_dependencies/saikedrums_basic_filters.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_drum_elements.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_drum_elements.jsfx-inc"
 sha256 = "aa70f11f3a4306895054e1d36138b38c8c807b9de0f0fc4740704152838df034"
 size = 67833
 path = "saikedrums_dependencies/saikedrums_drum_elements.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_freq_shift.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_freq_shift.jsfx-inc"
 sha256 = "6efbeab1e896396dc2f26e4cab3be71392c187e9c0e6b0dfff7f39e6192a99bd"
 size = 2833
 path = "saikedrums_dependencies/saikedrums_freq_shift.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_pixel_gfx.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_pixel_gfx.jsfx-inc"
 sha256 = "7e3b7d8d1b4dc7055c209a1091cd6e77338168dc15bc05613371cdf80eab98ce"
 size = 26359
 path = "saikedrums_dependencies/saikedrums_pixel_gfx.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_sample_playback.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_sample_playback.jsfx-inc"
 sha256 = "6c9ed409b5be1d03e0566656adc122460e56cdf113c90dc0fbddf5a03e40d37f"
 size = 10083
 path = "saikedrums_dependencies/saikedrums_sample_playback.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_triggered_midi.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums_dependencies/saikedrums_triggered_midi.jsfx-inc"
 sha256 = "4c93ad074521cf086775d5cd776d766100f7d5729ffba81a6a5d0190f5e07e25"
 size = 1822
 path = "saikedrums_dependencies/saikedrums_triggered_midi.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums.jsfx.rpl"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c1393ad62a7d1390f82afa75a5783b32bab2d37c/saikedrums/saikedrums.jsfx.rpl"
 sha256 = "1dcf6d3c7f902e2f8f50f847d98a56aa2af5de35b6b29564ea1096c55b6fdb67"
 size = 9431
 path = "saikedrums.jsfx.rpl"

@@ -14,7 +14,7 @@ kind = "files"
 size = 6651
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/228ee2e902dd448478cc7723db49242e1cc39301/Modulation/Albeton%20-%20Autopan.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/228ee2e902dd448478cc7723db49242e1cc39301/Modulation/Albeton%20-%20Autopan.jsfx"
 sha256 = "36d5239978342bc727e13becaed7d33749523916eb0a9173e3ca907583fc04ca"
 size = 6651
 path = "Albeton - Autopan.jsfx"

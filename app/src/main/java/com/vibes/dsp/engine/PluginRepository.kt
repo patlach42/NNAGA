@@ -163,6 +163,9 @@ internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoMa
             require(u.scheme.equals("https", ignoreCase = true) && !u.host.isNullOrBlank())
             require(u.userInfo == null && u.query == null && u.fragment == null && u.path.isNotBlank())
             require(u.normalize().path == u.path && !u.rawPath.orEmpty().contains("%2e", ignoreCase = true))
+            if (manifest.format == "jsfx") {
+                require(u.host.equals("raw.githubusercontent.com", ignoreCase = true)) { "Redirecting JSFX file URL: ${file.url}" }
+            }
         }
         require(manifest.files.sumOf { it.size } == manifest.payloadSize)
     }
@@ -171,7 +174,11 @@ internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoMa
         require(entry.isNotBlank() && !entry.startsWith('/') && !entry.split('/').contains(".."))
         when (manifest.kind) {
             "file" -> require(entry.endsWith(".jsfx"))
-            "files" -> require(manifest.files.any { it.path == entry } && entry.endsWith(".jsfx"))
+            "files" -> {
+                require(manifest.files.any { it.path == entry })
+                val name = entry.substringAfterLast('/')
+                require(name.endsWith(".jsfx") || !name.contains('.'))
+            }
         }
     }
 }

@@ -14,25 +14,25 @@ kind = "files"
 size = 41493
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/9ee52fd4bfd73f693acac2e35e30dd277fd88ea3/Delay/QuickDelay.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/9ee52fd4bfd73f693acac2e35e30dd277fd88ea3/Delay/QuickDelay.jsfx"
 sha256 = "c119d0cdee4948af0c6aea399044547ec60dddfaa53d7c9254438bd9048cc0f8"
 size = 4720
 path = "QuickDelay.jsfx"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/9ee52fd4bfd73f693acac2e35e30dd277fd88ea3/Delay/qdelay/qd.delay.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/9ee52fd4bfd73f693acac2e35e30dd277fd88ea3/Delay/qdelay/qd.delay.jsfx-inc"
 sha256 = "ce3326988143007f20dd495145e4fe073dfcf92aa8dd5fd7ab74b9f80219100e"
 size = 17528
 path = "qdelay/qd.delay.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/9ee52fd4bfd73f693acac2e35e30dd277fd88ea3/Delay/qdelay/qd.rbj_filter.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/9ee52fd4bfd73f693acac2e35e30dd277fd88ea3/Delay/qdelay/qd.rbj_filter.jsfx-inc"
 sha256 = "7a5885bb0c1523856ac682a9fc9a499c3a9de12d7b87837664f9e4ffefbc341b"
 size = 9422
 path = "qdelay/qd.rbj_filter.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/9ee52fd4bfd73f693acac2e35e30dd277fd88ea3/Delay/qdelay/qd.saike_pitchlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/9ee52fd4bfd73f693acac2e35e30dd277fd88ea3/Delay/qdelay/qd.saike_pitchlib.jsfx-inc"
 sha256 = "07dd4fbdc5b276237aed10b3f5c3bb1ae97e7894f56826280f593dc2c489524b"
 size = 9823
 path = "qdelay/qd.saike_pitchlib.jsfx-inc"

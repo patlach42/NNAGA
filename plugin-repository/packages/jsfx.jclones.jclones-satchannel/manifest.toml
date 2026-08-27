@@ -14,7 +14,7 @@ kind = "files"
 size = 7585
 
 [[payload.files]]
-url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_SatChannel.jsfx"
+url = "https://raw.githubusercontent.com/JClones/JSFXClones/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_SatChannel.jsfx"
 sha256 = "5d4bdd2b504456fa10380b66679028bf25a2e4e6ac99521f9a6ec723d9cffb2a"
 size = 7585
 path = "JClones_SatChannel.jsfx"

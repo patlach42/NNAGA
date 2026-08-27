@@ -14,55 +14,55 @@ kind = "files"
 size = 134899
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FM%20Filter.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FM%20Filter.jsfx"
 sha256 = "c85427839fdc813625eaf5dc2d6ddfbe92a32ae6989214987fcf058e2ea58ef2"
 size = 32516
 path = "FM Filter.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_distortion.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_distortion.jsfx-inc"
 sha256 = "191072cb68c57a336d69afd14d58582031f93564ca036606d7fef2dbbbf91a09"
 size = 4428
 path = "FMFilter_Dependencies/Saike_FMF_distortion.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_filters.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_filters.jsfx-inc"
 sha256 = "a303d1c30f0873a67a0b12482144a537e625af4d62da0bad3f51c740823d8205"
 size = 16934
 path = "FMFilter_Dependencies/Saike_FMF_filters.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_interpolators.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_interpolators.jsfx-inc"
 sha256 = "b12152a10325919aa7cbb6789783063d831909fa7d640114dd175f92823a1909"
 size = 1514
 path = "FMFilter_Dependencies/Saike_FMF_interpolators.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_midilib.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_midilib.jsfx-inc"
 sha256 = "0b197c5797d7cf5be14622dede0a9f1bb0da565fed5f002521a23a3ed304805e"
 size = 2735
 path = "FMFilter_Dependencies/Saike_FMF_midilib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_oversampling.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_oversampling.jsfx-inc"
 sha256 = "0085993dc54481f08c533d264e261963d1eb66e0d9a172c6b3d2a59b08640467"
 size = 5257
 path = "FMFilter_Dependencies/Saike_FMF_oversampling.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_widgetdata.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_widgetdata.jsfx-inc"
 sha256 = "bd146b8b2856d576a7f16aa1d7da3f82a5e7e94180f69fdaf76eadfff41f4d34"
 size = 6622
 path = "FMFilter_Dependencies/Saike_FMF_widgetdata.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_widgets.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FMFilter_Dependencies/Saike_FMF_widgets.jsfx-inc"
 sha256 = "9a72e0d43bdbf87ceda8313d2df48211298697c8c3b2eac73847350463a7bc82"
 size = 48415
 path = "FMFilter_Dependencies/Saike_FMF_widgets.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FM%20Filter.jsfx.rpl"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/b1ace1f66160c6c79ff1cb60a7f60dd0fc2b7029/FMFilter/FM%20Filter.jsfx.rpl"
 sha256 = "b308d80ce7c5e9815cc2306239898dda2baa97e6ca80722ec621f2ae1c30c68d"
 size = 16478
 path = "FM Filter.jsfx.rpl"

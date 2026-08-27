@@ -14,13 +14,13 @@ kind = "files"
 size = 169865
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/5.1%20Master%20Limiter.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/5.1%20Master%20Limiter.jsfx"
 sha256 = "7cfcf4713cbbe8d6761d7b8e38f8b9b69c9e673d88e2454c35dfea230fabc88b"
 size = 21224
 path = "5.1 Master Limiter.jsfx"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/5.1%20Master%20Limiter/5.1%20Master%20Limiter.pdf"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/5.1%20Master%20Limiter/5.1%20Master%20Limiter.pdf"
 sha256 = "a93094df9ba7c58725ec103e8825dab1c0b5da1df30def3b5a01286de8fc2374"
 size = 148641
 path = "5.1 Master Limiter/5.1 Master Limiter.pdf"

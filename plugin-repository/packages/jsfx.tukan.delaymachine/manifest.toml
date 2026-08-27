@@ -14,13 +14,13 @@ kind = "files"
 size = 55342
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Delaymachine%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Delaymachine%20(Tukan)"
 sha256 = "56cb70da2e2d8bca5cc4da7c142ec261fc63a74d45756fe67ad5f1a552922547"
 size = 46716
 path = "Delay Machine (Tukan).jsfx"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DELAYgui/delay-utils.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DELAYgui/delay-utils.jsfx-inc"
 sha256 = "bfb68cff4f09c2fe67965625518a44789a08fbed1938a18c5e9952693fcfa165"
 size = 8626
 path = "DELAYgui/delay-utils.jsfx-inc"

@@ -14,7 +14,7 @@ kind = "files"
 size = 15311
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/edcc0a619cc7fe90fe14996f68a34a5775e033ff/Basics/Saike%20SuperSpreaderClone.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/edcc0a619cc7fe90fe14996f68a34a5775e033ff/Basics/Saike%20SuperSpreaderClone.jsfx"
 sha256 = "5577137a10e3c0e2ce954eee4a96fe50e11193acc9b5ca4f6873f31bfeb2347e"
 size = 15311
 path = "Saike SuperSpreaderClone.jsfx"

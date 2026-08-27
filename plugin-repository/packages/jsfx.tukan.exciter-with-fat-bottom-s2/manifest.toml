@@ -14,13 +14,13 @@ kind = "files"
 size = 103756
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Exciter%20with%20fat%20bottom%20S2%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Exciter%20with%20fat%20bottom%20S2%20(Tukan)"
 sha256 = "8202b77fba920cea53130a5e2845626e40c6ceb4d70cc9c0cd39c29bd579bf92"
 size = 70580
 path = "Exciter with fat bottom S2 (Tukan).jsfx"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk_lib.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk_lib.jsfx-inc"
 sha256 = "9033bfcdf5e60a8805484837faa0138519ae14e1f29a3c773993f6209bc49754"
 size = 33176
 path = "S2GFX/tk_lib.jsfx-inc"

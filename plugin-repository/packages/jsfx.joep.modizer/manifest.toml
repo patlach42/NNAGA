@@ -14,25 +14,25 @@ kind = "files"
 size = 160318
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/34d6b72aa6784b40a10342ca69bbef518ca0f566/Modizer/modizer.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/34d6b72aa6784b40a10342ca69bbef518ca0f566/Modizer/modizer.jsfx"
 sha256 = "a9b7e4e9a71190141d305de3c7637bceffa7a2edb607834914fd001632c2bb62"
 size = 54738
 path = "modizer.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/34d6b72aa6784b40a10342ca69bbef518ca0f566/Modizer/modizer_dependencies/saike_modizer_font.png"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/34d6b72aa6784b40a10342ca69bbef518ca0f566/Modizer/modizer_dependencies/saike_modizer_font.png"
 sha256 = "c14f29b00c93190061a563bdae547a68bb66ac35466ee4f9d7535341c07076fd"
 size = 62627
 path = "modizer_dependencies/saike_modizer_font.png"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/34d6b72aa6784b40a10342ca69bbef518ca0f566/Modizer/modizer_dependencies/saike_modizer_midi.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/34d6b72aa6784b40a10342ca69bbef518ca0f566/Modizer/modizer_dependencies/saike_modizer_midi.jsfx-inc"
 sha256 = "a120215e6e20bb22984184fa2c4d5006084cf16b9f4694551023f27c5f7760d7"
 size = 3854
 path = "modizer_dependencies/saike_modizer_midi.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/34d6b72aa6784b40a10342ca69bbef518ca0f566/Modizer/modizer_dependencies/saike_modizer_widgets.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/34d6b72aa6784b40a10342ca69bbef518ca0f566/Modizer/modizer_dependencies/saike_modizer_widgets.jsfx-inc"
 sha256 = "22d78598bf5fb71de16ca9381b05f5f7df409063b75dfcb6eee6a55890b9be16"
 size = 39099
 path = "modizer_dependencies/saike_modizer_widgets.jsfx-inc"

@@ -14,7 +14,7 @@ kind = "files"
 size = 1766
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/766fa15d1159d26bd9bf6c7a1721e9fe0246696e/MIDI/GFX%20MIDI%20Filter.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/766fa15d1159d26bd9bf6c7a1721e9fe0246696e/MIDI/GFX%20MIDI%20Filter.jsfx"
 sha256 = "8c8309c7a63e0a7219cbf711a781a098f163c38816d8370b051a4117e3bb9e80"
 size = 1766
 path = "GFX MIDI Filter.jsfx"

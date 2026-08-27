@@ -14,19 +14,19 @@ kind = "files"
 size = 68713
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/LA-2KAN%20S2%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/LA-2KAN%20S2%20(Tukan)"
 sha256 = "0a4b02abab70d944312aa4120806d902558ed1a2926d986f4ef29a8fb618a6fe"
 size = 31167
 path = "LA-2KAN S2 (Tukan).jsfx"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk_lib.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk_lib.jsfx-inc"
 sha256 = "9033bfcdf5e60a8805484837faa0138519ae14e1f29a3c773993f6209bc49754"
 size = 33176
 path = "S2GFX/tk_lib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk-vu_lib.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk-vu_lib.jsfx-inc"
 sha256 = "c264b0e418d77c0baee9bc16adeb6a2a83106bc91d26b16cf3c57cd349d47aef"
 size = 4370
 path = "S2GFX/tk-vu_lib.jsfx-inc"

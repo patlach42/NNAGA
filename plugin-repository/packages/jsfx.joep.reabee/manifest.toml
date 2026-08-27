@@ -14,7 +14,7 @@ kind = "files"
 size = 5827
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/e3e559a28ebce112b967166afbec3c3e584bd25a/ReaBee/ReaBee.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/e3e559a28ebce112b967166afbec3c3e584bd25a/ReaBee/ReaBee.jsfx"
 sha256 = "185e2c0c49b0bc5130c36dd23199dd6c7340bfe173d5bff2bfb9371d4cdaa54d"
 size = 5827
 path = "ReaBee.jsfx"

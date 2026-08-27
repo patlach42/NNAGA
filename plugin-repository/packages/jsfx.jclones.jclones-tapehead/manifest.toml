@@ -14,7 +14,7 @@ kind = "files"
 size = 3295
 
 [[payload.files]]
-url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_TapeHead.jsfx"
+url = "https://raw.githubusercontent.com/JClones/JSFXClones/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_TapeHead.jsfx"
 sha256 = "f1c67b3a6cf99633ded315645217adbc5654172b767aaeb1e317ee19be353ca5"
 size = 3295
 path = "JClones_TapeHead.jsfx"

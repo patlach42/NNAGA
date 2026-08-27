@@ -14,7 +14,7 @@ kind = "files"
 size = 68590
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Dis-Treasure%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Dis-Treasure%20(Tukan)"
 sha256 = "78fe8bdca7c1b54514c0c5394ac1f19d66c5e368e2db5f4fc755e742454e71f2"
 size = 68590
 path = "Dis-Treasure (Tukan).jsfx"

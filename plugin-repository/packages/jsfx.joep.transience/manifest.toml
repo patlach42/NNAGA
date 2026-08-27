@@ -14,7 +14,7 @@ kind = "files"
 size = 9148
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/86789a8c95fdce21ab278978c45a1ffc1f863adf/Basics/Transience.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/86789a8c95fdce21ab278978c45a1ffc1f863adf/Basics/Transience.jsfx"
 sha256 = "83e258cf65f9599215852f2178d812d4ac2d67bffc2d897485bc3ddde2c87787"
 size = 9148
 path = "Transience.jsfx"

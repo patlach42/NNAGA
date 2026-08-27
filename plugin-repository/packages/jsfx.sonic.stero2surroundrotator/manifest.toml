@@ -14,7 +14,7 @@ kind = "files"
 size = 3908
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Stero2SurroundRotator.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Stero2SurroundRotator.jsfx"
 sha256 = "a468eb0d7960fa6108aa544129d60a3511fa07f1339dd6b9036e9714ea25cabd"
 size = 3908
 path = "Stero2SurroundRotator.jsfx"

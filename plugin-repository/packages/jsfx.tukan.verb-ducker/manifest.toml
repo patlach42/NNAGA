@@ -14,7 +14,7 @@ kind = "files"
 size = 35617
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Verb%20Ducker%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Verb%20Ducker%20(Tukan)"
 sha256 = "9c7fc051454a61155698d42b6484d7ca3f4a7a090adc73755d7cb96cac97c647"
 size = 35617
 path = "Verb Ducker (Tukan).jsfx"

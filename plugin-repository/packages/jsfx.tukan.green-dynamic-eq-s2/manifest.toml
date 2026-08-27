@@ -14,31 +14,31 @@ kind = "files"
 size = 391124
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Green%20Dynamic%20EQ%20S2%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Green%20Dynamic%20EQ%20S2%20(Tukan)"
 sha256 = "56d4e251372737aa9748c023384db4469ea96e09afaf1df89c2168275380411e"
 size = 286907
 path = "Green Dynamic EQ S2 (Tukan).jsfx"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/spectrum.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/spectrum.jsfx-inc"
 sha256 = "41ab0afaa3b9c78ca8b5822c5bea500c5d2b9ae65f156214742e2e4db023310d"
 size = 29007
 path = "S2GFX/spectrum.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/svf_filter.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/svf_filter.jsfx-inc"
 sha256 = "21530e2411b6f479db14716b5daec4bc4b5ab58b76d54608892f0177c88b3a37"
 size = 31755
 path = "S2GFX/svf_filter.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/firhalfband.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/firhalfband.jsfx-inc"
 sha256 = "20c10244da60c183cc45a8bfec920b83921c3779caacf59e37e5b6d7d2372daf"
 size = 10279
 path = "S2GFX/firhalfband.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk_lib.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk_lib.jsfx-inc"
 sha256 = "9033bfcdf5e60a8805484837faa0138519ae14e1f29a3c773993f6209bc49754"
 size = 33176
 path = "S2GFX/tk_lib.jsfx-inc"

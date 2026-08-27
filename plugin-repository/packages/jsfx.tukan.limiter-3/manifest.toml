@@ -14,13 +14,13 @@ kind = "files"
 size = 84531
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Limiter%203%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Limiter%203%20(Tukan)"
 sha256 = "6826dab14c927b5a1153a09cf6c9cf686a35b30a7a9fb3fcd2701ca1da161c43"
 size = 61432
 path = "Limiter 3 (Tukan).jsfx"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/BusTools/st-oversampler.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/BusTools/st-oversampler.jsfx-inc"
 sha256 = "cce9ae85a36ec57077806f4af8dffa8ad6b3e14de1c8c18b684fa8b4c96bdf0f"
 size = 23099
 path = "BusTools/st-oversampler.jsfx-inc"

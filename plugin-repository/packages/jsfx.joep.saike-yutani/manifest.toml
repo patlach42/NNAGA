@@ -14,103 +14,103 @@ kind = "files"
 size = 3657403
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Saike_Yutani.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Saike_Yutani.jsfx"
 sha256 = "63bbcd6d08f39af61c83eb3922c11dc89e183858fbde8f4e20147acf8355b6a3"
 size = 154981
 path = "Saike_Yutani.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_Delays.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_Delays.jsfx-inc"
 sha256 = "1113462ec68ccbeda2bd96d63e0bb2fdaf36b4b8da06546cbe7435b5b46922e9"
 size = 2156
 path = "Yutani_Dependencies/Saike_Yutani_Delays.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_Envelope.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_Envelope.jsfx-inc"
 sha256 = "83a2f602bf110041cd28cc5571ee1c321ed8f593dec7302ed4e8c42f32d7462f"
 size = 9014
 path = "Yutani_Dependencies/Saike_Yutani_Envelope.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_Filters.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_Filters.jsfx-inc"
 sha256 = "b8363b3035b6df31fc00c21ab3e4349350210d9b5724467102ec89c9394e742a"
 size = 95323
 path = "Yutani_Dependencies/Saike_Yutani_Filters.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_LFOs.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_LFOs.jsfx-inc"
 sha256 = "427d8c020c92592e2f11ff79d7eee4a847c84c15532a882c0937d2d81857c64d"
 size = 2656
 path = "Yutani_Dependencies/Saike_Yutani_LFOs.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_Oscs.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_Oscs.jsfx-inc"
 sha256 = "e444a20f373687a1b660e86d1957d23c90f3d82d366b0e7dc2a7f6450c6b55e7"
 size = 75473
 path = "Yutani_Dependencies/Saike_Yutani_Oscs.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_WT.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_WT.jsfx-inc"
 sha256 = "1cf7bc5546fe0e84f2b0eb757a4d4900c3dd1eb3f7eb6a7f911b5912fb8ec58f"
 size = 13895
 path = "Yutani_Dependencies/Saike_Yutani_WT.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_distortion.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_distortion.jsfx-inc"
 sha256 = "03b018b1d2baf192a6c5462f51488c8eb35291d530cec1faada23239d587e468"
 size = 4493
 path = "Yutani_Dependencies/Saike_Yutani_distortion.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_interpolators.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_interpolators.jsfx-inc"
 sha256 = "5dbb267b68b09300ce9c9915dc0439c8130ab23b229f32478fcf7d61f3bde939"
 size = 1696
 path = "Yutani_Dependencies/Saike_Yutani_interpolators.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_midilib.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_midilib.jsfx-inc"
 sha256 = "ed220e84f57e3b76aa2c4eb68fdd637b69bcc070ef052b2da00ea4017a959a3b"
 size = 6613
 path = "Yutani_Dependencies/Saike_Yutani_midilib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_oversampling.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_oversampling.jsfx-inc"
 sha256 = "0085993dc54481f08c533d264e261963d1eb66e0d9a172c6b3d2a59b08640467"
 size = 5257
 path = "Yutani_Dependencies/Saike_Yutani_oversampling.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_sample_delay_buffer.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_sample_delay_buffer.jsfx-inc"
 sha256 = "4fbfdeb11bece50d11bb548b1d8bc251f0a046e033f074be8bc3d1e461934a1b"
 size = 600
 path = "Yutani_Dependencies/Saike_Yutani_sample_delay_buffer.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_upsamplers.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_upsamplers.jsfx-inc"
 sha256 = "c254b307e71bc409106230ca26907f0f0eaba9522b7ca76139022bb427811a66"
 size = 126953
 path = "Yutani_Dependencies/Saike_Yutani_upsamplers.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_widgetdata.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_widgetdata.jsfx-inc"
 sha256 = "34707d10ebddb1f02f22961b94c40364ab2e6ce9f28768a46ef9c076e27380bd"
 size = 6811
 path = "Yutani_Dependencies/Saike_Yutani_widgetdata.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_widgets.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Yutani_Dependencies/Saike_Yutani_widgets.jsfx-inc"
 sha256 = "19860112ee4b5e4f1f348546bb45cb8d33c7efccc2cf0951b9970f50bdbae847"
 size = 54595
 path = "Yutani_Dependencies/Saike_Yutani_widgets.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/bass_presets.rpl"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/bass_presets.rpl"
 sha256 = "0cc198eedca722d925af4baf14a544a5761e33288e4dd1c8f20770235b0ab8e0"
 size = 127751
 path = "bass_presets.rpl"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Saike_Yutani.jsfx.rpl"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/06847ecfa7794faba2ba0ec5f99c5fc7b5196c61/Yutani/Saike_Yutani.jsfx.rpl"
 sha256 = "158065fa57e525193f3640a2bbc1859d2323a761e37e008f1897ca1641c59c51"
 size = 2969136
 path = "Saike_Yutani.jsfx.rpl"

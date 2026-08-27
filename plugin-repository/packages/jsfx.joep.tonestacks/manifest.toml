@@ -14,7 +14,7 @@ kind = "files"
 size = 103012
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/3f63603f05868eb41ff302d688b3004536b68c99/Basics/ToneStacks.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/3f63603f05868eb41ff302d688b3004536b68c99/Basics/ToneStacks.jsfx"
 sha256 = "0f91c6a3d908a5de97c6f748575d9e6a650758d2c8dfddacfe45eb20cd8beead"
 size = 103012
 path = "ToneStacks.jsfx"

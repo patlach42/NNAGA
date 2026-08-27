@@ -14,13 +14,13 @@ kind = "files"
 size = 140883
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c87db760b662aaacec486ceb6e771a5b669a8b75/Basics/Tanh_Saturator_AA.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c87db760b662aaacec486ceb6e771a5b669a8b75/Basics/Tanh_Saturator_AA.jsfx"
 sha256 = "35d7ed15e19a251e42e5c15d7673684c493a2710d7065a8114a975f7610ba42c"
 size = 13930
 path = "Tanh_Saturator_AA.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c87db760b662aaacec486ceb6e771a5b669a8b75/Basics/upsampler/tanh_upsampler.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c87db760b662aaacec486ceb6e771a5b669a8b75/Basics/upsampler/tanh_upsampler.jsfx-inc"
 sha256 = "c254b307e71bc409106230ca26907f0f0eaba9522b7ca76139022bb427811a66"
 size = 126953
 path = "upsampler/tanh_upsampler.jsfx-inc"

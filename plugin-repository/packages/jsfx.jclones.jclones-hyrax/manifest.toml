@@ -14,7 +14,7 @@ kind = "files"
 size = 12577
 
 [[payload.files]]
-url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_Hyrax.jsfx"
+url = "https://raw.githubusercontent.com/JClones/JSFXClones/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_Hyrax.jsfx"
 sha256 = "e23ba37c8ec6f762bcc2d65b510926e3a6d5a72911d3a1495c37f41f8fbd8ef9"
 size = 12577
 path = "JClones_Hyrax.jsfx"

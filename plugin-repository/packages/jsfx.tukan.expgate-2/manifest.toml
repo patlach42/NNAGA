@@ -14,7 +14,7 @@ kind = "files"
 size = 30206
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/ExpGate%202%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/ExpGate%202%20(Tukan)"
 sha256 = "99a56caaf10be43265722116f24084d7b201619c58e15449bcbeaf1d6fdafa14"
 size = 30206
 path = "ExpGate 2 (Tukan).jsfx"

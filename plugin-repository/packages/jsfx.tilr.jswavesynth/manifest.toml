@@ -14,199 +14,199 @@ kind = "files"
 size = 93246
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth.jsfx"
 sha256 = "13c7fd511d84a130cf6e2487cd593b73598bc91ef6374c4515f8fa86b7571f70"
 size = 16419
 path = "jswavesynth.jsfx"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth.jsfx.RPL"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth.jsfx.RPL"
 sha256 = "1266985e45b2abaebd77e6e21bb7323d563d4426db68cf026db8c28a76335f7e"
 size = 5056
 path = "jswavesynth.jsfx.RPL"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.adsr.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.adsr.jsfx-inc"
 sha256 = "3fd4c6acce122ed9468e5306e193bc8df0cb3ac0cf28900fc033fe76e4b6f79e"
 size = 2388
 path = "jswavesynth/ws.adsr.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.array.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.array.jsfx-inc"
 sha256 = "4ade80a551384328629078a8caf18b21e732b0d7f464e86363d3ffe1656d9d20"
 size = 6004
 path = "jswavesynth/ws.array.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.gfxlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.gfxlib.jsfx-inc"
 sha256 = "6ac74a88a36b570b2c5421baf0b7e450da687d80dd846768f372872791537326"
 size = 3492
 path = "jswavesynth/ws.gfxlib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.mouselib.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.mouselib.jsfx-inc"
 sha256 = "96e82b2c5669a76f906056d435174bb392d39a9c3bbc7fe6220a031cc64c7737"
 size = 771
 path = "jswavesynth/ws.mouselib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.wavetable.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.wavetable.jsfx-inc"
 sha256 = "c1bfce422311cd13abf6bff1e1b63d40d61ea2b02c70176ad644ae4fef4daddd"
 size = 13460
 path = "jswavesynth/ws.wavetable.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.rbj_filter.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/jswavesynth/ws.rbj_filter.jsfx-inc"
 sha256 = "ed19eebdaf64ea1fd7872ad48813834a667c259fe081d9f8d0b9374627778976"
 size = 9064
 path = "jswavesynth/ws.rbj_filter.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%201.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%201.wav"
 sha256 = "d455abe4634bcf0c8996f12b929eee676d08d2ab4d091480c5bfdb28c6cf53df"
 size = 1344
 path = "tilr8_JSWavesynth/Complex 1.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%202.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%202.wav"
 sha256 = "cdbd0798cf5c8ac7e82cf47816054461bfe3e7976f8ccc9df36ed3713d92eb49"
 size = 1344
 path = "tilr8_JSWavesynth/Complex 2.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%203.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%203.wav"
 sha256 = "7dbd6eeb3ff2004b5826c8c6ee2a75f1b485eee1b2eb40c9ad8b3e0d969423f0"
 size = 1344
 path = "tilr8_JSWavesynth/Complex 3.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%204.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%204.wav"
 sha256 = "f0cf88c67b8c6f5d3d65616c9fa6f472393789a918c3f074b36f38262c875db7"
 size = 1344
 path = "tilr8_JSWavesynth/Complex 4.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%205.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Complex%205.wav"
 sha256 = "b3da86b57a344763d16bec313a1fbcdbc200dc7d535553c7d2d32508774717d6"
 size = 1344
 path = "tilr8_JSWavesynth/Complex 5.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%201.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%201.wav"
 sha256 = "1677c74d7ff1836fe7513c759c3bd7c6e6fd473e22d84218310e1e451b17773c"
 size = 1344
 path = "tilr8_JSWavesynth/Organ 1.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%202.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%202.wav"
 sha256 = "2ae3996dfcdcdc20eafaa3f3b6a7c5164ea008a8d0730026e364b309fed71cb2"
 size = 1344
 path = "tilr8_JSWavesynth/Organ 2.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%203.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%203.wav"
 sha256 = "ff96d749499741c732a3bbf041d8ee4a1e952a83f6e889ab5c4ea96c29779c2d"
 size = 1344
 path = "tilr8_JSWavesynth/Organ 3.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%204.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%204.wav"
 sha256 = "5786053e78eb87347538bd75fed83fffaef06ea099279ed65fb37df9a3266939"
 size = 1344
 path = "tilr8_JSWavesynth/Organ 4.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%205.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%205.wav"
 sha256 = "814c7b44f59b2b5e9c3b6c2e337e2311cfb2f0ca85f8d67d82924c3cfe5ef465"
 size = 1344
 path = "tilr8_JSWavesynth/Organ 5.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%206.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%206.wav"
 sha256 = "7dfd3e9636614417eca41df070766cf72ae4a7bbf7f9cc5cbfb88fe518a3258c"
 size = 1344
 path = "tilr8_JSWavesynth/Organ 6.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%207.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Organ%207.wav"
 sha256 = "32aa24db6bf56333a15f7ac9db05264e62219192790b40ee18ab808cdc2b6555"
 size = 1344
 path = "tilr8_JSWavesynth/Organ 7.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Saw%201.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Saw%201.wav"
 sha256 = "9ba373b99d7857b6242cdde0365521ca08ea397d8e92745297fe3ec549ee231e"
 size = 2092
 path = "tilr8_JSWavesynth/Saw 1.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Saw%202.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Saw%202.wav"
 sha256 = "8a1226d1d25cad4c8fed1c3e3d9a99a19cb785a21ece8d2011ea85451ed0374e"
 size = 1344
 path = "tilr8_JSWavesynth/Saw 2.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Saw%203.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Saw%203.wav"
 sha256 = "463f527ac47fc188ec81f71ce1635fcb9dc1db94826af6725a98274c36ff4acb"
 size = 1344
 path = "tilr8_JSWavesynth/Saw 3.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%201.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%201.wav"
 sha256 = "1c0269b1849c146ee0b778832ef4b59ee6c1d86ad8842d921e69f58c28fbf475"
 size = 2092
 path = "tilr8_JSWavesynth/Sine 1.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%202.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%202.wav"
 sha256 = "1c88f7002830408d7363b7d2b90e439d4029b637aa288eb22dc9891717631e2c"
 size = 1344
 path = "tilr8_JSWavesynth/Sine 2.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%203.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%203.wav"
 sha256 = "3406d643e8bd65733da39cef95c76d4c9f7414dd804bb0d83fbc71027a557f6a"
 size = 1344
 path = "tilr8_JSWavesynth/Sine 3.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%204.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%204.wav"
 sha256 = "2b812289621ecf992eb0d7ead970f9a13946e3de083eb724dce01c84ffbd2333"
 size = 1344
 path = "tilr8_JSWavesynth/Sine 4.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%205.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Sine%205.wav"
 sha256 = "63929384e746e6b79243adea046bd4d671daab5c87cce4b7a6f1750af4622142"
 size = 1344
 path = "tilr8_JSWavesynth/Sine 5.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Spectral.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Spectral.wav"
 sha256 = "64f3aefc1f21a011f893b3f9ef017b52aff008a0e67fd6013a0ae05cd37cdb2d"
 size = 1344
 path = "tilr8_JSWavesynth/Spectral.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Square%201.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Square%201.wav"
 sha256 = "ba6e469a520dfec79d76fbf3c9b073168a6b5aa0f4858fc2c53ccbe0ae6dee05"
 size = 2092
 path = "tilr8_JSWavesynth/Square 1.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Square%202.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Square%202.wav"
 sha256 = "fa7d6c0885feebf14c7db365eda56ddb7e79a40f820b5522523e9d6c22ace94e"
 size = 1344
 path = "tilr8_JSWavesynth/Square 2.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Stairs.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Stairs.wav"
 sha256 = "a028ced13e4bbde4562fb1843e95cade345dbd296e368033c29bacefc16116cc"
 size = 1344
 path = "tilr8_JSWavesynth/Stairs.wav"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Triangle.wav"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/47e415610e1f2e3892f3684a9d71d480811488ff/Synth/tilr8_JSWavesynth/Triangle.wav"
 sha256 = "784a180a92e7645d513c6a0c8021132a641f50e0fa82b1c8d5994210f1adf87f"
 size = 2092
 path = "tilr8_JSWavesynth/Triangle.wav"

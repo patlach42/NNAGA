@@ -121,6 +121,31 @@ class PluginRepositoryContractsTest {
         val files = jsfxFilesManifest()
         validateRepositoryManifest(files)
 
+        val extensionlessPath = "Effects/example"
+        val extensionlessFiles = files.copy(
+            entry = extensionlessPath,
+            files = files.files.mapIndexed { index, file ->
+                if (index == 0) file.copy(path = extensionlessPath) else file
+            },
+        )
+        validateRepositoryManifest(extensionlessFiles)
+
+        listOf(
+            "extension-bearing .jsfx-inc entry" to "Effects/example.jsfx-inc",
+            "extension-bearing .txt entry" to "Effects/example.txt",
+            "extension-bearing .rpl entry" to "Effects/example.rpl",
+        ).forEach { (case, entry) ->
+            val declaredExtensionBearingEntry = files.copy(
+                entry = entry,
+                files = files.files.mapIndexed { index, file ->
+                    if (index == 0) file.copy(path = entry) else file
+                },
+            )
+            assertThrows(case, IllegalArgumentException::class.java) {
+                validateRepositoryManifest(declaredExtensionBearingEntry)
+            }
+        }
+
         assertThrows(IllegalArgumentException::class.java) {
             validateRepositoryManifest(legacy.copy(kind = "archive"))
         }
@@ -152,6 +177,22 @@ class PluginRepositoryContractsTest {
             assertThrows(case, IllegalArgumentException::class.java) {
                 validateRepositoryManifest(manifest)
             }
+        }
+    }
+
+    @Test
+    fun jsfxFilesManifestRequiresDirectGithubRawUrls() {
+        val valid = jsfxFilesManifest()
+        val direct = valid.files.first().copy(
+            url = "https://raw.githubusercontent.com/author/JSFX/commit/Basics/BandJoiner.jsfx",
+        )
+        validateRepositoryManifest(valid.copy(files = listOf(direct, valid.files[1])))
+
+        val redirecting = direct.copy(
+            url = "https://github.com/author/JSFX/raw/commit/Basics/BandJoiner.jsfx",
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            validateRepositoryManifest(valid.copy(files = listOf(redirecting, valid.files[1])))
         }
     }
 

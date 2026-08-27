@@ -14,61 +14,61 @@ kind = "files"
 size = 85602
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2.jsfx"
 sha256 = "323cb613681318dc37311d09551db2574309c72a82ee482826e94ab7b6412bb8"
 size = 24054
 path = "rippler2.jsfx"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2.jsfx.RPL"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2.jsfx.RPL"
 sha256 = "82979c415e8cfb0b05baf437af5e8c539254054920a17751ac173560fc0bb809"
 size = 9124
 path = "rippler2.jsfx.RPL"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/logo.png"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/logo.png"
 sha256 = "b4cd3672d5c48b8de90e75a066492bc13a24ace81db1ce3a3906f5df7fbd4833"
 size = 4223
 path = "rippler2/logo.png"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/on.png"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/on.png"
 sha256 = "a10a7cae9210047d55c29f6f43ad0028a7353f77defecfd63f7e1f20dc0379fa"
 size = 475
 path = "rippler2/on.png"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/off.png"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/off.png"
 sha256 = "6c73032d27190ca569b73f4aabb600f22c21e0f1542614e4b440980999253b7c"
 size = 487
 path = "rippler2/off.png"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.array.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.array.jsfx-inc"
 sha256 = "4ade80a551384328629078a8caf18b21e732b0d7f464e86363d3ffe1656d9d20"
 size = 6004
 path = "rippler2/rippler2.array.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.envlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.envlib.jsfx-inc"
 sha256 = "957d176e49c9502418eca6864aa7e463f7e8c807bd095a0ea768111ddf9b6abb"
 size = 3904
 path = "rippler2/rippler2.envlib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.gfxlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.gfxlib.jsfx-inc"
 sha256 = "7b36ae386ad855bd90dec8aa23af9cc013d670d95e8391700130da9b7e7be4b6"
 size = 5473
 path = "rippler2/rippler2.gfxlib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.modal.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.modal.jsfx-inc"
 sha256 = "811845bf17fc9e0ba6da729e04f2a0eece7bbdf2d31f254e912061a73535a682"
 size = 22436
 path = "rippler2/rippler2.modal.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.rbj_filter.jsfx-inc"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/beaf6136e74ea799789fdad4abcc56e624d7c2a7/Synth/rippler2/rippler2.rbj_filter.jsfx-inc"
 sha256 = "7a5885bb0c1523856ac682a9fc9a499c3a9de12d7b87837664f9e4ffefbc341b"
 size = 9422
 path = "rippler2/rippler2.rbj_filter.jsfx-inc"

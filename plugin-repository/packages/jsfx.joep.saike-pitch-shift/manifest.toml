@@ -14,13 +14,13 @@ kind = "files"
 size = 15028
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/d04c5ea17825df9256d3a82eecbe89944b9b8fb2/Basics/Saike_Pitch_Shift.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/d04c5ea17825df9256d3a82eecbe89944b9b8fb2/Basics/Saike_Pitch_Shift.jsfx"
 sha256 = "325d4f3be303e8fd6e13a55eeed46f9c24f5179c8578f4709bff0bdebf1da5a2"
 size = 5238
 path = "Saike_Pitch_Shift.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/d04c5ea17825df9256d3a82eecbe89944b9b8fb2/Basics/saike_pitchlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/d04c5ea17825df9256d3a82eecbe89944b9b8fb2/Basics/saike_pitchlib.jsfx-inc"
 sha256 = "47812dd5bcb3538b71a6da316d1df4a9d0488e7259c4b19f11d24d54a5885b71"
 size = 9790
 path = "saike_pitchlib.jsfx-inc"

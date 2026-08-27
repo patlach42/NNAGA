@@ -14,7 +14,7 @@ kind = "files"
 size = 528
 
 [[payload.files]]
-url = "https://github.com/tiagolr/tilr_jsfx/raw/0318daacf747847e952d7d7bfab01ff9d1b84570/MIDI/Notes%20to%2012%20channel.jsfx"
+url = "https://raw.githubusercontent.com/tiagolr/tilr_jsfx/0318daacf747847e952d7d7bfab01ff9d1b84570/MIDI/Notes%20to%2012%20channel.jsfx"
 sha256 = "d129ba193e39bede3d91b1aac1c977d26a025d4101aa450933feef4a25e1d2ea"
 size = 528
 path = "Notes to 12 channel.jsfx"

@@ -14,7 +14,7 @@ kind = "files"
 size = 9650
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/0eeb6f249e4c48143bd75a3db4c2317ee41152da/SpectrumAnalyzer/StereoManipulator.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/0eeb6f249e4c48143bd75a3db4c2317ee41152da/SpectrumAnalyzer/StereoManipulator.jsfx"
 sha256 = "7da5ed03cb645e2b62850e3a357d1df62cf8b9cb9beab67625273d0ef9e2fe8e"
 size = 9650
 path = "StereoManipulator.jsfx"

@@ -14,7 +14,7 @@ kind = "files"
 size = 6654
 
 [[payload.files]]
-url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_Fattener.jsfx"
+url = "https://raw.githubusercontent.com/JClones/JSFXClones/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_Fattener.jsfx"
 sha256 = "58157a7833ad1d7b4545d81540bab08a05e11e7504f192de20cf69cf576d05d0"
 size = 6654
 path = "JClones_Fattener.jsfx"

@@ -14,7 +14,7 @@ kind = "files"
 size = 3675
 
 [[payload.files]]
-url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_DaTube.jsfx"
+url = "https://raw.githubusercontent.com/JClones/JSFXClones/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_DaTube.jsfx"
 sha256 = "d66ebd11bf2e392cac36f536c0b24a8ad98e1c2cc6687ae2bd6f770c630f4f2c"
 size = 3675
 path = "JClones_DaTube.jsfx"

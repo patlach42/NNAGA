@@ -14,13 +14,13 @@ kind = "files"
 size = 87530
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/MIDI%20Arpeggiator%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/MIDI%20Arpeggiator%20(Tukan)"
 sha256 = "27283f22c78173b77ded48e910e3205dcd60572482526dc2a155ce9c1315ece8"
 size = 54747
 path = "MIDI Arpeggiator (Tukan).jsfx"
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/SynthAdd/tk_lib.jsfx-inc"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/SynthAdd/tk_lib.jsfx-inc"
 sha256 = "013d71adf0bc9e6adbdfdb1253fd0041e8578af5811506a3b65913384cc59854"
 size = 32783
 path = "SynthAdd/tk_lib.jsfx-inc"

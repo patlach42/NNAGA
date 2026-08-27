@@ -14,7 +14,7 @@ kind = "files"
 size = 82085
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/8796c2d656bda14584bf9324092e8127ed6eacf2/Ravager/Ravager_MB.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/8796c2d656bda14584bf9324092e8127ed6eacf2/Ravager/Ravager_MB.jsfx"
 sha256 = "3d40516f05a6dbb4f0156b57c7735dd71701f79788f6d17fca540395eaabade0"
 size = 82085
 path = "Ravager_MB.jsfx"

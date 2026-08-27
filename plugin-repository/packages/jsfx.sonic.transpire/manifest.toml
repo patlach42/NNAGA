@@ -14,49 +14,49 @@ kind = "files"
 size = 242858
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Transpire.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Transpire.jsfx"
 sha256 = "4e778fec4a3c41ea0cf249833ebef5d20202d45151ab8e18ebc0c373b49d2c21"
 size = 9903
 path = "Transpire.jsfx"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/bg.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/bg.png"
 sha256 = "11861b259aad9760083a2716d854a73b7067d2287f342540fc1845b3fdcf3b9a"
 size = 35278
 path = "transpire_gfx/bg.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/clip.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/clip.png"
 sha256 = "d03d5e3832c722061aab998fcadeddce6365dda6ee7e1d7e66eb51079d7c0de5"
 size = 2803
 path = "transpire_gfx/clip.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/credits.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/credits.png"
 sha256 = "5b1b0714a26861989ba60301048bce420a9a3381fb24fc388c175ca510218052"
 size = 26252
 path = "transpire_gfx/credits.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/knob_1.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/knob_1.png"
 sha256 = "4a9c6a96a21502ec3078b3337cc5f0007e1524bdc04fb1d2b7cbc75d9ba3e4cb"
 size = 36973
 path = "transpire_gfx/knob_1.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/knob_2.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/knob_2.png"
 sha256 = "b82469c1be06aab6a75ef586fb234baa27027384323cd6cc4c6795014d8cce53"
 size = 35480
 path = "transpire_gfx/knob_2.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/knob_3.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/knob_3.png"
 sha256 = "3e12bb68e08ac70069245e205463f5b16f6ec30ec463771a35ab7d263af3db1f"
 size = 34757
 path = "transpire_gfx/knob_3.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/knob_4.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/transpire_gfx/knob_4.png"
 sha256 = "23bfc88330d94d24ef3bc5d290d0678766fb08d3d3987868c5215ea708861413"
 size = 61412
 path = "transpire_gfx/knob_4.png"

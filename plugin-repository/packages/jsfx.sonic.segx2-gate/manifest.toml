@@ -14,19 +14,19 @@ kind = "files"
 size = 251202
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/SEGX2%20Gate.jsfx"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/SEGX2%20Gate.jsfx"
 sha256 = "6033b5f1f40a889b74ffd4cf6baebe490b0b7906e58626fc4be0f81dacc2639f"
 size = 13118
 path = "SEGX2 Gate.jsfx"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/seg_gfx/bg.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/seg_gfx/bg.png"
 sha256 = "179f34f05af499f5b4a8bc9bcd2829238cb171a5452d64b33252e97876af84c5"
 size = 237068
 path = "seg_gfx/bg.png"
 
 [[payload.files]]
-url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/seg_gfx/knob_sm.png"
+url = "https://raw.githubusercontent.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/seg_gfx/knob_sm.png"
 sha256 = "b90e92a5c8b6f3dba837f21c2e4fe4b811d56f71b3780eadccacf3ca8b153a97"
 size = 1016
 path = "seg_gfx/knob_sm.png"

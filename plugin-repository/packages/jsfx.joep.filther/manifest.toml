@@ -14,13 +14,13 @@ kind = "files"
 size = 717921
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/72e293b920654af81771a45b660162fb6cebe63e/Filther/Filther.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/72e293b920654af81771a45b660162fb6cebe63e/Filther/Filther.jsfx"
 sha256 = "8a7b83f62c1e785dd83a22be72f8384d9d539455ff189fcdb03a798ff3e78173"
 size = 651071
 path = "Filther.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/72e293b920654af81771a45b660162fb6cebe63e/Filther/Filther.jsfx.rpl"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/72e293b920654af81771a45b660162fb6cebe63e/Filther/Filther.jsfx.rpl"
 sha256 = "68f8a1f8f685a901d77ce33947c4d1d0d6ae101eb933a0166933d72f94eba383"
 size = 66850
 path = "Filther.jsfx.rpl"

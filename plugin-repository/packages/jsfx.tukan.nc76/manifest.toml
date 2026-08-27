@@ -14,7 +14,7 @@ kind = "files"
 size = 35081
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/NC76%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/NC76%20(Tukan)"
 sha256 = "f5495eaae477c1e9c9e6bc181fc9dd700e87897c2c018eb84ab655cc50358d80"
 size = 35081
 path = "NC76 (Tukan).jsfx"

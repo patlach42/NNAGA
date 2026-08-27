@@ -14,25 +14,25 @@ kind = "files"
 size = 28406
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c4f6629d3661bcc0ea7f77a9c3fda13c9165f672/Abyss/saike_abyss.jsfx"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c4f6629d3661bcc0ea7f77a9c3fda13c9165f672/Abyss/saike_abyss.jsfx"
 sha256 = "075b4f30285cdf8c67e343dd80b3279709fd5dc7ee1756a7f924a2d7830a85ec"
 size = 7512
 path = "saike_abyss.jsfx"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c4f6629d3661bcc0ea7f77a9c3fda13c9165f672/Abyss/Abyss_Dependencies/saike_abyss_delays.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c4f6629d3661bcc0ea7f77a9c3fda13c9165f672/Abyss/Abyss_Dependencies/saike_abyss_delays.jsfx-inc"
 sha256 = "1113462ec68ccbeda2bd96d63e0bb2fdaf36b4b8da06546cbe7435b5b46922e9"
 size = 2156
 path = "Abyss_Dependencies/saike_abyss_delays.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c4f6629d3661bcc0ea7f77a9c3fda13c9165f672/Abyss/Abyss_Dependencies/saike_abyss_pitchlib.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c4f6629d3661bcc0ea7f77a9c3fda13c9165f672/Abyss/Abyss_Dependencies/saike_abyss_pitchlib.jsfx-inc"
 sha256 = "e978c2c819da3583b6660e436cb78cf678c48d64ce6c28a8e1813214075bf9a5"
 size = 9992
 path = "Abyss_Dependencies/saike_abyss_pitchlib.jsfx-inc"
 
 [[payload.files]]
-url = "https://github.com/JoepVanlier/JSFX/raw/c4f6629d3661bcc0ea7f77a9c3fda13c9165f672/Abyss/Abyss_Dependencies/saike_abyss_verb.jsfx-inc"
+url = "https://raw.githubusercontent.com/JoepVanlier/JSFX/c4f6629d3661bcc0ea7f77a9c3fda13c9165f672/Abyss/Abyss_Dependencies/saike_abyss_verb.jsfx-inc"
 sha256 = "a094d822e6bed921e62ff7a1c39218c6c39794a9b852d1b6efbe7c3b0c5e5ce3"
 size = 8746
 path = "Abyss_Dependencies/saike_abyss_verb.jsfx-inc"

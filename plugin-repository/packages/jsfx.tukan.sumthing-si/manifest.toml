@@ -14,7 +14,7 @@ kind = "files"
 size = 49410
 
 [[payload.files]]
-url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/SumThing%20SI%20(Tukan)"
+url = "https://raw.githubusercontent.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/SumThing%20SI%20(Tukan)"
 sha256 = "037c7b684dce0dc0c15dcd86e0967daf9811b3dff4413e7fa3fd0ad0351e1daf"
 size = 49410
 path = "SumThing SI (Tukan).jsfx"
