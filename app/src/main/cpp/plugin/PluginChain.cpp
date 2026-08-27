@@ -21,7 +21,7 @@
 #include <liblowlatencyaudio/ThreadUtils.h>
 #include <android/log.h>
 #include <algorithm>
-#include <chrono>
+#include <limits>
 #include <atomic>
 #include <cstring>
 
@@ -117,8 +117,9 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
              activatedBufferSize != bufferSize_)) {
             continue;
         }
-
         int index;
+
+
         if (position < 0 || position >= static_cast<int>(plugins_.size())) {
             plugins_.push_back({nextPluginInstanceId(), std::move(plugin)});
             index = static_cast<int>(plugins_.size() - 1);
@@ -129,6 +130,7 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
             index = position;
         }
 
+        latencyFrames_.store(0, std::memory_order_release);
         pluginCount_.store(
             static_cast<uint32_t>(plugins_.size()),
             std::memory_order_release);
@@ -145,9 +147,9 @@ bool PluginChain::removePlugin(int index) {
         if (index < 0 || index >= static_cast<int>(plugins_.size())) {
             return false;
         }
-
         removedPlugin = std::move(plugins_[index].plugin);
         plugins_.erase(plugins_.begin() + index);
+        latencyFrames_.store(0, std::memory_order_release);
         pluginCount_.store(
             static_cast<uint32_t>(plugins_.size()),
             std::memory_order_release);
@@ -216,12 +218,10 @@ bool PluginChain::reorderPlugins(int fromIndex, int toIndex) {
         fromIndex == toIndex) {
         return false;
     }
-
     auto plugin = std::move(plugins_[fromIndex]);
     plugins_.erase(plugins_.begin() + fromIndex);
-    
     plugins_.insert(plugins_.begin() + toIndex, std::move(plugin));
-    
+    latencyFrames_.store(0, std::memory_order_release);
     return true;
 }
 
@@ -269,6 +269,7 @@ uint32_t PluginChain::process(const float* const* inputs, float* const* outputs,
     MidiEvent* currentOut = midiScratchA_.data();
     const float* currentInputs[2] = {inputs[0], inputs[1]};
     float* currentOutputs[2] = {nullptr, nullptr};
+    uint64_t totalLatency = 0;
     for (size_t i = 0; i < plugins_.size(); ++i) {
         auto& plugin = plugins_[i].plugin;
         currentOutputs[0] = (i + 1 == plugins_.size()) ? outputs[0] : intermediateBuffers_[0].data();
@@ -277,6 +278,9 @@ uint32_t PluginChain::process(const float* const* inputs, float* const* outputs,
         uint32_t stageCap = (i + 1 == plugins_.size()) ? outputCapacity : kMaxMidiEvents;
         uint32_t produced = plugin->process(currentInputs, currentOutputs, numFrames, context,
                                             currentMidi, currentCount, stageOut, stageCap);
+        totalLatency = std::min<uint64_t>(std::numeric_limits<uint32_t>::max(),
+                                          totalLatency + plugin->getLatencyFrames());
+        latencyFrames_.store(static_cast<uint32_t>(totalLatency), std::memory_order_release);
         if (produced == 0) {
             produced = copyMidi(currentMidi, currentCount, stageOut, stageCap);
         } else {

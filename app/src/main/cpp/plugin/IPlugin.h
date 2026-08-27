@@ -174,6 +174,14 @@ public:
                              MidiEvent* outputEvents, uint32_t outputCapacity) = 0;
 
     /**
+     * Get the currently observed processing latency in audio frames.
+     *
+     * This is an atomic/cached observation suitable for the audio thread;
+     * implementations must not perform plugin or host calls here.
+     */
+    virtual uint32_t getLatencyFrames() const noexcept { return 0; }
+
+    /**
      * Get plugin metadata.
      */
     virtual PluginInfo getInfo() const = 0;

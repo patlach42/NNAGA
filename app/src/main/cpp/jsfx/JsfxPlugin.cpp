@@ -5,7 +5,9 @@
 #include "JsfxPlugin.h"
 #include "JsfxUiHost.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace guitarrackcraft {
 
@@ -85,6 +87,7 @@ JsfxPlugin::~JsfxPlugin() {
 
 void JsfxPlugin::activate(float sampleRate, uint32_t bufferSize) {
     std::lock_guard lock(controlMutex_);
+    latencyFrames_.store(0, std::memory_order_release);
     if (!fx_) return;
     UiPauseGuard pause(uiHost_.get());
     ysfx_set_sample_rate(fx_, sampleRate);
@@ -108,9 +111,19 @@ uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, 
     ysfx_set_time_info(fx_, &ti);
     for (uint32_t i = 0; i < inputCount; ++i) {
         uint8_t bytes[3] = {inputEvents[i].status, inputEvents[i].data1, inputEvents[i].data2};
-        ysfx_midi_event_t ev{0, inputEvents[i].frameOffset, 3, bytes}; ysfx_send_midi(fx_, &ev);
+        ysfx_midi_event_t ev{0, inputEvents[i].frameOffset, 3, bytes};
+        ysfx_send_midi(fx_, &ev);
     }
     ysfx_process_float(fx_, inputs, outputs, 2, 2, frames);
+    uint32_t pdcChannels[2] = {0, 0};
+    ysfx_get_pdc_channels(fx_, pdcChannels);
+    const double delay = static_cast<double>(ysfx_get_pdc_delay(fx_));
+    const uint32_t latency = pdcChannels[0] == 0 && pdcChannels[1] >= 2 &&
+            std::isfinite(delay) && delay > 0.0
+        ? static_cast<uint32_t>(std::min(delay, static_cast<double>(
+            std::numeric_limits<uint32_t>::max())))
+        : 0;
+    latencyFrames_.store(latency, std::memory_order_release);
     uint32_t count = 0; ysfx_midi_event_t ev{};
     while (count < outputCapacity && ysfx_receive_midi(fx_, &ev)) {
         if (ev.size >= 3 && ev.data) outputEvents[count++] = {ev.offset, ev.data[0], ev.data[1], ev.data[2]};
@@ -118,7 +131,13 @@ uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, 
     return count;
 }
 
-PluginInfo JsfxPlugin::getInfo() const { return info_; }
+uint32_t JsfxPlugin::getLatencyFrames() const noexcept {
+    return latencyFrames_.load(std::memory_order_acquire);
+}
+
+PluginInfo JsfxPlugin::getInfo() const {
+    return info_;
+}
 void JsfxPlugin::setParameter(uint32_t i, float v) { if (i < kMaxSliders) { pending_[i].store(v, std::memory_order_relaxed); dirty_[i].store(true, std::memory_order_release); } }
 float JsfxPlugin::getParameter(uint32_t i) const { return fx_ && i < kMaxSliders ? static_cast<float>(ysfx_slider_get_value(fx_, i)) : 0.f; }
 uint32_t JsfxPlugin::getNumInputPorts() const { return fx_ ? std::min(ysfx_get_num_inputs(fx_), 2u) : 0; }

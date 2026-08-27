@@ -55,6 +55,58 @@ public:
     uint32_t getNumInputPorts() const override { return 2; }
     uint32_t getNumOutputPorts() const override { return 2; }
 };
+class LatencyReportingPlugin final : public IPlugin {
+public:
+    explicit LatencyReportingPlugin(uint32_t latencyFrames)
+        : latencyFrames_(latencyFrames) {}
+
+    void activate(float, uint32_t) override {
+        historyLeft_.fill(0.0f);
+        historyRight_.fill(0.0f);
+        writeIndex_ = 0;
+    }
+    void deactivate() override {}
+
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        if (latencyFrames_ == 0) {
+            for (uint32_t frame = 0; frame < numFrames; ++frame) {
+                outputs[0][frame] = inputs[0][frame];
+                outputs[1][frame] = inputs[1][frame];
+            }
+            return 0;
+        }
+
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            const uint32_t readIndex =
+                (writeIndex_ + kHistoryFrames - latencyFrames_) % kHistoryFrames;
+            outputs[0][frame] = historyLeft_[readIndex];
+            outputs[1][frame] = historyRight_[readIndex];
+            historyLeft_[writeIndex_] = inputs[0][frame];
+            historyRight_[writeIndex_] = inputs[1][frame];
+            writeIndex_ = (writeIndex_ + 1) % kHistoryFrames;
+        }
+        return 0;
+    }
+
+    uint32_t getLatencyFrames() const noexcept override { return latencyFrames_; }
+    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+
+private:
+    static constexpr uint32_t kHistoryFrames = 512;
+    const uint32_t latencyFrames_;
+    std::array<float, kHistoryFrames> historyLeft_{};
+    std::array<float, kHistoryFrames> historyRight_{};
+    uint32_t writeIndex_ = 0;
+};
+
 class SnapshotGatePlugin final : public IPlugin {
 public:
     SnapshotGatePlugin(std::atomic<bool>& blockNext,
@@ -3520,6 +3572,146 @@ TEST(RackGraphPluginRoutingTest, TrackChainRoutesProcessedStereoToDirectOutput) 
         EXPECT_FLOAT_EQ(buffers.outputRight[frame], 13.0f) << "frame " << frame;
     }
 }
+
+TEST(RackGraphLatencyCompensationTest, AlignsUnequalTrackLatenciesAtFinalMix) {
+    RackGraph graph;
+    configure(graph, 16);
+    const RackPathId delayedTrack = graph.getTracks().front().id;
+    const RackPathId directTrack = graph.addTrack();
+    ASSERT_NE(directTrack, 0u);
+
+    for (const RackPathId track : {delayedTrack, directTrack}) {
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        ASSERT_TRUE(graph.setTrackInputHardwarePair(track, 0));
+    }
+    const auto delayedChain = graph.getChain(delayedTrack);
+    const auto directChain = graph.getChain(directTrack);
+    ASSERT_NE(delayedChain, nullptr);
+    ASSERT_NE(directChain, nullptr);
+    ASSERT_EQ(delayedChain->addPlugin(
+                  std::make_unique<LatencyReportingPlugin>(3u)),
+              0);
+    ASSERT_EQ(directChain->addPlugin(
+                  std::make_unique<LatencyReportingPlugin>(0u)),
+              0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    // Latency is published after each plugin run, so prime the cached
+    // observations before measuring the first non-zero impulse.
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    clearBuffers(buffers);
+    buffers.left[0] = 1.0f;
+    buffers.right[0] = 1.0f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame == 3 ? 2.0f : 0.0f;
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
+}
+
+TEST(RackGraphLatencyCompensationTest, IncludesRouteLatencyWithoutDelayingRouteTaps) {
+    RackGraph graph;
+    configure(graph, 16);
+    const RackPathId sourceTrack = graph.getTracks().front().id;
+    const RackPathId routedTrack = graph.addTrack();
+    const RackPathId directTrack = graph.addTrack();
+    ASSERT_NE(routedTrack, 0u);
+    ASSERT_NE(directTrack, 0u);
+
+    ASSERT_TRUE(graph.setTrackInputArmed(sourceTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwarePair(sourceTrack, 0));
+    ASSERT_TRUE(graph.setTrackInputArmed(routedTrack, true));
+    ASSERT_TRUE(graph.setTrackInputTrack(
+        routedTrack, sourceTrack, guitarrackcraft::TrackInputTap::PreFader));
+    ASSERT_TRUE(graph.setTrackInputArmed(directTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwarePair(directTrack, 0));
+
+    const auto sourceChain = graph.getChain(sourceTrack);
+    const auto routedChain = graph.getChain(routedTrack);
+    const auto directChain = graph.getChain(directTrack);
+    ASSERT_NE(sourceChain, nullptr);
+    ASSERT_NE(routedChain, nullptr);
+    ASSERT_NE(directChain, nullptr);
+    ASSERT_EQ(sourceChain->addPlugin(
+                  std::make_unique<LatencyReportingPlugin>(2u)),
+              0);
+    ASSERT_EQ(routedChain->addPlugin(
+                  std::make_unique<LatencyReportingPlugin>(3u)),
+              0);
+    ASSERT_EQ(directChain->addPlugin(
+                  std::make_unique<LatencyReportingPlugin>(0u)),
+              0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    clearBuffers(buffers);
+    buffers.left[0] = 1.0f;
+    buffers.right[0] = 1.0f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    // The source path is delayed by 2 frames, then the routed plugin adds 3.
+    // The source and direct tracks are compensated to that route-inclusive
+    // maximum; the routed track's raw output remains available to its input.
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame == 5 ? 3.0f : 0.0f;
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
+}
+
+TEST(RackGraphLatencyCompensationTest, CompensatedProcessDoesNotAllocate) {
+    RackGraph graph;
+    configure(graph, 16);
+    const RackPathId delayedTrack = graph.getTracks().front().id;
+    const RackPathId directTrack = graph.addTrack();
+    ASSERT_NE(directTrack, 0u);
+
+    for (const RackPathId track : {delayedTrack, directTrack}) {
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        ASSERT_TRUE(graph.setTrackInputHardwarePair(track, 0));
+    }
+    const auto delayedChain = graph.getChain(delayedTrack);
+    const auto directChain = graph.getChain(directTrack);
+    ASSERT_NE(delayedChain, nullptr);
+    ASSERT_NE(directChain, nullptr);
+    ASSERT_EQ(delayedChain->addPlugin(
+                  std::make_unique<LatencyReportingPlugin>(4u)),
+              0);
+    ASSERT_EQ(directChain->addPlugin(
+                  std::make_unique<LatencyReportingPlugin>(0u)),
+              0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    buffers.left[0] = 1.0f;
+    buffers.right[0] = 1.0f;
+    allocation_probe::allocations = 0;
+    allocation_probe::enabled = true;
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+    allocation_probe::enabled = false;
+
+    EXPECT_EQ(allocation_probe::allocations, 0u);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame == 4 ? 2.0f : 0.0f;
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
+}
+
 
 TEST(RackGraphInputRoutingTest, HardwareStereoPairZeroFillsMissingRightChannel) {
     RackGraph graph;
