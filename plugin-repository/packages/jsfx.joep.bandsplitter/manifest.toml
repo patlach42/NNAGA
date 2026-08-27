@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.joep.bandsplitter"
+name = "BandSplitter.jsfx"
+version = "0.23"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Saike 4-pole BandSplitter"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 137475
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f2f963e2c53cf08b347f3cc6ad957170992e8db/Basics/BandSplitter.jsfx"
+sha256 = "a4ab40c380d32278ab76068a94aadb2e7f78300fc892e43e166a25812c0428c0"
+size = 77180
+path = "BandSplitter.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f2f963e2c53cf08b347f3cc6ad957170992e8db/Basics/BandJoiner.jsfx"
+sha256 = "00ec7700c7ef85548ed6ae1893d436af041b4a5b549c021619f1cab07747511a"
+size = 386
+path = "BandJoiner.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f2f963e2c53cf08b347f3cc6ad957170992e8db/Basics/BandSplitter_phasematcher.jsfx"
+sha256 = "698e2fc1053ae286f65e8e7f52580af1c2a720f842d683dc086400eb4d2eb628"
+size = 59909
+path = "BandSplitter_phasematcher.jsfx"
+
+[install]
+entry = "BandSplitter.jsfx"

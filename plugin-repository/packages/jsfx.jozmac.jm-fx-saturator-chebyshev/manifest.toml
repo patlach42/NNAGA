@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jozmac.jm-fx-saturator-chebyshev"
+name = "JM_fx_Saturator_Chebyshev.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "Chebyshev Saturator [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 4169
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_fx_Saturator_Chebyshev.jsfx"
+sha256 = "959f451a2a60c85f0b4a978128719244dab533a102a6daf5be2131ca2158baf6"
+size = 4169
+path = "JM_fx_Saturator_Chebyshev.jsfx"
+
+[install]
+entry = "JM_fx_Saturator_Chebyshev.jsfx"

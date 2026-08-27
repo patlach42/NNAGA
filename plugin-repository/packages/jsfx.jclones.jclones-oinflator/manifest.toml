@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jclones.jclones-oinflator"
+name = "JClones_OInflator.jsfx"
+version = "1.1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "JClones"
+tags = ["jsfx"]
+description = "JClones_OInflator"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 6936
+
+[[payload.files]]
+url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_OInflator.jsfx"
+sha256 = "c7aef16f666cd7cc2a2b6d194e7e252f3aaf5be0ec7dcff8dc4586dcab5ba48a"
+size = 6936
+path = "JClones_OInflator.jsfx"
+
+[install]
+entry = "JClones_OInflator.jsfx"

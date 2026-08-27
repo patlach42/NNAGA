@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tukan.envelope"
+name = "Envelope Shaper (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "Envelope Shaper (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 14539
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Envelope%20(Tukan)"
+sha256 = "fad396975f985ee19c5442d09827a3a3c3e70745e370877fbb9213af5c73c50a"
+size = 14539
+path = "Envelope Shaper (Tukan).jsfx"
+
+[install]
+entry = "Envelope Shaper (Tukan).jsfx"

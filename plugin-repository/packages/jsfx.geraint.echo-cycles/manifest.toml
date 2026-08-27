@@ -1,0 +1,59 @@
+schema = 1
+id = "jsfx.geraint.echo-cycles"
+name = "Echo-Cycles.jsfx"
+version = "1.2.4"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Echo Cycles (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 242081
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Echo-Cycles/1.2.4/Echo-Cycles/Echo-Cycles.jsfx"
+sha256 = "b3cbef02876ac147c77af0ed3f02341eae6e68e4b51f2944574f7ea4906e104d"
+size = 11213
+path = "Echo-Cycles.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Echo-Cycles/1.2.4/Echo-Cycles/ui-lib.jsfx-inc"
+sha256 = "e8e99a135174d0af851d8fb2d715ed608b45659c5f056d8f7814de73e200eef3"
+size = 96919
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Echo-Cycles/1.2.4/Echo-Cycles/themes/bitmap-simple/theme-dark-cyan.png"
+sha256 = "4bf991c92384266da2b419f6e23d0e4301c688c0c66fee92c95816c9bd1a2dcd"
+size = 113207
+path = "themes/bitmap-simple/theme-dark-cyan.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Echo-Cycles/1.2.4/Echo-Cycles/delay-utils.jsfx-inc"
+sha256 = "bfb68cff4f09c2fe67965625518a44789a08fbed1938a18c5e9952693fcfa165"
+size = 8626
+path = "delay-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Echo-Cycles/1.2.4/Echo-Cycles/filter-utils.jsfx-inc"
+sha256 = "ea374cf488c11a3bdd7d6c636e8d1c7bef14f2d78aa90c318b52b068338c5115"
+size = 8025
+path = "filter-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Echo-Cycles/1.2.4/Echo-Cycles/Echo-Cycles.jsfx.rpl"
+sha256 = "a642014a9d97835ca3537f6a24580a9387c341bc74407ceb624f09797d0cb554"
+size = 3095
+path = "Echo-Cycles.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Echo-Cycles/1.2.4/Echo-Cycles/smoother.jsfx-inc"
+sha256 = "d77e47a1f018d0862babd4cd7be447a66bd9748262d5967912d952ec375ba880"
+size = 996
+path = "smoother.jsfx-inc"
+
+[install]
+entry = "Echo-Cycles.jsfx"

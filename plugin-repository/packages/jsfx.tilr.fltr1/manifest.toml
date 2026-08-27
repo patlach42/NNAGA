@@ -1,0 +1,59 @@
+schema = 1
+id = "jsfx.tilr.fltr1"
+name = "fltr1.jsfx"
+version = "1.1.6"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "FLTR-1"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 283031
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/fltr1.jsfx"
+sha256 = "054c2805d1089627af3f2046b825673f10dafc0c08c2945bf724a100f0b15108"
+size = 36966
+path = "fltr1.jsfx"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/fltr1/fltr.Saike_Yutani_Filters.jsfx-inc"
+sha256 = "4da62cde0a4ab05430ebfe922a412a8e81db426883457838183a1b36c8c50381"
+size = 94358
+path = "fltr1/fltr.Saike_Yutani_Filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/fltr1/fltr.Saike_Yutani_oversampling.jsfx-inc"
+sha256 = "50c021b765073ee0733df8f9bde2e4e15dde4e315bed5251b9162fd4aeff8890"
+size = 6199
+path = "fltr1/fltr.Saike_Yutani_oversampling.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/fltr1/fltr.Saike_Yutani_upsamplers.jsfx-inc"
+sha256 = "ceb2766663f082fbbdb78c9fe33c21001afb744f613ec19c9bc8241cc3769902"
+size = 128029
+path = "fltr1/fltr.Saike_Yutani_upsamplers.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/fltr1/fltr.array.jsfx-inc"
+sha256 = "4ade80a551384328629078a8caf18b21e732b0d7f464e86363d3ffe1656d9d20"
+size = 6004
+path = "fltr1/fltr.array.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/fltr1/fltr.curvelib.jsfx-inc"
+sha256 = "2ce23a4c484b8d06c3eed8591699a68724eb11f1ea7b0e8c300b773922a467a0"
+size = 10462
+path = "fltr1/fltr.curvelib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/fltr1/fltr.mouselib.jsfx-inc"
+sha256 = "9aac751ec32b12d2172c0eae06ad27ce582b18c663c91958cf17008f1106062e"
+size = 1013
+path = "fltr1/fltr.mouselib.jsfx-inc"
+
+[install]
+entry = "fltr1.jsfx"

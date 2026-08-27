@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.joep.ripple"
+name = "ripple.jsfx"
+version = "0.05"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Ripple (Saike)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 66445
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/34d6b72aa6784b40a10342ca69bbef518ca0f566/Ripple/ripple.jsfx"
+sha256 = "d03c2b5942c7088cb4282542dce1935a3d2bcf6095aad4322de8cfb53c0f20c4"
+size = 12537
+path = "ripple.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/34d6b72aa6784b40a10342ca69bbef518ca0f566/Ripple/Ripple_dependencies/ripple_widgetdata.jsfx-inc"
+sha256 = "10fdf80ec7a4e8bbdfe66f30766e12e7fe53a01a9e5d7ee9331dab325cefed12"
+size = 9980
+path = "Ripple_dependencies/ripple_widgetdata.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/34d6b72aa6784b40a10342ca69bbef518ca0f566/Ripple/Ripple_dependencies/ripple_widgets.jsfx-inc"
+sha256 = "88330da4f5cdf83b9abfebeab8fcc456f795c2000844225e1e92e363c4ac6b10"
+size = 43928
+path = "Ripple_dependencies/ripple_widgets.jsfx-inc"
+
+[install]
+entry = "ripple.jsfx"

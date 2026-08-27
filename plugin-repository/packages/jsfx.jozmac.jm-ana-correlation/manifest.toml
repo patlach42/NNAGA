@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jozmac.jm-ana-correlation"
+name = "JM_ana_Correlation.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "Correlation meter [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 2851
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_ana_Correlation.jsfx"
+sha256 = "490579d3bd21bf4b49870fa024b4b60fc639b9f032b9f3c67959495cba33bac2"
+size = 2851
+path = "JM_ana_Correlation.jsfx"
+
+[install]
+entry = "JM_ana_Correlation.jsfx"

@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jozmac.jm-ana-stft-bispec"
+name = "JM_ana_STFT_Bispec.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "STFT Bispectrum V2 [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 10199
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_ana_STFT_Bispec.jsfx"
+sha256 = "cd18c25db99e8d499d1ac817cc3b108b105758a1fe2bb9d750501a248227dc95"
+size = 10199
+path = "JM_ana_STFT_Bispec.jsfx"
+
+[install]
+entry = "JM_ana_STFT_Bispec.jsfx"

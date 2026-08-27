@@ -1,0 +1,29 @@
+schema = 1
+id = "jsfx.jozmac.jm-gen-stern-brocot-stereochord"
+name = "JM_gen_Stern-Brocot_Stereochord.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "Stern-Brocot Stereochord [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 50177
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_gen_Stern-Brocot_Stereochord.jsfx"
+sha256 = "ca9ab7f309002d731d363ccf4c35e1ffea8e213b6acc01c03f6b40de85f69dcb"
+size = 23235
+path = "JM_gen_Stern-Brocot_Stereochord.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/poly_blep.jsfx-inc"
+sha256 = "0f2dc90d0d8110fc37ba788ca4da43cb5564880dc5b18cd6ed4e45a67e03d40f"
+size = 26942
+path = "Tale/poly_blep.jsfx-inc"
+
+[install]
+entry = "JM_gen_Stern-Brocot_Stereochord.jsfx"

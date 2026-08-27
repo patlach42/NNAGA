@@ -1,0 +1,53 @@
+schema = 1
+id = "jsfx.geraint.vibrato"
+name = "Vibrato.jsfx"
+version = "1.1.4"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Vibrato (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 359921
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vibrato/1.1.4/Vibrato/Vibrato.jsfx"
+sha256 = "cd009e514bfac0c303021883f3280b77c7a65d54c060834f2fd5ceb4c3697cef"
+size = 4897
+path = "Vibrato.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vibrato/1.1.4/Vibrato/ui-lib.jsfx-inc"
+sha256 = "0230d197f0017477deeb578caf6c01888a9f9cae763a366a76be57c6700106a3"
+size = 95494
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vibrato/1.1.4/Vibrato/delay-utils.jsfx-inc"
+sha256 = "c6673a4ea3cd0520bc926cffb1f81d19536a78ca5f065ca5e1d0dd5b436b7928"
+size = 8906
+path = "delay-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vibrato/1.1.4/Vibrato/themes/backgrounds/tom-barrett-512968-unsplash-small-denoised.png"
+sha256 = "1fdaae7981018ad65a0b994753ecd1d4ec680984e88159e3dcf860b18095e096"
+size = 130247
+path = "themes/backgrounds/tom-barrett-512968-unsplash-small-denoised.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vibrato/1.1.4/Vibrato/themes/bitmap-simple/theme-dark-blue.png"
+sha256 = "1fe6a4a52fad31bc95434b4559c153f506164760bb397663f2a0fe282afc1f16"
+size = 119450
+path = "themes/bitmap-simple/theme-dark-blue.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vibrato/1.1.4/Vibrato/Vibrato.jsfx.rpl"
+sha256 = "383e13a14cbd878eccf15114c7f72383d6e9191bf7dbc2b889db026c442e6dab"
+size = 927
+path = "Vibrato.jsfx.rpl"
+
+[install]
+entry = "Vibrato.jsfx"

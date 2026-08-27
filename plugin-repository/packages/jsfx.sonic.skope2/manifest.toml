@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.sonic.skope2"
+name = "Skope2.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "SonicAnomaly"
+tags = ["jsfx"]
+description = "Skope II [Build 160930]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 11620
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Skope2.jsfx"
+sha256 = "0a1ff93ea333f80b7364255bab44ee18451f0f5a5c3a6fb888dad0f14dd1f864"
+size = 11620
+path = "Skope2.jsfx"
+
+[install]
+entry = "Skope2.jsfx"

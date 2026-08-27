@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jozmac.jm-util-stereo-tool"
+name = "JM_util_Stereo_Tool.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "Stereo Tool [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 14647
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_util_Stereo_Tool.jsfx"
+sha256 = "c0a197e73ed36a5fe79eb45bb9ef6feff9ac8f2ea8bc6b6e4938183c0639c9d5"
+size = 14647
+path = "JM_util_Stereo_Tool.jsfx"
+
+[install]
+entry = "JM_util_Stereo_Tool.jsfx"

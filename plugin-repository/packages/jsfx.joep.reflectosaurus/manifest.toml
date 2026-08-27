@@ -1,0 +1,83 @@
+schema = 1
+id = "jsfx.joep.reflectosaurus"
+name = "Reflectosaurus.jsfx"
+version = "0.106"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Saike Reflectosaurus (beta)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 1036522
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus.jsfx"
+sha256 = "0e664d0eb1dbdb4bc3f54734ac3295c8cb55c9b4f8ecb57f8857294338378a9b"
+size = 173387
+path = "Reflectosaurus.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/Reflectosaurus_allpassverb.jsfx-inc"
+sha256 = "64c915303120a75f9e28dacf6a37f4727e5dcb6906dd0368d6ad1f74b5ebf321"
+size = 6415
+path = "Reflectosaurus_Dependencies/Reflectosaurus_allpassverb.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/Reflectosaurus_buffers.jsfx-inc"
+sha256 = "5882f6470a1449e35ace44862b1591a1fcb6c39caf5feae25b520ab63ff9ea74"
+size = 4715
+path = "Reflectosaurus_Dependencies/Reflectosaurus_buffers.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/Reflectosaurus_compressor.jsfx-inc"
+sha256 = "9b9b4ea91a11e9246b95388c6316a40520c11e6b67a6be8ab96b5eb69afb11a5"
+size = 2192
+path = "Reflectosaurus_Dependencies/Reflectosaurus_compressor.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/Reflectosaurus_grainlib.jsfx-inc"
+sha256 = "d17d30526a2a6e010125d442b2a04fd1db3cb6a8b1311672a1c22e9a9b70d596"
+size = 6322
+path = "Reflectosaurus_Dependencies/Reflectosaurus_grainlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/Reflectosaurus_midilib.jsfx-inc"
+sha256 = "0b197c5797d7cf5be14622dede0a9f1bb0da565fed5f002521a23a3ed304805e"
+size = 2735
+path = "Reflectosaurus_Dependencies/Reflectosaurus_midilib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/Reflectosaurus_pitchlib.jsfx-inc"
+sha256 = "a1bc1a53edc7943db5f0d4de5829dba8d1edfd7998bbfa7d363e90e23c1a9be1"
+size = 14663
+path = "Reflectosaurus_Dependencies/Reflectosaurus_pitchlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/Reflectosaurus_widgetdata.jsfx-inc"
+sha256 = "1893070c2d795be5adad6c02d36a314be5df8dc0f67aab7c50f8fb53e0c8bb1e"
+size = 6841
+path = "Reflectosaurus_Dependencies/Reflectosaurus_widgetdata.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/Reflectosaurus_widgets.jsfx-inc"
+sha256 = "2d86d95fd85899cc6af560d06ed05473a2640b84780c320df1c28ebdd0976f66"
+size = 45540
+path = "Reflectosaurus_Dependencies/Reflectosaurus_widgets.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus_Dependencies/reflecto_logo.png"
+sha256 = "af66ba708623b72fcf1937bc5ee11ec218762abefe1d2dd1e342854de27281fe"
+size = 15152
+path = "Reflectosaurus_Dependencies/reflecto_logo.png"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/948cda375e265a820c1dfc13556c6ffee46cfdf7/Reflectosaurus/Reflectosaurus.jsfx.rpl"
+sha256 = "0e989ea482223877a895a0b464766863f18588d4d5aa67294c07748819936dfa"
+size = 758560
+path = "Reflectosaurus.jsfx.rpl"
+
+[install]
+entry = "Reflectosaurus.jsfx"

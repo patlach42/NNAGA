@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tilr.notes-to-cc"
+name = "Notes to CC.jsfx"
+version = "1.1.1"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "Notes to CC"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 3069
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/336455e0dc55025008ef03dfe2dda236aaa5976f/MIDI/Notes%20to%20CC.jsfx"
+sha256 = "9385f2552e81161774fa39844225fb80575b27b17db0d7636c10ec959f5cffd8"
+size = 3069
+path = "Notes to CC.jsfx"
+
+[install]
+entry = "Notes to CC.jsfx"

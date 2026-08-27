@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.rejj.respectrum"
+name = "ReSpectrum.jsfx"
+version = "1.1.4"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Justin Johnson"
+tags = ["jsfx"]
+description = "Spectrum Analyser"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 90612
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/Justin-Johnson/ReJJ/0f94ef04a7131df71b2ad2293ce312111073b871/ReSpectrum/ReSpectrum.jsfx"
+sha256 = "c46b6ff3e2a8448a00c9ea30a41eea3da2183759ca6af08535e3f49bcbfcd8d4"
+size = 19591
+path = "ReSpectrum.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/Justin-Johnson/ReJJ/0f94ef04a7131df71b2ad2293ce312111073b871/ReSpectrum/Dependencies/firhalfband.jsfx-inc"
+sha256 = "20c10244da60c183cc45a8bfec920b83921c3779caacf59e37e5b6d7d2372daf"
+size = 10279
+path = "Dependencies/firhalfband.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/Justin-Johnson/ReJJ/0f94ef04a7131df71b2ad2293ce312111073b871/ReSpectrum/Dependencies/spectrum.jsfx-inc"
+sha256 = "caa388dd5df5c8c85120f8a16e78016e2628bea7106bfe4fd1573fc6c2c43b9e"
+size = 28987
+path = "Dependencies/spectrum.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/Justin-Johnson/ReJJ/0f94ef04a7131df71b2ad2293ce312111073b871/ReSpectrum/Dependencies/svf_filter.jsfx-inc"
+sha256 = "21530e2411b6f479db14716b5daec4bc4b5ab58b76d54608892f0177c88b3a37"
+size = 31755
+path = "Dependencies/svf_filter.jsfx-inc"
+
+[install]
+entry = "ReSpectrum.jsfx"

@@ -1,0 +1,119 @@
+schema = 1
+id = "jsfx.joep.saike-partials"
+name = "saike_partials.jsfx"
+version = "0.68"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Partials (Saike)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 21849154
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/saike_partials.jsfx"
+sha256 = "351a7fb73c1111f971416cb838d7bd85b1e41a75330b60b53154070f9f93f027"
+size = 107123
+path = "saike_partials.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/logo.dat"
+sha256 = "41b266adba50fd30ec245a89ed6334a886e438fecf298141402e81ba65cfc7d3"
+size = 7176
+path = "partials_dependencies/logo.dat"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_female_vowel_data.dat"
+sha256 = "b91086af3f3386259853886f0f8369c4cd9e55b4e087dcadd963d16d7818be7c"
+size = 705600
+path = "partials_dependencies/saike_female_vowel_data.dat"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_modal.jsfx-inc"
+sha256 = "6408d10693d5dc1c95e3868ad8ce7487c312ce5da5eaf92d9b9844f913b1252b"
+size = 90900
+path = "partials_dependencies/saike_modal.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_modal_buffer.jsfx-inc"
+sha256 = "617e8194db3fd5dd05bfa93bdae62c2a7c58c2e78cabe5484994d23da6e205bd"
+size = 946
+path = "partials_dependencies/saike_modal_buffer.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_modal_custom.jsfx-inc"
+sha256 = "36e9bd48d88de5aecda64c21a7dd5a5e2b05f1851074161dc4bde57970bad877"
+size = 1727
+path = "partials_dependencies/saike_modal_custom.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_modal_gfx.jsfx-inc"
+sha256 = "12594113cae8f10425743496c7f0a45ffe2fe5387766a1e39020f5f0953cb759"
+size = 31892
+path = "partials_dependencies/saike_modal_gfx.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_modal_impulses.jsfx-inc"
+sha256 = "7d9a07db0c9a5a4e65e160fcbc029c1539f88a8fb470a54a75f5bb8c3c27fd02"
+size = 9178
+path = "partials_dependencies/saike_modal_impulses.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_modal_kp_midi.jsfx-inc"
+sha256 = "9da6953746c272c74ba3b3ac8b66e6b47a8a99197941fd357871d244bc96fe37"
+size = 9006
+path = "partials_dependencies/saike_modal_kp_midi.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_modal_stft.jsfx-inc"
+sha256 = "be68d04caabf06b22f61a0173fe7a09b1913cc44d26440438a02b8db172827e5"
+size = 52276
+path = "partials_dependencies/saike_modal_stft.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_partial_array.jsfx-inc"
+sha256 = "e4dac0c09e3bd9ff8ec94bc763f31c5adf98c9dde862b3d0f7b779c42a13f0c3"
+size = 15593
+path = "partials_dependencies/saike_partial_array.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_partials_fx.jsfx-inc"
+sha256 = "6974aa189e0c2edf07df833e6254284c51d3c77a5d903d25c66183b0df28118b"
+size = 7265
+path = "partials_dependencies/saike_partials_fx.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_partials_playback.jsfx-inc"
+sha256 = "fd965a3d73c9389492a60059d40d70ffd7d4b87df0ea94a1be470e24933c166c"
+size = 6576
+path = "partials_dependencies/saike_partials_playback.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_partials_sample_editor.jsfx-inc"
+sha256 = "d053b0baf2b8d56b18b18693008276db0c234c9ecb3a0593cdf4750192dccdc2"
+size = 31707
+path = "partials_dependencies/saike_partials_sample_editor.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_vowel_data.dat"
+sha256 = "76dbbe7312fc644ae3be1ea1888c7c6f502b364c058a052ca770a79b7d176f60"
+size = 705600
+path = "partials_dependencies/saike_vowel_data.dat"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/partials_dependencies/saike_vowel_data.jsfx-inc"
+sha256 = "398d664b6746b46ae30d52805a0c025c684fd8adfff96ab1b146a57676009cf2"
+size = 499
+path = "partials_dependencies/saike_vowel_data.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/92bb42e411d58d8b95042c6bd303b5f91b857ee5/partials/saike_partials.jsfx.rpl"
+sha256 = "c1d711125c979815e1ebf521dd489b11df7cad7f65c791fc92442890688e479b"
+size = 20066090
+path = "saike_partials.jsfx.rpl"
+
+[install]
+entry = "saike_partials.jsfx"

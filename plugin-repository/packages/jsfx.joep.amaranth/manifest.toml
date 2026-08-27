@@ -1,0 +1,65 @@
+schema = 1
+id = "jsfx.joep.amaranth"
+name = "Amaranth.jsfx"
+version = "0.32"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Amaranth (Saike) [BETA]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 200646
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/61aa97d6141601e4ba5e15daed4682315de5e1ea/Amaranth/Amaranth.jsfx"
+sha256 = "75cf6f3ffc4387325d0c011ef8bd23f52ae914dd99ac04e9100d0f805cb48f64"
+size = 58366
+path = "Amaranth.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/61aa97d6141601e4ba5e15daed4682315de5e1ea/Amaranth/Amaranth_Dependencies/Amaranth_envelopes.jsfx-inc"
+sha256 = "17a64511f4b3c6c931cbf12e625dd3819f17db83f7c71c4dca1cbee249b88ece"
+size = 38717
+path = "Amaranth_Dependencies/Amaranth_envelopes.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/61aa97d6141601e4ba5e15daed4682315de5e1ea/Amaranth/Amaranth_Dependencies/Amaranth_filters.jsfx-inc"
+sha256 = "9d36e7e0ab253231d948e051fd3391b2ea6c1c061ae56b4e8280c124c411a50d"
+size = 16158
+path = "Amaranth_Dependencies/Amaranth_filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/61aa97d6141601e4ba5e15daed4682315de5e1ea/Amaranth/Amaranth_Dependencies/Amaranth_grainlib.jsfx-inc"
+sha256 = "618c5875d9cc2594547a714fbbd97834fc0cbadf4a6c8a643334905744a2a011"
+size = 11882
+path = "Amaranth_Dependencies/Amaranth_grainlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/61aa97d6141601e4ba5e15daed4682315de5e1ea/Amaranth/Amaranth_Dependencies/Amaranth_mouse.jsfx-inc"
+sha256 = "f990c2f2e5ab186869eff4ef506ea15a248117c900cbc42a2c8682c73024ccba"
+size = 479
+path = "Amaranth_Dependencies/Amaranth_mouse.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/61aa97d6141601e4ba5e15daed4682315de5e1ea/Amaranth/Amaranth_Dependencies/Amaranth_widgetdata.jsfx-inc"
+sha256 = "2617e80c236586d90daba3e1bce69184de7e527082e2d9bfc0b08d2fcc9d7ff1"
+size = 6345
+path = "Amaranth_Dependencies/Amaranth_widgetdata.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/61aa97d6141601e4ba5e15daed4682315de5e1ea/Amaranth/Amaranth_Dependencies/Amaranth_widgets.jsfx-inc"
+sha256 = "c24e778df7bd9e5ff17308b81f39e3eaad521450d99db5e5d92f938c6b87c7b0"
+size = 45208
+path = "Amaranth_Dependencies/Amaranth_widgets.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/61aa97d6141601e4ba5e15daed4682315de5e1ea/Amaranth/Amaranth_Dependencies/Logo4.png"
+sha256 = "e8b3cfaaee1b619a5026924a46a86c5a2ca913e8cb476cb321bdda10fb6be341"
+size = 23491
+path = "Amaranth_Dependencies/Logo4.png"
+
+[install]
+entry = "Amaranth.jsfx"

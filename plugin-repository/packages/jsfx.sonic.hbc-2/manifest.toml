@@ -1,0 +1,47 @@
+schema = 1
+id = "jsfx.sonic.hbc-2"
+name = "HBC-2.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "SonicAnomaly"
+tags = ["jsfx"]
+description = "HBC-2 Stereo Hybrid Bus Compressor"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 167321
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/HBC-2.jsfx"
+sha256 = "91b085e1ba6714d587ba82d35abb557fd04ed6694f569fe524381aef4b4cf6e1"
+size = 16124
+path = "HBC-2.jsfx"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc2_gfx/bg.png"
+sha256 = "d403420a84bf5569313121d0356fe3afabfe8aa453d69266089c7dd1b5a42ab2"
+size = 149606
+path = "hbc2_gfx/bg.png"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc2_gfx/lr.png"
+sha256 = "b7d414abfb99a8dfced399c76cb65becc9a35214bf2887ba08de31d8b562d925"
+size = 292
+path = "hbc2_gfx/lr.png"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc2_gfx/ms.png"
+sha256 = "37d6974370da9815162449370eaa40df5a6aad37d1ed6d8c13a2d62e1761bd1c"
+size = 446
+path = "hbc2_gfx/ms.png"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/hbc2_gfx/sliderknob.png"
+sha256 = "e4dc799ae5bcfba344f3b8ca9f9a6d9f5a951d3dba7fb3903b4b8f9158bd559f"
+size = 853
+path = "hbc2_gfx/sliderknob.png"
+
+[install]
+entry = "HBC-2.jsfx"

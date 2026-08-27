@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.geraint.vocoder"
+name = "Vocoder.jsfx"
+version = "1.0.1"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Vocoder (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 336229
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vocoder/1.0.1/Vocoder/Vocoder.jsfx"
+sha256 = "5f264137d669c9b26800e1d00a252ce5094487173c025ebf0f3e50d24256c287"
+size = 8122
+path = "Vocoder.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vocoder/1.0.1/Vocoder/themes/bitmap-simple/theme-dark-blue.png"
+sha256 = "1fe6a4a52fad31bc95434b4559c153f506164760bb397663f2a0fe282afc1f16"
+size = 119450
+path = "themes/bitmap-simple/theme-dark-blue.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Vocoder/1.0.1/Vocoder/themes/backgrounds/umberto-jXd2FSvcRr8-unsplash.png"
+sha256 = "3469f1010993ee4356ade37131cc43d07150e6f42a8b5f54ba5cf900e0983400"
+size = 208657
+path = "themes/backgrounds/umberto-jXd2FSvcRr8-unsplash.png"
+
+[install]
+entry = "Vocoder.jsfx"

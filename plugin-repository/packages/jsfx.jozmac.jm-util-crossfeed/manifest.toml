@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.jozmac.jm-util-crossfeed"
+name = "JM_util_Crossfeed.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "Crossfeed [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 56818
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_util_Crossfeed.jsfx"
+sha256 = "ea8a9c9e691157126ac1af092cc5a9e686c7c356d7a05f76c63decb4fe333810"
+size = 12056
+path = "JM_util_Crossfeed.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/rbj_filter.jsfx-inc"
+sha256 = "f6493654e2d180f5ec9096668097d510dd09e7f893d52a9e94b9b6696b930a24"
+size = 9182
+path = "Tale/rbj_filter.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/rc_filter.jsfx-inc"
+sha256 = "44646fff4d5c0c43daa8044e9d2adfa2e6724e469665923a64c67240a0751673"
+size = 4984
+path = "Tale/rc_filter.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/lfo.jsfx-inc"
+sha256 = "90481162c2fa62cba3f11ba3fe0a9e106b8e90bcd463c3764e3666334deed034"
+size = 30596
+path = "Tale/lfo.jsfx-inc"
+
+[install]
+entry = "JM_util_Crossfeed.jsfx"

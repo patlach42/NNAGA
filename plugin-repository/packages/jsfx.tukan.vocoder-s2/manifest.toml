@@ -1,0 +1,239 @@
+schema = 1
+id = "jsfx.tukan.vocoder-s2"
+name = "Vocoder S2 (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "Vocoder S2 (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 842405
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Vocoder%20S2%20(Tukan)"
+sha256 = "213d1ed1ddc1cf0d843fd244ba4d15d1f2141b862bd343ca3a4f28067ea0a7ec"
+size = 43442
+path = "Vocoder S2 (Tukan).jsfx"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk_lib.jsfx-inc"
+sha256 = "9033bfcdf5e60a8805484837faa0138519ae14e1f29a3c773993f6209bc49754"
+size = 33176
+path = "S2GFX/tk_lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp.jsfx-inc"
+sha256 = "882d9a02300914fdf44ccfc1de35ec8897c80782a7048bc9888f5d8d46084265"
+size = 1544
+path = "S2GFX/cookdsp.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/svf_filter.jsfx-inc"
+sha256 = "21530e2411b6f479db14716b5daec4bc4b5ab58b76d54608892f0177c88b3a37"
+size = 31755
+path = "S2GFX/svf_filter.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/mmath.jsfx-inc"
+sha256 = "98bbfc4ffbddfc2d8b5af5ff6eecf34fb507a17dae7c3eb9af5b15a1ecb30185"
+size = 2534
+path = "S2GFX/cookdsp/mmath.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/memalloc.jsfx-inc"
+sha256 = "0604be61db664e8f9eb889b961de94e888906ea32c9f11d91aa01d788a620af4"
+size = 2987
+path = "S2GFX/cookdsp/memalloc.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/scaling.jsfx-inc"
+sha256 = "44f68a76db4f8fd0f8c1695bad98e5466ecd896fa89f37f21899607a1f92d122"
+size = 11725
+path = "S2GFX/cookdsp/scaling.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/list.jsfx-inc"
+sha256 = "3e286590a2c9297ee6c239d6ff27bc8932cf7be9ff26310ddfd39a782918644d"
+size = 55529
+path = "S2GFX/cookdsp/list.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/buffer.jsfx-inc"
+sha256 = "062d5a22318356b2181dbf06d9fd66085f3705416500eb638382ca16df774274"
+size = 65833
+path = "S2GFX/cookdsp/buffer.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/delay.jsfx-inc"
+sha256 = "b7874e27e9f99c51873929dbe00e025baa969873e1114e97320d56a41d244ec2"
+size = 17760
+path = "S2GFX/cookdsp/delay.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/filters.jsfx-inc"
+sha256 = "8b06af58d6509d3d0e3d906a6a2f69a91f46812848ae5a1455b7f0db43a6d4d8"
+size = 42967
+path = "S2GFX/cookdsp/filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/analysis.jsfx-inc"
+sha256 = "98836506fe4babc6a3763d2e2b54026815554b7883eb52e15bd3e6c188dc1f22"
+size = 16449
+path = "S2GFX/cookdsp/analysis.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/oscil.jsfx-inc"
+sha256 = "c713a926cb4db4d9d6c9d640c2f7a8d227d2676c479fb510d153113676437de8"
+size = 9175
+path = "S2GFX/cookdsp/oscil.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/random.jsfx-inc"
+sha256 = "760ee5c754a806201503e57ef3f5dffc8326451efbfef9be9a96c25455861d67"
+size = 3485
+path = "S2GFX/cookdsp/random.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/midi.jsfx-inc"
+sha256 = "bc08bd8908467c7867a7ba232d1fa41ecdb4ccc87eb0b31e536163cd2d4a7ba4"
+size = 11306
+path = "S2GFX/cookdsp/midi.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/dynamics.jsfx-inc"
+sha256 = "a0784dc2e45f68bc2d9dc2e670b2dbb2c6213afa86461d8d260208583f8c039a"
+size = 21551
+path = "S2GFX/cookdsp/dynamics.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/effects.jsfx-inc"
+sha256 = "2bcc27692105b0321a0af2657b45642e8cf08a8045ddc9e754b9f848652432de"
+size = 32157
+path = "S2GFX/cookdsp/effects.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/granulator.jsfx-inc"
+sha256 = "424850f924396d6a0518e30cab4290802f6d94849c8984b2dfe13489b9aa3da5"
+size = 8591
+path = "S2GFX/cookdsp/granulator.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/fftobjects.jsfx-inc"
+sha256 = "f78a68bb7b902ec7e24bb8bdd00bf6210e094d88a5d065067e4e6ae959ee096c"
+size = 40426
+path = "S2GFX/cookdsp/fftobjects.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/cookdsp/pvocobjects.jsfx-inc"
+sha256 = "5a2c6be654ae8a185dbdcb77de5cb713df4684fffbf6eb64691b341c2ba9382f"
+size = 22997
+path = "S2GFX/cookdsp/pvocobjects.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp.jsfx-inc"
+sha256 = "882d9a02300914fdf44ccfc1de35ec8897c80782a7048bc9888f5d8d46084265"
+size = 1544
+path = "DecemberSynthAdd/cookdsp.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/mmath.jsfx-inc"
+sha256 = "98bbfc4ffbddfc2d8b5af5ff6eecf34fb507a17dae7c3eb9af5b15a1ecb30185"
+size = 2534
+path = "DecemberSynthAdd/cookdsp/mmath.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/memalloc.jsfx-inc"
+sha256 = "0604be61db664e8f9eb889b961de94e888906ea32c9f11d91aa01d788a620af4"
+size = 2987
+path = "DecemberSynthAdd/cookdsp/memalloc.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/scaling.jsfx-inc"
+sha256 = "44f68a76db4f8fd0f8c1695bad98e5466ecd896fa89f37f21899607a1f92d122"
+size = 11725
+path = "DecemberSynthAdd/cookdsp/scaling.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/list.jsfx-inc"
+sha256 = "3e286590a2c9297ee6c239d6ff27bc8932cf7be9ff26310ddfd39a782918644d"
+size = 55529
+path = "DecemberSynthAdd/cookdsp/list.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/buffer.jsfx-inc"
+sha256 = "062d5a22318356b2181dbf06d9fd66085f3705416500eb638382ca16df774274"
+size = 65833
+path = "DecemberSynthAdd/cookdsp/buffer.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/delay.jsfx-inc"
+sha256 = "b7874e27e9f99c51873929dbe00e025baa969873e1114e97320d56a41d244ec2"
+size = 17760
+path = "DecemberSynthAdd/cookdsp/delay.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/filters.jsfx-inc"
+sha256 = "8b06af58d6509d3d0e3d906a6a2f69a91f46812848ae5a1455b7f0db43a6d4d8"
+size = 42967
+path = "DecemberSynthAdd/cookdsp/filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/analysis.jsfx-inc"
+sha256 = "98836506fe4babc6a3763d2e2b54026815554b7883eb52e15bd3e6c188dc1f22"
+size = 16449
+path = "DecemberSynthAdd/cookdsp/analysis.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/oscil.jsfx-inc"
+sha256 = "c713a926cb4db4d9d6c9d640c2f7a8d227d2676c479fb510d153113676437de8"
+size = 9175
+path = "DecemberSynthAdd/cookdsp/oscil.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/random.jsfx-inc"
+sha256 = "760ee5c754a806201503e57ef3f5dffc8326451efbfef9be9a96c25455861d67"
+size = 3485
+path = "DecemberSynthAdd/cookdsp/random.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/midi.jsfx-inc"
+sha256 = "bc08bd8908467c7867a7ba232d1fa41ecdb4ccc87eb0b31e536163cd2d4a7ba4"
+size = 11306
+path = "DecemberSynthAdd/cookdsp/midi.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/dynamics.jsfx-inc"
+sha256 = "a0784dc2e45f68bc2d9dc2e670b2dbb2c6213afa86461d8d260208583f8c039a"
+size = 21551
+path = "DecemberSynthAdd/cookdsp/dynamics.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/effects.jsfx-inc"
+sha256 = "2bcc27692105b0321a0af2657b45642e8cf08a8045ddc9e754b9f848652432de"
+size = 32157
+path = "DecemberSynthAdd/cookdsp/effects.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/granulator.jsfx-inc"
+sha256 = "424850f924396d6a0518e30cab4290802f6d94849c8984b2dfe13489b9aa3da5"
+size = 8591
+path = "DecemberSynthAdd/cookdsp/granulator.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/fftobjects.jsfx-inc"
+sha256 = "f78a68bb7b902ec7e24bb8bdd00bf6210e094d88a5d065067e4e6ae959ee096c"
+size = 40426
+path = "DecemberSynthAdd/cookdsp/fftobjects.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DecemberSynthAdd/cookdsp/pvocobjects.jsfx-inc"
+sha256 = "5a2c6be654ae8a185dbdcb77de5cb713df4684fffbf6eb64691b341c2ba9382f"
+size = 22997
+path = "DecemberSynthAdd/cookdsp/pvocobjects.jsfx-inc"
+
+[install]
+entry = "Vocoder S2 (Tukan).jsfx"

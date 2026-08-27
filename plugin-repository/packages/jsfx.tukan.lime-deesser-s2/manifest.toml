@@ -1,0 +1,29 @@
+schema = 1
+id = "jsfx.tukan.lime-deesser-s2"
+name = "Lime Deesser S2 (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "Lime Deesser S2 (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 83034
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Lime%20Deesser%20S2%20(Tukan)"
+sha256 = "e980988da8731e647f5075fb442b2855a7aeb1cbe9833c502d6102b1babdaec7"
+size = 49858
+path = "Lime Deesser S2 (Tukan).jsfx"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S2GFX/tk_lib.jsfx-inc"
+sha256 = "9033bfcdf5e60a8805484837faa0138519ae14e1f29a3c773993f6209bc49754"
+size = 33176
+path = "S2GFX/tk_lib.jsfx-inc"
+
+[install]
+entry = "Lime Deesser S2 (Tukan).jsfx"

@@ -1,0 +1,29 @@
+schema = 1
+id = "jsfx.geraint.midi-controller-control"
+name = "MIDI-Controller-Control.jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "MIDI Controller Control (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 74678
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Controller/1.0.0/MIDI-Controller/MIDI-Controller-Control.jsfx"
+sha256 = "8f33d44bdf18a6a7c67f1431b5510ae2624ac888a9fd020a1b64b7aca6d70a2c"
+size = 2155
+path = "MIDI-Controller-Control.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Controller/1.0.0/MIDI-Controller/ui-lib.jsfx-inc"
+sha256 = "c70c648f8c8c307e5fe48e19c0aa3f6be985677b48ab4154bdb7939ceedab0c9"
+size = 72523
+path = "ui-lib.jsfx-inc"
+
+[install]
+entry = "MIDI-Controller-Control.jsfx"

@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tukan.meter"
+name = "MCP Meter (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "MCP Meter (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 12677
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Meter%20(Tukan)"
+sha256 = "f16b8738a3571cbb224f33f0713d9833d6518bf82e9b29324c273e2bc094d686"
+size = 12677
+path = "MCP Meter (Tukan).jsfx"
+
+[install]
+entry = "MCP Meter (Tukan).jsfx"

@@ -1,0 +1,137 @@
+schema = 1
+id = "jsfx.jozmac.jm-fx-m-flanger"
+name = "JM_fx_M-Flanger.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "K-Flanger [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 408732
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_fx_M-Flanger.jsfx"
+sha256 = "a5a092875f84385d8625c6a5b3da7cf3fcdf59506af94b8bdb241e2062be2b42"
+size = 11156
+path = "JM_fx_M-Flanger.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/rc_filter.jsfx-inc"
+sha256 = "44646fff4d5c0c43daa8044e9d2adfa2e6724e469665923a64c67240a0751673"
+size = 4984
+path = "Tale/rc_filter.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/cookdsp.jsfx-inc"
+sha256 = "5f370e7d61716f4209c612ef1501dcadfb75e46916b1b9bd4cd9cd3f21e1ea2d"
+size = 1496
+path = "cookdsp/cookdsp.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/pvocobjects.jsfx-inc"
+sha256 = "5a2c6be654ae8a185dbdcb77de5cb713df4684fffbf6eb64691b341c2ba9382f"
+size = 22997
+path = "cookdsp/pvocobjects.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/fftobjects.jsfx-inc"
+sha256 = "9e2d9e5c42a758dca95b2a9c984a12e6f8f162ba06ba48e31b843551b18c6051"
+size = 39747
+path = "cookdsp/fftobjects.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/granulator.jsfx-inc"
+sha256 = "424850f924396d6a0518e30cab4290802f6d94849c8984b2dfe13489b9aa3da5"
+size = 8591
+path = "cookdsp/granulator.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/effects.jsfx-inc"
+sha256 = "48abeed844d6e7a789a7f69d82a191ff6c45c991fcbf48852e062016a72358cf"
+size = 30446
+path = "cookdsp/effects.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/dynamics.jsfx-inc"
+sha256 = "a0784dc2e45f68bc2d9dc2e670b2dbb2c6213afa86461d8d260208583f8c039a"
+size = 21551
+path = "cookdsp/dynamics.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/midi.jsfx-inc"
+sha256 = "bc08bd8908467c7867a7ba232d1fa41ecdb4ccc87eb0b31e536163cd2d4a7ba4"
+size = 11306
+path = "cookdsp/midi.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/random.jsfx-inc"
+sha256 = "760ee5c754a806201503e57ef3f5dffc8326451efbfef9be9a96c25455861d67"
+size = 3485
+path = "cookdsp/random.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/oscil.jsfx-inc"
+sha256 = "8aff4e56c476514fee5e67a7864409f28b2c55ef7d7163e18e0273eafde1bbd0"
+size = 9085
+path = "cookdsp/oscil.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/analysis.jsfx-inc"
+sha256 = "98836506fe4babc6a3763d2e2b54026815554b7883eb52e15bd3e6c188dc1f22"
+size = 16449
+path = "cookdsp/analysis.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/filters.jsfx-inc"
+sha256 = "1db6aa8c6c6fc89495e9040d6786856057501030f1cd04302e260ad8184e177d"
+size = 42211
+path = "cookdsp/filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/delay.jsfx-inc"
+sha256 = "8bcc0ef05b106a8617402fd9246b8a5f6c492378004e61b924340a5c3347441f"
+size = 17628
+path = "cookdsp/delay.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/buffer.jsfx-inc"
+sha256 = "612aeb4d34b943f951aac66e4a5b4a2c04282e13abb1841cfaaf1d44e7aa12c2"
+size = 64811
+path = "cookdsp/buffer.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/list.jsfx-inc"
+sha256 = "3e286590a2c9297ee6c239d6ff27bc8932cf7be9ff26310ddfd39a782918644d"
+size = 55529
+path = "cookdsp/list.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/scaling.jsfx-inc"
+sha256 = "ae0f650980d46b14c60b7491511692fec0da302dcec1b605d6432f78783d8f6a"
+size = 11247
+path = "cookdsp/scaling.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/memalloc.jsfx-inc"
+sha256 = "81c26cb4fc9ea55c102296ec32cb0823d4c8baff8063882e5c519e7ca8ba94b4"
+size = 2883
+path = "cookdsp/memalloc.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/cookdsp/mmath.jsfx-inc"
+sha256 = "98bbfc4ffbddfc2d8b5af5ff6eecf34fb507a17dae7c3eb9af5b15a1ecb30185"
+size = 2534
+path = "cookdsp/mmath.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/lfo.jsfx-inc"
+sha256 = "90481162c2fa62cba3f11ba3fe0a9e106b8e90bcd463c3764e3666334deed034"
+size = 30596
+path = "Tale/lfo.jsfx-inc"
+
+[install]
+entry = "JM_fx_M-Flanger.jsfx"

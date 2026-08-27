@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tilr.midi-keyvel-filter"
+name = "MIDI Keyvel Filter.jsfx"
+version = "1.1"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "MIDI Keyvel Filter"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 1000
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/0318daacf747847e952d7d7bfab01ff9d1b84570/MIDI/MIDI%20Keyvel%20Filter.jsfx"
+sha256 = "3ccae6a76846062b101634fc9813a2e5b55cd85b6338a259149d205cdb2fb4c5"
+size = 1000
+path = "MIDI Keyvel Filter.jsfx"
+
+[install]
+entry = "MIDI Keyvel Filter.jsfx"

@@ -1,0 +1,47 @@
+schema = 1
+id = "jsfx.geraint.midi-harmony"
+name = "MIDI Harmony.jsfx"
+version = "1.0.5"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "MIDI Harmony (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 132357
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Harmony/1.0.5/MIDI-Harmony/synth-framework.jsfx-inc"
+sha256 = "7310e8d9df8713d6add244af83d6ee39b60bed317ad3320b9ff6e2e6428b5e67"
+size = 7387
+path = "synth-framework.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Harmony/1.0.5/MIDI-Harmony/MIDI%20Harmony.jsfx"
+sha256 = "7d1541d15330e77addcda0b715adc3a8262dc9a7cd872a2286a3a11daf78a745"
+size = 13210
+path = "MIDI Harmony.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Harmony/1.0.5/MIDI-Harmony/ui-lib.jsfx-inc"
+sha256 = "e25d3fea9cb2009cfa8212088fa53f3ec84b8136cc04e0599d6318b621cac113"
+size = 96978
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Harmony/1.0.5/MIDI-Harmony/MIDI%20Harmony.jsfx.rpl"
+sha256 = "20cd5a11b69f567a3befdc4f42d74bb5857ea1f3acdf5f0a343344723c3c1f0d"
+size = 8836
+path = "MIDI Harmony.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Harmony/1.0.5/MIDI-Harmony/piano-ui.jsfx-inc"
+sha256 = "216eae89e8023ebd4e2efaa87f437d9a2053d51175fa7eafb2ca783a79064267"
+size = 5946
+path = "piano-ui.jsfx-inc"
+
+[install]
+entry = "MIDI Harmony.jsfx"

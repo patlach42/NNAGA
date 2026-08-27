@@ -1,0 +1,53 @@
+schema = 1
+id = "jsfx.tukan.equalizers-s3"
+name = "Equalizers S3 (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "Equalizers S3 (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 246216
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Equalizers%20S3%20(Tukan)"
+sha256 = "502ff8d458d9c5439b07b7377bdfc983cb7de52657078672277d2340f23e59d6"
+size = 153050
+path = "Equalizers S3 (Tukan).jsfx"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S3GFX/tk-vu_lib_S3.jsfx-inc"
+sha256 = "2cedc6c4a90f39576d012914195f167df368422939b5ca9be0ed72d2e4a69198"
+size = 11691
+path = "S3GFX/tk-vu_lib_S3.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S3GFX/svf_filter.jsfx-inc"
+sha256 = "21530e2411b6f479db14716b5daec4bc4b5ab58b76d54608892f0177c88b3a37"
+size = 31755
+path = "S3GFX/svf_filter.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S3GFX/firhalfband.jsfx-inc"
+sha256 = "20c10244da60c183cc45a8bfec920b83921c3779caacf59e37e5b6d7d2372daf"
+size = 10279
+path = "S3GFX/firhalfband.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S3GFX/tk-Comp_Lib_S3.jsfx-inc"
+sha256 = "193940bb4a6b29fb310c23602cdb5c6f5e996a660b0dea5bbe36b74ebd0e8b3c"
+size = 34898
+path = "S3GFX/tk-Comp_Lib_S3.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/S3GFX/tk-obj_vu_lib.jsfx-inc"
+sha256 = "37feb406307fde0ea9de2d5c1acad98cc233abb5aa9e51f4a2b94c1c3512deb7"
+size = 4543
+path = "S3GFX/tk-obj_vu_lib.jsfx-inc"
+
+[install]
+entry = "Equalizers S3 (Tukan).jsfx"

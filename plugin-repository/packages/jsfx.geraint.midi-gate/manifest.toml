@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.geraint.midi-gate"
+name = "MIDI Gate.jsfx"
+version = "1.2.2"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "MIDI Gate (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 104200
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Gate/1.2.2/MIDI-Gate/MIDI%20Gate.jsfx"
+sha256 = "c124e361849d93bd0106195da2c639f7573f642955f586035f825e13c961333b"
+size = 3231
+path = "MIDI Gate.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Gate/1.2.2/MIDI-Gate/synth-framework.jsfx-inc"
+sha256 = "2f178fc7c3cc79903c28b635a4c82901bcea9e7989dcc250a04c8def55991761"
+size = 7365
+path = "synth-framework.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/MIDI-Gate/1.2.2/MIDI-Gate/ui-lib.jsfx-inc"
+sha256 = "a23465e15361743e7d404af8e0fac7ecedfa5dc615b2825acf0b7eee9361d3a7"
+size = 93604
+path = "ui-lib.jsfx-inc"
+
+[install]
+entry = "MIDI Gate.jsfx"

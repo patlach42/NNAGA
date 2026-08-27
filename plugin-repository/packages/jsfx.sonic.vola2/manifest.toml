@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.sonic.vola2"
+name = "VOLA2.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "SonicAnomaly"
+tags = ["jsfx"]
+description = "VOLA2"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 79199
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/VOLA2.jsfx"
+sha256 = "17a3030c5b55bc4c4cea033234ce003025596c83239022c3828b0adbcfa7314b"
+size = 13008
+path = "VOLA2.jsfx"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/vola2_gfx/bg.png"
+sha256 = "b2ee0cfe12461d79056d64f9f2e2763b3009faaad10535da820530a69b7cd56d"
+size = 65441
+path = "vola2_gfx/bg.png"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/vola2_gfx/sliderknob.png"
+sha256 = "6abf851216253507cce46a55896fc3fa45a21409e2053d97969c1aa5a34ca5e9"
+size = 750
+path = "vola2_gfx/sliderknob.png"
+
+[install]
+entry = "VOLA2.jsfx"

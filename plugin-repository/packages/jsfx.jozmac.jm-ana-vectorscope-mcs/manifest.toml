@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.jozmac.jm-ana-vectorscope-mcs"
+name = "JM_ana_Vectorscope_MCS.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "MCS Vectorscope [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 46194
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_ana_Vectorscope_MCS.jsfx"
+sha256 = "3102f198b9b45cadfb6da5693fddcde743dc5d9c8136d7a0379cf02f9919609f"
+size = 17470
+path = "JM_ana_Vectorscope_MCS.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/complex.jsfx-inc"
+sha256 = "73c92fd28398fdabb4dfecf592e910876dcc7392b9f4c11dfe44a0fda1fa28eb"
+size = 8632
+path = "Tale/complex.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/rc_filter.jsfx-inc"
+sha256 = "44646fff4d5c0c43daa8044e9d2adfa2e6724e469665923a64c67240a0751673"
+size = 4984
+path = "Tale/rc_filter.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/window.jsfx-inc"
+sha256 = "ec0ca22629777f5838f7e484c00ec7ab580be50f19de4a76ab46400426281962"
+size = 15108
+path = "Tale/window.jsfx-inc"
+
+[install]
+entry = "JM_ana_Vectorscope_MCS.jsfx"

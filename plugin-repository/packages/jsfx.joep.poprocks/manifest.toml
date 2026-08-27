@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.joep.poprocks"
+name = "poprocks.jsfx"
+version = "0.02"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Pop rocks (Saike)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 11635
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/34d6b72aa6784b40a10342ca69bbef518ca0f566/Poprocks/poprocks.jsfx"
+sha256 = "f9389ae3c81c0950baf060c11a17e947b6fcd9b2a0e488fab6db9c7004a9ff24"
+size = 11635
+path = "poprocks.jsfx"
+
+[install]
+entry = "poprocks.jsfx"

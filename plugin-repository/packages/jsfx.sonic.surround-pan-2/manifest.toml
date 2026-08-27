@@ -1,0 +1,47 @@
+schema = 1
+id = "jsfx.sonic.surround-pan-2"
+name = "Surround Pan 2.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "SonicAnomaly"
+tags = ["jsfx"]
+description = "Surround Pan 2.1"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 486252
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/Surround%20Pan%202.jsfx"
+sha256 = "c5a45b3172d845e0b2c6d71066ed89e2d931a135411fb16d196c9f2239bc5422"
+size = 36285
+path = "Surround Pan 2.jsfx"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/surroundpan2_gfx/bg.png"
+sha256 = "abdbef8e86ed0688d36c09197b7cb31829eb55699a13c0b0caddc6391bf42418"
+size = 31202
+path = "surroundpan2_gfx/bg.png"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/surroundpan2_gfx/radar.png"
+sha256 = "abe3d598445d21ef03a462e861aa7a44ce92e5a79a8e0bd1b726fc64204a33ee"
+size = 32146
+path = "surroundpan2_gfx/radar.png"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/surroundpan2_gfx/sliderknob.png"
+sha256 = "26f41aa1072f868a0e6c2cd3a2a4f6d07a9f4a930ef804fb662e87120f6e32f3"
+size = 767
+path = "surroundpan2_gfx/sliderknob.png"
+
+[[payload.files]]
+url = "https://github.com/Sonic-Anomaly/Sonic-Anomaly-JSFX/raw/f14cef59b86bd58c3e1e6a5bf982ff71c302443f/Plugins/docs/Surround%20Pan.pdf"
+sha256 = "fbbacaa621353c82d56df60afdddb82f5552700ea581f9e163a8d97d8415164e"
+size = 385852
+path = "docs/Surround Pan.pdf"
+
+[install]
+entry = "Surround Pan 2.jsfx"

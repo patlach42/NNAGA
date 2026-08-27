@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jclones.jclones-l2"
+name = "JClones_L2.jsfx"
+version = "1.1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "JClones"
+tags = ["jsfx"]
+description = "JClones_L2"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 22109
+
+[[payload.files]]
+url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_L2.jsfx"
+sha256 = "173821b875aee86a441ab07d0dd047bc45ceb405f1b42607e92b1348efb2659a"
+size = 22109
+path = "JClones_L2.jsfx"
+
+[install]
+entry = "JClones_L2.jsfx"

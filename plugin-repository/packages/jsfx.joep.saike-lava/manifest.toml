@@ -1,0 +1,71 @@
+schema = 1
+id = "jsfx.joep.saike-lava"
+name = "saike_lava.jsfx"
+version = "0.28"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Lava Reverb (Saike) [ALPHA]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 112873
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/saike_lava.jsfx"
+sha256 = "e295139b078a7f4e0ff09f135fb5a90757a066efcbd1fbc7a99cb98204d67294"
+size = 25960
+path = "saike_lava.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/Lava_Dependencies/saike_fft_verb.jsfx-inc"
+sha256 = "4b00bb32fcc08d47c6fc06712e0165ce274be41ed332714eca7f88d155210e22"
+size = 9440
+path = "Lava_Dependencies/saike_fft_verb.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/Lava_Dependencies/saike_lava_cabs.jsfx-inc"
+sha256 = "07da65961196082afa5f2722ab3f3d15c462e1e6d7df87ff507166e2c715bd5b"
+size = 20482
+path = "Lava_Dependencies/saike_lava_cabs.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/Lava_Dependencies/saike_lava_delays.jsfx-inc"
+sha256 = "1113462ec68ccbeda2bd96d63e0bb2fdaf36b4b8da06546cbe7435b5b46922e9"
+size = 2156
+path = "Lava_Dependencies/saike_lava_delays.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/Lava_Dependencies/saike_lava_fluid.jsfx-inc"
+sha256 = "489d9c4439ae70a4d0e6eae3550514e522caa7ccebf7376ae0eaa67e821d9c7f"
+size = 12319
+path = "Lava_Dependencies/saike_lava_fluid.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/Lava_Dependencies/saike_lava_gfx.jsfx-inc"
+sha256 = "088b1a2efa94fab6efa35883600c3ef0f05d4588dbbfb705a7c1945e220b7706"
+size = 3488
+path = "Lava_Dependencies/saike_lava_gfx.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/Lava_Dependencies/saike_lava_pitchlib.jsfx-inc"
+sha256 = "89c8f370276e50a44952bb1f231acbe32315acc6f760ccc8d8cdbf75f4be8a0f"
+size = 12967
+path = "Lava_Dependencies/saike_lava_pitchlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/Lava_Dependencies/saike_lava_verb.jsfx-inc"
+sha256 = "e9c98831b8f8c047b32b3d5e2dad75405749da7d62c2a73495fe69551512c36b"
+size = 20255
+path = "Lava_Dependencies/saike_lava_verb.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b71575017be404a845e1a45c92cab276032dec84/lavaverb/saike_lava.jsfx.rpl"
+sha256 = "e2ccc53953b96b1d5b0be25b3675ff6205de38840d91c4da7384a49e77f2fdd0"
+size = 5806
+path = "saike_lava.jsfx.rpl"
+
+[install]
+entry = "saike_lava.jsfx"

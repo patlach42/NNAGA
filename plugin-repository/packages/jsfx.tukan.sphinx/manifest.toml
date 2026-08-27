@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tukan.sphinx"
+name = "Sphinx (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "Sphinx (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 23558
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Sphinx%20(Tukan)"
+sha256 = "af4fced904e30e97eb722ba0d3d175ccdb4f4fd76e19f2d669313915b1640626"
+size = 23558
+path = "Sphinx (Tukan).jsfx"
+
+[install]
+entry = "Sphinx (Tukan).jsfx"

@@ -114,16 +114,15 @@ class PluginRepositoryContractsTest {
     }
 
     @Test
-    fun jsfxManifestAcceptsFileAndArchivePayloadsAndSafeJsfxEntry() {
-        val valid = jsfxManifest()
-        val archive = valid.copy(
-            kind = "archive",
-            payloadUrl = "https://codeload.github.com/JoepVanlier/JSFX/zip/7d9b1456fbe4543406a4e927c89453a212cab3eb",
-        )
-        val extensionlessArchive = archive.copy(entry = "Effects/example")
+    fun jsfxManifestAcceptsDependencyCompleteFilesAndLegacyFilePayloads() {
+        val legacy = jsfxManifest()
+        validateRepositoryManifest(legacy)
 
-        listOf(valid, archive, extensionlessArchive).forEach { manifest ->
-            validateRepositoryManifest(manifest)
+        val files = jsfxFilesManifest()
+        validateRepositoryManifest(files)
+
+        assertThrows(IllegalArgumentException::class.java) {
+            validateRepositoryManifest(legacy.copy(kind = "archive"))
         }
 
         listOf(
@@ -136,28 +135,151 @@ class PluginRepositoryContractsTest {
             "",
         ).forEach { kind ->
             assertThrows("unsupported JSFX payload kind: $kind", IllegalArgumentException::class.java) {
-                validateRepositoryManifest(valid.copy(kind = kind))
+                validateRepositoryManifest(legacy.copy(kind = kind))
             }
         }
 
         listOf(
-            "non-jsfx format" to valid.copy(format = "JSFX"),
-            "archive entry extension" to valid.copy(entry = "Effects/example.zip"),
-            "extensionless file entry" to valid.copy(entry = "Effects/example"),
-            "archive .jsfx-inc entry" to archive.copy(entry = "Effects/example.jsfx-inc"),
-            "archive arbitrary extension" to archive.copy(entry = "Effects/example.zip"),
-            "uppercase entry extension" to valid.copy(entry = "Effects/example.JSFX"),
-            "absolute entry" to valid.copy(entry = "/Effects/example.jsfx"),
-            "traversal entry" to valid.copy(entry = "Effects/../escape.jsfx"),
-            "backslash traversal entry" to valid.copy(entry = "Effects\\..\\escape.jsfx"),
-            "empty entry" to valid.copy(entry = ""),
-            "directory entry" to valid.copy(entry = "Effects/"),
+            "non-jsfx format" to legacy.copy(format = "JSFX"),
+            "extensionless file entry" to legacy.copy(entry = "Effects/example"),
+            "uppercase entry extension" to legacy.copy(entry = "Effects/example.JSFX"),
+            "absolute entry" to legacy.copy(entry = "/Effects/example.jsfx"),
+            "traversal entry" to legacy.copy(entry = "Effects/../escape.jsfx"),
+            "backslash traversal entry" to legacy.copy(entry = "Effects\\..\\escape.jsfx"),
+            "empty entry" to legacy.copy(entry = ""),
+            "directory entry" to legacy.copy(entry = "Effects/"),
         ).forEach { (case, manifest) ->
             assertThrows(case, IllegalArgumentException::class.java) {
                 validateRepositoryManifest(manifest)
             }
         }
     }
+
+    @Test
+    fun jsfxFilesManifestRejectsMissingDuplicateUnsafeAndInvalidFileDeclarations() {
+        val valid = jsfxFilesManifest()
+        val first = valid.files.first()
+
+        listOf(
+            "missing files" to jsfxFilesManifest(files = emptyList()),
+            "duplicate destination" to jsfxFilesManifest(files = listOf(first, first)),
+            "entry not declared" to jsfxFilesManifest(entry = "Effects/missing.jsfx"),
+            "absolute destination" to jsfxFilesManifest(files = listOf(first.copy(path = "/Effects/example.jsfx"))),
+            "parent traversal destination" to jsfxFilesManifest(files = listOf(first.copy(path = "../escape.jsfx"))),
+            "nested traversal destination" to jsfxFilesManifest(files = listOf(first.copy(path = "Effects/../escape.jsfx"))),
+            "backslash traversal destination" to jsfxFilesManifest(files = listOf(first.copy(path = "Effects\\..\\escape.jsfx"))),
+            "empty destination" to jsfxFilesManifest(files = listOf(first.copy(path = ""))),
+            "directory destination" to jsfxFilesManifest(files = listOf(first.copy(path = "Effects/"))),
+            "non-HTTPS URL" to jsfxFilesManifest(files = listOf(first.copy(url = "http://author.example/example.jsfx"))),
+            "relative URL" to jsfxFilesManifest(files = listOf(first.copy(url = "Basics/example.jsfx"))),
+            "URL query" to jsfxFilesManifest(files = listOf(first.copy(url = "https://author.example/example.jsfx?ref=main"))),
+            "URL fragment" to jsfxFilesManifest(files = listOf(first.copy(url = "https://author.example/example.jsfx#latest"))),
+            "invalid hash" to jsfxFilesManifest(files = listOf(first.copy(sha256 = "not-a-sha256"))),
+            "zero size" to jsfxFilesManifest(files = listOf(first.copy(size = 0))),
+            "negative size" to jsfxFilesManifest(files = listOf(first.copy(size = -1))),
+            "oversized file" to jsfxFilesManifest(files = listOf(first.copy(size = 512L * 1024 * 1024 + 1))),
+        ).forEach { (case, manifest) ->
+            assertThrows(case, IllegalArgumentException::class.java) {
+                validateRepositoryManifest(manifest)
+            }
+        }
+    }
+
+    @Test
+    fun parsesAndValidatesDependencyCompleteJsfxFiles() {
+        val manifest = parseRepositoryManifest(
+            """
+            schema = 1
+            id = "example.jsfx"
+            name = "Example JSFX"
+            version = "1.0.0"
+            format = "jsfx"
+            description = "A deterministic JSFX fixture"
+            arch = ["arm64-v8a"]
+            manufacturer = "Acme Audio"
+            tags = ["JSFX"]
+
+            [payload]
+            kind = "files"
+
+            [[payload.files]]
+            url = "https://raw.githubusercontent.com/author/JSFX/commit/Basics/BandJoiner.jsfx"
+            sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+            size = 42
+            path = "Effects/example.jsfx"
+
+            [[payload.files]]
+            url = "https://raw.githubusercontent.com/author/JSFX/commit/Basics/Utilities.jsfx-inc"
+            sha256 = "1111111111111111111111111111111111111111111111111111111111111111"
+            size = 7
+            path = "Effects/Utilities.jsfx-inc"
+
+            [install]
+            entry = "Effects/example.jsfx"
+            """.trimIndent(),
+            source = "Test source",
+            url = "https://plugins.example/repo/example.toml",
+            repositoryRoot = "https://plugins.example/repo/",
+        )
+
+        assertEquals("files", manifest.kind)
+        assertEquals(49L, manifest.payloadSize)
+        assertEquals(
+            listOf(
+                RepoManifestFile(
+                    "https://raw.githubusercontent.com/author/JSFX/commit/Basics/BandJoiner.jsfx",
+                    "0000000000000000000000000000000000000000000000000000000000000000",
+                    42,
+                    "Effects/example.jsfx",
+                ),
+                RepoManifestFile(
+                    "https://raw.githubusercontent.com/author/JSFX/commit/Basics/Utilities.jsfx-inc",
+                    "1111111111111111111111111111111111111111111111111111111111111111",
+                    7,
+                    "Effects/Utilities.jsfx-inc",
+                ),
+            ),
+            manifest.files,
+        )
+        validateRepositoryManifest(manifest)
+    }
+
+    private fun jsfxFilesManifest(
+        files: List<RepoManifestFile> = listOf(
+            RepoManifestFile(
+                url = "https://raw.githubusercontent.com/author/JSFX/commit/Basics/BandJoiner.jsfx",
+                sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+                size = 42,
+                path = "Effects/example.jsfx",
+            ),
+            RepoManifestFile(
+                url = "https://raw.githubusercontent.com/author/JSFX/commit/Basics/Utilities.jsfx-inc",
+                sha256 = "1111111111111111111111111111111111111111111111111111111111111111",
+                size = 7,
+                path = "Effects/Utilities.jsfx-inc",
+            ),
+        ),
+        entry: String = "Effects/example.jsfx",
+    ) = PluginRepositoryService.RepoManifest(
+        schema = 1,
+        id = "example.jsfx",
+        name = "Example JSFX",
+        version = "1.0.0",
+        format = "jsfx",
+        description = "A deterministic JSFX fixture",
+        payloadUrl = "",
+        payloadSha256 = "",
+        payloadSize = files.sumOf { it.size },
+        entry = entry,
+        kind = "files",
+        files = files,
+        arch = listOf("arm64-v8a"),
+        sourceName = "Test source",
+        sourceUrl = "https://plugins.example/repo/example.toml",
+        repositoryRoot = "https://plugins.example/repo/",
+        manufacturer = "Acme Audio",
+        tags = listOf("JSFX"),
+    )
 
     private fun jsfxManifest() = PluginRepositoryService.RepoManifest(
         schema = 1,

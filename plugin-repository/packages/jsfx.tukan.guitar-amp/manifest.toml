@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tukan.guitar-amp"
+name = "Guitar Amp (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "Guitar Amp (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 50569
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Guitar%20Amp%20(Tukan)"
+sha256 = "d0af74f41785ecbb057e4f2dd8db9c43d125ff7c2c5373029ffb130b3090a0da"
+size = 50569
+path = "Guitar Amp (Tukan).jsfx"
+
+[install]
+entry = "Guitar Amp (Tukan).jsfx"

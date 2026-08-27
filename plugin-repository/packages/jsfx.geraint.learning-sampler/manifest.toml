@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.geraint.learning-sampler"
+name = "Learning Sampler.jsfx"
+version = "1.0.9"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Learning Sampler (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 104583
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Learning-Sampler/1.0.9/Learning-Sampler/Learning%20Sampler.jsfx"
+sha256 = "299efc95850beb7f96f25d3cd1928c8b59b39fba087b1ddf40405fc191782467"
+size = 4881
+path = "Learning Sampler.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Learning-Sampler/1.0.9/Learning-Sampler/ui-lib.jsfx-inc"
+sha256 = "f22e415dfeda998fae09dbe2f084ca5eb9334080a1b1fdc58a8621a5a322919b"
+size = 92337
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Learning-Sampler/1.0.9/Learning-Sampler/synth-framework.jsfx-inc"
+sha256 = "b654c7c3b71e7ee51c59b2f22ac53d6c51b3b4169d15cb39917d317db1541957"
+size = 7365
+path = "synth-framework.jsfx-inc"
+
+[install]
+entry = "Learning Sampler.jsfx"

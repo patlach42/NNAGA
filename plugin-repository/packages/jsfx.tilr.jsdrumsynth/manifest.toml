@@ -1,0 +1,59 @@
+schema = 1
+id = "jsfx.tilr.jsdrumsynth"
+name = "jsdrumsynth.jsfx"
+version = "1.1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "JSDrumsynth"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 74207
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumsynth.jsfx"
+sha256 = "97fa552d496ce1f76ba85bff0a62ced781794ac476e48c879ad998f5d9a5b706"
+size = 23615
+path = "jsdrumsynth.jsfx"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumsynth.jsfx.RPL"
+sha256 = "16b1deae4d88e6157cd4f51d66b5550f223b906c7c0a26ede1a966ee686468a9"
+size = 4226
+path = "jsdrumsynth.jsfx.RPL"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumsynth/ds.envlib.jsfx-inc"
+sha256 = "8410fd8dfe170c35a4dc5bcc8a8a22a7a7bfad38064dc147e68f3ef0367489c7"
+size = 3986
+path = "jsdrumsynth/ds.envlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumsynth/ds.gfxlib.jsfx-inc"
+sha256 = "20ef37d3c9763bbe8337c39e7d74a2c03847f6c1a088dfea2c40afcf98839687"
+size = 3870
+path = "jsdrumsynth/ds.gfxlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumsynth/ds.mouselib.jsfx-inc"
+sha256 = "4068ede71f475e321a6844b58058c988bcdc136c67025102c9aec699568beea2"
+size = 771
+path = "jsdrumsynth/ds.mouselib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumsynth/ds.pad.jsfx-inc"
+sha256 = "189870047089afc86db2a0a3b224db013cdbdb57968eabb5bcb0dae5a2b845ca"
+size = 7262
+path = "jsdrumsynth/ds.pad.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/d7966756914e979287464fe53340d07f0471e3cf/Synth/jsdrumsynth/ds.svf_filter.jsfx-inc"
+sha256 = "6bb6670c831267b8a75f6a0515b8e4ba350c3c138a813057ab332016dcd50b79"
+size = 30477
+path = "jsdrumsynth/ds.svf_filter.jsfx-inc"
+
+[install]
+entry = "jsdrumsynth.jsfx"

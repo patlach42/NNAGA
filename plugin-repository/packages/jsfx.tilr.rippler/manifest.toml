@@ -1,0 +1,365 @@
+schema = 1
+id = "jsfx.tilr.rippler"
+name = "rippler.jsfx"
+version = "1.1.1"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "Rippler"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 537521
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/rippler.jsfx"
+sha256 = "569d9662f206c72d22ced9e295e0c91d06902dec3cc8ecc6af895438cec97026"
+size = 19951
+path = "rippler.jsfx"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/rippler.jsfx.RPL"
+sha256 = "299f7216358f55cfd31201ee73da471ed92c5cdb0ef9759222d93b525d17ebcf"
+size = 7993
+path = "rippler.jsfx.RPL"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/rippler/logo.png"
+sha256 = "8de3310ab770d4555a343ed6a04aaf730d2e7a6dd3e96dbe7590a109581759d9"
+size = 3861
+path = "rippler/logo.png"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/rippler/rippler.array.jsfx-inc"
+sha256 = "4ade80a551384328629078a8caf18b21e732b0d7f464e86363d3ffe1656d9d20"
+size = 6004
+path = "rippler/rippler.array.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/rippler/rippler.envlib.jsfx-inc"
+sha256 = "957d176e49c9502418eca6864aa7e463f7e8c807bd095a0ea768111ddf9b6abb"
+size = 3904
+path = "rippler/rippler.envlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/rippler/rippler.gfxlib.jsfx-inc"
+sha256 = "ec845d524160ae5d26423f9a9b3399eeeac4d82a43611885f2a33b4118442e5c"
+size = 5476
+path = "rippler/rippler.gfxlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/rippler/rippler.modal.jsfx-inc"
+sha256 = "aa25244c0091072ae9ff983cc01f33647c2d3ff907cf0ccbdb520898ae929a7a"
+size = 18150
+path = "rippler/rippler.modal.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/rippler/rippler.rbj_filter.jsfx-inc"
+sha256 = "7a5885bb0c1523856ac682a9fc9a499c3a9de12d7b87837664f9e4ffefbc341b"
+size = 9422
+path = "rippler/rippler.rbj_filter.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet01.wav"
+sha256 = "4036a31145ca56803d88ca2ea7fe9d27dd0d68564b9fe93996aed5cc794fabbe"
+size = 59700
+path = "tilr8_Rippler/mallet01.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet02.wav"
+sha256 = "b0761d00fab8d13340ba885906843e807f9c649b9c2d69ca1a810c46f8b51e8f"
+size = 43564
+path = "tilr8_Rippler/mallet02.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet03.wav"
+sha256 = "d3f855be51d9f4ac5478ff527e5728e9fbb6550205c719834e02df0d00b459ed"
+size = 74090
+path = "tilr8_Rippler/mallet03.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet04.wav"
+sha256 = "7cf38ae46b7e4189ea99954fe1a0b33365e9270d7d7e31a95cd33dbce175bb94"
+size = 74792
+path = "tilr8_Rippler/mallet04.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet05.wav"
+sha256 = "463fbb88dca13b9e34a9c039b3038ed35593a603611c3aaa43e6b2e43652e890"
+size = 71984
+path = "tilr8_Rippler/mallet05.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet06.wav"
+sha256 = "9a8637b7a6b4932fb2d9df077f5eca404640f8c46d1d09bb14b1bd3cb5460b4b"
+size = 69176
+path = "tilr8_Rippler/mallet06.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet07.wav"
+sha256 = "fd803f9f4423c512e8b3c30e7c160f3796bb9b590b6a106981744483ef65d2b7"
+size = 1758
+path = "tilr8_Rippler/mallet07.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet08.wav"
+sha256 = "a03b7767b37a1fe0c0ed059ec992508d235347758d6c519c16e95728ea96c654"
+size = 482
+path = "tilr8_Rippler/mallet08.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet09.wav"
+sha256 = "de9dc3da5a3939c3ea014d8fd41ca624ec1011be0582b21de55ed7575cf5e766"
+size = 1238
+path = "tilr8_Rippler/mallet09.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet10.wav"
+sha256 = "32cf8d43af594c00f43a2201ca71a963c3734b5e90eb744cb61c06989b59e821"
+size = 574
+path = "tilr8_Rippler/mallet10.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet11.wav"
+sha256 = "ad6aafc6f662fd8aa640002359209589a653aab71b424cf55446f740500abfda"
+size = 630
+path = "tilr8_Rippler/mallet11.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet12.wav"
+sha256 = "050eebf138b55bf2de10ef47e64bb09c254575a9af306c6b4a47ac93808fedd5"
+size = 226
+path = "tilr8_Rippler/mallet12.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet13.wav"
+sha256 = "7251e908686b1eb31cdecb3cb2fcfa9ccfa2f394088d91da5fbc97adef231d7d"
+size = 1132
+path = "tilr8_Rippler/mallet13.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet14.wav"
+sha256 = "20b791791e5e8e7a41096f47bfbe9994152732d3626c6a8a77e422ad9bd5493c"
+size = 1152
+path = "tilr8_Rippler/mallet14.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet15.wav"
+sha256 = "fa2dd72bd53d790270b81852bc3be78825296a2d04c4fabc12a1d07b0696a678"
+size = 1070
+path = "tilr8_Rippler/mallet15.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet16.wav"
+sha256 = "6efb863c6b7b241df58d48d6dc954a7cba89f6d6f302c415db6bf3eabf4ea8d4"
+size = 1296
+path = "tilr8_Rippler/mallet16.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet17.wav"
+sha256 = "e14c67282d48ccdd8830b72ddfdbffecf26dc8438ca14c9232696ff4d9f5bf1b"
+size = 2498
+path = "tilr8_Rippler/mallet17.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet18.wav"
+sha256 = "3a4ee491446d0ec439909c95127cc4f38a36cf8a3c24cc7478bac03a82dcbdbe"
+size = 2084
+path = "tilr8_Rippler/mallet18.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet19.wav"
+sha256 = "120b6be24ad13f6d6a6ccecf878567ddcf2346e544e346715f092942d43f89a1"
+size = 2436
+path = "tilr8_Rippler/mallet19.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet20.wav"
+sha256 = "d1f7a82af6d1c079383d109504fbafa285d6ede55acc6d5702664a47bcc93d90"
+size = 1944
+path = "tilr8_Rippler/mallet20.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet21.wav"
+sha256 = "c7a1e254abc37e09e47c07b44157b5b11b6953bae64cb9bb570dd38da2cdf69c"
+size = 1862
+path = "tilr8_Rippler/mallet21.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet22.wav"
+sha256 = "9e453d47ecfc21b3f16eb54ae4fc6af8b15142046cfaeaa914b928cb6592fead"
+size = 1904
+path = "tilr8_Rippler/mallet22.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet23.wav"
+sha256 = "3e56c99db9981fa8f52451e1aabf7ec44ae51229125e436bbdcaddfe50d33667"
+size = 1784
+path = "tilr8_Rippler/mallet23.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet24.wav"
+sha256 = "d79ffe53f599487f91acc49602ceb91782d9ef1614ca7767fb68fe818f350532"
+size = 2054
+path = "tilr8_Rippler/mallet24.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet25.wav"
+sha256 = "acf66ce1b20b6629fd1de61f9a23e781cfd9f6979ea755dd536103cb943a207f"
+size = 1958
+path = "tilr8_Rippler/mallet25.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet26.wav"
+sha256 = "d4e6fa68494071d2c16638b8fd333256ee53186d7816808eab36facfaa945071"
+size = 2100
+path = "tilr8_Rippler/mallet26.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet27.wav"
+sha256 = "58a76a89d397dff835f9112eb606fec996e141a2e88f4668bb379c95030b0721"
+size = 1946
+path = "tilr8_Rippler/mallet27.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet28.wav"
+sha256 = "d0ca29874f86f136913b46e8dc7ad9d818cb7d6d297b339e84e12c0b31188e40"
+size = 1990
+path = "tilr8_Rippler/mallet28.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet29.wav"
+sha256 = "70148f7e467d3fe2b0b3f567be0f63231889fe3808972db54c9e3e20c5c26321"
+size = 1962
+path = "tilr8_Rippler/mallet29.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet30.wav"
+sha256 = "e588d84f98f659835e594960ed5a4e7e2a76ff74db1f7f3c39e7d96ee6115fc4"
+size = 1740
+path = "tilr8_Rippler/mallet30.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet31.wav"
+sha256 = "d55ab6e9ec7c856b7bed1955904d581049ea0484b1425a3c71c23aa28e1281c8"
+size = 394
+path = "tilr8_Rippler/mallet31.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet32.wav"
+sha256 = "bb57645725c77548a6982639f0786430c4ca292b53a3742507714d73b0774289"
+size = 498
+path = "tilr8_Rippler/mallet32.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet33.wav"
+sha256 = "46db971ea09f981a8eeafd90b526054a729781bf3cd8fa2143a7e12472e4caf2"
+size = 2074
+path = "tilr8_Rippler/mallet33.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet34.wav"
+sha256 = "95b49f7034b6456baa2cd43b6af85c532c820eba4505a49499534aab37342746"
+size = 1168
+path = "tilr8_Rippler/mallet34.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet35.wav"
+sha256 = "25b17976714942cfb34a767db402c0e6e3f239e4b3a13f89db2f6f974d59700b"
+size = 946
+path = "tilr8_Rippler/mallet35.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet36.wav"
+sha256 = "b8be094f3b25843b13b7f254c0c4bd693dfd266ffccdc894ee3d71d1bf0a81c7"
+size = 1502
+path = "tilr8_Rippler/mallet36.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet37.wav"
+sha256 = "c27f1e32fd4380f33c835c5b0270fa4d61004f75e21666c1a3f192f09e04fe26"
+size = 306
+path = "tilr8_Rippler/mallet37.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet38.wav"
+sha256 = "1c0c339ea4c8ad66ecc678126cdc9380a6fded516060837665eac093a635821b"
+size = 1584
+path = "tilr8_Rippler/mallet38.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet39.wav"
+sha256 = "c229e9c4dc1bdd8e3c7628cbacea107f0b1914762fdb8d81f9a63f2d9c0d7098"
+size = 982
+path = "tilr8_Rippler/mallet39.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet40.wav"
+sha256 = "4ffa0c2dde6ac12bd66da55dfb5275621b3ca47f974d77a21323716b92afa8f4"
+size = 306
+path = "tilr8_Rippler/mallet40.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet41.wav"
+sha256 = "418fb14133673479cb446376728ead9a06163903c3d1883b8ebc2e9c1663ee13"
+size = 2070
+path = "tilr8_Rippler/mallet41.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet42.wav"
+sha256 = "62ac7c8961004f1b436ee5fd4828ddb05751285c97bb9ec06123241c5f2b9e98"
+size = 2310
+path = "tilr8_Rippler/mallet42.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet43.wav"
+sha256 = "4163a68232e561a8c32f4f2ee71f940f36c5885c313552898608b7a4b97089ef"
+size = 5358
+path = "tilr8_Rippler/mallet43.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet44.wav"
+sha256 = "ef8be6f8133a5ad2a26558d63602dff3d178a92ed18a28f92b7150fd8275b42b"
+size = 4176
+path = "tilr8_Rippler/mallet44.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet45.wav"
+sha256 = "f00884ba715b2f81136eb959ac1feff3b9f6da4d70b4e053aa46255749db6ece"
+size = 3030
+path = "tilr8_Rippler/mallet45.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet46.wav"
+sha256 = "d6d0740ea27b3914470c75f71f22a26b7820214e60451791f25828246a74a579"
+size = 1078
+path = "tilr8_Rippler/mallet46.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet47.wav"
+sha256 = "c924adcb03b5094a917b1fe7638dd4c5b9b8c7ee893f5890777ccdc84838873e"
+size = 866
+path = "tilr8_Rippler/mallet47.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet48.wav"
+sha256 = "5f33fa418a82051c416a162c7db8bbd1e99675bad1bd8756aa6a54c213ce688f"
+size = 2362
+path = "tilr8_Rippler/mallet48.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet49.wav"
+sha256 = "aae9718485581efdb9a2808b84c6844c6bb73d22b32cce32c86329d923b67901"
+size = 458
+path = "tilr8_Rippler/mallet49.wav"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/75b5ffb51b7485e93305ee323ca51491fc830349/Synth/tilr8_Rippler/mallet50.wav"
+sha256 = "4a053f73b945f8b085642b27c22a36835ddcec90c2ae30627824f2c68255f3d0"
+size = 166
+path = "tilr8_Rippler/mallet50.wav"
+
+[install]
+entry = "rippler.jsfx"

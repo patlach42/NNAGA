@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jozmac.jm-fx-filter-lulu"
+name = "JM_fx_Filter_LULU.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "LULU Filter [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 1360
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_fx_Filter_LULU.jsfx"
+sha256 = "8f1a54caf1200dd75eb371be9c88f765978d3582e7b3e2b271d31bdce25ecd9b"
+size = 1360
+path = "JM_fx_Filter_LULU.jsfx"
+
+[install]
+entry = "JM_fx_Filter_LULU.jsfx"

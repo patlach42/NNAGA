@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.geraint.sandwich-amp"
+name = "Sandwich Amp.jsfx"
+version = "1.0.9"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Sandwich Amp Distortion (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 104687
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Sandwich-Amp/1.0.9/Sandwich-Amp/Sandwich%20Amp.jsfx"
+sha256 = "f6942221d6e1db3e6a9ddda5ec0da9715d8812d0bb66d8fc4a8d1887cf7d38a8"
+size = 7168
+path = "Sandwich Amp.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Sandwich-Amp/1.0.9/Sandwich-Amp/ui-lib.jsfx-inc"
+sha256 = "0230d197f0017477deeb578caf6c01888a9f9cae763a366a76be57c6700106a3"
+size = 95494
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Sandwich-Amp/1.0.9/Sandwich-Amp/Sandwich%20Amp.jsfx.rpl"
+sha256 = "e2076274786b90a31f174df399a74f80fd6749ad54e7b108d699c9b1e91d695e"
+size = 1029
+path = "Sandwich Amp.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Sandwich-Amp/1.0.9/Sandwich-Amp/smoother.jsfx-inc"
+sha256 = "d77e47a1f018d0862babd4cd7be447a66bd9748262d5967912d952ec375ba880"
+size = 996
+path = "smoother.jsfx-inc"
+
+[install]
+entry = "Sandwich Amp.jsfx"

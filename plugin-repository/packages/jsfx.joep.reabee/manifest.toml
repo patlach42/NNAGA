@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.joep.reabee"
+name = "ReaBee.jsfx"
+version = "0.02"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "ReaBee"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 5827
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/e3e559a28ebce112b967166afbec3c3e584bd25a/ReaBee/ReaBee.jsfx"
+sha256 = "185e2c0c49b0bc5130c36dd23199dd6c7340bfe173d5bff2bfb9371d4cdaa54d"
+size = 5827
+path = "ReaBee.jsfx"
+
+[install]
+entry = "ReaBee.jsfx"

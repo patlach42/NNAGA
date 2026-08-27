@@ -1,0 +1,137 @@
+schema = 1
+id = "jsfx.joep.saike-protosynth"
+name = "saike_protosynth.jsfx"
+version = "0.60"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Saike Protosynth"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 3795724
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/saike_protosynth.jsfx"
+sha256 = "51c39544fd06aeb64858bae6104e621a6db7ca95a48f22f455af18cb1de5ed32"
+size = 133534
+path = "saike_protosynth.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/bigfont_caps.png"
+sha256 = "44194521506caf2073dec45b54aef0a0a9f79587e5dc6ca206c727eb6784816b"
+size = 1530
+path = "protosynth_dependencies/bigfont_caps.png"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/bigfont_caps3.png"
+sha256 = "65ae6798750edec037f99eeb65457e9f30a940fd4808b2adbf1beb91da34ddbf"
+size = 1559
+path = "protosynth_dependencies/bigfont_caps3.png"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/bigfont_caps3_dark.png"
+sha256 = "db918792a1959b1e640604413029b3473884497ab5b3d6551b65fd57dabecac0"
+size = 1441
+path = "protosynth_dependencies/bigfont_caps3_dark.png"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/bigfont_caps_dark.png"
+sha256 = "9a3079be88c38760d1571c22e05bd6a8da7357038867ad3a26ca0ecd350814ed"
+size = 1430
+path = "protosynth_dependencies/bigfont_caps_dark.png"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/font.png"
+sha256 = "872a066383d4a7d5b73b4bc03e572f6d6fd4f4717a55da79a640f853de2d493d"
+size = 416
+path = "protosynth_dependencies/font.png"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/proto_bg_2.png"
+sha256 = "922c02049d6c97a990ce2695d69d9c39113b237541bbb44609445caaf6063122"
+size = 40716
+path = "protosynth_dependencies/proto_bg_2.png"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/proto_bg_4.png"
+sha256 = "432006e690efb844f1026af400db70e102f9516c16a1a586c676b47cd5aeb30d"
+size = 23547
+path = "protosynth_dependencies/proto_bg_4.png"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_diffusion.jsfx-inc"
+sha256 = "bd0448854b17aa43e4486b0be74266696cb93de66dbacfd8df738edc896944a1"
+size = 19683
+path = "protosynth_dependencies/saike_proto_diffusion.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_stft_fx.jsfx-inc"
+sha256 = "a3bb309114891183db1b19fd72ca3d5efc5b638fdd933674735ab2a86d75683a"
+size = 15143
+path = "protosynth_dependencies/saike_proto_stft_fx.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_filters.jsfx-inc"
+sha256 = "3898f8778d4550b9bf914a685591a55b673b315f9afd57b2204301fd83f02d43"
+size = 99037
+path = "protosynth_dependencies/saike_proto_synth_filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_fx.jsfx-inc"
+sha256 = "55405a5377253036120521ec37d980cd7dbdc365ae92ff86dba40d96086887fc"
+size = 15823
+path = "protosynth_dependencies/saike_proto_synth_fx.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_kp_midi.jsfx-inc"
+sha256 = "5e078a0cfbcff5dc3ad024fb46dd8ff1eb7689f2c902788b4a3f05112b337ada"
+size = 11106
+path = "protosynth_dependencies/saike_proto_synth_kp_midi.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_modal.jsfx-inc"
+sha256 = "feea036b27aa57dd6f8bb6c2b4dbcaade254994f7a1fcbf5be79c37296fdf6d2"
+size = 15956
+path = "protosynth_dependencies/saike_proto_synth_modal.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_os_nl_filters.jsfx-inc"
+sha256 = "ca2545d2592a3bbc6c5ab5d0196df9c04422738259f7bd1e48c181a4dce87f54"
+size = 26671
+path = "protosynth_dependencies/saike_proto_synth_os_nl_filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_oscillators.jsfx-inc"
+sha256 = "128ffb0d0616a7c1079e7d4774bcac1794d31bb572cb26e5b071db67459bfc52"
+size = 16084
+path = "protosynth_dependencies/saike_proto_synth_oscillators.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_pixel_gfx.jsfx-inc"
+sha256 = "cf05b80a87b297f850ee296b64064204a34a3315cd474e701e8738e58004e7bc"
+size = 51252
+path = "protosynth_dependencies/saike_proto_synth_pixel_gfx.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_spreader.jsfx-inc"
+sha256 = "93dca96a89aa074bb5e5707ecd7d8bb6ee60551b70e149f0e04e7c363dad2ff8"
+size = 18715
+path = "protosynth_dependencies/saike_proto_synth_spreader.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/protosynth_dependencies/saike_proto_synth_wt.jsfx-inc"
+sha256 = "4f99fbb3a6a8743bad183f139489ba499b0fcf1d88af9452d6f1cbf4e57c356b"
+size = 14368
+path = "protosynth_dependencies/saike_proto_synth_wt.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/7f1c1ae5f3f74a468112b9af20c38e42ff1aaad7/protosynth/saike_protosynth.jsfx.rpl"
+sha256 = "d58a8197d2a8819a517d38f1898783fff872a73f97dfa153bb035f2be5957c47"
+size = 3287713
+path = "saike_protosynth.jsfx.rpl"
+
+[install]
+entry = "saike_protosynth.jsfx"

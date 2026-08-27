@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.geraint.piano-display"
+name = "piano-display.jsfx"
+version = "1.0.1"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Piano Display (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 118367
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Piano-Display/1.0.1/Piano-Display/piano-display.jsfx"
+sha256 = "5a0f83d332cbebe234cc1fa3d05cf39955176c7f29f1bf8eed1be7a702a5efb6"
+size = 4394
+path = "piano-display.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Piano-Display/1.0.1/Piano-Display/ui-lib.jsfx-inc"
+sha256 = "776165e79175c6903f7c24887c2b0f8caf2ad082d277e41dca8f57d545ee65cb"
+size = 94270
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Piano-Display/1.0.1/Piano-Display/piano-ui.jsfx-inc"
+sha256 = "25cde461e7b5049f79952193b71e9570c3dd5bbff5996737892285793ef880a6"
+size = 3531
+path = "piano-ui.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Piano-Display/1.0.1/Piano-Display/synth-framework-obj.jsfx-inc"
+sha256 = "d6b717df05321a557c1f4872bf59846f7b8e4fd47f8cd1068c3b1de7bc4bf3bd"
+size = 16172
+path = "synth-framework-obj.jsfx-inc"
+
+[install]
+entry = "piano-display.jsfx"

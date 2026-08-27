@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.tilr.skfilter"
+name = "skfilter.jsfx"
+version = "1.0.1"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "SKFilter"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 236546
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/c8857be6761ebd3cc3a551672543b8c329016dbe/Filter/skfilter.jsfx"
+sha256 = "01de2c0aa3b21a5d6f334ad57485a5b4c434822c9a25439f5384a4757b315268"
+size = 7960
+path = "skfilter.jsfx"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/c8857be6761ebd3cc3a551672543b8c329016dbe/Filter/skfilter/skf.Saike_Yutani_Filters.jsfx-inc"
+sha256 = "4da62cde0a4ab05430ebfe922a412a8e81db426883457838183a1b36c8c50381"
+size = 94358
+path = "skfilter/skf.Saike_Yutani_Filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/c8857be6761ebd3cc3a551672543b8c329016dbe/Filter/skfilter/skf.Saike_Yutani_oversampling.jsfx-inc"
+sha256 = "50c021b765073ee0733df8f9bde2e4e15dde4e315bed5251b9162fd4aeff8890"
+size = 6199
+path = "skfilter/skf.Saike_Yutani_oversampling.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/c8857be6761ebd3cc3a551672543b8c329016dbe/Filter/skfilter/skf.Saike_Yutani_upsamplers.jsfx-inc"
+sha256 = "ceb2766663f082fbbdb78c9fe33c21001afb744f613ec19c9bc8241cc3769902"
+size = 128029
+path = "skfilter/skf.Saike_Yutani_upsamplers.jsfx-inc"
+
+[install]
+entry = "skfilter.jsfx"

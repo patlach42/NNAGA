@@ -1,0 +1,65 @@
+schema = 1
+id = "jsfx.geraint.humonica"
+name = "Humonica.jsfx"
+version = "3.0.4"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Humonica - Synth & Harmoniser (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 189821
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Humonica/3.0.4/Humonica/Humonica.jsfx"
+sha256 = "bef4b01cd00654e7bed752944a235748bb70216980fea9466fdfd48151743a43"
+size = 32651
+path = "Humonica.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Humonica/3.0.4/Humonica/synth-framework-obj.jsfx-inc"
+sha256 = "59c419b47952bf6d84ecce62357caa9592819ce60cdd74a6528fe766c36a72e1"
+size = 17411
+path = "synth-framework-obj.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Humonica/3.0.4/Humonica/ui-lib.jsfx-inc"
+sha256 = "f3653ced5262a0cf6d5b7d6d378563c7443bb5b7b5d9bc4f7eb8bafe074a17c1"
+size = 96046
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Humonica/3.0.4/Humonica/filter-utils.jsfx-inc"
+sha256 = "fc5ea1c743af76448166f40d5e9552be6bb691ec7385484475b027c1e2fc8d8b"
+size = 8003
+path = "filter-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Humonica/3.0.4/Humonica/Humonica.jsfx.rpl"
+sha256 = "8562ad8a06c201112a504efeb81b6ac8cc8764bbdfccc943acb7914821510b3c"
+size = 23791
+path = "Humonica.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Humonica/3.0.4/Humonica/synth-framework-obj-ui.jsfx-inc"
+sha256 = "a25b9c1e35792183148f1f58c12e70cfb5b9aed96621c1ab64710e3653bcfa4a"
+size = 3585
+path = "synth-framework-obj-ui.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Humonica/3.0.4/Humonica/smoother.jsfx-inc"
+sha256 = "d77e47a1f018d0862babd4cd7be447a66bd9748262d5967912d952ec375ba880"
+size = 996
+path = "smoother.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Humonica/3.0.4/Humonica/graph-utils.jsfx-inc"
+sha256 = "5a1572e366397ba3f7c67a751250fb8759f19b962ef9994a4715a65666d00c51"
+size = 7338
+path = "graph-utils.jsfx-inc"
+
+[install]
+entry = "Humonica.jsfx"

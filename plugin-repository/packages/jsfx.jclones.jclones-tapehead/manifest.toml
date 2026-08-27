@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jclones.jclones-tapehead"
+name = "JClones_TapeHead.jsfx"
+version = "1.1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "JClones"
+tags = ["jsfx"]
+description = "JClones_TapeHead"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 3295
+
+[[payload.files]]
+url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_TapeHead.jsfx"
+sha256 = "f1c67b3a6cf99633ded315645217adbc5654172b767aaeb1e317ee19be353ca5"
+size = 3295
+path = "JClones_TapeHead.jsfx"
+
+[install]
+entry = "JClones_TapeHead.jsfx"

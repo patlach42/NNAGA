@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jclones.jclones-duvalve"
+name = "JClones_DuValve.jsfx"
+version = "1.1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "JClones"
+tags = ["jsfx"]
+description = "JClones_DuValve"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 451457
+
+[[payload.files]]
+url = "https://github.com/JClones/JSFXClones/raw/9486f9cb9bc7b929d8e5db2959db0b97326d1a18/jsfx/JClones_DuValve.jsfx"
+sha256 = "541cccbf8689dddf36580fad8e09d608660feada7b7cdbb70bbdee975fae39dc"
+size = 451457
+path = "JClones_DuValve.jsfx"
+
+[install]
+entry = "JClones_DuValve.jsfx"

@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.tukan.ac-trem"
+name = "AC Trem (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "AC Trem (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 135674
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/AC%20Trem%20(Tukan)"
+sha256 = "ebbbaa6a21a022f63ffb31b2c39775d4090a4c62e5356d2a858d37cc04de0e72"
+size = 29074
+path = "AC Trem (Tukan).jsfx"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/ui-lib.jsfx-inc"
+sha256 = "e25d3fea9cb2009cfa8212088fa53f3ec84b8136cc04e0599d6318b621cac113"
+size = 96978
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/delay-utils.jsfx-inc"
+sha256 = "bfb68cff4f09c2fe67965625518a44789a08fbed1938a18c5e9952693fcfa165"
+size = 8626
+path = "delay-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/smoother.jsfx-inc"
+sha256 = "d77e47a1f018d0862babd4cd7be447a66bd9748262d5967912d952ec375ba880"
+size = 996
+path = "smoother.jsfx-inc"
+
+[install]
+entry = "AC Trem (Tukan).jsfx"

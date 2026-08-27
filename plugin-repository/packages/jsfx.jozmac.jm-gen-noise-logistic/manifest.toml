@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jozmac.jm-gen-noise-logistic"
+name = "JM_gen_Noise_Logistic.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "Logistic Noise Generator [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 1928
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_gen_Noise_Logistic.jsfx"
+sha256 = "cf0aaf61760ffa32a2fabf4d78c201357b85e1d7c232a2c89265753472a98ce1"
+size = 1928
+path = "JM_gen_Noise_Logistic.jsfx"
+
+[install]
+entry = "JM_gen_Noise_Logistic.jsfx"

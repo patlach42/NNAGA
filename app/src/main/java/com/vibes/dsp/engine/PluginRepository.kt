@@ -52,6 +52,14 @@ internal fun validateDeclaredContentLength(length: Long, max: Long, url: String)
 }
 
 
+data class RepoManifestFile(
+    val url: String,
+    val sha256: String,
+    val size: Long,
+    val path: String,
+)
+private const val MAX_JSFX_FILE_SIZE = 512L * 1024 * 1024
+
 internal fun validateFacetMetadata(manifest: PluginRepositoryService.RepoManifest) {
     fun safe(value: String, max: Int) = value.isNotBlank() && value.length <= max && value.none { it.isISOControl() }
     require(safe(manifest.manufacturer, 128))
@@ -91,6 +99,14 @@ internal fun parseRepositoryManifest(
                     ?: throw IllegalArgumentException("Invalid tags element")
             }
     }
+    val files = payload.getArray("files")?.toList().orEmpty().map { value ->
+        val file = value as? org.tomlj.TomlTable ?: throw IllegalArgumentException("Invalid files element")
+        val path = file.getString("path").orEmpty().replace('\\', '/')
+        val fileUrl = file.getString("url").orEmpty()
+        val hash = file.getString("sha256")?.lowercase().orEmpty()
+        val size = file.getLong("size") ?: 0L
+        RepoManifestFile(fileUrl, hash, size, path)
+    }
     return PluginRepositoryService.RepoManifest(
         schema = toml.getLong("schema")?.toInt() ?: 0,
         id = toml.getString("id").orEmpty(),
@@ -100,9 +116,10 @@ internal fun parseRepositoryManifest(
         description = toml.getString("description").orEmpty(),
         payloadUrl = payload.getString("url").orEmpty(),
         payloadSha256 = payload.getString("sha256")?.lowercase().orEmpty(),
-        payloadSize = payload.getLong("size") ?: 0L,
+        payloadSize = payload.getLong("size") ?: files.sumOf { it.size },
         entry = install.getString("entry").orEmpty(),
         kind = payload.getString("kind").orEmpty(),
+        files = files,
         arch = toml.getArray("arch")?.toList()?.map(Any::toString).orEmpty(),
         manufacturer = manufacturer,
         tags = tags,
@@ -123,24 +140,38 @@ internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoMa
         "wine_installer" -> setOf("installer")
         "wine_archive" -> setOf("archive")
         "wine_directory" -> setOf("directory")
-        "jsfx" -> setOf("file", "archive")
+        "jsfx" -> setOf("file", "files")
         else -> emptySet()
     }
-    require(expectedKinds.isNotEmpty() && manifest.kind in expectedKinds && manifest.payloadSize in 1..512L * 1024 * 1024)
-    require(shaPattern.matches(manifest.payloadSha256) && manifest.arch.contains("arm64-v8a"))
+    require(expectedKinds.isNotEmpty() && manifest.kind in expectedKinds)
+    require(manifest.arch.contains("arm64-v8a"))
+    if (manifest.kind != "files") {
+        require(manifest.payloadSize in 1..512L * 1024 * 1024)
+        require(shaPattern.matches(manifest.payloadSha256))
+    } else {
+        require(manifest.files.isNotEmpty())
+        require(manifest.payloadSize in 1..512L * 1024 * 1024)
+        val paths = mutableSetOf<String>()
+        manifest.files.forEach { file ->
+            val path = file.path.replace('\\', '/')
+            val parts = path.split('/')
+            require(path.isNotBlank() && !path.startsWith('/') && parts.all { it.isNotBlank() && it != "." && it != ".." })
+            require(paths.add(path)) { "Duplicate JSFX file path: $path" }
+            require(file.size in 1..MAX_JSFX_FILE_SIZE)
+            require(shaPattern.matches(file.sha256))
+            val u = URI(file.url)
+            require(u.scheme.equals("https", ignoreCase = true) && !u.host.isNullOrBlank())
+            require(u.userInfo == null && u.query == null && u.fragment == null && u.path.isNotBlank())
+            require(u.normalize().path == u.path && !u.rawPath.orEmpty().contains("%2e", ignoreCase = true))
+        }
+        require(manifest.files.sumOf { it.size } == manifest.payloadSize)
+    }
     if (manifest.format == "jsfx") {
         val entry = manifest.entry.replace('\\', '/')
         require(entry.isNotBlank() && !entry.startsWith('/') && !entry.split('/').contains(".."))
         when (manifest.kind) {
             "file" -> require(entry.endsWith(".jsfx"))
-            "archive" -> {
-                val basename = entry.substringAfterLast('/')
-                require(basename.isNotBlank())
-                require(
-                    basename.endsWith(".jsfx") ||
-                        (!basename.contains('.') && !basename.endsWith(".jsfx-inc"))
-                )
-            }
+            "files" -> require(manifest.files.any { it.path == entry } && entry.endsWith(".jsfx"))
         }
     }
 }
@@ -341,99 +372,32 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
         withContext(Dispatchers.IO) { mutex.withLock {
             val stagedRecord = stagedManifests.remove(payload.token) ?: error("Staged payload is no longer available")
             require(stagedRecord.file.canonicalFile == payload.file.canonicalFile)
-            val m = stagedRecord.manifest
-            require(m.version == payload.manifest.version)
-            val packageId = payload.packageId
-            val staged = stagedRecord.file
+            val m = stagedRecord.manifest; require(m.version == payload.manifest.version); val packageId = payload.packageId; val staged = stagedRecord.file
             if (!success) { staged.delete(); setPackageState(packageId, null, null, error ?: "Wine install cancelled"); return@withLock }
-            val dir = File(installedRoot, "${m.format}/${m.id}").canonicalFile
-            val target = File(dir, m.version).canonicalFile; requireContained(target, dir)
-            val tmp = File(dir, ".${m.version}.${payload.token}.staging").canonicalFile
-            val backup = File(dir, ".${m.version}.${payload.token}.backup").canonicalFile
-            var committed = false
+            val dir = File(installedRoot, "${m.format}/${m.id}").canonicalFile; val target = File(dir, m.version).canonicalFile; requireContained(target, dir)
+            val tmp = File(dir, ".${m.version}.${payload.token}.staging").canonicalFile; val backup = File(dir, ".${m.version}.${payload.token}.backup").canonicalFile; var committed = false
             try {
-                tmp.mkdirs(); writeMetadata(tmp, m, ownership); dir.mkdirs()
-                if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); committed = true
+                tmp.mkdirs(); writeMetadata(tmp, m, ownership); dir.mkdirs(); if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE); Files.move(tmp.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); committed = true
                 require(nativeRefresh?.invoke() != false) { "Native plugin registry refresh failed" }
-                val prior = dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }
-                    .mapNotNull(::readOwnership).fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) }
-                require(removeWineOwnership?.invoke(prior) != false) { "Prior Wine ownership removal failed" }
-                dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively)
-                backup.deleteRecursively(); staged.delete()
-                setPackageState(packageId, null, 1f, null); publishCurrent()
+                val prior = dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.mapNotNull(::readOwnership).fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) }
+                require(removeWineOwnership?.invoke(prior) != false) { "Prior Wine ownership removal failed" }; dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively); backup.deleteRecursively(); staged.delete(); setPackageState(packageId, null, 1f, null); publishCurrent()
             } catch (e: Exception) {
-                if (committed) target.deleteRecursively()
-                if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                if (ownership.vstUuids.isNotEmpty() || ownership.executableUuids.isNotEmpty() || ownership.prefixPaths.isNotEmpty()) removeWineOwnership?.invoke(ownership)
-                nativeRefresh?.invoke(); setPackageState(packageId, null, null, e.message ?: "Install failed"); throw e
+                if (committed) target.deleteRecursively(); if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); if (ownership.vstUuids.isNotEmpty() || ownership.executableUuids.isNotEmpty() || ownership.prefixPaths.isNotEmpty()) removeWineOwnership?.invoke(ownership); nativeRefresh?.invoke(); setPackageState(packageId, null, null, e.message ?: "Install failed"); throw e
             } finally { tmp.deleteRecursively(); backup.deleteRecursively(); staged.delete() }
         } }
-
-
     override suspend fun remove(packageId: String) = withContext(Dispatchers.IO) { mutex.withLock {
-        setPackageState(packageId, RepositoryPackageOperation.Removing, 0f, null); val p=packageId.split(':', limit=2); require(p.size==2 && PACKAGE.matches(p[0])); val removeRoot = if (p[0] == "jsfx") jsfxInstalledRoot else installedRoot; val relative = if (p[0] == "jsfx") p[1] else "${p[0]}/${p[1]}"; val dir=File(removeRoot,relative).canonicalFile; requireContained(dir,removeRoot)
-        val backup=File(dir.parentFile,".${dir.name}.${UUID.randomUUID()}.backup")
-        val ownership = if (p[0].startsWith("wine_")) dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") }.mapNotNull(::readOwnership).fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) } else WineInstallOwnership()
-        try { if(dir.exists()) Files.move(dir.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); require(removeWineOwnership?.invoke(ownership) != false) { "Wine ownership removal failed" }; require(nativeRefresh?.invoke()!=false) { "Native registry refresh failed" }; backup.deleteRecursively(); setPackageState(packageId,null,1f,null) ; publishCurrent() } catch(e:Exception) { if(backup.exists()&&!dir.exists()) Files.move(backup.toPath(),dir.toPath(),StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(packageId,null,null,e.message?:"Remove failed"); throw e }
+        setPackageState(packageId, RepositoryPackageOperation.Removing, 0f, null); val p=packageId.split(':', limit=2); require(p.size==2 && PACKAGE.matches(p[0])); val removeRoot = if (p[0] == "jsfx") jsfxInstalledRoot else installedRoot; val relative = if (p[0] == "jsfx") p[1] else "${p[0]}/${p[1]}"; val dir=File(removeRoot,relative).canonicalFile; requireContained(dir,removeRoot); val backup=File(dir.parentFile,".${dir.name}.${UUID.randomUUID()}.backup"); val ownership = if (p[0].startsWith("wine_")) dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") }.mapNotNull(::readOwnership).fold(WineInstallOwnership()) { a, b -> mergeOwnership(a, b) } else WineInstallOwnership()
+        try { if(dir.exists()) Files.move(dir.toPath(),backup.toPath(),StandardCopyOption.ATOMIC_MOVE); require(removeWineOwnership?.invoke(ownership) != false); require(nativeRefresh?.invoke()!=false); backup.deleteRecursively(); setPackageState(packageId,null,1f,null); publishCurrent() } catch(e:Exception) { if(backup.exists()&&!dir.exists()) Files.move(backup.toPath(),dir.toPath(),StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(packageId,null,null,e.message?:"Remove failed"); throw e }
     } }
     private suspend fun installOrUpdate(id: String, update: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
-            val m = cache[id] ?: error("Package is not available: $id")
-            validate(m)
-            val installRoot = if (m.format == "jsfx") jsfxInstalledRoot else installedRoot
-            val relative = if (m.format == "jsfx") m.id else "${m.format}/${m.id}"
-            val dir = File(installRoot, relative).canonicalFile
-            requireContained(dir, installRoot)
-            val target = File(dir, m.version).canonicalFile
-            requireContained(target, dir)
-            require(!target.exists() || update)
-            val stage = File(dir, ".${m.version}.${UUID.randomUUID()}.staging")
-            val backup = File(dir, ".${m.version}.${UUID.randomUUID()}.backup")
-            val tmp = File(root, ".download-${UUID.randomUUID()}.tmp")
-            var moved = false
+            val m = cache[id] ?: error("Package is not available: $id"); validate(m); val installRoot = if (m.format == "jsfx") jsfxInstalledRoot else installedRoot; val relative = if (m.format == "jsfx") m.id else "${m.format}/${m.id}"; val dir = File(installRoot, relative).canonicalFile; requireContained(dir, installRoot); val target = File(dir, m.version).canonicalFile; requireContained(target, dir); require(!target.exists() || update); val stage = File(dir, ".${m.version}.${UUID.randomUUID()}.staging"); val backup = File(dir, ".${m.version}.${UUID.randomUUID()}.backup"); val tmp = File(root, ".download-${UUID.randomUUID()}.tmp"); var moved = false
             try {
-                if (m.format == "jsfx") {
-                    when (m.kind) {
-                        "file" -> {
-                            val payload = File(stage, m.entry).canonicalFile
-                            requireContained(payload, stage)
-                            payload.parentFile?.mkdirs()
-                            Files.move(tmp.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                            require(payload.isFile)
-                        }
-                        "archive" -> {
-                            extractSafe(tmp, stage)
-                            validateEntry(stage, m.entry)
-                        }
-                    }
-                } else {
-                    extractSafe(tmp, stage)
-                    validateEntry(stage, m.entry)
-                }
-                writeMetadata(stage, m)
-                if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                Files.move(stage.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                moved = true
-                if (m.format == "lv2") preloadLv2Binaries(target, System::load)
-                require(nativeRefresh?.invoke() != false) { "Native plugin registry refresh failed" }
-                if (backup.exists()) backup.deleteRecursively()
-                dir.listFiles().orEmpty()
-                    .filter { it.isDirectory && !it.name.startsWith(".") && it != target }
-                    .forEach(File::deleteRecursively)
-                setPackageState(id, null, 1f, null)
-                publishCurrent()
-            } catch (e: Exception) {
-                if (moved) target.deleteRecursively()
-                if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                nativeRefresh?.invoke()
-                setPackageState(id, null, null, e.message ?: "Install failed")
-                throw e
-            } finally {
-                tmp.delete()
-                stage.deleteRecursively()
-                backup.deleteRecursively()
-            }
+                if (m.format == "jsfx" && m.kind == "files") {
+                    m.files.forEach { declared -> val payload = File(stage, declared.path.replace('\\', '/')).canonicalFile; requireContained(payload, stage); payload.parentFile?.mkdirs(); val ft = File(root, ".download-${UUID.randomUUID()}.tmp"); try { download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), declared.url, true), ft, declared.size); require(ft.length() == declared.size); require(sha256(ft) == declared.sha256); Files.move(ft.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE) } finally { ft.delete() } }; validateEntry(stage, m.entry)
+                } else { download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl, false), tmp, m.payloadSize); if (m.format == "jsfx") { require(m.kind == "file"); val payload = File(stage, m.entry).canonicalFile; requireContained(payload, stage); payload.parentFile?.mkdirs(); Files.move(tmp.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE); require(payload.isFile) } else { extractSafe(tmp, stage); validateEntry(stage, m.entry) } }
+                writeMetadata(stage, m); if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE); Files.move(stage.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); moved = true; if (m.format == "lv2") preloadLv2Binaries(target, System::load); require(nativeRefresh?.invoke() != false); if (backup.exists()) backup.deleteRecursively(); dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively); setPackageState(id, null, 1f, null); publishCurrent()
+            } catch (e: Exception) { if (moved) target.deleteRecursively(); if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(id, null, null, e.message ?: "Install failed"); throw e } finally { tmp.delete(); stage.deleteRecursively(); backup.deleteRecursively() }
         }
     }
     private fun publishCurrent(){ publish(loadSources(), cache.values.toList(), null) }
@@ -553,7 +517,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private fun builtin()=RepositorySourceRecord("builtin","NNAGA Base",BUILTIN_INDEX_URL,true,false,null)
     private fun encode(s:RepositorySourceRecord)=Base64.encodeToString(listOf(s.id,s.name,s.url,s.enabled,s.custom,s.lastError?:"").joinToString("\u0001").toByteArray(),Base64.NO_WRAP)
     private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{RepositorySourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
-    data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val sourceUrl:String="",val repositoryRoot:String="",val manufacturer:String="Unknown",val tags:List<String> = emptyList())
+    data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val sourceUrl:String="",val repositoryRoot:String="",val manufacturer:String="Unknown",val tags:List<String> = emptyList(),val files:List<RepoManifestFile> = emptyList())
     private data class Installed(val version:String,val manifest:RepoManifest)
     companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-27";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
     private fun sha256(b:ByteArray)=digest(b.inputStream())

@@ -1,0 +1,77 @@
+schema = 1
+id = "jsfx.joep.saike-bric-a-brac"
+name = "saike_bric_a_brac.jsfx"
+version = "0.48"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "bric-a-brac (Saike)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 162652
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/saike_bric_a_brac.jsfx"
+sha256 = "1d8d3b38aa92ef4bce7f390d84277bfc4947273c2f372ef031c46ce7435f7f0f"
+size = 40491
+path = "saike_bric_a_brac.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_LFOs.jsfx-inc"
+sha256 = "7df38706cecef037c8be94a7aeeaedf1c4dd8e65f183d2a4c0f784095e343aca"
+size = 2154
+path = "bab_dependencies/saike_bab_LFOs.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_buffer_plotting.jsfx-inc"
+sha256 = "4184083e0242dd15b53bd5a28ee0f3bb791141ef884c8f220b1373991d3d5629"
+size = 4815
+path = "bab_dependencies/saike_bab_buffer_plotting.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_filters.jsfx-inc"
+sha256 = "b05313500e57e653ef7b8213cf553148361cac7bb08adfcb8a63290d45580b5e"
+size = 5660
+path = "bab_dependencies/saike_bab_filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_palettes.jsfx-inc"
+sha256 = "ed9574ff24ae6edd3a988788317b22b49f06c4d79100576cf5f6ecff9178d25e"
+size = 9295
+path = "bab_dependencies/saike_bab_palettes.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_playback.jsfx-inc"
+sha256 = "ee6d9d29967c639cc26c4bdec29d31cd01d98f4854fb0fc6cc99e16d75c3bbb7"
+size = 7438
+path = "bab_dependencies/saike_bab_playback.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_sample_editor.jsfx-inc"
+sha256 = "14215d87212ed94d0b4847e76d123020c8635d48652e55d938ecc7e497ed5b12"
+size = 27788
+path = "bab_dependencies/saike_bab_sample_editor.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_settings.jsfx-inc"
+sha256 = "7c1c8ad266f5ed2099b36eb575d3149fe774e9a228673275f0e51fff2fce735f"
+size = 11272
+path = "bab_dependencies/saike_bab_settings.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_widgetdata.jsfx-inc"
+sha256 = "eeca4aabd1594896195b8c9c1c2903065f4a94c7d4b1c3f5f28659c11954df18"
+size = 5677
+path = "bab_dependencies/saike_bab_widgetdata.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/bfb3461371b7b63c8d27951932fac4c662cfe95f/bric-a-brac/bab_dependencies/saike_bab_widgets.jsfx-inc"
+sha256 = "04dd81fe8ab288f81ba8b4b428882f2e6fd27d26e3f1637c4ee4cdfc011c0b3d"
+size = 48062
+path = "bab_dependencies/saike_bab_widgets.jsfx-inc"
+
+[install]
+entry = "saike_bric_a_brac.jsfx"

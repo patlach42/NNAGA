@@ -1,0 +1,59 @@
+schema = 1
+id = "jsfx.tilr.js3osc"
+name = "js3osc.jsfx"
+version = "1.2.2"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "JS3Osc"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 46632
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/20e585b72540128f11497e46a5948770818d38c7/Synth/js3osc.jsfx"
+sha256 = "c06c806cdc1ed42b51594b22f985efb8570e9b83dabf916eb78cddf10e283600"
+size = 22251
+path = "js3osc.jsfx"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/20e585b72540128f11497e46a5948770818d38c7/Synth/js3osc.jsfx.RPL"
+sha256 = "9b24d3721d9b5d825855c97d4cec9016e95ad1e98d040220fdf17d41aad483ac"
+size = 2848
+path = "js3osc.jsfx.RPL"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/20e585b72540128f11497e46a5948770818d38c7/Synth/js3osc/3o.adsr.jsfx-inc"
+sha256 = "97fe9ad900ef8370e377fc5d7e04e4daf0700ccd227eb754965cdfbc67403968"
+size = 2202
+path = "js3osc/3o.adsr.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/20e585b72540128f11497e46a5948770818d38c7/Synth/js3osc/3o.array.jsfx-inc"
+sha256 = "4ade80a551384328629078a8caf18b21e732b0d7f464e86363d3ffe1656d9d20"
+size = 6004
+path = "js3osc/3o.array.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/20e585b72540128f11497e46a5948770818d38c7/Synth/js3osc/3o.gfxlib.jsfx-inc"
+sha256 = "6fa2a6fa04013aa219734f30ed4bb1035b4fb47911bab8dc5f2d22cb269ab653"
+size = 3492
+path = "js3osc/3o.gfxlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/20e585b72540128f11497e46a5948770818d38c7/Synth/js3osc/3o.mouselib.jsfx-inc"
+sha256 = "96e82b2c5669a76f906056d435174bb392d39a9c3bbc7fe6220a031cc64c7737"
+size = 771
+path = "js3osc/3o.mouselib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/20e585b72540128f11497e46a5948770818d38c7/Synth/js3osc/3o.rbj_filter.jsfx-inc"
+sha256 = "ed19eebdaf64ea1fd7872ad48813834a667c259fe081d9f8d0b9374627778976"
+size = 9064
+path = "js3osc/3o.rbj_filter.jsfx-inc"
+
+[install]
+entry = "js3osc.jsfx"

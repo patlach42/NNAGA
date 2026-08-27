@@ -1,0 +1,29 @@
+schema = 1
+id = "jsfx.joep.saikemultispectralanalyzer"
+name = "SaikeMultiSpectralAnalyzer.jsfx"
+version = "5.0.40"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier, Trond-Viggo Melssen, Cockos, Feed The Cat"
+tags = ["jsfx"]
+description = "Saike Spectral Analyzer (beta)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 301154
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/5e2ee6c42068b9086ab865c7fa4f482c2049f215/SpectrumAnalyzer/SaikeMultiSpectralAnalyzer.jsfx"
+sha256 = "df6b3d0af947107ebd93c2a5ef43b4f254bdf3bf6becb9e05187691b43a6ad68"
+size = 122779
+path = "SaikeMultiSpectralAnalyzer.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/5e2ee6c42068b9086ab865c7fa4f482c2049f215/SpectrumAnalyzer/colormaps.jsfx-inc"
+sha256 = "7f3b7ac455288afcb4121977c25fca6b5fbb3735d91afc7dea5c9ae0c2787411"
+size = 178375
+path = "colormaps.jsfx-inc"
+
+[install]
+entry = "SaikeMultiSpectralAnalyzer.jsfx"

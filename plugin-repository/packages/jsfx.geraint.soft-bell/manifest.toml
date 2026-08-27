@@ -1,0 +1,65 @@
+schema = 1
+id = "jsfx.geraint.soft-bell"
+name = "Soft-Bell.jsfx"
+version = "1.0.9"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Soft Bell/Chime (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 744632
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Soft-Bell/1.0.9/Soft-Bell/ui-lib.jsfx-inc"
+sha256 = "776165e79175c6903f7c24887c2b0f8caf2ad082d277e41dca8f57d545ee65cb"
+size = 94270
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Soft-Bell/1.0.9/Soft-Bell/synth-framework-obj.jsfx-inc"
+sha256 = "bc9eb033095d4f06b81949d66120a171441aaefdb38f3d2e00a16112e708214b"
+size = 13424
+path = "synth-framework-obj.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Soft-Bell/1.0.9/Soft-Bell/Soft-Bell.jsfx"
+sha256 = "4e5b7fb1fca20a408526404dc7ca538bac6149cb2b190d55ae24a059d8fc6948"
+size = 10951
+path = "Soft-Bell.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Soft-Bell/1.0.9/Soft-Bell/filter-utils.jsfx-inc"
+sha256 = "bf37cfd28997c3b5d40326271cbb7129da182f27a17bb7bc53ba5eae3c9d4fe6"
+size = 6741
+path = "filter-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Soft-Bell/1.0.9/Soft-Bell/themes/bitmap-simple/theme-dark-orange.png"
+sha256 = "618e08c7c6457c856a08315f01aefc808a2e8a3a1adb52396ff5d344a350379b"
+size = 115784
+path = "themes/bitmap-simple/theme-dark-orange.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Soft-Bell/1.0.9/Soft-Bell/themes/backgrounds/fancycrave-194878-unsplash.png"
+sha256 = "b4e7be2e223546de36ef863f0fac0f838e10b65faa1f8882c9f897fe25d5ce2b"
+size = 495346
+path = "themes/backgrounds/fancycrave-194878-unsplash.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Soft-Bell/1.0.9/Soft-Bell/Soft-Bell.jsfx.rpl"
+sha256 = "eed00092f89e928e082cd4c7538e7cf14b5ecac91fb8d840e23fac13079256e8"
+size = 5133
+path = "Soft-Bell.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Soft-Bell/1.0.9/Soft-Bell/synth-framework-obj-ui.jsfx-inc"
+sha256 = "db044c9974bbdf1e027734c9d87e010e54a65171f41c0a576740192bcf14ffd5"
+size = 2983
+path = "synth-framework-obj-ui.jsfx-inc"
+
+[install]
+entry = "Soft-Bell.jsfx"

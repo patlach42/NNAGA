@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.jozmac.jm-temp-stft-dual-channel"
+name = "JM_temp_STFT_dual-channel.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "STFT-Based dual-channel Template v2 [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 31540
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_temp_STFT_dual-channel.jsfx"
+sha256 = "dbfadc568f14e2be0a27907f67564701c5a43f782f3bcf9f4e8f4c1b6b33e09c"
+size = 7800
+path = "JM_temp_STFT_dual-channel.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/window.jsfx-inc"
+sha256 = "ec0ca22629777f5838f7e484c00ec7ab580be50f19de4a76ab46400426281962"
+size = 15108
+path = "Tale/window.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/complex.jsfx-inc"
+sha256 = "73c92fd28398fdabb4dfecf592e910876dcc7392b9f4c11dfe44a0fda1fa28eb"
+size = 8632
+path = "Tale/complex.jsfx-inc"
+
+[install]
+entry = "JM_temp_STFT_dual-channel.jsfx"

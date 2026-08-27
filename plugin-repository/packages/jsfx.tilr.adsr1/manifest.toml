@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.tilr.adsr1"
+name = "adsr1.jsfx"
+version = "1.3.2"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "ADSR-1"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 28503
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/4206a7233593487fe4db6d6a561d1c51e9afd148/Modulation/adsr1.jsfx"
+sha256 = "d2105962c70523d9c8ec6abb2d5048e0d5fd3e4f66bcec34e19a8a77f577689f"
+size = 16419
+path = "adsr1.jsfx"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/4206a7233593487fe4db6d6a561d1c51e9afd148/Modulation/adsr1/adsr.array.jsfx-inc"
+sha256 = "4ade80a551384328629078a8caf18b21e732b0d7f464e86363d3ffe1656d9d20"
+size = 6004
+path = "adsr1/adsr.array.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/4206a7233593487fe4db6d6a561d1c51e9afd148/Modulation/adsr1/adsr.curvelib.jsfx-inc"
+sha256 = "06269e1fdc8733200b10a6ef062fedc340f839f4ba5bcf959a411edf1265afad"
+size = 5096
+path = "adsr1/adsr.curvelib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/4206a7233593487fe4db6d6a561d1c51e9afd148/Modulation/adsr1/adsr.mouselib.jsfx-inc"
+sha256 = "d1ad648731fe2a77b0873a6a1e99a47af68a972588aedd3baf85fc03d6ce78a8"
+size = 984
+path = "adsr1/adsr.mouselib.jsfx-inc"
+
+[install]
+entry = "adsr1.jsfx"

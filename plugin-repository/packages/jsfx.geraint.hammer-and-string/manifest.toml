@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.geraint.hammer-and-string"
+name = "Hammer And String.jsfx"
+version = "1.0.4"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Hammer And String (Synth/Resonator by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 118760
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-String/1.0.4/Hammer-And-String/Hammer%20And%20String.jsfx"
+sha256 = "8ed4a2fe91868bcc0de70af1ed711dc0d75da9b4f96a8fe3037b13da0c70ff5f"
+size = 6745
+path = "Hammer And String.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-String/1.0.4/Hammer-And-String/ui-lib.jsfx-inc"
+sha256 = "f3653ced5262a0cf6d5b7d6d378563c7443bb5b7b5d9bc4f7eb8bafe074a17c1"
+size = 96046
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-String/1.0.4/Hammer-And-String/delay-utils.jsfx-inc"
+sha256 = "4a43b2b87e3814b685180dae7e213f53ec558d8ab93f3431f65d7ed897d9cbfc"
+size = 8604
+path = "delay-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-String/1.0.4/Hammer-And-String/synth-framework.jsfx-inc"
+sha256 = "2f178fc7c3cc79903c28b635a4c82901bcea9e7989dcc250a04c8def55991761"
+size = 7365
+path = "synth-framework.jsfx-inc"
+
+[install]
+entry = "Hammer And String.jsfx"

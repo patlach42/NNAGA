@@ -1,0 +1,47 @@
+schema = 1
+id = "jsfx.geraint.ripple"
+name = "Ripple.jsfx"
+version = "1.0.4"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Ripple Phaser (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 135014
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Ripple/1.0.4/Ripple/Ripple.jsfx"
+sha256 = "c176f91b97f27cdaf89e40631e446db5a9b391b52d6318e2ac767cc0721df8d5"
+size = 25982
+path = "Ripple.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Ripple/1.0.4/Ripple/ui-lib.jsfx-inc"
+sha256 = "f3653ced5262a0cf6d5b7d6d378563c7443bb5b7b5d9bc4f7eb8bafe074a17c1"
+size = 96046
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Ripple/1.0.4/Ripple/filter-utils.jsfx-inc"
+sha256 = "fc5ea1c743af76448166f40d5e9552be6bb691ec7385484475b027c1e2fc8d8b"
+size = 8003
+path = "filter-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Ripple/1.0.4/Ripple/frequency-graph.jsfx-inc"
+sha256 = "c49616ab05f9aade48b5519296811840800c738907e73d030e1e1fe2e8617a85"
+size = 1983
+path = "frequency-graph.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Ripple/1.0.4/Ripple/Ripple.jsfx.rpl"
+sha256 = "dde5b4630c5837dba82a1389f1bbb58629ba7853b5a5ae2317d5b0e39ed0629c"
+size = 3000
+path = "Ripple.jsfx.rpl"
+
+[install]
+entry = "Ripple.jsfx"

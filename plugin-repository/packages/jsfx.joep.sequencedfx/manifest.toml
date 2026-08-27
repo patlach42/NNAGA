@@ -1,0 +1,71 @@
+schema = 1
+id = "jsfx.joep.sequencedfx"
+name = "SequencedFX.jsfx"
+version = "0.126"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Saike SEQS (Sequenced FX) (beta)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 376051
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/SequencedFX.jsfx"
+sha256 = "ad956b88941a132261ba41609c4e1bb4f8a711f11db46fde68f11e5e34e98a2d"
+size = 205479
+path = "SequencedFX.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/seqs_dependencies/saike_seqs_delays.jsfx-inc"
+sha256 = "543a265712e68a2faf4f7b438a3d41d268549954ea8cf286c58d91153e309172"
+size = 2211
+path = "seqs_dependencies/saike_seqs_delays.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/seqs_dependencies/saike_seqs_envelope.jsfx-inc"
+sha256 = "c0d3dd1cdfc444448356450ecd19614a68b665f8fef41ae6388e365057ed767b"
+size = 9005
+path = "seqs_dependencies/saike_seqs_envelope.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/seqs_dependencies/saike_seqs_filters.jsfx-inc"
+sha256 = "00f5d0134476c2fe0d15a2914cd971b30972fde2ad921dc85d6bdc4e19b7a52c"
+size = 79877
+path = "seqs_dependencies/saike_seqs_filters.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/seqs_dependencies/saike_seqs_interpolators.jsfx-inc"
+sha256 = "b12152a10325919aa7cbb6789783063d831909fa7d640114dd175f92823a1909"
+size = 1514
+path = "seqs_dependencies/saike_seqs_interpolators.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/seqs_dependencies/saike_seqs_midilib.jsfx-inc"
+sha256 = "40860c56dd61649bbda8fe0c415850ccdb609cfe156a29dfa94184e6f59ae6f4"
+size = 5626
+path = "seqs_dependencies/saike_seqs_midilib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/seqs_dependencies/saike_seqs_pitchlib.jsfx-inc"
+sha256 = "f9e0846335d0522d8b2bb7066732d0ba693eac5bbf133c4b877b444aab51d45a"
+size = 12848
+path = "seqs_dependencies/saike_seqs_pitchlib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/seqs_dependencies/saike_seqs_widgetdata.jsfx-inc"
+sha256 = "34707d10ebddb1f02f22961b94c40364ab2e6ce9f28768a46ef9c076e27380bd"
+size = 6811
+path = "seqs_dependencies/saike_seqs_widgetdata.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/79b9c9e9b25db95920d5c10c73d4e6801414441a/SequencedFX/seqs_dependencies/saike_seqs_widgets.jsfx-inc"
+sha256 = "d49241ce55c8f8f242dc6e9a4f357b690c05d29c3fa11b9a743e193d4043aca9"
+size = 52680
+path = "seqs_dependencies/saike_seqs_widgets.jsfx-inc"
+
+[install]
+entry = "SequencedFX.jsfx"

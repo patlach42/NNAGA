@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tukan.multiband-processor"
+name = "Multiband Processor (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "Multiband Processor (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 101127
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Multiband%20Processor%20(Tukan)"
+sha256 = "fcf28148df76802fb54f0826209ac24a13ce989c70a77de80dfd5ce5f58db365"
+size = 101127
+path = "Multiband Processor (Tukan).jsfx"
+
+[install]
+entry = "Multiband Processor (Tukan).jsfx"

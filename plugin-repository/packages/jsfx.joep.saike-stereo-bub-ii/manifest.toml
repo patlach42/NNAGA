@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.joep.saike-stereo-bub-ii"
+name = "Saike Stereo Bub II.jsfx"
+version = "0.06"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Saike Stereo Bub II Stereoizer"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 17807
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/36753944d642560f26b6480fc7f49431953ca686/Basics/Saike%20Stereo%20Bub%20II.jsfx"
+sha256 = "5211b039a68bf7517282766fd4c4eb5f4d24897548b0a775b0ffe4c5a596a9e3"
+size = 17807
+path = "Saike Stereo Bub II.jsfx"
+
+[install]
+entry = "Saike Stereo Bub II.jsfx"

@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jozmac.jm-fx-stft-frequency-shifter"
+name = "JM_fx_STFT_Frequency_Shifter.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "STFT Frequency Shifter [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 14655
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_fx_STFT_Frequency_Shifter.jsfx"
+sha256 = "62696763ed38034f98ba12161c1671508eb5021671f1752f7930247951c8db8f"
+size = 14655
+path = "JM_fx_STFT_Frequency_Shifter.jsfx"
+
+[install]
+entry = "JM_fx_STFT_Frequency_Shifter.jsfx"

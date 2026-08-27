@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.jozmac.jm-ana-stfa"
+name = "JM_ana_STFA.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "STFA [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 11582
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_ana_STFA.jsfx"
+sha256 = "6fa11a8122f72bb282485cf5088729f9d1de61e9e1c9dd026b3a59e3204f968e"
+size = 11582
+path = "JM_ana_STFA.jsfx"
+
+[install]
+entry = "JM_ana_STFA.jsfx"

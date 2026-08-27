@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.rejj.reeq"
+name = "ReEQ.jsfx"
+version = "1.2.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Justin Johnson"
+tags = ["jsfx"]
+description = "Parametric Equaliser"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 248038
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/Justin-Johnson/ReJJ/97769537b9c973281bbf9bdb8f870d26e5dfb231/ReEQ/ReEQ.jsfx"
+sha256 = "f32d3fa5c30b934cd0f1707d61d795f3d0a8f8eba505d0d52782a67e76bb4a9e"
+size = 177017
+path = "ReEQ.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/Justin-Johnson/ReJJ/0f94ef04a7131df71b2ad2293ce312111073b871/ReEQ/Dependencies/firhalfband.jsfx-inc"
+sha256 = "20c10244da60c183cc45a8bfec920b83921c3779caacf59e37e5b6d7d2372daf"
+size = 10279
+path = "Dependencies/firhalfband.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/Justin-Johnson/ReJJ/0f94ef04a7131df71b2ad2293ce312111073b871/ReEQ/Dependencies/spectrum.jsfx-inc"
+sha256 = "caa388dd5df5c8c85120f8a16e78016e2628bea7106bfe4fd1573fc6c2c43b9e"
+size = 28987
+path = "Dependencies/spectrum.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/Justin-Johnson/ReJJ/0f94ef04a7131df71b2ad2293ce312111073b871/ReEQ/Dependencies/svf_filter.jsfx-inc"
+sha256 = "21530e2411b6f479db14716b5daec4bc4b5ab58b76d54608892f0177c88b3a37"
+size = 31755
+path = "Dependencies/svf_filter.jsfx-inc"
+
+[install]
+entry = "ReEQ.jsfx"

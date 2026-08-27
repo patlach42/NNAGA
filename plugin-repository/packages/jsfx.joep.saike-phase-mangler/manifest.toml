@@ -1,0 +1,47 @@
+schema = 1
+id = "jsfx.joep.saike-phase-mangler"
+name = "saike_phase_mangler.jsfx"
+version = "0.05"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Saike Phase Mangler (BETA)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 41554
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/4e59d7a5b780e4a2e15fc22ccd854535d3e96045/PhaseMangler/saike_phase_mangler.jsfx"
+sha256 = "6f4d4c99e8a255f60f88bd30fe5967d296865b4cb40f1b73249db5297694028e"
+size = 6661
+path = "saike_phase_mangler.jsfx"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/4e59d7a5b780e4a2e15fc22ccd854535d3e96045/PhaseMangler/PhaseMangler_Dependencies/saike_fft_view.jsfx-inc"
+sha256 = "690a921ffa30739294408c1d8b7376f13d191ab61045eb6b821f3bc529a5be28"
+size = 10178
+path = "PhaseMangler_Dependencies/saike_fft_view.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/4e59d7a5b780e4a2e15fc22ccd854535d3e96045/PhaseMangler/PhaseMangler_Dependencies/saike_phase_mangler_gfx.jsfx-inc"
+sha256 = "757ae9b5a2720bc4afc4b641b2eca228bb02687015df86963008b402dc49296e"
+size = 5717
+path = "PhaseMangler_Dependencies/saike_phase_mangler_gfx.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/4e59d7a5b780e4a2e15fc22ccd854535d3e96045/PhaseMangler/PhaseMangler_Dependencies/saike_phase_mangler_stft.jsfx-inc"
+sha256 = "e7693099bed50d29ba78f36a44ed8971d32d902ab7710a7bd38f7d0ba93183f1"
+size = 6874
+path = "PhaseMangler_Dependencies/saike_phase_mangler_stft.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/4e59d7a5b780e4a2e15fc22ccd854535d3e96045/PhaseMangler/PhaseMangler_Dependencies/saike_splines.jsfx-inc"
+sha256 = "64ae0722bf610954a13fdb160b393da383b509f55555e2ccf231ef179cbde968"
+size = 12124
+path = "PhaseMangler_Dependencies/saike_splines.jsfx-inc"
+
+[install]
+entry = "saike_phase_mangler.jsfx"

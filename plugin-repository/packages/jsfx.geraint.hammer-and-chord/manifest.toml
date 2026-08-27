@@ -1,0 +1,59 @@
+schema = 1
+id = "jsfx.geraint.hammer-and-chord"
+name = "Hammer And Chord.jsfx"
+version = "1.5.5"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Hammer And Chord (Polyphonic Synth/Resonator by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 157781
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-Chord/1.5.5/Hammer-And-Chord/Hammer%20And%20Chord.jsfx"
+sha256 = "0cbbd150f02db43d32f7ee263176f61509ceb01bdab58f0014e299222f2b753e"
+size = 15638
+path = "Hammer And Chord.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-Chord/1.5.5/Hammer-And-Chord/delay-utils.jsfx-inc"
+sha256 = "4a43b2b87e3814b685180dae7e213f53ec558d8ab93f3431f65d7ed897d9cbfc"
+size = 8604
+path = "delay-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-Chord/1.5.5/Hammer-And-Chord/ui-lib.jsfx-inc"
+sha256 = "f3653ced5262a0cf6d5b7d6d378563c7443bb5b7b5d9bc4f7eb8bafe074a17c1"
+size = 96046
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-Chord/1.5.5/Hammer-And-Chord/synth-framework-obj.jsfx-inc"
+sha256 = "213aa03ca4592b303f69a938e424da0518f78bbf0e58c9db85a137f3d9719e4e"
+size = 17411
+path = "synth-framework-obj.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-Chord/1.5.5/Hammer-And-Chord/filter-utils.jsfx-inc"
+sha256 = "fc5ea1c743af76448166f40d5e9552be6bb691ec7385484475b027c1e2fc8d8b"
+size = 8003
+path = "filter-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-Chord/1.5.5/Hammer-And-Chord/Hammer%20And%20Chord.jsfx.rpl"
+sha256 = "14d968e4d252c0997734b2559c1bc0a53bf9eae8bc22ee693b0d61320f0fcb25"
+size = 8494
+path = "Hammer And Chord.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Hammer-And-Chord/1.5.5/Hammer-And-Chord/synth-framework-obj-ui.jsfx-inc"
+sha256 = "a25b9c1e35792183148f1f58c12e70cfb5b9aed96621c1ab64710e3653bcfa4a"
+size = 3585
+path = "synth-framework-obj-ui.jsfx-inc"
+
+[install]
+entry = "Hammer And Chord.jsfx"

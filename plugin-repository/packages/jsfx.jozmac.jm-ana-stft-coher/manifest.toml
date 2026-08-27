@@ -1,0 +1,29 @@
+schema = 1
+id = "jsfx.jozmac.jm-ana-stft-coher"
+name = "JM_ana_STFT_Coher.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "STFT Coherence Analyser [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 19662
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_ana_STFT_Coher.jsfx"
+sha256 = "4b517076484f80005521da3d85b0671860f6a01d27ea10c34b04a779e560a261"
+size = 11030
+path = "JM_ana_STFT_Coher.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/complex.jsfx-inc"
+sha256 = "73c92fd28398fdabb4dfecf592e910876dcc7392b9f4c11dfe44a0fda1fa28eb"
+size = 8632
+path = "Tale/complex.jsfx-inc"
+
+[install]
+entry = "JM_ana_STFT_Coher.jsfx"

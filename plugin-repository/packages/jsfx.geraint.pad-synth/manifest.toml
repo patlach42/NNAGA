@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.geraint.pad-synth"
+name = "pad-synth.jsfx"
+version = "1.1.9"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "PadSynth (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 303865
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/PadSynth/1.1.9/PadSynth/pad-synth.jsfx"
+sha256 = "8bafd8e648450374448bee91154e8eb63b4faba91972143ee16cf732bbd0a36d"
+size = 110150
+path = "pad-synth.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/PadSynth/1.1.9/PadSynth/ui-lib.jsfx-inc"
+sha256 = "55ba5e31e1751661771a61c77274157611c2c1e03fedb1d98e1f4408884df7b3"
+size = 92214
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/PadSynth/1.1.9/PadSynth/ui-lib-compat.jsfx-inc"
+sha256 = "3bdaf9af3a9423021bfe5f34a87c99c59d871a6b048b1a2255ff5a4572981cf4"
+size = 1223
+path = "ui-lib-compat.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/PadSynth/1.1.9/PadSynth/pad-synth.jsfx.rpl"
+sha256 = "397792e3e568a9156d3368a8893a88da6bda4bb7289439c095791653a9ef0ad5"
+size = 100278
+path = "pad-synth.jsfx.rpl"
+
+[install]
+entry = "pad-synth.jsfx"

@@ -1,0 +1,53 @@
+schema = 1
+id = "jsfx.geraint.droplets"
+name = "Droplets.jsfx"
+version = "1.3.4"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Droplets (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 385153
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Droplets/1.3.4/Droplets/Droplets.jsfx"
+sha256 = "767b947d1c36adcebe5be464410e8b3fafd233e622f91713de208caecf50cdbf"
+size = 24421
+path = "Droplets.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Droplets/1.3.4/Droplets/ui-lib.jsfx-inc"
+sha256 = "e8e99a135174d0af851d8fb2d715ed608b45659c5f056d8f7814de73e200eef3"
+size = 96919
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Droplets/1.3.4/Droplets/piano-ui.jsfx-inc"
+sha256 = "216eae89e8023ebd4e2efaa87f437d9a2053d51175fa7eafb2ca783a79064267"
+size = 5946
+path = "piano-ui.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Droplets/1.3.4/Droplets/Droplets.jsfx.rpl"
+sha256 = "fd23af3bfa17e0212644bfe6f25b72519d7dfa5f9b522571ba81fda3772c09d8"
+size = 3043
+path = "Droplets.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Droplets/1.3.4/Droplets/themes/bitmap-simple/theme-dark-cyan.png"
+sha256 = "4bf991c92384266da2b419f6e23d0e4301c688c0c66fee92c95816c9bd1a2dcd"
+size = 113207
+path = "themes/bitmap-simple/theme-dark-cyan.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Droplets/1.3.4/Droplets/themes/backgrounds/isiah-gibson-xqFCy9AbHP4-unsplash.png"
+sha256 = "f79b55ef7bf3147a4d5f8e633ae0b3db0387831c24ce0468ab0b77b71e74b8ee"
+size = 141617
+path = "themes/backgrounds/isiah-gibson-xqFCy9AbHP4-unsplash.png"
+
+[install]
+entry = "Droplets.jsfx"

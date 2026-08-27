@@ -1,0 +1,47 @@
+schema = 1
+id = "jsfx.jozmac.jm-temp-stft-cplx"
+name = "JM_temp_STFT_Cplx.jsfx"
+version = "1.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Jozef Mackowiak"
+tags = ["jsfx"]
+description = "STFT-Based Cplx Template [JM]"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 87158
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_temp_STFT_Cplx.jsfx"
+sha256 = "7f5857ab5e4593777071656effc004115820932bca99e9b26081abae288a7c77"
+size = 3573
+path = "JM_temp_STFT_Cplx.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM.jsfx-inc"
+sha256 = "7b479ea119848e76536d36c8a231e302372bd956a055ec74534e13e6e38e6d34"
+size = 43045
+path = "JM.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/Effects/_JM_STFT.jsfx-inc"
+sha256 = "ea369dc6e5db6d509f5d974446454657f57ddafa4a46bd1beef94a1eabca936a"
+size = 16800
+path = "_JM/STFT.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/complex.jsfx-inc"
+sha256 = "73c92fd28398fdabb4dfecf592e910876dcc7392b9f4c11dfe44a0fda1fa28eb"
+size = 8632
+path = "Tale/complex.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/jozmac/reapack-jm/4f507485554c90dcb6a3670058a8f4812c851518/ThirdParty/Tale/window.jsfx-inc"
+sha256 = "ec0ca22629777f5838f7e484c00ec7ab580be50f19de4a76ab46400426281962"
+size = 15108
+path = "Tale/window.jsfx-inc"
+
+[install]
+entry = "JM_temp_STFT_Cplx.jsfx"

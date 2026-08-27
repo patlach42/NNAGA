@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tukan.cmeter-send"
+name = "CMeter Send (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "CMeter Send (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 29509
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/CMeter%20Send%20(Tukan)"
+sha256 = "1eb442596cd958efba2d4591a2ce643fd3fd57f4c239ba74f2f1f7d11cd66e08"
+size = 29509
+path = "CMeter Send (Tukan).jsfx"
+
+[install]
+entry = "CMeter Send (Tukan).jsfx"

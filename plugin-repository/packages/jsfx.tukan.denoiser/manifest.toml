@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tukan.denoiser"
+name = "DeNoiser (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "DeNoiser (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 30768
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/DeNoiser%20(Tukan)"
+sha256 = "ed07aa1c66bb0cf7b400d5f284b5e2affa65f8e84a5c5a5530c043aaffd3221f"
+size = 30768
+path = "DeNoiser (Tukan).jsfx"
+
+[install]
+entry = "DeNoiser (Tukan).jsfx"

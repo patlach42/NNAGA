@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.geraint.atlantis-reverb"
+name = "atlantis-reverb.jsfx"
+version = "1.2.7"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Atlantis Reverb (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 121891
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Atlantis-Reverb/1.2.7/Atlantis-Reverb/atlantis-reverb.jsfx"
+sha256 = "ba56952f274cf5d29d850d8c69d55ce6dd4251ed2a4a1f02fe8f64d7eaff1938"
+size = 17611
+path = "atlantis-reverb.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Atlantis-Reverb/1.2.7/Atlantis-Reverb/atlantis-reverb.jsfx.rpl"
+sha256 = "56fa45da7ca4acb4810cf91361515f984f2c5b1c4db153ed9e20b2b8c2913568"
+size = 4067
+path = "atlantis-reverb.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Atlantis-Reverb/1.2.7/Atlantis-Reverb/frequency-graph.jsfx-inc"
+sha256 = "aa830273564fe0f6b6be0720759eecbe27815a4cf056c54dd31216285692afb8"
+size = 3235
+path = "frequency-graph.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Atlantis-Reverb/1.2.7/Atlantis-Reverb/ui-lib.jsfx-inc"
+sha256 = "e25d3fea9cb2009cfa8212088fa53f3ec84b8136cc04e0599d6318b621cac113"
+size = 96978
+path = "ui-lib.jsfx-inc"
+
+[install]
+entry = "atlantis-reverb.jsfx"

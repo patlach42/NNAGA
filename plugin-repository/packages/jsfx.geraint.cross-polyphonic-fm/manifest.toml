@@ -1,0 +1,65 @@
+schema = 1
+id = "jsfx.geraint.cross-polyphonic-fm"
+name = "Cross-Polyphonic-FM.jsfx"
+version = "1.0.9"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Cross-Polyphonic FM (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 595151
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Cross-Polyphonic-FM/1.0.9/Cross-Polyphonic-FM/Cross-Polyphonic-FM.jsfx"
+sha256 = "364c5bc31695042fa051a989acb5ea1db1aa38fab9995712b2f30baa8a04478a"
+size = 8241
+path = "Cross-Polyphonic-FM.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Cross-Polyphonic-FM/1.0.9/Cross-Polyphonic-FM/ui-lib.jsfx-inc"
+sha256 = "0230d197f0017477deeb578caf6c01888a9f9cae763a366a76be57c6700106a3"
+size = 95494
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Cross-Polyphonic-FM/1.0.9/Cross-Polyphonic-FM/delay-utils.jsfx-inc"
+sha256 = "c6673a4ea3cd0520bc926cffb1f81d19536a78ca5f065ca5e1d0dd5b436b7928"
+size = 8906
+path = "delay-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Cross-Polyphonic-FM/1.0.9/Cross-Polyphonic-FM/synth-framework-obj.jsfx-inc"
+sha256 = "213aa03ca4592b303f69a938e424da0518f78bbf0e58c9db85a137f3d9719e4e"
+size = 17411
+path = "synth-framework-obj.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Cross-Polyphonic-FM/1.0.9/Cross-Polyphonic-FM/themes/bitmap-simple/theme-dark-orange.png"
+sha256 = "618e08c7c6457c856a08315f01aefc808a2e8a3a1adb52396ff5d344a350379b"
+size = 115784
+path = "themes/bitmap-simple/theme-dark-orange.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Cross-Polyphonic-FM/1.0.9/Cross-Polyphonic-FM/themes/backgrounds/sebastian-pociecha-451575-unsplash.png"
+sha256 = "aa4c9cfe14a014994bfd58da05c17226bea26ac2aabef363e3e9c3e24bf39e82"
+size = 345116
+path = "themes/backgrounds/sebastian-pociecha-451575-unsplash.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Cross-Polyphonic-FM/1.0.9/Cross-Polyphonic-FM/synth-framework-obj-ui.jsfx-inc"
+sha256 = "a25b9c1e35792183148f1f58c12e70cfb5b9aed96621c1ab64710e3653bcfa4a"
+size = 3585
+path = "synth-framework-obj-ui.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Cross-Polyphonic-FM/1.0.9/Cross-Polyphonic-FM/smoother.jsfx-inc"
+sha256 = "b8bc07fcfe58d4bdc1122a5a002da37f8349c56810a3befbf5a8264faa16ede2"
+size = 614
+path = "smoother.jsfx-inc"
+
+[install]
+entry = "Cross-Polyphonic-FM.jsfx"

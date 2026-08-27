@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.geraint.level-meter"
+name = "Level Meter.jsfx"
+version = "0.1.1"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Level Meter - LUFS (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 103264
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Level-Meter/0.1.1/Level-Meter/filter-utils.jsfx-inc"
+sha256 = "832eb2866c5fd0b4fdd6f68fd04ad65f26116187443f7b6d473f0c93d504c865"
+size = 5623
+path = "filter-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Level-Meter/0.1.1/Level-Meter/Level%20Meter.jsfx"
+sha256 = "3e33fce54bb7e060c1dcbc907a8b9c0cef4ce73f13c54d84e15afa583dea198d"
+size = 5304
+path = "Level Meter.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Level-Meter/0.1.1/Level-Meter/ui-lib.jsfx-inc"
+sha256 = "f22e415dfeda998fae09dbe2f084ca5eb9334080a1b1fdc58a8621a5a322919b"
+size = 92337
+path = "ui-lib.jsfx-inc"
+
+[install]
+entry = "Level Meter.jsfx"

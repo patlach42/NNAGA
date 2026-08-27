@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tukan.compressor-2"
+name = "Compressor 2 (Tukan).jsfx"
+version = "1.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "TukanStudios"
+tags = ["jsfx"]
+description = "Compressor 2 (Tukan)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 38233
+
+[[payload.files]]
+url = "https://github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/raw/e400035bb4c02bf95c1adbef803cba2e4b6b36b5/Compressor%202%20(Tukan)"
+sha256 = "53278ed6fc127005a75f86da9b6186f621d0e14a62fd7571f438fa9eca0bfb1c"
+size = 38233
+path = "Compressor 2 (Tukan).jsfx"
+
+[install]
+entry = "Compressor 2 (Tukan).jsfx"

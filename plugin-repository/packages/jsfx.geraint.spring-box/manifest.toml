@@ -1,0 +1,53 @@
+schema = 1
+id = "jsfx.geraint.spring-box"
+name = "Spring-Box.jsfx"
+version = "1.1.6"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Spring-Box Delay-Reverb (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 209006
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Spring-Box/1.1.6/Spring-Box/Spring-Box.jsfx"
+sha256 = "65e325838432d3202ea84bf8079c5c0ec38900fcca657489e5fb5657abfca4ed"
+size = 10246
+path = "Spring-Box.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Spring-Box/1.1.6/Spring-Box/ui-lib.jsfx-inc"
+sha256 = "0230d197f0017477deeb578caf6c01888a9f9cae763a366a76be57c6700106a3"
+size = 95494
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Spring-Box/1.1.6/Spring-Box/delay-utils.jsfx-inc"
+sha256 = "c6673a4ea3cd0520bc926cffb1f81d19536a78ca5f065ca5e1d0dd5b436b7928"
+size = 8906
+path = "delay-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Spring-Box/1.1.6/Spring-Box/themes/bitmap-simple/theme-cyan.png"
+sha256 = "948ac97bf2fd6d2e2a79d37b38605a626a74b03a7168202f5ad8df751b7ba322"
+size = 87194
+path = "themes/bitmap-simple/theme-cyan.png"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Spring-Box/1.1.6/Spring-Box/Spring-Box.jsfx.rpl"
+sha256 = "f1b91ddac917a62e693f3e8eaa48744809977e4cd5072bd2afec20157b3ca86b"
+size = 6552
+path = "Spring-Box.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Spring-Box/1.1.6/Spring-Box/smoother.jsfx-inc"
+sha256 = "b8bc07fcfe58d4bdc1122a5a002da37f8349c56810a3befbf5a8264faa16ede2"
+size = 614
+path = "smoother.jsfx-inc"
+
+[install]
+entry = "Spring-Box.jsfx"

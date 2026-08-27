@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.geraint.warble"
+name = "Warble.jsfx"
+version = "1.0.9"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Warble - Pitch Shifter (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 137052
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Warble/1.0.9/Warble/pitch-detection.jsfx-inc"
+sha256 = "1d61ca5ec2fde555cda630514769f5f41c0d7a367ee63f8b493fec74a6946c3f"
+size = 7937
+path = "pitch-detection.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Warble/1.0.9/Warble/ui-lib.jsfx-inc"
+sha256 = "a23465e15361743e7d404af8e0fac7ecedfa5dc615b2825acf0b7eee9361d3a7"
+size = 93604
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Warble/1.0.9/Warble/Warble.jsfx"
+sha256 = "802fda61bb34e30fab658e7b969b0fd85ab75bd313d760035bfb1a3bf3117d97"
+size = 26556
+path = "Warble.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Warble/1.0.9/Warble/delay-utils.jsfx-inc"
+sha256 = "c4ee279fb6977f266f531910afa9b0cc031c832b58e19471569b46a3ead14991"
+size = 8955
+path = "delay-utils.jsfx-inc"
+
+[install]
+entry = "Warble.jsfx"

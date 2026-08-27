@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.tilr.vel-to-cc"
+name = "Vel to CC.jsfx"
+version = "2.0.0"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "Vel to CC"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 1998
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/b1160b5d78ce3c25eebb5dcd98ff8c0220ff93c1/MIDI/Vel%20to%20CC.jsfx"
+sha256 = "1b7eb0b38df3a53038fb6d5b607663a72f02eace048827a9be73f84212ef6e51"
+size = 1998
+path = "Vel to CC.jsfx"
+
+[install]
+entry = "Vel to CC.jsfx"

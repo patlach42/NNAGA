@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.geraint.bad-connection"
+name = "Bad Connection.jsfx"
+version = "2.1.3"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Bad Connection (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 113951
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Bad-Connection/2.1.3/Bad-Connection/Bad%20Connection.jsfx"
+sha256 = "e6f543fbb746a4a50cac4e0c9be32716774ae5aefbcdde1e97acb34dd6696d87"
+size = 7055
+path = "Bad Connection.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Bad-Connection/2.1.3/Bad-Connection/ui-lib.jsfx-inc"
+sha256 = "0230d197f0017477deeb578caf6c01888a9f9cae763a366a76be57c6700106a3"
+size = 95494
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Bad-Connection/2.1.3/Bad-Connection/delay-utils.jsfx-inc"
+sha256 = "c6673a4ea3cd0520bc926cffb1f81d19536a78ca5f065ca5e1d0dd5b436b7928"
+size = 8906
+path = "delay-utils.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Bad-Connection/2.1.3/Bad-Connection/Bad%20Connection.jsfx.rpl"
+sha256 = "3c94bed3c84773b7c71ee8d4f026e1ad18d3694bf36d2bede0ee027c38ecc413"
+size = 2496
+path = "Bad Connection.jsfx.rpl"
+
+[install]
+entry = "Bad Connection.jsfx"

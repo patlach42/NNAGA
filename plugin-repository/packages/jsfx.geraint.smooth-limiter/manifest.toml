@@ -1,0 +1,35 @@
+schema = 1
+id = "jsfx.geraint.smooth-limiter"
+name = "Smooth Limiter.jsfx"
+version = "1.1.2"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Smooth Limiter (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 102057
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Smooth-Limiter/1.1.2/Smooth-Limiter/ui-lib.jsfx-inc"
+sha256 = "a23465e15361743e7d404af8e0fac7ecedfa5dc615b2825acf0b7eee9361d3a7"
+size = 93604
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Smooth-Limiter/1.1.2/Smooth-Limiter/Smooth%20Limiter.jsfx"
+sha256 = "e589a2f9f098b1a788069fa9ac695fd07bda692b961c3d5ae0a135f3db17f05d"
+size = 7842
+path = "Smooth Limiter.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Smooth-Limiter/1.1.2/Smooth-Limiter/Smooth%20Limiter.jsfx.rpl"
+sha256 = "500317a04374b6ba5449cdecc5dbe306b0aca2ba3144f2c6c59a77b1a639fd88"
+size = 611
+path = "Smooth Limiter.jsfx.rpl"
+
+[install]
+entry = "Smooth Limiter.jsfx"

@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.joep.swellotron"
+name = "Swellotron.jsfx"
+version = "0.10"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["jsfx"]
+description = "Saike Swellotron"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 33528
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/b6f2731824cac1215efb6df8aeb94a6d7ea598eb/Swellotron/Swellotron.jsfx"
+sha256 = "35838b6ff50bf2ba4d01faa57b62ad9c827ff83de62d9aa730597fb5290c4df0"
+size = 33528
+path = "Swellotron.jsfx"
+
+[install]
+entry = "Swellotron.jsfx"

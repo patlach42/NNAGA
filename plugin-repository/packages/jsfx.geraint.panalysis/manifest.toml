@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.geraint.panalysis"
+name = "Panalysis.jsfx"
+version = "1.1.7"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Geraint Luff"
+tags = ["jsfx"]
+description = "Panalysis (by Geraint Luff)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 104006
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Panalysis/1.1.7/Panalysis/Panalysis.jsfx"
+sha256 = "71980bbd27d2e338e593c55b8fc9828de20eb75aa269a043201c88bff23cc5a7"
+size = 6939
+path = "Panalysis.jsfx"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Panalysis/1.1.7/Panalysis/ui-lib.jsfx-inc"
+sha256 = "0230d197f0017477deeb578caf6c01888a9f9cae763a366a76be57c6700106a3"
+size = 95494
+path = "ui-lib.jsfx-inc"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Panalysis/1.1.7/Panalysis/Panalysis.jsfx.rpl"
+sha256 = "3b014dc2b47e408e1f1e512439dfed7f135464917d5e089e36e1435630599b2a"
+size = 577
+path = "Panalysis.jsfx.rpl"
+
+[[payload.files]]
+url = "https://raw.githubusercontent.com/geraintluff/jsfx/e98d64401ba57590b7ea0d3592675accb43667da/releases/Panalysis/1.1.7/Panalysis/smoother.jsfx-inc"
+sha256 = "d77e47a1f018d0862babd4cd7be447a66bd9748262d5967912d952ec375ba880"
+size = 996
+path = "smoother.jsfx-inc"
+
+[install]
+entry = "Panalysis.jsfx"

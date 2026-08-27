@@ -1,0 +1,41 @@
+schema = 1
+id = "jsfx.tilr.mseg1"
+name = "mseg1.jsfx"
+version = "1.2.2"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tilr"
+tags = ["jsfx"]
+description = "MSEG-1"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 47556
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/mseg1.jsfx"
+sha256 = "6742cfd26c6b561297da6ccaafd8a26accbb9c0c9e9c0c857ef090a6f32afb22"
+size = 30157
+path = "mseg1.jsfx"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/mseg1/mseg.array.jsfx-inc"
+sha256 = "4ade80a551384328629078a8caf18b21e732b0d7f464e86363d3ffe1656d9d20"
+size = 6004
+path = "mseg1/mseg.array.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/mseg1/mseg.curvelib.jsfx-inc"
+sha256 = "c8cbe2f6809b3f1e80a306dcb6da9a359c111acd7841eb2322d2b14e590940da"
+size = 10382
+path = "mseg1/mseg.curvelib.jsfx-inc"
+
+[[payload.files]]
+url = "https://github.com/tiagolr/tilr_jsfx/raw/8379da177843b130bcd828cb9a0bb87ce8a508e0/Modulation/mseg1/mseg.mouselib.jsfx-inc"
+sha256 = "9aac751ec32b12d2172c0eae06ad27ce582b18c663c91958cf17008f1106062e"
+size = 1013
+path = "mseg1/mseg.mouselib.jsfx-inc"
+
+[install]
+entry = "mseg1.jsfx"

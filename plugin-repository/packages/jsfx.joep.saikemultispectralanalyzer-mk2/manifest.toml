@@ -1,0 +1,23 @@
+schema = 1
+id = "jsfx.joep.saikemultispectralanalyzer-mk2"
+name = "SaikeMultiSpectralAnalyzer_MK2.jsfx"
+version = "1.6"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier, Trond-Viggo Melssen, Cockos"
+tags = ["jsfx"]
+description = "Saike Spectral Analyzer (Alternative)"
+license = "custom"
+
+[payload]
+kind = "files"
+size = 63115
+
+[[payload.files]]
+url = "https://github.com/JoepVanlier/JSFX/raw/21bed3ded6de9568d19f1e3da6bd7e0cc270b5ab/SpectrumAnalyzer/SaikeMultiSpectralAnalyzer_MK2.jsfx"
+sha256 = "3481de09ac59fbae0be297216fef81100ff7b5ec4933fc3aa55df019e071451d"
+size = 63115
+path = "SaikeMultiSpectralAnalyzer_MK2.jsfx"
+
+[install]
+entry = "SaikeMultiSpectralAnalyzer_MK2.jsfx"
