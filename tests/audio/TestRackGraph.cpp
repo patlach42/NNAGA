@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "plugin/RackGraph.h"
+#include "plugin/PluginRegistry.h"
 
 #include <array>
 #include <atomic>
@@ -3855,3 +3856,190 @@ TEST(RackGraphStatusSnapshotTest,
     EXPECT_EQ(observedTrackCount, 1u);
     EXPECT_EQ(graph.getTracks().size(), 1u);
 }
+namespace {
+using guitarrackcraft::RackGraph;
+using guitarrackcraft::RackPathId;
+
+
+class RestorableTestPlugin final : public guitarrackcraft::IPlugin {
+public:
+    explicit RestorableTestPlugin(std::string id) : id_(std::move(id)) {}
+
+    void activate(float, uint32_t) override {}
+    void deactivate() override {}
+
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = inputs[0][frame];
+            outputs[1][frame] = inputs[1][frame];
+        }
+        return 0;
+    }
+
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.id = id_;
+        info.format = "TEST";
+        return info;
+    }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+
+    guitarrackcraft::PluginState saveState() override {
+        guitarrackcraft::PluginState state;
+        state.format = "TEST";
+        state.pluginUri = id_;
+        return state;
+    }
+    bool restoreState(const guitarrackcraft::PluginState& state) override {
+        return state.format == "TEST" && state.pluginUri == id_;
+    }
+
+private:
+    std::string id_;
+};
+class RestorableTestFactory final : public guitarrackcraft::IPluginFactory {
+public:
+    std::string getFormat() const override { return "TEST"; }
+    std::vector<guitarrackcraft::PluginInfo> enumeratePlugins() override { return {}; }
+    std::unique_ptr<guitarrackcraft::IPlugin> createPlugin(const std::string& pluginId) override {
+        if (pluginId == "new" || pluginId == "replacement" ||
+            pluginId == "other" || pluginId == "master") {
+            return std::make_unique<RestorableTestPlugin>(pluginId);
+        }
+        return nullptr;
+    }
+    bool initialize() override { return true; }
+};
+
+guitarrackcraft::PluginState serializedPlugin(const char* id) {
+    guitarrackcraft::PluginState state;
+    state.format = "TEST";
+    state.pluginUri = id;
+    return state;
+}
+
+std::string firstPluginId(const std::shared_ptr<guitarrackcraft::PluginChain>& chain) {
+    if (!chain || chain->getSize() == 0) return {};
+    const auto* plugin = chain->getPlugin(0);
+    return plugin ? plugin->getInfo().id : std::string{};
+}
+
+TEST(RackGraphStateRestoreTest,
+     StartupRestorePreservesTracksButLeavesEveryPluginChainEmpty) {
+    RackGraph graph;
+
+    RackGraph::State saved;
+    RackGraph::State::Track first;
+    first.id = 101;
+    first.volume = 0.25f;
+    first.chain.plugins.push_back(serializedPlugin("first"));
+    RackGraph::State::Track second;
+    second.id = 202;
+    second.volume = 0.75f;
+    saved.tracks = {first, second};
+    saved.beatsPerMinute = 137.5;
+    saved.transportFrame = 55;
+    saved.samplePosition = 110;
+    saved.musicalQuarterNotes = 2.75;
+    saved.master.plugins.push_back(serializedPlugin("master"));
+
+    // Startup restoration deliberately does not need a plugin registry: it
+    // restores rack metadata while deferring all plugin instantiation.
+    guitarrackcraft::PluginRegistry registry;
+    std::string diagnostic;
+    ASSERT_TRUE(graph.restoreState(saved, registry, diagnostic, false)) << diagnostic;
+
+    // Read the transport immediately after startup restoration. This must
+    // complete with the restore publication's seqlock balanced.
+    const auto transport = graph.getTransportSnapshot();
+    EXPECT_DOUBLE_EQ(transport.beatsPerMinute, 137.5);
+    EXPECT_EQ(transport.transportFrame, 55u);
+    EXPECT_EQ(transport.samplePosition, 110u);
+    EXPECT_DOUBLE_EQ(transport.musicalQuarterNotes, 2.75);
+
+    const auto tracks = graph.getTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    EXPECT_EQ(tracks[0].id, 101u);
+    EXPECT_FLOAT_EQ(tracks[0].volume, 0.25f);
+    EXPECT_EQ(tracks[1].id, 202u);
+    EXPECT_FLOAT_EQ(tracks[1].volume, 0.75f);
+    EXPECT_EQ(graph.getChain(101)->getSize(), 0u);
+    EXPECT_EQ(graph.getChain(202)->getSize(), 0u);
+    EXPECT_EQ(graph.getChain(guitarrackcraft::kMasterPathId)->getSize(), 0u);
+}
+TEST(RackGraphStateRestoreTest,
+     FullRackRestoreStillRestoresPluginsWhenFlagIsOmitted) {
+    RackGraph graph;
+    RackGraph::State saved;
+    RackGraph::State::Track track;
+    track.id = 303;
+    track.chain.plugins.push_back(serializedPlugin("new"));
+    saved.tracks.push_back(track);
+
+    guitarrackcraft::PluginRegistry registry;
+    registry.registerFactory(std::make_unique<RestorableTestFactory>());
+    std::string diagnostic;
+    ASSERT_TRUE(graph.restoreState(saved, registry, diagnostic)) << diagnostic;
+    ASSERT_EQ(graph.getChain(303)->getSize(), 1u);
+    EXPECT_EQ(firstPluginId(graph.getChain(303)), "new");
+}
+
+TEST(RackGraphStateRestoreTest,
+     DeviceChainImportIsScopedAndFailedReplacementIsAtomic) {
+    RackGraph graph;
+    const RackPathId target = graph.getTracks().front().id;
+    const RackPathId other = graph.addTrack();
+    ASSERT_NE(other, guitarrackcraft::kMasterPathId);
+
+    ASSERT_EQ(graph.getChain(target)->addPlugin(
+                  std::make_unique<RestorableTestPlugin>("old")),
+              0);
+    ASSERT_EQ(graph.getChain(other)->addPlugin(
+                  std::make_unique<RestorableTestPlugin>("other")),
+              0);
+    ASSERT_EQ(graph.getChain(guitarrackcraft::kMasterPathId)->addPlugin(
+                  std::make_unique<RestorableTestPlugin>("master")),
+              0);
+    guitarrackcraft::PluginRegistry registry;
+    registry.registerFactory(std::make_unique<RestorableTestFactory>());
+
+    guitarrackcraft::PluginChain::ChainState exported;
+    std::string diagnostic;
+    ASSERT_TRUE(graph.exportDeviceChain(target, exported, diagnostic)) << diagnostic;
+    ASSERT_EQ(exported.plugins.size(), 1u);
+    EXPECT_EQ(exported.plugins.front().format, "TEST");
+    EXPECT_EQ(exported.plugins.front().pluginUri, "old");
+
+    guitarrackcraft::PluginChain::ChainState replacement;
+    replacement.plugins.push_back(serializedPlugin("new"));
+
+    ASSERT_TRUE(graph.importDeviceChain(target, replacement, registry, diagnostic))
+        << diagnostic;
+    EXPECT_EQ(firstPluginId(graph.getChain(target)), "new");
+    EXPECT_EQ(firstPluginId(graph.getChain(other)), "other");
+    EXPECT_EQ(firstPluginId(graph.getChain(guitarrackcraft::kMasterPathId)),
+              "master");
+
+    // The second plugin cannot be created. The first one must not leak into
+    // the live chain, and unrelated paths must remain untouched.
+    guitarrackcraft::PluginChain::ChainState malformed;
+    malformed.plugins.push_back(serializedPlugin("replacement"));
+    malformed.plugins.push_back(serializedPlugin("missing"));
+    diagnostic.clear();
+    EXPECT_FALSE(graph.importDeviceChain(target, malformed, registry, diagnostic));
+    EXPECT_EQ(diagnostic, "plugin-create-failed:TEST:missing");
+    EXPECT_EQ(firstPluginId(graph.getChain(target)), "new");
+    EXPECT_EQ(graph.getChain(target)->getSize(), 1u);
+    EXPECT_EQ(firstPluginId(graph.getChain(other)), "other");
+    EXPECT_EQ(firstPluginId(graph.getChain(guitarrackcraft::kMasterPathId)),
+              "master");
+}
+
+} // namespace

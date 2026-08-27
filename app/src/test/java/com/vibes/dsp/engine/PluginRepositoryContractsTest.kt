@@ -348,15 +348,15 @@ class PluginRepositoryContractsTest {
         val staleBuiltin = RepositorySourceRecord(
             id = "builtin",
             name = "NNAGA Base",
-            url = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml",
+            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml",
             enabled = false,
             custom = false,
-            lastError = "HTTP 404 https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml",
+            lastError = "HTTP 404 https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml",
         )
         val currentBuiltin = RepositorySourceRecord(
             id = "builtin",
             name = "NNAGA Base",
-            url = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-23",
+            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-27",
             enabled = true,
             custom = false,
             lastError = null,
@@ -380,7 +380,7 @@ class PluginRepositoryContractsTest {
         val builtin = RepositorySourceRecord(
             id = "builtin",
             name = "NNAGA Base",
-            url = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-23",
+            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-27",
             enabled = true,
             custom = false,
             lastError = null,
@@ -421,12 +421,150 @@ class PluginRepositoryContractsTest {
 
     @Test
     fun malformedIndexTomlIsRejected() {
-        val malformed = Toml.parse("schema = 1\nmanifests = [")
+        val malformed = Toml.parse(
+            """
+            schema = 2
+            repository = "NNAGA"
+            release = "2026-08-27"
+            packages = [
+            """.trimIndent(),
+        )
 
         assertThrows(IllegalArgumentException::class.java) {
             parseRepositoryIndex(malformed)
         }
     }
+
+    @Test
+    fun parsesSchema2SummaryFieldsWithoutResolvingManifestDocuments() {
+        val index = Toml.parse(
+            """
+            schema = 2
+            repository = "NNAGA Plugin Repository"
+            release = "2026-08-27"
+
+            [[packages]]
+            manifest = "packages/lv2/echo/manifest.toml"
+            id = "echo"
+            name = "Echo"
+            version = "1.4.0"
+            format = "lv2"
+            description = "A spatial delay"
+            manufacturer = "Acme Audio"
+            tags = ["Delay", "Stereo"]
+
+            [[packages]]
+            manifest = "packages/wine/foo/manifest.toml"
+            id = "foo"
+            name = "Foo"
+            version = "2.0.1"
+            format = "wine_archive"
+            description = "A Windows plug-in"
+            manufacturer = "Tone Forge"
+            tags = ["Compressor"]
+            """.trimIndent(),
+        )
+
+        val entries = parseRepositoryIndex(index)
+
+        assertEquals(listOf("lv2:echo", "wine_archive:foo"), entries.map { "${it.format}:${it.id}" })
+        assertEquals(
+            listOf("packages/lv2/echo/manifest.toml", "packages/wine/foo/manifest.toml"),
+            entries.map { it.manifest },
+        )
+        assertEquals(listOf("Echo", "Foo"), entries.map { it.name })
+        assertEquals(listOf("1.4.0", "2.0.1"), entries.map { it.version })
+        assertEquals(listOf("A spatial delay", "A Windows plug-in"), entries.map { it.description })
+        assertEquals(listOf("Acme Audio", "Tone Forge"), entries.map { it.manufacturer })
+        assertEquals(
+            listOf(listOf("Delay", "Stereo"), listOf("Compressor")),
+            entries.map { it.tags },
+        )
+    }
+
+    @Test
+    fun schema2IndexRejectsDuplicatePackageIdentityAndMissingSummaryMetadata() {
+        val duplicate = Toml.parse(
+            """
+            schema = 2
+            repository = "NNAGA"
+            release = "2026-08-27"
+
+            [[packages]]
+            manifest = "packages/one.toml"
+            id = "same"
+            name = "First"
+            version = "1.0.0"
+            format = "lv2"
+            description = "First"
+            manufacturer = "Acme"
+            tags = []
+
+            [[packages]]
+            manifest = "packages/two.toml"
+            id = "same"
+            name = "Second"
+            version = "2.0.0"
+            format = "lv2"
+            description = "Second"
+            manufacturer = "Acme"
+            tags = []
+            """.trimIndent(),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            parseRepositoryIndex(duplicate)
+        }
+        val sameIdDifferentFormats = Toml.parse(
+            """
+            schema = 2
+            repository = "NNAGA"
+            release = "2026-08-27"
+
+            [[packages]]
+            manifest = "packages/lv2/same.toml"
+            id = "same"
+            name = "LV2 Same"
+            version = "1.0.0"
+            format = "lv2"
+            description = "LV2 package"
+            manufacturer = "Acme"
+            tags = []
+
+            [[packages]]
+            manifest = "packages/jsfx/same.toml"
+            id = "same"
+            name = "JSFX Same"
+            version = "1.0.0"
+            format = "jsfx"
+            description = "JSFX package"
+            manufacturer = "Acme"
+            tags = []
+            """.trimIndent(),
+        )
+        assertEquals(2, parseRepositoryIndex(sameIdDifferentFormats).size)
+
+
+        val missingDescription = Toml.parse(
+            """
+            schema = 2
+            repository = "NNAGA"
+            release = "2026-08-27"
+
+            [[packages]]
+            manifest = "packages/one.toml"
+            id = "one"
+            name = "One"
+            version = "1.0.0"
+            format = "lv2"
+            manufacturer = "Acme"
+            tags = []
+            """.trimIndent(),
+        )
+        assertThrows(IllegalArgumentException::class.java) {
+            parseRepositoryIndex(missingDescription)
+        }
+    }
+
 
     @Test
     fun manifestParserPreservesPackageIdentityPayloadAndFacetFields() {
@@ -469,35 +607,6 @@ class PluginRepositoryContractsTest {
         assertEquals("https://plugins.example/repo/", manifest.repositoryRoot)
     }
 
-    @Test
-    fun legacyManifestDefaultsFacetMetadata() {
-        val manifest = parseRepositoryManifest(
-            """
-            schema = 1
-            id = "legacy.plugin"
-            name = "Legacy Plugin"
-            version = "1.0.0"
-            format = "lv2"
-            description = "A legacy package without facet metadata"
-            arch = ["arm64-v8a"]
-
-            [payload]
-            url = "payload/legacy.zip"
-            sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-            size = 42
-            kind = "archive"
-
-            [install]
-            entry = "Legacy.lv2"
-            """.trimIndent(),
-            source = "Legacy source",
-            url = "https://plugins.example/repo/legacy.toml",
-            repositoryRoot = "https://plugins.example/repo/",
-        )
-
-        assertEquals("Unknown", manifest.manufacturer)
-        assertEquals(emptyList<String>(), manifest.tags)
-    }
 
     @Test
     fun parserRejectsPresentBlankManufacturer() {

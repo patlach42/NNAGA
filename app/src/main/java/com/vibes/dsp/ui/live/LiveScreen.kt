@@ -252,6 +252,7 @@ fun LiveScreen(
     var selectedTrackId by rememberSaveable { mutableLongStateOf(0L) }
     var selectedSlot by rememberSaveable { mutableIntStateOf(0) }
     var importTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
+    var deviceChainPathId by remember { mutableStateOf<RackPathId?>(null) }
     var inputMenuTrack by remember { mutableStateOf<RackTrackInfo?>(null) }
     var trackColorOverrides by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
     var showQuantizationMenu by remember { mutableStateOf(false) }
@@ -344,6 +345,20 @@ fun LiveScreen(
             }
         }
         importTarget = null
+    }
+    val saveDeviceChainLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream"),
+    ) { uri ->
+        val pathId = deviceChainPathId
+        deviceChainPathId = null
+        if (uri != null && pathId != null) viewModel.saveDeviceChain(pathId, uri)
+    }
+    val loadDeviceChainLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        val pathId = deviceChainPathId
+        deviceChainPathId = null
+        if (uri != null && pathId != null) viewModel.loadDeviceChain(pathId, uri)
     }
 
     LaunchedEffect(Unit) {
@@ -903,9 +918,7 @@ fun LiveScreen(
                                 onTrackArmLock = { track ->
                                     viewModel.setTrackInputArmLocked(track.id, !track.inputArmLocked)
                                 },
-                                onOpenClipSettings = { track, clip ->
-                                    openClipSettings(track.id, clip)
-                                },
+                                onOpenClipSettings = { track, clip -> openClipSettings(track.id, clip) },
                                 modifier = Modifier.fillMaxSize(),
                             )
                             "devices" -> DevicesTile(
@@ -917,6 +930,14 @@ fun LiveScreen(
                                 cpuLoad = cpuLoad,
                                 xRunCount = xRunCount,
                                 onBrowser = { path -> onNavigateToBrowser(path, -1) },
+                                onSaveChain = { path ->
+                                    deviceChainPathId = path
+                                    saveDeviceChainLauncher.launch("device-chain-$path.nnchain")
+                                },
+                                onLoadChain = { path ->
+                                    deviceChainPathId = path
+                                    loadDeviceChainLauncher.launch(arrayOf("application/octet-stream"))
+                                },
                                 onOpenFullscreen = { plugin, width, height ->
                                     fullscreenPluginInstanceId = plugin.instanceId
                                     fullscreenPluginPathId = selectedPath
@@ -1192,10 +1213,13 @@ private fun DevicesTile(
     cpuLoad: Float,
     xRunCount: Int,
     onBrowser: (Long) -> Unit,
+    onSaveChain: (Long) -> Unit,
+    onLoadChain: (Long) -> Unit,
     onOpenFullscreen: (RackPlugin, Int, Int) -> Unit,
     modifier: Modifier,
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit,
 ) {
+    var showDeviceChainMenu by remember { mutableStateOf(false) }
     val horizontalScrollState = rememberScrollState()
     val verticalScrollState = rememberScrollState()
     Column(modifier = modifier) {
@@ -1204,6 +1228,38 @@ private fun DevicesTile(
                 .padding(start = LiveDimensions.gap, end = LiveDimensions.smallGap),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box {
+                NnagaIconButton(
+                    onClick = { showDeviceChainMenu = true },
+                    modifier = Modifier.size(LiveDimensions.hitTarget),
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "Device chain options",
+                        tint = LiveColors.textMuted,
+                        modifier = Modifier.size(LiveDimensions.icon),
+                    )
+                }
+                DropdownMenu(
+                    expanded = showDeviceChainMenu,
+                    onDismissRequest = { showDeviceChainMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Save device chain") },
+                        onClick = {
+                            showDeviceChainMenu = false
+                            onSaveChain(pathId)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Load device chain") },
+                        onClick = {
+                            showDeviceChainMenu = false
+                            onLoadChain(pathId)
+                        },
+                    )
+                }
+            }
             Text(
                 "DEVICES",
                 color = LiveColors.textMuted,

@@ -18,6 +18,11 @@ public:
     static constexpr uint32_t kMaxBlobBytes = 16u * 1024u * 1024u;
     static std::vector<uint8_t> encode(const RackGraph::State& state, std::string* error = nullptr);
     static bool decode(const uint8_t* data, size_t size, RackGraph::State& state, std::string& error);
+    static std::vector<uint8_t> encodeDeviceChain(RackPathId pathId,
+                                                   const PluginChain::ChainState& chain,
+                                                   std::string* error = nullptr);
+    static bool decodeDeviceChain(const uint8_t* data, size_t size, RackPathId& pathId,
+                                  PluginChain::ChainState& chain, std::string& error);
 };
 }
 #endif

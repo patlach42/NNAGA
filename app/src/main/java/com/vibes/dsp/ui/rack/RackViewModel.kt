@@ -794,6 +794,50 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.addPlugin(pathId, pluginId, position) < 0) _errorMessage.value = "Failed to add plugin"; refreshSelectedPath() } }
     fun removePlugin(pathId: RackPathId, position: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.removePlugin(pathId, position)) _errorMessage.value = "Failed to remove plugin"; refreshSelectedPath() } }
     fun reorderPlugins(pathId: RackPathId, fromPos: Int, toPos: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.reorder(pathId, fromPos, toPos)) _errorMessage.value = "Failed to reorder plugins"; refreshSelectedPath() } }
+    fun saveDeviceChain(pathId: RackPathId, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!isKnownPath(pathId)) {
+                _errorMessage.value = "Selected device path is no longer available"
+                return@launch
+            }
+            runCatching {
+                val bytes = RackManager.exportDeviceChain(pathId)
+                    ?: error("Unable to export selected device chain")
+                getApplication<Application>().contentResolver.openOutputStream(uri)?.use { output ->
+                    output.write(bytes)
+                    output.flush()
+                } ?: error("Unable to open destination document")
+            }.onFailure {
+                Log.e("RackViewModel", "Failed to save device chain", it)
+                _errorMessage.value = "Unable to save device chain: ${it.message}"
+            }
+        }
+    }
+
+    fun loadDeviceChain(pathId: RackPathId, uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!isKnownPath(pathId)) {
+                _errorMessage.value = "Selected device path is no longer available"
+                return@launch
+            }
+            runCatching {
+                val bytes = getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    ?: error("Unable to open source document")
+                if (!RackManager.importDeviceChain(pathId, bytes)) {
+                    error("Invalid or incompatible device chain")
+                }
+            }.onSuccess {
+                if (_selectedPathId.value == pathId) refreshSelectedPath()
+            }.onFailure {
+                Log.e("RackViewModel", "Failed to load device chain", it)
+                _errorMessage.value = "Unable to load device chain: ${it.message}"
+            }
+        }
+    }
+
+    private fun isKnownPath(pathId: RackPathId): Boolean =
+        pathId == MASTER_PATH_ID || _tracks.value.any { it.id == pathId }
+
     fun setPluginFilePath(
         pathId: RackPathId,
         pluginIndex: Int,

@@ -48,4 +48,28 @@ bool chainR(R& reader, PluginChain::ChainState& chain) {
 }
 std::vector<uint8_t> RackStateCodec::encode(const RackGraph::State&s,std::string*e){W w;w.b.insert(w.b.end(),{'N','N','G','S'});w.u32(1);w.u32(s.tracks.size());for(auto&t:s.tracks){w.u64(t.id);w.f(t.volume);w.u8(t.inputArmed);w.u8(t.inputArmLocked);w.u8(uint8_t(t.inputSource.kind));w.u8(uint8_t(t.inputSource.tap));w.u32(uint32_t(t.inputSource.firstChannel));w.u64(t.inputSource.trackId);chainW(w,t.chain);}chainW(w,s.master);w.d(s.beatsPerMinute);w.u8(s.transportPlaying);w.u64(s.transportFrame);w.u64(s.samplePosition);w.d(s.musicalQuarterNotes);if(w.b.size()>kMaxBlobBytes-4){if(e)*e="state-too-large";return{};}w.u32(crc(w.b.data(),w.b.size()));return std::move(w.b);}
 bool RackStateCodec::decode(const uint8_t*d,size_t z,RackGraph::State&s,std::string&e){if(!d||z<12||z>kMaxBlobBytes){e="invalid-size";return false;}if(std::memcmp(d,"NNGS",4)||d[4]!=1||d[5]||d[6]||d[7]){e="unsupported-header";return false;}uint32_t got=uint32_t(d[z-4])|uint32_t(d[z-3])<<8|uint32_t(d[z-2])<<16|uint32_t(d[z-1])<<24;if(crc(d,z-4)!=got){e="crc-mismatch";return false;}R r{d,z-4,0,true};r.o=8;auto n=r.u32();if(!r.ok||n>kMaxItems){e="invalid-track-count";return false;}RackGraph::State out;for(uint32_t i=0;i<n;i++){RackGraph::State::Track t;t.id=r.u64();t.volume=r.f();t.inputArmed=r.u8();t.inputArmLocked=r.u8();t.inputSource.kind=TrackInputSource::Kind(r.u8());t.inputSource.tap=TrackInputTap(r.u8());t.inputSource.firstChannel=int32_t(r.u32());t.inputSource.trackId=r.u64();if(uint8_t(t.inputSource.kind)>2||uint8_t(t.inputSource.tap)>1||!std::isfinite(t.volume)||!chainR(r,t.chain)){e="invalid-track";return false;}out.tracks.push_back(std::move(t));}if(!chainR(r,out.master)){e="invalid-master";return false;}out.beatsPerMinute=r.d();out.transportPlaying=r.u8();out.transportFrame=r.u64();out.samplePosition=r.u64();out.musicalQuarterNotes=r.d();if(!r.ok||r.o!=z-4||!std::isfinite(out.beatsPerMinute)||out.beatsPerMinute<=0||out.beatsPerMinute>1000||!std::isfinite(out.musicalQuarterNotes)){e="truncated-or-invalid";return false;}s=std::move(out);return true;}
+std::vector<uint8_t> RackStateCodec::encodeDeviceChain(
+        RackPathId pathId, const PluginChain::ChainState& chain, std::string* error) {
+    RackGraph::State state;
+    RackGraph::State::Track scoped;
+    scoped.id = pathId;
+    scoped.chain = chain;
+    state.tracks.push_back(std::move(scoped));
+    return encode(state, error);
+}
+
+bool RackStateCodec::decodeDeviceChain(
+        const uint8_t* data, size_t size, RackPathId& pathId,
+        PluginChain::ChainState& chain, std::string& error) {
+    RackGraph::State state;
+    if (!decode(data, size, state, error)) return false;
+    if (state.tracks.size() != 1 || !state.master.plugins.empty()) {
+        error = "not-device-chain";
+        return false;
+    }
+    pathId = state.tracks.front().id;
+    chain = std::move(state.tracks.front().chain);
+    error.clear();
+    return true;
+}
 }

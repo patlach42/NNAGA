@@ -13,20 +13,25 @@ package com.vibes.dsp.ui.dashboard
 
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -34,13 +39,16 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -57,6 +65,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -71,6 +81,11 @@ import com.vibes.dsp.ui.components.NnagaTextButton
 import com.vibes.dsp.ui.components.NnagaTonalButton
 import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import java.util.Locale
+import kotlin.math.min
+
+internal const val REPOSITORY_PAGE_SIZE = 25
+
+private val REPOSITORY_FORMAT_GROUPS = listOf("LV2", "Wine", "JSFX")
 
 private object RepositoryDimensions {
     val compactPadding = 8.dp
@@ -81,6 +96,9 @@ private object RepositoryDimensions {
     val divider = 1.dp
     val progressHeight = 2.dp
     val actionProgress = 16.dp
+    val badgeMinimum = 16.dp
+    val sheetBottomPadding = 32.dp
+    val sheetHeaderSpacing = 20.dp
 }
 
 @Composable
@@ -97,8 +115,18 @@ fun RepositoryScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var sourceUrl by rememberSaveable { mutableStateOf("") }
     var query by rememberSaveable { mutableStateOf("") }
+    var selectedFormat by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedManufacturer by rememberSaveable { mutableStateOf<String?>(null) }
-    var selectedTag by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedTags by rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+    var visiblePackageCount by rememberSaveable(
+        snapshot.packages,
+        query,
+        selectedFormat,
+        selectedManufacturer,
+        selectedTags,
+    ) {
+        mutableStateOf(REPOSITORY_PAGE_SIZE)
+    }
     var addWasPending by remember { mutableStateOf(false) }
     val addPending = actionState.isPending(RepositoryViewModel.ADD_SOURCE)
     val refreshing = snapshot.isRefreshing ||
@@ -118,30 +146,38 @@ fun RepositoryScreen(
             .distinctBy { it.lowercase(Locale.ROOT) }
             .sortedWith(String.CASE_INSENSITIVE_ORDER)
     }
-    val selectedTags = remember(selectedTag) { selectedTag?.let(::setOf).orEmpty() }
+    val selectedTagSet = remember(selectedTags) { selectedTags.toSet() }
     val filteredPackages = remember(
         snapshot.packages,
         query,
+        selectedFormat,
         selectedManufacturer,
-        selectedTags,
+        selectedTagSet,
     ) {
         filterRepositoryPackages(
             packages = snapshot.packages,
             query = query,
             manufacturer = selectedManufacturer,
-            tags = selectedTags,
+            tags = selectedTagSet,
+            formatGroup = selectedFormat,
         )
     }
-    val filtersActive = query.isNotBlank() || selectedManufacturer != null || selectedTag != null
+    val visiblePackages = remember(filteredPackages, visiblePackageCount) {
+        paginateRepositoryPackages(filteredPackages, visiblePackageCount)
+    }
+    val activeFacetCount =
+        listOfNotNull(selectedFormat, selectedManufacturer).size + selectedTags.size
+    val filtersActive = query.isNotBlank() || activeFacetCount > 0
 
     LaunchedEffect(snapshot.isLoading, manufacturerOptions, tagOptions) {
         if (!snapshot.isLoading) {
             if (manufacturerOptions.none { it.equals(selectedManufacturer, ignoreCase = true) }) {
                 selectedManufacturer = null
             }
-            if (tagOptions.none { it.equals(selectedTag, ignoreCase = true) }) {
-                selectedTag = null
-            }
+            val availableTags = tagOptions.mapTo(mutableSetOf()) { it.lowercase(Locale.ROOT) }
+            val retainedTags = selectedTags
+                .filterTo(arrayListOf()) { it.lowercase(Locale.ROOT) in availableTags }
+            if (retainedTags != selectedTags) selectedTags = retainedTags
         }
     }
     LaunchedEffect(actionState.errorMessage) {
@@ -171,18 +207,28 @@ fun RepositoryScreen(
                 RepositoryCatalogToolbar(
                     query = query,
                     onQueryChanged = { query = it },
+                    formats = REPOSITORY_FORMAT_GROUPS,
+                    selectedFormat = selectedFormat,
+                    onFormatSelected = { selectedFormat = it },
                     manufacturers = manufacturerOptions,
                     selectedManufacturer = selectedManufacturer,
                     onManufacturerSelected = { selectedManufacturer = it },
                     tags = tagOptions,
-                    selectedTag = selectedTag,
-                    onTagSelected = { selectedTag = it },
+                    selectedTags = selectedTagSet,
+                    onTagSelected = { tag ->
+                        selectedTags = ArrayList(selectedTags).apply {
+                            val selectedIndex = indexOfFirst { it.equals(tag, ignoreCase = true) }
+                            if (selectedIndex >= 0) removeAt(selectedIndex) else add(tag)
+                        }
+                    },
                     onClear = {
                         query = ""
+                        selectedFormat = null
                         selectedManufacturer = null
-                        selectedTag = null
+                        selectedTags = arrayListOf()
                     },
                     filtersActive = filtersActive,
+                    activeFacetCount = activeFacetCount,
                     onRefresh = viewModel::refreshAll,
                     refreshing = refreshing,
                 )
@@ -201,7 +247,8 @@ fun RepositoryScreen(
             )
             RepositoryContent(
                 snapshot = snapshot,
-                catalogPackages = filteredPackages,
+                catalogPackages = visiblePackages,
+                matchedPackageCount = filteredPackages.size,
                 filtersActive = filtersActive,
                 actionState = actionState,
                 manageSources = manageSources,
@@ -214,6 +261,12 @@ fun RepositoryScreen(
                     snapshot.packages.firstOrNull { it.id == id }?.let(onUpdatePackage)
                 },
                 onRemovePackage = viewModel::remove,
+                onShowMore = {
+                    visiblePackageCount = min(
+                        filteredPackages.size,
+                        visiblePackageCount + REPOSITORY_PAGE_SIZE,
+                    )
+                },
                 modifier = Modifier.weight(1f),
             )
         }
@@ -288,123 +341,217 @@ private fun RepositorySourceToolbar(
     }
 }
 
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(
+    ExperimentalComposeUiApi::class,
+    ExperimentalLayoutApi::class,
+    ExperimentalMaterial3Api::class,
+)
 @Composable
 private fun RepositoryCatalogToolbar(
     query: String,
     onQueryChanged: (String) -> Unit,
+    formats: List<String>,
+    selectedFormat: String?,
+    onFormatSelected: (String?) -> Unit,
     manufacturers: List<String>,
     selectedManufacturer: String?,
     onManufacturerSelected: (String?) -> Unit,
     tags: List<String>,
-    selectedTag: String?,
-    onTagSelected: (String?) -> Unit,
+    selectedTags: Set<String>,
+    onTagSelected: (String) -> Unit,
     onClear: () -> Unit,
     filtersActive: Boolean,
+    activeFacetCount: Int,
     onRefresh: () -> Unit,
     refreshing: Boolean,
 ) {
     val keyboardController = LocalSoftwareKeyboardController.current
-    Column(
+    var showFilterSheet by rememberSaveable { mutableStateOf(false) }
+
+    Row(
         modifier = Modifier
             .fillMaxWidth()
             .padding(RepositoryDimensions.compactPadding),
-        verticalArrangement = Arrangement.spacedBy(RepositoryDimensions.inlineSpacing),
+        horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.inlineSpacing),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.inlineSpacing),
-            verticalAlignment = Alignment.CenterVertically,
+        OutlinedTextField(
+            value = query,
+            onValueChange = onQueryChanged,
+            modifier = Modifier.weight(1f),
+            placeholder = { Text("Search plugins...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            trailingIcon = query.takeIf(String::isNotEmpty)?.let {
+                {
+                    NnagaIconButton(onClick = { onQueryChanged("") }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear plugin search")
+                    }
+                }
+            },
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Search,
+            ),
+            keyboardActions = KeyboardActions(
+                onSearch = { keyboardController?.hide() },
+            ),
+            shape = MaterialTheme.shapes.small,
+            colors = nnagaOutlinedTextFieldColors(),
+        )
+        Box {
+            NnagaIconButton(onClick = { showFilterSheet = true }) {
+                Icon(
+                    imageVector = Icons.Default.FilterList,
+                    contentDescription = if (activeFacetCount == 0) {
+                        "Open repository filters"
+                    } else {
+                        "Open repository filters, $activeFacetCount selected"
+                    },
+                    tint = if (activeFacetCount > 0) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            if (activeFacetCount > 0) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(
+                            x = -RepositoryDimensions.inlineSpacing,
+                            y = RepositoryDimensions.inlineSpacing,
+                        )
+                        .defaultMinSize(
+                            minWidth = RepositoryDimensions.badgeMinimum,
+                            minHeight = RepositoryDimensions.badgeMinimum,
+                        ),
+                    shape = MaterialTheme.shapes.extraSmall,
+                    color = MaterialTheme.colorScheme.error,
+                ) {
+                    Text(
+                        text = activeFacetCount.toString(),
+                        modifier = Modifier.padding(horizontal = RepositoryDimensions.inlineSpacing),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onError,
+                    )
+                }
+            }
+        }
+        RepositoryRefreshButton(onRefresh = onRefresh, refreshing = refreshing)
+    }
+
+    if (showFilterSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showFilterSheet = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.small,
         ) {
-            OutlinedTextField(
-                value = query,
-                onValueChange = onQueryChanged,
-                modifier = Modifier.weight(1f),
-                label = { Text("Search plugins") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = query.takeIf(String::isNotEmpty)?.let {
-                    {
-                        NnagaIconButton(onClick = { onQueryChanged("") }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear plugin search")
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = RepositoryDimensions.contentPadding)
+                    .padding(bottom = RepositoryDimensions.sheetBottomPadding),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Filters",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    if (filtersActive) {
+                        NnagaTextButton(onClick = onClear) {
+                            Text("Clear All")
                         }
                     }
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Search,
-                ),
-                keyboardActions = KeyboardActions(
-                    onSearch = { keyboardController?.hide() },
-                ),
-                shape = MaterialTheme.shapes.small,
-                colors = nnagaOutlinedTextFieldColors(),
-            )
-            RepositoryRefreshButton(onRefresh = onRefresh, refreshing = refreshing)
-        }
-        if (manufacturers.isNotEmpty()) {
-            FacetRow(
-                label = "Manufacturer",
-                allLabel = "All manufacturers",
-                options = manufacturers,
-                selected = selectedManufacturer,
-                onSelected = onManufacturerSelected,
-            )
-        }
-        if (tags.isNotEmpty()) {
-            FacetRow(
-                label = "Tag",
-                allLabel = "All tags",
-                options = tags,
-                selected = selectedTag,
-                onSelected = onTagSelected,
-            )
-        }
-        if (filtersActive) {
-            NnagaTextButton(
-                onClick = onClear,
-                modifier = Modifier.align(Alignment.End),
-            ) {
-                Text("Clear filters")
+                }
+                Spacer(modifier = Modifier.height(RepositoryDimensions.sheetHeaderSpacing))
+                RepositoryFilterSection(title = "Format") {
+                    RepositorySingleChoiceFlow(
+                        facetName = "Format",
+                        options = formats,
+                        selected = selectedFormat,
+                        onSelected = onFormatSelected,
+                    )
+                }
+                RepositoryFilterSection(title = "Manufacturer") {
+                    RepositorySingleChoiceFlow(
+                        facetName = "Manufacturer",
+                        options = manufacturers,
+                        selected = selectedManufacturer,
+                        onSelected = onManufacturerSelected,
+                    )
+                }
+                RepositoryFilterSection(title = "Tags") {
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.itemSpacing),
+                        verticalArrangement = Arrangement.spacedBy(RepositoryDimensions.itemSpacing),
+                    ) {
+                        tags.forEach { tag ->
+                            val selected = selectedTags.any { it.equals(tag, ignoreCase = true) }
+                            NnagaFilterChip(
+                                text = tag,
+                                selected = selected,
+                                onClick = { onTagSelected(tag) },
+                                modifier = Modifier.semantics {
+                                    contentDescription = "Tag filter: $tag"
+                                },
+                            )
+                        }
+                    }
+                }
             }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun FacetRow(
-    label: String,
-    allLabel: String,
+private fun RepositorySingleChoiceFlow(
+    facetName: String,
     options: List<String>,
     selected: String?,
     onSelected: (String?) -> Unit,
 ) {
-    LazyRow(
+    FlowRow(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.inlineSpacing),
-        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(RepositoryDimensions.itemSpacing),
+        verticalArrangement = Arrangement.spacedBy(RepositoryDimensions.itemSpacing),
     ) {
-        item(key = "$label:label") {
-            Text(
-                text = label,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        item(key = "$label:all") {
-            NnagaFilterChip(
-                text = allLabel,
-                selected = selected == null,
-                onClick = { onSelected(null) },
-            )
-        }
-        items(options, key = { "$label:${it.lowercase(Locale.ROOT)}" }) { option ->
+        options.forEach { option ->
+            val isSelected = option.equals(selected, ignoreCase = true)
             NnagaFilterChip(
                 text = option,
-                selected = option.equals(selected, ignoreCase = true),
-                onClick = { onSelected(option.takeUnless { it.equals(selected, ignoreCase = true) }) },
+                selected = isSelected,
+                onClick = { onSelected(option.takeUnless { isSelected }) },
+                modifier = Modifier.semantics {
+                    contentDescription = "$facetName filter: $option"
+                },
             )
         }
+    }
+}
+
+@Composable
+private fun RepositoryFilterSection(
+    title: String,
+    content: @Composable () -> Unit,
+) {
+    Column(modifier = Modifier.padding(bottom = RepositoryDimensions.sectionSpacing)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = RepositoryDimensions.itemSpacing),
+        )
+        content()
     }
 }
 
@@ -429,6 +576,7 @@ private fun RepositoryRefreshButton(
 private fun RepositoryContent(
     snapshot: RepositorySnapshot,
     catalogPackages: List<RepositoryPackageItem>,
+    matchedPackageCount: Int,
     filtersActive: Boolean,
     actionState: RepositoryActionState,
     manageSources: Boolean,
@@ -439,6 +587,7 @@ private fun RepositoryContent(
     onInstall: (RepositoryPackageItem) -> Unit,
     onUpdate: (String) -> Unit,
     onRemovePackage: (String) -> Unit,
+    onShowMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     when {
@@ -467,12 +616,14 @@ private fun RepositoryContent(
         else -> {
             PackageList(
                 packages = catalogPackages,
+                matchedPackageCount = matchedPackageCount,
                 totalPackageCount = snapshot.packages.size,
                 filtersActive = filtersActive,
                 actionState = actionState,
                 onInstall = onInstall,
                 onUpdate = onUpdate,
                 onRemove = onRemovePackage,
+                onShowMore = onShowMore,
                 modifier = modifier.fillMaxSize(),
             )
         }
@@ -515,12 +666,14 @@ private fun SourceList(
 @Composable
 private fun PackageList(
     packages: List<RepositoryPackageItem>,
+    matchedPackageCount: Int,
     totalPackageCount: Int,
     filtersActive: Boolean,
     actionState: RepositoryActionState,
     onInstall: (RepositoryPackageItem) -> Unit,
     onUpdate: (String) -> Unit,
     onRemove: (String) -> Unit,
+    onShowMore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -531,20 +684,21 @@ private fun PackageList(
         item(key = "package-heading") {
             SectionHeading(
                 title = "Plugins",
-                description = if (filtersActive) {
-                    "${packages.size} of $totalPackageCount plugins match."
-                } else {
-                    "$totalPackageCount plugins from enabled sources."
-                },
+                description =
+                    "${packages.size} shown · $matchedPackageCount matched · " +
+                        "$totalPackageCount total.",
             )
         }
         if (packages.isEmpty()) {
             item(key = "package-empty") {
                 EmptyMessage(
-                    if (totalPackageCount == 0) {
-                        "Enable a source and refresh repositories to discover plugins."
-                    } else {
-                        "No matching plugins. Clear filters or try another search."
+                    when {
+                        totalPackageCount == 0 ->
+                            "Enable a source and refresh repositories to discover plugins."
+                        filtersActive ->
+                            "No matching plugins. Clear filters or try another search."
+                        else ->
+                            "Refresh repositories to discover plugins."
                     },
                 )
             }
@@ -559,6 +713,18 @@ private fun PackageList(
                     onUpdate = { onUpdate(repositoryPackage.id) },
                     onRemove = { onRemove(repositoryPackage.id) },
                 )
+            }
+            if (packages.size < matchedPackageCount) {
+                item(key = "package-show-more") {
+                    NnagaOutlinedButton(
+                        onClick = onShowMore,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text(
+                            "Show more (${matchedPackageCount - packages.size} remaining)",
+                        )
+                    }
+                }
             }
         }
     }
@@ -973,9 +1139,11 @@ internal fun filterRepositoryPackages(
     query: String,
     manufacturer: String?,
     tags: Set<String>,
+    formatGroup: String? = null,
 ): List<RepositoryPackageItem> {
     val normalizedQuery = query.trim()
     val normalizedManufacturer = manufacturer?.trim().orEmpty()
+    val normalizedFormatGroup = formatGroup?.trim()?.lowercase(Locale.ROOT).orEmpty()
     val normalizedTags = tags.asSequence()
         .map(String::trim)
         .filter(String::isNotEmpty)
@@ -983,6 +1151,7 @@ internal fun filterRepositoryPackages(
     if (
         normalizedQuery.isEmpty() &&
         normalizedManufacturer.isEmpty() &&
+        normalizedFormatGroup.isEmpty() &&
         normalizedTags.isEmpty()
     ) {
         return packages
@@ -1001,6 +1170,19 @@ internal fun filterRepositoryPackages(
                 tag.trim().equals(selectedTag, ignoreCase = true)
             }
         }
-        matchesQuery && matchesManufacturer && matchesTags
+        val packageFormat = repositoryPackage.format.trim()
+        val matchesFormat = when (normalizedFormatGroup) {
+            "" -> true
+            "lv2" -> packageFormat.equals("lv2", ignoreCase = true)
+            "wine" -> packageFormat.startsWith("wine_", ignoreCase = true)
+            "jsfx" -> packageFormat.equals("jsfx", ignoreCase = true)
+            else -> false
+        }
+        matchesQuery && matchesManufacturer && matchesTags && matchesFormat
     }
 }
+
+internal fun paginateRepositoryPackages(
+    packages: List<RepositoryPackageItem>,
+    visibleCount: Int,
+): List<RepositoryPackageItem> = packages.take(visibleCount.coerceIn(0, packages.size))

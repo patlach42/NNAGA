@@ -379,7 +379,9 @@ class NativeEngine private constructor() {
      * Import a complete rack state. Returns null on success, otherwise a
      * diagnostic explaining why the blob was rejected.
      */
-    external fun nativeImportRackState(bytes: ByteArray): String?
+    external fun nativeImportRackState(bytes: ByteArray, restorePlugins: Boolean = true): String?
+    external fun nativeExportDeviceChain(pathId: Long): ByteArray?
+    external fun nativeImportDeviceChain(pathId: Long, bytes: ByteArray): Boolean
 
 
     /** Re-runs each PluginFactory's initialize() and rebuilds the registry's
@@ -731,7 +733,10 @@ class NativeEngine private constructor() {
     fun getRackPlugins(pathId: Long): Array<RackPluginEntry> = nativeGetRackPlugins(pathId)
     fun setJsfxRoot(path: String) = nativeSetJsfxRoot(path)
     fun exportRackState(): ByteArray = nativeExportRackState()
-    fun importRackState(bytes: ByteArray): String? = nativeImportRackState(bytes)
+    fun importRackState(bytes: ByteArray, restorePlugins: Boolean = true): String? =
+        nativeImportRackState(bytes, restorePlugins)
+    fun exportDeviceChain(pathId: Long): ByteArray? = nativeExportDeviceChain(pathId)
+    fun importDeviceChain(pathId: Long, bytes: ByteArray): Boolean = nativeImportDeviceChain(pathId, bytes)
 
     fun addTrack(): Long = nativeAddTrack()
     fun removeTrack(trackId: Long): Boolean = nativeRemoveTrack(trackId)

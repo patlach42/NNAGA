@@ -239,5 +239,54 @@ TEST(RackStateCodecTest, InvalidCountsAndLengthsAreRejectedWithoutPartialState) 
     }
 }
 
+TEST(RackStateCodecTest, DeviceChainEnvelopeRoundTripPreservesPathAndPlugins) {
+    PluginChain::ChainState expected;
+    expected.plugins.push_back(plugin(
+        "LV2", "http://example.test/scoped",
+        {{3, 0.625f}},
+        {{"urn:state:blob", {0x00, 0xff, 0x01}, "urn:type:blob", 7u}}));
+
+    std::string error;
+    const std::vector<uint8_t> encoded =
+        RackStateCodec::encodeDeviceChain(42, expected, &error);
+    ASSERT_FALSE(encoded.empty()) << error;
+
+    RackPathId pathId = 999;
+    PluginChain::ChainState decoded;
+    ASSERT_TRUE(RackStateCodec::decodeDeviceChain(
+        encoded.data(), encoded.size(), pathId, decoded, error)) << error;
+    EXPECT_EQ(pathId, 42u);
+    ASSERT_EQ(decoded.plugins.size(), 1u);
+    expectPlugin(decoded.plugins.front(), expected.plugins.front());
+}
+
+TEST(RackStateCodecTest,
+     MalformedDeviceChainPayloadPreservesExistingPathAndChain) {
+    PluginChain::ChainState source;
+    source.plugins.push_back(plugin("LV2", "http://example.test/new", {{1, 0.5f}}));
+    std::vector<uint8_t> damaged = RackStateCodec::encodeDeviceChain(42, source);
+    ASSERT_FALSE(damaged.empty());
+
+    // The scoped chain begins after the fixed 40-byte envelope prefix. Keep
+    // the CRC valid so this exercises bounded decoding, not only checksum
+    // rejection.
+    putU32(damaged, 40, std::numeric_limits<uint32_t>::max());
+    refreshCrc(damaged);
+
+    PluginChain::ChainState existing;
+    existing.plugins.push_back(plugin("LV2", "http://example.test/old", {{1, 0.25f}}));
+    RackPathId pathId = 7;
+    const RackPathId beforePath = pathId;
+    const PluginChain::ChainState beforeChain = existing;
+    std::string error;
+
+    EXPECT_FALSE(RackStateCodec::decodeDeviceChain(
+        damaged.data(), damaged.size(), pathId, existing, error));
+    EXPECT_EQ(error, "invalid-track");
+    EXPECT_EQ(pathId, beforePath);
+    ASSERT_EQ(existing.plugins.size(), beforeChain.plugins.size());
+    expectPlugin(existing.plugins.front(), beforeChain.plugins.front());
+}
+
 } // namespace
 } // namespace guitarrackcraft

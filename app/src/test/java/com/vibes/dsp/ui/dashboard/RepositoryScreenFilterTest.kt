@@ -93,6 +93,109 @@ class RepositoryScreenFilterTest {
         )
     }
 
+    @Test
+    fun formatGroupMapsLv2JsfxAndEveryWineFormat() {
+        val mixed = catalog + listOf(
+            catalog.first().copy(
+                id = "jsfx-f",
+                name = "JSFX Utility",
+                format = "jsfx",
+            ),
+            catalog.first().copy(
+                id = "wine-g",
+                name = "Wine VST",
+                format = "wine_archive",
+            ),
+            catalog.first().copy(
+                id = "wine-h",
+                name = "Wine Installer",
+                format = "wine_installer",
+            ),
+        )
+
+        assertIds(
+            filterRepositoryPackages(
+                mixed,
+                query = "",
+                manufacturer = null,
+                tags = emptySet(),
+                formatGroup = "LV2",
+            ),
+            "synth-b",
+            "delay-a",
+            "compressor-c",
+            "reverb-d",
+            "bass-e",
+        )
+        assertIds(
+            filterRepositoryPackages(
+                mixed,
+                query = "",
+                manufacturer = null,
+                tags = emptySet(),
+                formatGroup = "jsfx",
+            ),
+            "jsfx-f",
+        )
+        assertIds(
+            filterRepositoryPackages(
+                mixed,
+                query = "",
+                manufacturer = null,
+                tags = emptySet(),
+                formatGroup = "wInE",
+            ),
+            "wine-g",
+            "wine-h",
+        )
+        assertIds(
+            filterRepositoryPackages(
+                mixed,
+                query = "",
+                manufacturer = null,
+                tags = emptySet(),
+                formatGroup = "VST",
+            ),
+        )
+    }
+
+    @Test
+    fun formatGroupParticipatesInAndFiltering() {
+        val mixed = catalog + catalog.first().copy(
+            id = "wine-shimmer",
+            name = "Wine Shimmer",
+            format = "wine_archive",
+            manufacturer = "Acme Audio",
+            tags = listOf("Digital"),
+        )
+
+        assertIds(
+            filterRepositoryPackages(
+                mixed,
+                query = "SHIMMER",
+                manufacturer = "acme audio",
+                tags = setOf("digital"),
+                formatGroup = "Wine",
+            ),
+            "wine-shimmer",
+        )
+    }
+
+    @Test
+    fun paginationKeepsOrderAndHonorsPageBoundaries() {
+        val packages = (1..51).map { index ->
+            catalog.first().copy(id = "item-$index")
+        }
+
+        assertEquals(25, REPOSITORY_PAGE_SIZE)
+        assertEquals(emptyList<String>(), paginateRepositoryPackages(packages, 0).map(RepositoryPackageItem::id))
+        assertEquals((1..24).map { "item-$it" }, paginateRepositoryPackages(packages, 24).map(RepositoryPackageItem::id))
+        assertEquals((1..25).map { "item-$it" }, paginateRepositoryPackages(packages, REPOSITORY_PAGE_SIZE).map(RepositoryPackageItem::id))
+        assertEquals((1..26).map { "item-$it" }, paginateRepositoryPackages(packages, 26).map(RepositoryPackageItem::id))
+        assertEquals((1..51).map { "item-$it" }, paginateRepositoryPackages(packages, 100).map(RepositoryPackageItem::id))
+        assertEquals(emptyList<String>(), paginateRepositoryPackages(packages, -1).map(RepositoryPackageItem::id))
+    }
+
     private fun assertIds(actual: List<RepositoryPackageItem>, vararg expectedIds: String) {
         assertEquals(expectedIds.toList(), actual.map(RepositoryPackageItem::id))
     }

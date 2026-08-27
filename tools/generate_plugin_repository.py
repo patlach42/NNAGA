@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import tempfile
+import tomllib
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -22,9 +23,9 @@ ASSETS = Path("app/src/main/assets/lv2")
 LIBS = Path("app/src/full/jniLibs/arm64-v8a")
 METADATA = Path("app/src/main/assets/plugin_metadata.json")
 DESCRIPTION_SOURCE = Path("plugin_descriptions.json")
-OUTPUT = Path("plugin-repository")
+OUTPUT = Path(os.environ.get("NNAGA_PLUGIN_REPOSITORY", "../nnaga-plugin-repository"))
 VERSION = "1.0.0"
-RELEASE = "2026-08-25"
+RELEASE = "2026-08-27"
 BINARY_RE = re.compile(r"(?:lv2:binary|guiext:binary|ui:binary)\s+<([^>]+)>")
 IDENTITY_ALIASES = {
     "GxVoodoFuzz": "GxVoodooFuzz",
@@ -264,7 +265,10 @@ def atomic_write(path: Path, content: bytes) -> None:
 
 
 
-def generate(check: bool = False) -> int:
+def generate(check: bool = False, output: Path | None = None) -> int:
+    global OUTPUT
+    if output is not None:
+        OUTPUT = output
     if not ASSETS.is_dir() or not LIBS.is_dir():
         raise SystemExit(f"missing input directory: {ASSETS} or {LIBS}")
     records: list[tuple[str, str, bytes, str]] = []
@@ -290,7 +294,7 @@ def generate(check: bool = False) -> int:
         expected_packages = {package for package, *_ in records}
         for kind in ("packages", "payload"):
             directory = OUTPUT / kind
-            actual = {p.name for p in directory.iterdir()} if directory.is_dir() else set()
+            actual = {p.name for p in directory.iterdir() if p.name.startswith("lv2.")} if directory.is_dir() else set()
             extras = sorted(actual - expected_packages)
             missing_dirs = sorted(expected_packages - actual)
             errors.extend(f"{kind}/{name}" for name in extras + missing_dirs)
@@ -316,10 +320,8 @@ def generate(check: bool = False) -> int:
             directory = OUTPUT / kind
             directory.mkdir(parents=True, exist_ok=True)
             for child in directory.iterdir():
-                if child.is_dir() and child.name not in expected_packages:
+                if child.is_dir() and child.name.startswith("lv2.") and child.name not in expected_packages:
                     shutil.rmtree(child)
-                elif child.is_file():
-                    child.unlink()
         for package in expected_packages:
             for directory, keep in (
                 (OUTPUT / "packages" / package, "manifest.toml"),
@@ -347,14 +349,30 @@ def generate(check: bool = False) -> int:
     print(f"Generated {len(records)} LV2 packages")
     return 0
 def index_text(records: list[tuple[str, str, bytes, str]]) -> str:
-    paths = ",".join(f'"packages/{package}/manifest.toml?v={RELEASE}"' for package, *_ in records)
-    return f'schema = 1\nrepository = "nnaga-base"\nrelease = "{RELEASE}"\nmanifests = [{paths}]\n'
-
-
+    generated = {package: text for package, _, _, text in records}
+    manifests = sorted((OUTPUT / "packages").glob("*/manifest.toml"))
+    rows: list[str] = []
+    for path in manifests:
+        package = path.parent.name
+        text = generated.get(package, path.read_text(encoding="utf-8"))
+        data = tomllib.loads(text)
+        tags = json.dumps(data.get("tags", []), ensure_ascii=False, separators=(",", ":"))
+        q = lambda value: json.dumps(str(value), ensure_ascii=False)
+        rows.append(
+            "[[packages]]\n"
+            f"manifest = {q(path.relative_to(OUTPUT).as_posix() + '?v=' + RELEASE)}\n"
+            f"id = {q(data['id'])}\nname = {q(data['name'])}\n"
+            f"version = {q(data['version'])}\nformat = {q(data['format'])}\n"
+            f"description = {q(data.get('description', ''))}\n"
+            f"manufacturer = {q(data.get('manufacturer', ''))}\ntags = {tags}\n"
+        )
+    return "schema = 2\nrepository = \"nnaga-plugin-repository\"\nrelease = \"2026-08-27\"\n\n" + "\n".join(rows)
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="verify deterministic output without rewriting")
-    raise SystemExit(generate(parser.parse_args().check))
+    parser.add_argument("--output", type=Path, help="standalone repository output directory")
+    args = parser.parse_args()
+    raise SystemExit(generate(args.check, args.output))
 
 
 if __name__ == "__main__":

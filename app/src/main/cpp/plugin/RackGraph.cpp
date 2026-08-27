@@ -694,10 +694,86 @@ std::shared_ptr<PluginChain> RackGraph::getChain(RackPathId id) const{std::lock_
 void RackGraph::setSampleRate(float rate,uint32_t buffer){std::lock_guard lock(controlMutex_);sampleRate_.store(rate);bufferSize_=buffer;for(auto& n:tracks_){n->sourceLeft.resize(buffer);n->sourceRight.resize(buffer);n->outputLeft.resize(buffer);n->outputRight.resize(buffer);n->chain->setSampleRate(rate,buffer);}master_->setSampleRate(rate,buffer);(void)publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
 void RackGraph::activate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->activate();master_->activate();}void RackGraph::deactivate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->deactivate();master_->deactivate();}void RackGraph::pauseAndResetTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,false,true);}
 RackGraph::State RackGraph::saveState(){std::lock_guard lock(controlMutex_);State s; s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); for(auto& n:tracks_){State::Track t; t.id=n->id; t.volume=n->volume.load(); t.inputArmed=n->inputArmed.load(); t.inputArmLocked=n->inputArmLocked.load(); t.inputSource=n->inputSource; t.chain=n->chain->saveChainState(); s.tracks.push_back(std::move(t));}s.master=master_->saveChainState();return s;}
+bool RackGraph::exportDeviceChain(
+        RackPathId pathId,
+        PluginChain::ChainState& chain,
+        std::string& diagnostic) const {
+    std::lock_guard lock(controlMutex_);
+    const auto target = pathId == kMasterPathId
+        ? master_
+        : [&]() -> std::shared_ptr<PluginChain> {
+            const auto it = std::find_if(tracks_.begin(), tracks_.end(),
+                [&](const auto& node) { return node->id == pathId; });
+            return it == tracks_.end() ? nullptr : (*it)->chain;
+        }();
+    if (!target) {
+        diagnostic = "path-not-found";
+        return false;
+    }
+    chain = target->saveChainState();
+    diagnostic.clear();
+    return true;
+}
+
+bool RackGraph::importDeviceChain(
+        RackPathId pathId,
+        const PluginChain::ChainState& state,
+        const PluginRegistry& registry,
+        std::string& diagnostic) {
+    std::lock_guard lock(controlMutex_);
+    if (statusPlaying_.load(std::memory_order_acquire) ||
+        mailbox_.desiredPlaying.load(std::memory_order_acquire)) {
+        diagnostic = "engine-running";
+        return false;
+    }
+    auto replacement = std::make_shared<PluginChain>();
+    const float sampleRate = sampleRate_.load(std::memory_order_relaxed);
+    if (sampleRate > 0.0f) replacement->setSampleRate(sampleRate, bufferSize_);
+    for (const auto& pluginState : state.plugins) {
+        if (pluginState.format.empty() || pluginState.pluginUri.empty()) {
+            diagnostic = "invalid-plugin-id";
+            return false;
+        }
+        auto plugin = registry.createPlugin(pluginState.format + ":" + pluginState.pluginUri);
+        if (!plugin) {
+            diagnostic = "plugin-create-failed:" + pluginState.format + ":" + pluginState.pluginUri;
+            return false;
+        }
+        const int index = replacement->addPlugin(std::move(plugin));
+        if (index < 0 || !replacement->restorePluginState(index, pluginState)) {
+            diagnostic = "plugin-restore-failed:" + pluginState.format + ":" + pluginState.pluginUri;
+            return false;
+        }
+    }
+    if (pathId == kMasterPathId) {
+        auto next = buildSnapshotLocked(tracks_, clips_, recordingClips_);
+        if (!next) { diagnostic = "publish-failed"; return false; }
+        next->master = replacement;
+        if (!publishSnapshotLocked(std::move(next))) { diagnostic = "publish-failed"; return false; }
+        master_ = std::move(replacement);
+        diagnostic.clear();
+        return true;
+    }
+    const auto it = std::find_if(tracks_.begin(), tracks_.end(),
+        [&](const auto& node) { return node->id == pathId; });
+    if (it == tracks_.end()) { diagnostic = "path-not-found"; return false; }
+    const auto previous = (*it)->chain;
+    (*it)->chain = replacement;
+    auto next = buildSnapshotLocked(tracks_, clips_, recordingClips_);
+    if (!next || !publishSnapshotLocked(std::move(next))) {
+        (*it)->chain = previous;
+        diagnostic = "publish-failed";
+        return false;
+    }
+    diagnostic.clear();
+    return true;
+}
+
 bool RackGraph::restoreState(
         const State& state,
         const PluginRegistry& registry,
-        std::string& diagnostic) {
+        std::string& diagnostic,
+        bool restorePlugins) {
     std::lock_guard lock(controlMutex_);
     if (statusPlaying_.load(std::memory_order_acquire) ||
         mailbox_.desiredPlaying.load(std::memory_order_acquire)) {
@@ -722,6 +798,7 @@ bool RackGraph::restoreState(
     const float sampleRate = sampleRate_.load();
     const auto restoreChain = [&](const PluginChain::ChainState& saved,
                                   const std::shared_ptr<PluginChain>& chain) {
+        if (!restorePlugins) return true;
         if (sampleRate > 0.0f) chain->setSampleRate(sampleRate, bufferSize_);
         for (const auto& pluginState : saved.plugins) {
             if (pluginState.format.empty() || pluginState.pluginUri.empty()) {
@@ -808,6 +885,7 @@ bool RackGraph::restoreState(
     double rate = sampleRate_.load(std::memory_order_relaxed);
     if (rate <= 0.0) rate = 48000.0;
     audioElapsedSeconds_ = static_cast<double>(audioSamplePosition_) / rate;
+    statusSequence_.fetch_add(1, std::memory_order_acq_rel);
     publishGlobalStatus(rate);
     diagnostic.clear();
     return true;

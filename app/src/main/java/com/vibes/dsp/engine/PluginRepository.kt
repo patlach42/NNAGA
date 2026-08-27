@@ -66,11 +66,55 @@ internal fun validateFacetMetadata(manifest: PluginRepositoryService.RepoManifes
     require(manifest.tags.size <= 32 && manifest.tags.all { safe(it, 64) })
 }
 
-internal fun parseRepositoryIndex(t: org.tomlj.TomlParseResult): List<String> {
+internal data class RepositoryCatalogEntry(
+    val manifest: String,
+    val id: String,
+    val name: String,
+    val version: String,
+    val format: String,
+    val description: String,
+    val manufacturer: String,
+    val tags: List<String>,
+    val sourceName: String,
+    val sourceUrl: String,
+    val repositoryRoot: String,
+)
+
+internal fun parseRepositoryIndex(t: org.tomlj.TomlParseResult): List<RepositoryCatalogEntry> {
     require(!t.hasErrors()) { t.errors().joinToString("; ") }
-    require(t.getLong("schema") == 1L)
-    val a = t.getArray("manifests") ?: error("Missing manifests")
-    return a.toList().map { it.toString() }.also { require(it.isNotEmpty()) }
+    require(t.getLong("schema") == 2L)
+    require(!t.getString("repository").isNullOrBlank())
+    require(!t.getString("release").isNullOrBlank())
+    val packages = t.getArray("packages") ?: throw IllegalArgumentException("Missing packages")
+    require(packages.size() > 0)
+    return packages.toList().map { value ->
+        val table = value as? org.tomlj.TomlTable
+            ?: throw IllegalArgumentException("Invalid package entry")
+        fun required(key: String): String = table.getString(key)?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("Missing package field: $key")
+        val tags = (
+            table.getArray("tags")
+                ?: throw IllegalArgumentException("Missing package field: tags")
+            ).toList().map {
+            it as? String ?: throw IllegalArgumentException("Invalid tags element")
+        }
+        RepositoryCatalogEntry(
+            manifest = required("manifest"),
+            id = required("id"),
+            name = required("name"),
+            version = required("version"),
+            format = required("format"),
+            description = required("description"),
+            manufacturer = required("manufacturer"),
+            tags = tags,
+            sourceName = "",
+            sourceUrl = "",
+            repositoryRoot = "",
+        )
+    }.also { entries ->
+        val identities = entries.map { "${it.format}:${it.id}" }
+        require(identities.toSet().size == identities.size) { "Duplicate package identity" }
+    }
 }
 
 internal fun parseRepositoryManifest(
@@ -260,14 +304,14 @@ internal fun preloadLv2Binaries(
                 binaries += binary.path
             }
         }
-    binaries.forEach { path ->
-        try {
-            loader(path)
-        } catch (e: UnsatisfiedLinkError) {
-            throw IllegalStateException("Failed to preload LV2 DSP binary: $path", e)
+        binaries.forEach { path ->
+            try {
+                loader(path)
+            } catch (e: UnsatisfiedLinkError) {
+                throw IllegalStateException("Failed to preload LV2 DSP binary: $path", e)
+            }
         }
     }
-}
 
 
 /** Repository installer. All state mutations happen on IO and publish immutable snapshots. */
@@ -296,34 +340,47 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private val jsfxInstalledRoot = File(context.filesDir, "jsfx/Effects/repository")
     private val state = MutableStateFlow(RepositorySnapshot())
     private val cache = mutableMapOf<String, RepoManifest>()
+    private val catalog = mutableMapOf<String, RepositoryCatalogEntry>()
     private val stagedManifests = mutableMapOf<String, StagedRepositoryPayload>()
     private val mutex = Mutex()
     override val snapshot: StateFlow<RepositorySnapshot> = state
     override suspend fun refreshAll() = withContext(Dispatchers.IO) { mutex.withLock { refreshAllLocked() } }
     private fun refreshAllLocked() {
         state.value = state.value.copy(isLoading = true, isRefreshing = true, errorMessage = null)
-        val sources = loadSources(); val manifests = mutableListOf<RepoManifest>(); val updated = sources.toMutableList(); var error: String? = null; val ids = mutableSetOf<String>()
+        val sources = loadSources()
+        val entries = mutableListOf<RepositoryCatalogEntry>()
+        val updated = sources.toMutableList()
+        var error: String? = null
+        val ids = mutableSetOf<String>()
         sources.forEachIndexed { index, source ->
             if (!source.enabled) return@forEachIndexed
             try {
                 val indexUrl = source.url
-                val repositoryRoot = URI(indexUrl).let { URI(it.scheme, it.userInfo, it.host, it.port, it.path, null, null) }.resolve("./")
-                val parsed = parseRepositoryIndex(Toml.parse(fetchText(indexUrl)))
-                val sourceManifests = parsed.map { path ->
-                    val manifestUrl = resolveContained(indexUrl, repositoryRoot, path)
-                    parseManifest(fetchText(manifestUrl), source.name, manifestUrl, repositoryRoot.toString())
+                val repositoryRoot = URI(indexUrl).let {
+                    URI(it.scheme, it.userInfo, it.host, it.port, it.path, null, null)
+                }.resolve("./")
+                val parsed = parseRepositoryIndex(Toml.parse(fetchText(indexUrl))).map { entry ->
+                    val manifestUrl = resolveContained(indexUrl, repositoryRoot, entry.manifest)
+                    require(entry.format.matches(PACKAGE) && entry.id.matches(PACKAGE))
+                    require(entry.version.matches(Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")))
+                    require(entry.manufacturer.length <= 128 && entry.manufacturer.none { it.isISOControl() })
+                    require(entry.tags.size <= 32 && entry.tags.all { it.isNotBlank() && it.length <= 64 && it.none(Char::isISOControl) })
+                    entry.copy(sourceName = source.name, sourceUrl = manifestUrl, repositoryRoot = repositoryRoot.toString())
                 }
-                val sourceIds = sourceManifests.map { "${it.format}:${it.id}" }
+                val sourceIds = parsed.map { "${it.format}:${it.id}" }
                 require(sourceIds.toSet().size == sourceIds.size) { "Duplicate package identity" }
                 require(sourceIds.none { it in ids }) { "Duplicate package identity" }
                 ids += sourceIds
-                manifests += sourceManifests
+                entries += parsed
                 updated[index] = source.copy(lastError = null)
             } catch (e: Exception) {
-                val msg = e.message ?: "refresh failed"; error = error ?: msg; updated[index] = source.copy(lastError = msg)
+                val msg = e.message ?: "refresh failed"
+                error = error ?: msg
+                updated[index] = source.copy(lastError = msg)
             }
         }
-        saveSources(updated); publish(updated, manifests, error)
+        saveSources(updated)
+        publish(updated, entries, error)
     }
     override suspend fun addSource(url: String) = withContext(Dispatchers.IO) { mutex.withLock {
         val u = normalizeSource(url); val s = loadSources()
@@ -339,8 +396,11 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
         require(loadSources().any { it.id == sourceId }); refreshAllLocked()
     } }
     override suspend fun removeSource(sourceId: String) = withContext(Dispatchers.IO) { mutex.withLock {
-        val s = loadSources(); val x = s.firstOrNull { it.id == sourceId } ?: error("Unknown source")
-        require(x.custom); saveSources(s.filterNot { it.id == sourceId }); refreshAllLocked()
+        val sources = loadSources()
+        val source = sources.firstOrNull { it.id == sourceId } ?: error("Unknown source")
+        require(source.custom)
+        saveSources(sources.filterNot { it.id == sourceId })
+        refreshAllLocked()
     } }
     override suspend fun install(packageId: String) { installOrUpdate(packageId, false) }
     override suspend fun update(packageId: String) { installOrUpdate(packageId, true) }
@@ -351,8 +411,8 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
      */
     suspend fun stageVerifiedPayload(packageId: String): VerifiedRepositoryPayload =
         withContext(Dispatchers.IO) { mutex.withLock {
-            val m = cache[packageId] ?: error("Package is not available: $packageId")
-            validate(m); require(m.format != "lv2" && m.format != "jsfx") { "This payload uses the native repository installer" }
+            val m = fullManifest(packageId)
+            require(m.format != "lv2" && m.format != "jsfx") { "This payload uses the native repository installer" }
             setPackageState(packageId, RepositoryPackageOperation.Installing, 0f, null)
             val token = UUID.randomUUID().toString()
             val staged = File(root, ".pending-$token.payload").canonicalFile
@@ -366,8 +426,11 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
                 setPackageState(packageId, null, 1f, null)
                 VerifiedRepositoryPayload(packageId, m, staged, token)
             } catch (e: Exception) {
-                setPackageState(packageId, null, null, e.message ?: "Payload verification failed"); throw e
-            } finally { tmp.delete() }
+                setPackageState(packageId, null, null, e.message ?: "Payload verification failed")
+                throw e
+            } finally {
+                tmp.delete()
+            }
         } }
     fun discardStagedPayload(payload: VerifiedRepositoryPayload) {
         val staged = stagedManifests.remove(payload.token)
@@ -398,49 +461,113 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     } }
     private suspend fun installOrUpdate(id: String, update: Boolean) = withContext(Dispatchers.IO) {
         mutex.withLock {
-            val m = cache[id] ?: error("Package is not available: $id"); validate(m); val installRoot = if (m.format == "jsfx") jsfxInstalledRoot else installedRoot; val relative = if (m.format == "jsfx") m.id else "${m.format}/${m.id}"; val dir = File(installRoot, relative).canonicalFile; requireContained(dir, installRoot); val target = File(dir, m.version).canonicalFile; requireContained(target, dir); require(!target.exists() || update); val stage = File(dir, ".${m.version}.${UUID.randomUUID()}.staging"); val backup = File(dir, ".${m.version}.${UUID.randomUUID()}.backup"); val tmp = File(root, ".download-${UUID.randomUUID()}.tmp"); var moved = false
+            val m = fullManifest(id); val installRoot = if (m.format == "jsfx") jsfxInstalledRoot else installedRoot; val relative = if (m.format == "jsfx") m.id else "${m.format}/${m.id}"; val dir = File(installRoot, relative).canonicalFile; requireContained(dir, installRoot); val target = File(dir, m.version).canonicalFile; requireContained(target, dir); require(!target.exists() || update); val stage = File(dir, ".${m.version}.${UUID.randomUUID()}.staging"); val backup = File(dir, ".${m.version}.${UUID.randomUUID()}.backup"); val tmp = File(root, ".download-${UUID.randomUUID()}.tmp"); var moved = false
             try {
                 if (m.format == "jsfx" && m.kind == "files") {
                     m.files.forEach { declared -> val payload = File(stage, declared.path.replace('\\', '/')).canonicalFile; requireContained(payload, stage); payload.parentFile?.mkdirs(); val ft = File(root, ".download-${UUID.randomUUID()}.tmp"); try { download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), declared.url, true), ft, declared.size); require(ft.length() == declared.size); require(sha256(ft) == declared.sha256); Files.move(ft.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE) } finally { ft.delete() } }; validateEntry(stage, m.entry)
-                } else { download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl, false), tmp, m.payloadSize); if (m.format == "jsfx") { require(m.kind == "file"); val payload = File(stage, m.entry).canonicalFile; requireContained(payload, stage); payload.parentFile?.mkdirs(); Files.move(tmp.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE); require(payload.isFile) } else { extractSafe(tmp, stage); validateEntry(stage, m.entry) } }
+                } else {
+                    download(
+                        resolveRepositoryPayloadUrl(
+                            m.sourceUrl,
+                            URI(m.repositoryRoot),
+                            m.payloadUrl,
+                            false,
+                        ),
+                        tmp,
+                        m.payloadSize,
+                    )
+                    require(tmp.length() == m.payloadSize) { "Payload size mismatch" }
+                    require(sha256(tmp) == m.payloadSha256) { "Payload SHA-256 mismatch" }
+                    if (m.format == "jsfx") {
+                        require(m.kind == "file")
+                        val payload = File(stage, m.entry).canonicalFile
+                        requireContained(payload, stage)
+                        payload.parentFile?.mkdirs()
+                        Files.move(tmp.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                        require(payload.isFile)
+                    } else {
+                        extractSafe(tmp, stage)
+                        validateEntry(stage, m.entry)
+                    }
+                }
                 writeMetadata(stage, m); if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE); Files.move(stage.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); moved = true; if (m.format == "lv2") preloadLv2Binaries(target, System::load); require(nativeRefresh?.invoke() != false); if (backup.exists()) backup.deleteRecursively(); dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively); setPackageState(id, null, 1f, null); publishCurrent()
             } catch (e: Exception) { if (moved) target.deleteRecursively(); if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(id, null, null, e.message ?: "Install failed"); throw e } finally { tmp.delete(); stage.deleteRecursively(); backup.deleteRecursively() }
         }
     }
-    private fun publishCurrent(){ publish(loadSources(), cache.values.toList(), null) }
+    private fun fullManifest(packageId: String): RepoManifest {
+        val expected = catalog[packageId] ?: error("Package is not available: $packageId")
+        cache[packageId]?.takeIf { manifestMatchesSummary(it, expected) }?.let { return it }
+        cache.remove(packageId)
+        val manifest = parseManifest(
+            fetchText(expected.sourceUrl),
+            expected.sourceName,
+            expected.sourceUrl,
+            expected.repositoryRoot,
+        )
+        validate(manifest)
+        require("${manifest.format}:${manifest.id}" == packageId) { "Manifest package identity mismatch" }
+        require(manifestMatchesSummary(manifest, expected)) { "Manifest package metadata mismatch" }
+        cache[packageId] = manifest
+        return manifest
+    }
+    private fun manifestMatchesSummary(
+        manifest: RepoManifest,
+        entry: RepositoryCatalogEntry,
+    ): Boolean =
+        manifest.version == entry.version &&
+            manifest.name == entry.name &&
+            manifest.description == entry.description &&
+            manifest.manufacturer == entry.manufacturer &&
+            manifest.tags == entry.tags &&
+            manifest.sourceUrl == entry.sourceUrl
+    private fun publishCurrent(){ publish(loadSources(), catalog.values.toList(), null) }
     private fun publish(
         sources: List<RepositorySourceRecord>,
-        manifests: List<RepoManifest>,
+        entries: List<RepositoryCatalogEntry>,
         error: String?,
     ) {
-        cache.clear()
-        manifests.forEach { cache["${it.format}:${it.id}"] = it }
+        catalog.clear()
+        entries.forEach { catalog["${it.format}:${it.id}"] = it }
+        cache.entries.removeAll { (id, manifest) ->
+            val entry = catalog[id]
+            entry == null || !manifestMatchesSummary(manifest, entry)
+        }
         val installed = inventory()
-        val available = manifests.associateBy { "${it.format}:${it.id}" }
-        val installedOnly = installed
-            .filterKeys { it !in available }
-            .mapValues { it.value.manifest }
-        val all = available + installedOnly
-        val packages = all.map { (id, manifest) ->
+        val packages = entries.map { entry ->
+            val id = "${entry.format}:${entry.id}"
             val installedVersion = installed[id]?.version
             val status = when {
-                !com.vibes.dsp.BuildConfig.HAS_VST_HOST && manifest.format.startsWith("wine_") ->
+                !com.vibes.dsp.BuildConfig.HAS_VST_HOST && entry.format.startsWith("wine_") ->
                     RepositoryPackageStatus.Incompatible
                 installedVersion == null -> RepositoryPackageStatus.Available
-                installedVersion == manifest.version -> RepositoryPackageStatus.Installed
+                installedVersion == entry.version -> RepositoryPackageStatus.Installed
                 else -> RepositoryPackageStatus.Update
             }
+            RepositoryPackageItem(
+                id = id,
+                name = entry.name,
+                format = entry.format,
+                sourceName = entry.sourceName,
+                availableVersion = entry.version,
+                installedVersion = installedVersion,
+                description = entry.description,
+                manufacturer = entry.manufacturer,
+                tags = entry.tags,
+                status = status,
+            )
+        } + installed.filterKeys { it !in catalog }.map { (id, installedPackage) ->
+            val manifest = installedPackage.manifest
             RepositoryPackageItem(
                 id = id,
                 name = manifest.name,
                 format = manifest.format,
                 sourceName = manifest.sourceName,
-                availableVersion = manifest.version,
-                installedVersion = installedVersion,
+                availableVersion = null,
+                installedVersion = installedPackage.version,
                 description = manifest.description,
                 manufacturer = manifest.manufacturer,
                 tags = manifest.tags,
-                status = status,
+                status = RepositoryPackageStatus.Installed,
             )
         }
         state.value = RepositorySnapshot(
@@ -497,7 +624,6 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private fun validate(m:RepoManifest){ validateRepositoryManifest(m) }
     private fun parseManifest(text: String, source: String, url: String, repositoryRoot: String): RepoManifest =
         parseRepositoryManifest(text, source, url, repositoryRoot)
-    private fun parseIndex(t:org.tomlj.TomlParseResult):List<String> = parseRepositoryIndex(t)
     private fun normalizeSource(u:String):String{val x=URI(u.trim());require(x.scheme in setOf("https","file"));require(x.fragment==null&&x.query==null);return x.toString()}
     private fun resolveContained(base:String,root:URI,relative:String):String =
         resolveContainedRepositoryUrl(base, root, relative)
@@ -526,7 +652,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{RepositorySourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
     data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val sourceUrl:String="",val repositoryRoot:String="",val manufacturer:String="Unknown",val tags:List<String> = emptyList(),val files:List<RepoManifestFile> = emptyList())
     private data class Installed(val version:String,val manifest:RepoManifest)
-    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/NNAGA/main/plugin-repository/index.toml?v=2026-08-27";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
+    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-27";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
     private fun sha256(b:ByteArray)=digest(b.inputStream())
     private fun sha256(f:File)=digest(f.inputStream())
     private fun digest(i:java.io.InputStream):String { val md=MessageDigest.getInstance("SHA-256"); i.use { val buf=ByteArray(8192); while(true){val n=it.read(buf);if(n<0)break;md.update(buf,0,n)} }; return md.digest().joinToString(""){"%02x".format(it)} }

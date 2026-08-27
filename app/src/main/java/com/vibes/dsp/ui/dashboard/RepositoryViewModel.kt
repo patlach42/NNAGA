@@ -199,7 +199,6 @@ class RepositoryViewModel(
             },
         ) {
             action()
-            repository.refreshAll()
         }
     }
 

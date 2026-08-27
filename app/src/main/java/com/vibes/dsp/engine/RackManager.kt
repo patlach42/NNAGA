@@ -34,7 +34,11 @@ object RackManager {
     fun getRackPluginInstanceId(pathId: RackPathId, index: Int): Long = native.getRackPluginInstanceId(pathId, index)
     fun getRackPlugins(pathId: RackPathId): Array<RackPluginEntry> = native.getRackPlugins(pathId)
     fun exportRackState(): ByteArray = native.exportRackState()
-    fun importRackState(bytes: ByteArray): String? = native.importRackState(bytes)
+    fun importRackState(bytes: ByteArray, restorePlugins: Boolean = true): String? =
+        native.importRackState(bytes, restorePlugins)
+    fun exportDeviceChain(pathId: RackPathId): ByteArray? = native.exportDeviceChain(pathId)
+    fun importDeviceChain(pathId: RackPathId, bytes: ByteArray): Boolean =
+        native.importDeviceChain(pathId, bytes)
 
 
     fun addTrack(): RackPathId = native.addTrack()

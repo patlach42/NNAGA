@@ -144,9 +144,11 @@ public:
     bool setClipLoopStartQuarterNotes(RackPathId, uint32_t, double);
     bool setClipLoopLengthQuarterNotes(RackPathId, uint32_t, double);
     bool setClipLooping(RackPathId, uint32_t, bool);
-    void process(const float* const*, int, float* const*, uint32_t) noexcept; void advanceTransport(uint32_t) noexcept; State saveState();
-    bool restoreState(const State&, const PluginRegistry&, std::string& diagnostic);
     bool setSlotEnterOnPunch(RackPathId, uint32_t, bool, LaunchQuantization);
+    void process(const float* const*, int, float* const*, uint32_t) noexcept; void advanceTransport(uint32_t) noexcept; State saveState();
+    bool restoreState(const State&, const PluginRegistry&, std::string& diagnostic, bool restorePlugins = true);
+    bool exportDeviceChain(RackPathId, PluginChain::ChainState&, std::string& diagnostic) const;
+    bool importDeviceChain(RackPathId, const PluginChain::ChainState&, const PluginRegistry&, std::string& diagnostic);
     bool setClipTransportPlaying(RackPathId, uint32_t, bool, LaunchQuantization);
     bool setClipTempoMode(RackPathId, uint32_t, ClipTempoMode);
     bool setClipSourceBpm(RackPathId, uint32_t, double);

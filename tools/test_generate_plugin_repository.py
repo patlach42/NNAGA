@@ -45,12 +45,12 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
             )
             (output / "README.txt").parent.mkdir(parents=True, exist_ok=True)
             (output / "README.txt").write_text("keep", encoding="utf-8")
-            (output / "packages" / "stale-package").mkdir(parents=True)
-            (output / "packages" / "stale-package" / "manifest.toml").write_text(
+            (output / "packages" / "lv2.stale").mkdir(parents=True)
+            (output / "packages" / "lv2.stale" / "manifest.toml").write_text(
                 "stale", encoding="utf-8"
             )
-            (output / "payload" / "stale-package").mkdir(parents=True)
-            (output / "payload" / "stale-package" / "old.zip").write_bytes(b"stale")
+            (output / "payload" / "lv2.stale").mkdir(parents=True)
+            (output / "payload" / "lv2.stale" / "old.zip").write_bytes(b"stale")
 
             with patch.object(generator, "ASSETS", assets), patch.object(
                 generator, "LIBS", libs
@@ -71,15 +71,29 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                 self.assertEqual(
                     "keep", (output / "README.txt").read_text(encoding="utf-8")
                 )
-                self.assertFalse((output / "packages" / "stale-package").exists())
-                self.assertFalse((output / "payload" / "stale-package").exists())
+                self.assertFalse((output / "packages" / "lv2.stale").exists())
+                self.assertFalse((output / "payload" / "lv2.stale").exists())
 
                 manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
                 index = tomllib.loads(index_path.read_text(encoding="utf-8"))
                 payload = payload_path.read_bytes()
+                self.assertEqual(2, index["schema"])
+                self.assertEqual("nnaga-plugin-repository", index["repository"])
+                self.assertEqual("2026-08-27", index["release"])
                 self.assertEqual(
-                    ["packages/lv2.example/manifest.toml?v=2026-08-25"],
-                    index["manifests"],
+                    [
+                        {
+                            "manifest": "packages/lv2.example/manifest.toml?v=2026-08-27",
+                            "id": "lv2.example",
+                            "name": "Example",
+                            "version": "1.0.0",
+                            "format": "lv2",
+                            "description": "Stereo delay for spacious guitar echoes.",
+                            "manufacturer": "Example Audio",
+                            "tags": ["Delay"],
+                        }
+                    ],
+                    index["packages"],
                 )
                 self.assertEqual("lv2.example", manifest["id"])
                 self.assertEqual("Example Audio", manifest["manufacturer"])
