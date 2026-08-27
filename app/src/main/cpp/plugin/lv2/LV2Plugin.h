@@ -88,6 +88,7 @@ public:
                      const MidiEvent* inputEvents, uint32_t inputCount,
                      MidiEvent* outputEvents, uint32_t outputCapacity) override;
     PluginInfo getInfo() const override;
+    uint32_t getLatencyFrames() const noexcept override { return latencyFrames_.load(std::memory_order_relaxed); }
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
     uint32_t getNumInputPorts() const override;
@@ -124,8 +125,10 @@ private:
 #endif
     float sampleRate_;
     std::atomic<bool> isActive_{false};
+    std::atomic<uint32_t> latencyFrames_{0};
     std::atomic<bool> processing_{false}; // guards instance_ use in process()
 
+    int32_t latencyControlPosition_ = -1;
     std::vector<std::unique_ptr<float>> controlPorts_;
     /** Global LV2 port index for each control port (same order as controlPorts_). */
     std::vector<uint32_t> controlPortIndices_;

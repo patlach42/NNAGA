@@ -28,6 +28,7 @@ public:
                      const AudioProcessContext& context, const MidiEvent* inputEvents,
                      uint32_t inputCount, MidiEvent* outputEvents, uint32_t outputCapacity) override;
     PluginInfo getInfo() const override;
+    uint32_t getLatencyFrames() const noexcept override { return latencyFrames_.load(std::memory_order_relaxed); }
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
     uint32_t getNumInputPorts() const override;
@@ -48,6 +49,7 @@ private:
     std::array<std::atomic<float>, kMaxSliders> pending_{};
     std::array<std::atomic<bool>, kMaxSliders> dirty_{};
     std::atomic<bool> active_{false};
+    std::atomic<uint32_t> latencyFrames_{0};
     mutable std::mutex controlMutex_;
 };
 

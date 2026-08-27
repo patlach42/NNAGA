@@ -258,6 +258,7 @@ void LV2Plugin::activate(float sampleRate, uint32_t bufferSize) {
         maxBlockLength_ == static_cast<int32_t>(effectiveBlock)) {
         return;
     }
+    latencyFrames_.store(0, std::memory_order_relaxed);
 
     deactivate();
     sampleRate_ = sampleRate;
@@ -334,6 +335,7 @@ void LV2Plugin::activate(float sampleRate, uint32_t bufferSize) {
 }
 
 void LV2Plugin::deactivate() {
+    latencyFrames_.store(0, std::memory_order_relaxed);
     if (!isActive_.load(std::memory_order_seq_cst)) {
         return;
     }
@@ -518,6 +520,12 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
     }
     if (workerInterface_ && workerInterface_->end_run) {
         workerInterface_->end_run(workerHandle);
+    }
+    if (latencyControlPosition_ >= 0 &&
+        static_cast<size_t>(latencyControlPosition_) < controlPorts_.size()) {
+        const float reported = *controlPorts_[static_cast<size_t>(latencyControlPosition_)];
+        if (std::isfinite(reported) && reported >= 0.0f)
+            latencyFrames_.store(static_cast<uint32_t>(reported), std::memory_order_relaxed);
     }
     for (auto& ap : atomPorts_) {
         if (ap.isInput) continue;
@@ -834,6 +842,7 @@ void LV2Plugin::initializePorts() {
 
     controlPorts_.clear();
     controlPortIndices_.clear();
+    latencyControlPosition_ = -1;
     audioInputBuffers_.clear();
     audioOutputBuffers_.clear();
     audioInputPorts_.clear();
@@ -852,43 +861,34 @@ void LV2Plugin::initializePorts() {
     for (uint32_t i = 0; i < numPorts; ++i) {
         const LilvPort* port = lilv_plugin_get_port_by_index(plugin_, i);
         if (!port) continue;
-
         bool isAudio = lilv_port_is_a(plugin_, port, audioClass);
         bool isControl = lilv_port_is_a(plugin_, port, controlClass);
         bool isAtom = lilv_port_is_a(plugin_, port, atomClass);
         bool isInput = lilv_port_is_a(plugin_, port, inputClass);
-
         if (isControl) {
             float defaultVal = 0.0f;
             LilvNode* defNode = nullptr;
             LilvNode* minNode = nullptr;
             LilvNode* maxNode = nullptr;
             lilv_port_get_range(plugin_, port, &defNode, &minNode, &maxNode);
-            if (defNode) {
-                defaultVal = static_cast<float>(lilv_node_as_float(defNode));
-                lilv_node_free(defNode);
-            }
+            if (defNode) { defaultVal = static_cast<float>(lilv_node_as_float(defNode)); lilv_node_free(defNode); }
             if (minNode) lilv_node_free(minNode);
             if (maxNode) lilv_node_free(maxNode);
+            const size_t position = controlPorts_.size();
             controlPorts_.push_back(std::unique_ptr<float>(new float(defaultVal)));
             controlPortIndices_.push_back(i);
+            const LilvNode* symbol = lilv_port_get_symbol(plugin_, port);
+            if (!isInput && symbol && std::strcmp(lilv_node_as_string(symbol), "latency") == 0)
+                latencyControlPosition_ = static_cast<int32_t>(position);
         } else if (isAudio) {
-            if (isInput) {
-                audioInputBuffers_.emplace_back(kMaxLv2BufferFrames, 0.0f);
-                audioInputPorts_.push_back(audioInputBuffers_.back().data());
-            } else {
-                audioOutputBuffers_.emplace_back(kMaxLv2BufferFrames, 0.0f);
-                audioOutputPorts_.push_back(audioOutputBuffers_.back().data());
-            }
+            if (isInput) { audioInputBuffers_.emplace_back(kMaxLv2BufferFrames, 0.0f); audioInputPorts_.push_back(audioInputBuffers_.back().data()); }
+            else { audioOutputBuffers_.emplace_back(kMaxLv2BufferFrames, 0.0f); audioOutputPorts_.push_back(audioOutputBuffers_.back().data()); }
         } else if (isAtom) {
             bool supportsMidi = false;
             LilvNodes* supported = lilv_port_get_value(plugin_, port, atomSupports);
             if (supported) {
                 LILV_FOREACH(nodes, si, supported) {
-                    if (lilv_node_equals(lilv_nodes_get(supported, si), midiEventNode)) {
-                        supportsMidi = true;
-                        break;
-                    }
+                    if (lilv_node_equals(lilv_nodes_get(supported, si), midiEventNode)) { supportsMidi = true; break; }
                 }
                 lilv_nodes_free(supported);
             }
@@ -897,7 +897,6 @@ void LV2Plugin::initializePorts() {
             atomPorts_.push_back({i, isInput, supportsMidi, bufIdx});
         }
     }
-
     lilv_node_free(audioClass);
     lilv_node_free(atomSupports);
     lilv_node_free(midiEventNode);
@@ -1170,11 +1169,13 @@ LV2Plugin::~LV2Plugin() {
 }
 
 void LV2Plugin::activate(float sampleRate, uint32_t /*bufferSize*/) {
+    latencyFrames_.store(0, std::memory_order_relaxed);
     sampleRate_ = sampleRate;
     isActive_ = true;
 }
 
 void LV2Plugin::deactivate() {
+    latencyFrames_.store(0, std::memory_order_relaxed);
     isActive_ = false;
 }
 

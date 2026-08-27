@@ -5,7 +5,7 @@
 #include "JsfxPlugin.h"
 #include "JsfxUiHost.h"
 #include <algorithm>
-#include <cstring>
+#include <cmath>
 
 namespace guitarrackcraft {
 
@@ -85,6 +85,7 @@ JsfxPlugin::~JsfxPlugin() {
 
 void JsfxPlugin::activate(float sampleRate, uint32_t bufferSize) {
     std::lock_guard lock(controlMutex_);
+    latencyFrames_.store(0, std::memory_order_relaxed);
     if (!fx_) return;
     UiPauseGuard pause(uiHost_.get());
     ysfx_set_sample_rate(fx_, sampleRate);
@@ -93,7 +94,11 @@ void JsfxPlugin::activate(float sampleRate, uint32_t bufferSize) {
     ysfx_init(fx_);
     active_.store(true, std::memory_order_release);
 }
-void JsfxPlugin::deactivate() { active_.store(false, std::memory_order_release); }
+
+void JsfxPlugin::deactivate() {
+    active_.store(false, std::memory_order_release);
+    latencyFrames_.store(0, std::memory_order_release);
+}
 
 uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, uint32_t frames,
                              const AudioProcessContext& context, const MidiEvent* inputEvents,
@@ -111,6 +116,13 @@ uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, 
         ysfx_midi_event_t ev{0, inputEvents[i].frameOffset, 3, bytes}; ysfx_send_midi(fx_, &ev);
     }
     ysfx_process_float(fx_, inputs, outputs, 2, 2, frames);
+    const ysfx_real pdc = ysfx_get_pdc_delay(fx_);
+    uint32_t channels[2] = {0, 0};
+    ysfx_get_pdc_channels(fx_, channels);
+    if (std::isfinite(static_cast<double>(pdc)) && pdc >= 0 &&
+        channels[0] == 0 && channels[1] >= 2) {
+        latencyFrames_.store(static_cast<uint32_t>(pdc), std::memory_order_relaxed);
+    }
     uint32_t count = 0; ysfx_midi_event_t ev{};
     while (count < outputCapacity && ysfx_receive_midi(fx_, &ev)) {
         if (ev.size >= 3 && ev.data) outputEvents[count++] = {ev.offset, ev.data[0], ev.data[1], ev.data[2]};

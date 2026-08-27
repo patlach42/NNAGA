@@ -56,6 +56,55 @@ public:
     uint32_t getNumInputPorts() const override { return 2; }
     uint32_t getNumOutputPorts() const override { return 2; }
 };
+class FakeLatencyPlugin final : public IPlugin {
+public:
+    explicit FakeLatencyPlugin(uint32_t latencyFrames)
+        : latencyFrames_(latencyFrames) {}
+
+    void activate(float, uint32_t) override {
+        delayLeft_.fill(0.0f);
+        delayRight_.fill(0.0f);
+        cursor_ = 0;
+    }
+    void deactivate() override {}
+
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        if (latencyFrames_ == 0) {
+            for (uint32_t frame = 0; frame < numFrames; ++frame) {
+                outputs[0][frame] = inputs[0][frame];
+                outputs[1][frame] = inputs[1][frame];
+            }
+            return 0;
+        }
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = delayLeft_[cursor_];
+            outputs[1][frame] = delayRight_[cursor_];
+            delayLeft_[cursor_] = inputs[0][frame];
+            delayRight_[cursor_] = inputs[1][frame];
+            cursor_ = (cursor_ + 1) % latencyFrames_;
+        }
+        return 0;
+    }
+
+    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+    uint32_t getLatencyFrames() const noexcept override { return latencyFrames_; }
+
+private:
+    static constexpr uint32_t kDelayCapacity = 64;
+    const uint32_t latencyFrames_;
+    std::array<float, kDelayCapacity> delayLeft_{};
+    std::array<float, kDelayCapacity> delayRight_{};
+    uint32_t cursor_ = 0;
+};
+
 class SnapshotGatePlugin final : public IPlugin {
 public:
     SnapshotGatePlugin(std::atomic<bool>& blockNext,
@@ -4040,6 +4089,140 @@ TEST(RackGraphStateRestoreTest,
     EXPECT_EQ(firstPluginId(graph.getChain(other)), "other");
     EXPECT_EQ(firstPluginId(graph.getChain(guitarrackcraft::kMasterPathId)),
               "master");
+}
+TEST(RackGraphPdcTest, UnequalTrackLatenciesAlignAtFinalMix) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId delayedTrack = graph.getTracks().front().id;
+    const RackPathId directTrack = graph.addTrack();
+    ASSERT_NE(directTrack, guitarrackcraft::kMasterPathId);
+
+    ASSERT_TRUE(graph.setTrackInputArmed(delayedTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(delayedTrack, 0));
+    ASSERT_TRUE(graph.setTrackInputArmed(directTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(directTrack, 1));
+
+    const auto delayedChain = graph.getChain(delayedTrack);
+    const auto directChain = graph.getChain(directTrack);
+    ASSERT_NE(delayedChain, nullptr);
+    ASSERT_NE(directChain, nullptr);
+    ASSERT_EQ(delayedChain->addPlugin(std::make_unique<FakeLatencyPlugin>(4)), 0);
+    ASSERT_EQ(directChain->addPlugin(std::make_unique<FakeLatencyPlugin>(0)), 0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    clearBuffers(buffers);
+    buffers.left[0] = 1.0f;
+    buffers.right[0] = 2.0f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame == 4 ? 3.0f : 0.0f;
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected) << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected) << "right frame " << frame;
+    }
+}
+
+TEST(RackGraphPdcTest, RoutedLatencyUsesRawPostChainTapsAndAccumulatedPath) {
+    const std::array<guitarrackcraft::TrackInputTap, 2> taps = {{
+        guitarrackcraft::TrackInputTap::PreFader,
+        guitarrackcraft::TrackInputTap::PostFader,
+    }};
+    for (const auto tap : taps) {
+        SCOPED_TRACE(tap == guitarrackcraft::TrackInputTap::PreFader
+                         ? "pre-fader"
+                         : "post-fader");
+        RackGraph graph;
+        configure(graph, 64);
+        const RackPathId sourceTrack = graph.getTracks().front().id;
+        const RackPathId routedTrack = graph.addTrack();
+        const RackPathId independentTrack = graph.addTrack();
+        ASSERT_NE(routedTrack, guitarrackcraft::kMasterPathId);
+        ASSERT_NE(independentTrack, guitarrackcraft::kMasterPathId);
+
+        ASSERT_TRUE(graph.setTrackInputArmed(sourceTrack, true));
+        ASSERT_TRUE(graph.setTrackInputHardwareMono(sourceTrack, 0));
+        ASSERT_TRUE(graph.setTrackVolume(sourceTrack, 0.5f));
+        ASSERT_TRUE(graph.setTrackInputArmed(routedTrack, true));
+        ASSERT_TRUE(graph.setTrackInputTrack(routedTrack, sourceTrack, tap));
+        ASSERT_TRUE(graph.setTrackInputArmed(independentTrack, true));
+        ASSERT_TRUE(graph.setTrackInputHardwareMono(independentTrack, 1));
+
+        const auto sourceChain = graph.getChain(sourceTrack);
+        const auto routedChain = graph.getChain(routedTrack);
+        const auto independentChain = graph.getChain(independentTrack);
+        ASSERT_NE(sourceChain, nullptr);
+        ASSERT_NE(routedChain, nullptr);
+        ASSERT_NE(independentChain, nullptr);
+        ASSERT_EQ(sourceChain->addPlugin(std::make_unique<FakeLatencyPlugin>(3)), 0);
+        ASSERT_EQ(routedChain->addPlugin(std::make_unique<FakeLatencyPlugin>(2)), 0);
+        ASSERT_EQ(independentChain->addPlugin(std::make_unique<FakeLatencyPlugin>(5)), 0);
+
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+        clearBuffers(buffers);
+        buffers.left[0] = 1.0f;
+        buffers.right[0] = 4.0f;
+        graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+        const float routedContribution =
+            tap == guitarrackcraft::TrackInputTap::PreFader ? 1.0f : 0.5f;
+        const float expectedAtAlignment = 0.5f + routedContribution + 4.0f;
+        for (uint32_t frame = 0; frame < 8; ++frame) {
+            const float expected = frame == 5 ? expectedAtAlignment : 0.0f;
+            EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+                << "left frame " << frame;
+            EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+                << "right frame " << frame;
+        }
+    }
+}
+
+TEST(RackGraphPdcTest, CompensatedProcessingDoesNotAllocate) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId delayedTrack = graph.getTracks().front().id;
+    const RackPathId directTrack = graph.addTrack();
+    ASSERT_NE(directTrack, guitarrackcraft::kMasterPathId);
+
+    ASSERT_TRUE(graph.setTrackInputArmed(delayedTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(delayedTrack, 0));
+    ASSERT_TRUE(graph.setTrackInputArmed(directTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(directTrack, 1));
+
+    const auto delayedChain = graph.getChain(delayedTrack);
+    const auto directChain = graph.getChain(directTrack);
+    ASSERT_NE(delayedChain, nullptr);
+    ASSERT_NE(directChain, nullptr);
+    ASSERT_EQ(delayedChain->addPlugin(std::make_unique<FakeLatencyPlugin>(6)), 0);
+    ASSERT_EQ(directChain->addPlugin(std::make_unique<FakeLatencyPlugin>(0)), 0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    clearBuffers(buffers);
+    buffers.left[0] = 1.0f;
+    buffers.right[0] = 2.0f;
+    allocation_probe::allocations = 0;
+    allocation_probe::enabled = true;
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+    allocation_probe::enabled = false;
+
+    EXPECT_EQ(allocation_probe::allocations, 0u);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame == 6 ? 3.0f : 0.0f;
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
 }
 
 } // namespace

@@ -191,6 +191,8 @@ public:
         std::shared_ptr<PluginChain> chain;
         TrackInputSource inputSource{};
         std::vector<float> sourceLeft, sourceRight, outputLeft, outputRight;
+        std::vector<float> latencyHistoryLeft, latencyHistoryRight;
+        uint32_t latencyHistoryWrite = 0;
         std::vector<MidiEvent> midiScratch;
         std::atomic<uint32_t> punchCalibrationRemaining{0}, punchCalibrationFrames{0};
         std::atomic<float> punchNoiseSum{0.0f}, punchThreshold{0.02f};
@@ -205,7 +207,7 @@ public:
         std::atomic<uint8_t> recordQuantization{0};
         TrackNode() = default;
     };
-    struct GraphSnapshot { struct TrackView { std::shared_ptr<TrackNode> node; std::shared_ptr<const WavClip> clip; std::shared_ptr<WavClip> recordingClip; std::shared_ptr<const MidiClip> midi; std::vector<std::shared_ptr<const WavClip>> wavSlots; std::vector<std::shared_ptr<const MidiClip>> midiSlots; std::vector<std::shared_ptr<ClipRuntime>> clipRuntime; std::vector<std::shared_ptr<SlotConfig>> slotConfig; uint32_t selectedSlot{0}; uint32_t recordingSlot{std::numeric_limits<uint32_t>::max()}; uint32_t recordLength{0}; uint64_t recordingGeneration{0}; TrackInputSource inputSource{}; int32_t routeIndex{-1}; }; std::vector<TrackView> tracks; std::vector<uint32_t> topoOrder; std::shared_ptr<PluginChain> master; std::vector<float> mixLeft,mixRight; uint32_t capacity=0; };
+    struct GraphSnapshot { struct TrackView { std::shared_ptr<TrackNode> node; std::shared_ptr<const WavClip> clip; std::shared_ptr<WavClip> recordingClip; std::shared_ptr<const MidiClip> midi; std::vector<std::shared_ptr<const WavClip>> wavSlots; std::vector<std::shared_ptr<const MidiClip>> midiSlots; std::vector<std::shared_ptr<ClipRuntime>> clipRuntime; std::vector<std::shared_ptr<SlotConfig>> slotConfig; uint32_t selectedSlot{0}; uint32_t recordingSlot{std::numeric_limits<uint32_t>::max()}; uint32_t recordLength{0}; uint64_t recordingGeneration{0}; TrackInputSource inputSource{}; int32_t routeIndex{-1}; }; std::vector<TrackView> tracks; std::vector<uint32_t> topoOrder; std::vector<uint32_t> pathLatency; std::shared_ptr<PluginChain> master; std::vector<float> mixLeft,mixRight; uint32_t capacity{0}; };
     struct RetiredSnapshot { std::unique_ptr<GraphSnapshot> owner; RetiredSnapshot* next=nullptr; };
     struct Mailbox { std::atomic<uint64_t> sequence{0}, playSerial{0}, resetSerial{0}, bpmSerial{0}; std::atomic<bool> desiredPlaying{false}; std::atomic<double> desiredBpm{120.0}; };
     std::unique_ptr<GraphSnapshot> activeOwner_; alignas(64) std::atomic<GraphSnapshot*> activeSnapshot_{nullptr}; alignas(64) std::atomic<GraphSnapshot*> hazardSnapshot_{nullptr}; RetiredSnapshot* retired_=nullptr;
@@ -215,6 +217,9 @@ public:
     Mailbox mailbox_; std::atomic<bool> statusPlaying_{false}; std::atomic<double> statusPositionSec_{0}, statusBpm_{120}, statusMusicalQuarterNotes_{0}; std::atomic<uint64_t> statusSamplePosition_{0}, statusTransportFrame_{0}, statusSampleRate_{0}, statusCapturedAtNanos_{0}, statusSequence_{0};
     void writeMailboxLocked(bool, bool, bool, bool=false, double=120); std::unique_ptr<GraphSnapshot> buildSnapshotLocked(const std::vector<std::shared_ptr<TrackNode>>&, const std::vector<std::shared_ptr<const WavClip>>&, const std::vector<std::shared_ptr<WavClip>>& = {}) const; bool publishSnapshotLocked(std::unique_ptr<GraphSnapshot>); bool startTrackRecordingLocked(RackPathId, uint32_t, double, LaunchQuantization, bool); static double clipDuration(const WavClip&); void reclaimerLoop(); void reclaimRetired();
     void applyGlobalMailbox() noexcept; void publishGlobalStatus(double) noexcept; static uint64_t nextBoundary(uint64_t, double, double, double, LaunchQuantization) noexcept;
+    static constexpr uint32_t kLatencyHistoryFrames = 65536;
+    std::array<uint32_t, 256> audioPathLatency_{};
+    uint32_t audioGlobalLatency_ = 0;
     bool clearIncompleteRecordingLocked(size_t) noexcept;
     bool reserveIncompleteRecordingLocked(size_t, RecordingPhase&) noexcept;
     bool clearReservedRecordingLocked(size_t) noexcept;

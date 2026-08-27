@@ -132,6 +132,7 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
         pluginCount_.store(
             static_cast<uint32_t>(plugins_.size()),
             std::memory_order_release);
+        latencyFrames_.store(0, std::memory_order_relaxed);
         LOGI("addPlugin: index=%d sampleRate=%.0f", index, sampleRate_);
         return index;
     }
@@ -151,6 +152,7 @@ bool PluginChain::removePlugin(int index) {
         pluginCount_.store(
             static_cast<uint32_t>(plugins_.size()),
             std::memory_order_release);
+        latencyFrames_.store(0, std::memory_order_relaxed);
     }
 
     // Wine VST teardown can block while the helper process exits. Detach first
@@ -221,6 +223,7 @@ bool PluginChain::reorderPlugins(int fromIndex, int toIndex) {
     plugins_.erase(plugins_.begin() + fromIndex);
     
     plugins_.insert(plugins_.begin() + toIndex, std::move(plugin));
+    latencyFrames_.store(0, std::memory_order_relaxed);
     
     return true;
 }
@@ -284,7 +287,14 @@ uint32_t PluginChain::process(const float* const* inputs, float* const* outputs,
             for (uint32_t j = 0; j < produced; ++j)
                 if (stageOut[j].frameOffset >= numFrames) stageOut[j].frameOffset = numFrames ? numFrames - 1 : 0;
         }
-        if (i + 1 == plugins_.size()) return produced;
+        if (i + 1 == plugins_.size()) {
+            uint64_t totalLatency = 0;
+            for (const auto& slot : plugins_)
+                totalLatency += slot.plugin->getLatencyFrames();
+            latencyFrames_.store(static_cast<uint32_t>(
+                std::min<uint64_t>(totalLatency, UINT32_MAX)), std::memory_order_relaxed);
+            return produced;
+        }
         currentMidi = stageOut;
         currentCount = produced;
         currentOut = (currentOut == midiScratchA_.data()) ? midiScratchB_.data() : midiScratchA_.data();
@@ -297,6 +307,7 @@ uint32_t PluginChain::process(const float* const* inputs, float* const* outputs,
 void PluginChain::setSampleRate(float sampleRate, uint32_t bufferSize) {
     std::unique_lock lock(chainMutex_);
     sampleRate_ = sampleRate;
+    latencyFrames_.store(0, std::memory_order_relaxed);
     bufferSize_ = bufferSize;
     renderBufferSize_ = bufferSize_;
     ensureBuffers(renderBufferSize_, 2);
@@ -306,6 +317,7 @@ void PluginChain::setSampleRate(float sampleRate, uint32_t bufferSize) {
 }
 
 void PluginChain::activate() {
+    latencyFrames_.store(0, std::memory_order_relaxed);
     // No-op: plugins are activated individually in setSampleRate() and addPlugin().
 }
 
@@ -316,6 +328,7 @@ void PluginChain::deactivate() {
     for (auto& slot : plugins_) {
         slot.plugin->deactivate();
     }
+    latencyFrames_.store(0, std::memory_order_relaxed);
     LOGI("deactivate() done tid=%ld", getTid());
 }
 

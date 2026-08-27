@@ -177,6 +177,12 @@ public:
      * Get plugin metadata.
      */
     virtual PluginInfo getInfo() const = 0;
+    /**
+     * Report the plugin's current serial processing latency in frames.
+     * Implementations update this value from their real-time-safe processing
+     * path; callers may read it without taking a lock.
+     */
+    virtual uint32_t getLatencyFrames() const noexcept { return 0; }
 
     /**
      * Set a control parameter value.

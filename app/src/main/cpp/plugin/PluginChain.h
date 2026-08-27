@@ -59,6 +59,7 @@ public:
     }
 
     void setSampleRate(float sampleRate, uint32_t bufferSize = 0);
+    uint32_t getLatencyFrames() const noexcept { return latencyFrames_.load(std::memory_order_relaxed); }
     void activate();
     void deactivate();
 
@@ -117,6 +118,7 @@ private:
     std::vector<PluginSlot> plugins_;
     mutable std::shared_mutex chainMutex_;
     std::atomic<uint32_t> pluginCount_{0};
+    std::atomic<uint32_t> latencyFrames_{0};
 
     float sampleRate_ = 0.0f;
     uint32_t bufferSize_ = 0;
