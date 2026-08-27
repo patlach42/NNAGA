@@ -64,13 +64,6 @@ public:
 
     size_t getSize() const;
     IPlugin* getPlugin(int index);
-    uint32_t getLatencyFrames() const noexcept {
-        return latencyFrames_.load(std::memory_order_acquire);
-    }
-
-    // Latency is published by the render thread and is intentionally independent
-    // of chainMutex_, so graph alignment can observe it without blocking audio.
-
     uint64_t getPluginInstanceId(int index) const;
     void setParameter(int pluginIndex, uint32_t portIndex, float value);
     float getParameter(int pluginIndex, uint32_t portIndex) const;
@@ -124,7 +117,6 @@ private:
     std::vector<PluginSlot> plugins_;
     mutable std::shared_mutex chainMutex_;
     std::atomic<uint32_t> pluginCount_{0};
-    std::atomic<uint32_t> latencyFrames_{0};
 
     float sampleRate_ = 0.0f;
     uint32_t bufferSize_ = 0;

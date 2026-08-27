@@ -87,7 +87,6 @@ public:
                      const AudioProcessContext& context,
                      const MidiEvent* inputEvents, uint32_t inputCount,
                      MidiEvent* outputEvents, uint32_t outputCapacity) override;
-    uint32_t getLatencyFrames() const noexcept override;
     PluginInfo getInfo() const override;
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
@@ -126,7 +125,7 @@ private:
     float sampleRate_;
     std::atomic<bool> isActive_{false};
     std::atomic<bool> processing_{false}; // guards instance_ use in process()
-    std::atomic<uint32_t> latencyFrames_{0};
+
     std::vector<std::unique_ptr<float>> controlPorts_;
     /** Global LV2 port index for each control port (same order as controlPorts_). */
     std::vector<uint32_t> controlPortIndices_;
@@ -134,7 +133,6 @@ private:
     std::vector<std::vector<float>> audioOutputBuffers_;
     std::vector<float*> audioInputPorts_;
     std::vector<float*> audioOutputPorts_;
-    float* latencyPort_ = nullptr;
 
     static constexpr size_t kMaxLv2BufferFrames = 8192;
 

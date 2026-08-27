@@ -189,12 +189,6 @@ public:
         std::shared_ptr<PluginChain> chain;
         TrackInputSource inputSource{};
         std::vector<float> sourceLeft, sourceRight, outputLeft, outputRight;
-        // Fixed-size RT history for per-track latency compensation.
-        // Bounded to 65536 frames (~1.36s @ 48k) to cover long-convolution latency.
-        static constexpr uint32_t kLatencyCompensationCapacity = 65536;
-        std::array<float, 2> compensationWriteScratch{};
-        std::vector<float> compensationHistoryLeft, compensationHistoryRight;
-        uint32_t compensationWriteIndex = 0;
         std::vector<MidiEvent> midiScratch;
         std::atomic<uint32_t> punchCalibrationRemaining{0}, punchCalibrationFrames{0};
         std::atomic<float> punchNoiseSum{0.0f}, punchThreshold{0.02f};
@@ -209,7 +203,7 @@ public:
         std::atomic<uint8_t> recordQuantization{0};
         TrackNode() = default;
     };
-    struct GraphSnapshot { struct TrackView { std::shared_ptr<TrackNode> node; std::shared_ptr<const WavClip> clip; std::shared_ptr<WavClip> recordingClip; std::shared_ptr<const MidiClip> midi; std::vector<std::shared_ptr<const WavClip>> wavSlots; std::vector<std::shared_ptr<const MidiClip>> midiSlots; std::vector<std::shared_ptr<ClipRuntime>> clipRuntime; std::vector<std::shared_ptr<SlotConfig>> slotConfig; uint32_t selectedSlot{0}; uint32_t recordingSlot{std::numeric_limits<uint32_t>::max()}; uint32_t recordLength{0}; uint64_t recordingGeneration{0}; TrackInputSource inputSource{}; int32_t routeIndex{-1}; }; std::vector<TrackView> tracks; std::vector<uint32_t> topoOrder; std::vector<uint32_t> pathLatency; std::shared_ptr<PluginChain> master; std::vector<float> mixLeft,mixRight; uint32_t capacity{}; };
+    struct GraphSnapshot { struct TrackView { std::shared_ptr<TrackNode> node; std::shared_ptr<const WavClip> clip; std::shared_ptr<WavClip> recordingClip; std::shared_ptr<const MidiClip> midi; std::vector<std::shared_ptr<const WavClip>> wavSlots; std::vector<std::shared_ptr<const MidiClip>> midiSlots; std::vector<std::shared_ptr<ClipRuntime>> clipRuntime; std::vector<std::shared_ptr<SlotConfig>> slotConfig; uint32_t selectedSlot{0}; uint32_t recordingSlot{std::numeric_limits<uint32_t>::max()}; uint32_t recordLength{0}; uint64_t recordingGeneration{0}; TrackInputSource inputSource{}; int32_t routeIndex{-1}; }; std::vector<TrackView> tracks; std::vector<uint32_t> topoOrder; std::shared_ptr<PluginChain> master; std::vector<float> mixLeft,mixRight; uint32_t capacity=0; };
     struct RetiredSnapshot { std::unique_ptr<GraphSnapshot> owner; RetiredSnapshot* next=nullptr; };
     struct Mailbox { std::atomic<uint64_t> sequence{0}, playSerial{0}, resetSerial{0}, bpmSerial{0}; std::atomic<bool> desiredPlaying{false}; std::atomic<double> desiredBpm{120.0}; };
     std::unique_ptr<GraphSnapshot> activeOwner_; alignas(64) std::atomic<GraphSnapshot*> activeSnapshot_{nullptr}; alignas(64) std::atomic<GraphSnapshot*> hazardSnapshot_{nullptr}; RetiredSnapshot* retired_=nullptr;

@@ -35,10 +35,9 @@
 
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
 #include <lilv/lilv.h>
-#include <lv2/core/lv2.h>
 #include <lv2/urid/urid.h>
 #include <lv2/atom/util.h>
-#include <limits>
+
 // ---------- Global URID map (shared across all plugin instances + UIs) ------
 
 namespace {
@@ -249,7 +248,6 @@ LV2Plugin::~LV2Plugin() {
 }
 
 void LV2Plugin::activate(float sampleRate, uint32_t bufferSize) {
-    latencyFrames_.store(0, std::memory_order_release);
     LOGI("activate: sampleRate=%.0f bufferSize=%u", sampleRate, bufferSize);
     uint32_t effectiveBlock = kMaxLv2BufferFrames;
     if (bufferSize > 0) {
@@ -513,16 +511,6 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
     // delivered during this run and must be drained before end_run().
     const LV2_Handle workerHandle = lilv_instance_get_handle(instance_);
     lilv_instance_run(instance_, static_cast<uint32_t>(maxCopy));
-    if (latencyPort_) {
-        const double latency = static_cast<double>(*latencyPort_);
-        const uint32_t frames = std::isfinite(latency) && latency > 0.0
-            ? static_cast<uint32_t>(std::min(latency, static_cast<double>(
-                std::numeric_limits<uint32_t>::max())))
-            : 0;
-        latencyFrames_.store(frames, std::memory_order_release);
-    } else {
-        latencyFrames_.store(0, std::memory_order_release);
-    }
     if (workerInterface_ && workerInterface_->work_response) {
         while (workResponses_.consume([&](const WorkerMessage& response) {
             workerInterface_->work_response(workerHandle, response.size, response.data);
@@ -833,9 +821,16 @@ void LV2Plugin::connectPorts() {
             lilv_instance_connect_port(instance_, i, nullptr);
         }
     }
+
+    lilv_node_free(audioClass);
+    lilv_node_free(controlClass);
+    lilv_node_free(inputClass);
 }
+
 void LV2Plugin::initializePorts() {
-    if (!plugin_) return;
+    if (!plugin_) {
+        return;
+    }
 
     controlPorts_.clear();
     controlPortIndices_.clear();
@@ -843,12 +838,10 @@ void LV2Plugin::initializePorts() {
     audioOutputBuffers_.clear();
     audioInputPorts_.clear();
     audioOutputPorts_.clear();
-    latencyPort_ = nullptr;
     atomPortBuffers_.clear();
     atomPorts_.clear();
 
-    const uint32_t numPorts = lilv_plugin_get_num_ports(plugin_);
-    const uint32_t latencyPortIndex = lilv_plugin_get_latency_port_index(plugin_);
+    uint32_t numPorts = lilv_plugin_get_num_ports(plugin_);
     LilvNode* audioClass = lilv_new_uri(world_, LILV_URI_AUDIO_PORT);
     LilvNode* controlClass = lilv_new_uri(world_, LILV_URI_CONTROL_PORT);
     LilvNode* atomClass = lilv_new_uri(world_, LILV_URI_ATOM_PORT);
@@ -859,10 +852,11 @@ void LV2Plugin::initializePorts() {
     for (uint32_t i = 0; i < numPorts; ++i) {
         const LilvPort* port = lilv_plugin_get_port_by_index(plugin_, i);
         if (!port) continue;
-        const bool isAudio = lilv_port_is_a(plugin_, port, audioClass);
-        const bool isControl = lilv_port_is_a(plugin_, port, controlClass);
-        const bool isAtom = lilv_port_is_a(plugin_, port, atomClass);
-        const bool isInput = lilv_port_is_a(plugin_, port, inputClass);
+
+        bool isAudio = lilv_port_is_a(plugin_, port, audioClass);
+        bool isControl = lilv_port_is_a(plugin_, port, controlClass);
+        bool isAtom = lilv_port_is_a(plugin_, port, atomClass);
+        bool isInput = lilv_port_is_a(plugin_, port, inputClass);
 
         if (isControl) {
             float defaultVal = 0.0f;
@@ -878,7 +872,6 @@ void LV2Plugin::initializePorts() {
             if (maxNode) lilv_node_free(maxNode);
             controlPorts_.push_back(std::unique_ptr<float>(new float(defaultVal)));
             controlPortIndices_.push_back(i);
-            if (i == latencyPortIndex && !isInput) latencyPort_ = controlPorts_.back().get();
         } else if (isAudio) {
             if (isInput) {
                 audioInputBuffers_.emplace_back(kMaxLv2BufferFrames, 0.0f);
@@ -899,7 +892,7 @@ void LV2Plugin::initializePorts() {
                 }
                 lilv_nodes_free(supported);
             }
-            const size_t bufIdx = atomPortBuffers_.size();
+            size_t bufIdx = atomPortBuffers_.size();
             atomPortBuffers_.emplace_back(kAtomBufferSize, 0);
             atomPorts_.push_back({i, isInput, supportsMidi, bufIdx});
         }
@@ -911,6 +904,10 @@ void LV2Plugin::initializePorts() {
     lilv_node_free(controlClass);
     lilv_node_free(atomClass);
     lilv_node_free(inputClass);
+
+    LOGI("initializePorts: control=%zu audioIn=%zu audioOut=%zu atom=%zu",
+         controlPorts_.size(), audioInputPorts_.size(), audioOutputPorts_.size(),
+         atomPorts_.size());
 }
 
 // ---------- State path mapping ----------
@@ -1232,9 +1229,5 @@ void LV2Plugin::initializePorts() {
 }
 
 #endif // HAVE_LV2 == 1
-
-uint32_t LV2Plugin::getLatencyFrames() const noexcept {
-    return latencyFrames_.load(std::memory_order_acquire);
-}
 
 } // namespace guitarrackcraft

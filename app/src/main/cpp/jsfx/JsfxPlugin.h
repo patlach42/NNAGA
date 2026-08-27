@@ -27,7 +27,6 @@ public:
     uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
                      const AudioProcessContext& context, const MidiEvent* inputEvents,
                      uint32_t inputCount, MidiEvent* outputEvents, uint32_t outputCapacity) override;
-    uint32_t getLatencyFrames() const noexcept override;
     PluginInfo getInfo() const override;
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
@@ -39,19 +38,17 @@ public:
     JsfxUiHost* jsfxUiHost() noexcept override;
 
 private:
-    PluginInfo info_;
+    static constexpr uint32_t kMaxSliders = ysfx_max_sliders;
     std::shared_ptr<ysfx_config_t> config_;
     ysfx_t* fx_ = nullptr;
     std::unique_ptr<JsfxUiHost> uiHost_;
     std::string path_;
     std::string id_;
-    static constexpr uint32_t kMaxSliders = ysfx_max_sliders;
+    PluginInfo info_;
     std::array<std::atomic<float>, kMaxSliders> pending_{};
     std::array<std::atomic<bool>, kMaxSliders> dirty_{};
-    std::atomic<uint32_t> latencyFrames_{0};
     std::atomic<bool> active_{false};
     mutable std::mutex controlMutex_;
-
 };
- 
+
 } // namespace guitarrackcraft
