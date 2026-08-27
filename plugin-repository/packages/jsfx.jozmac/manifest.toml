@@ -1,0 +1,19 @@
+schema = 1
+id = "jsfx.jozmac"
+name = "Jozmac JSFX"
+version = "4f507485"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Józef Maćkowiak"
+tags = ["midi", "tuner", "utility", "effects"]
+description = "Józef Maćkowiak's JSFX tools and effects, including MIDI utilities and audio processors."
+license = "MIT"
+
+[payload]
+kind = "archive"
+url = "https://codeload.github.com/jozmac/reapack-jm/zip/4f507485554c90dcb6a3670058a8f4812c851518"
+sha256 = "e465cacbe245c318dd59741f242243a404d7ab28a7dcc7780bceb8098dfa48e1"
+size = 2495274
+
+[install]
+entry = "reapack-jm-4f507485554c90dcb6a3670058a8f4812c851518/Effects/JM_MIDI_Chroma_Tuner.jsfx"

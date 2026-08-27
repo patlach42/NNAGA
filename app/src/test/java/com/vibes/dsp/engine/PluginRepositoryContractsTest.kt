@@ -114,15 +114,38 @@ class PluginRepositoryContractsTest {
     }
 
     @Test
-    fun jsfxManifestRequiresFilePayloadAndSafeJsfxEntry() {
+    fun jsfxManifestAcceptsFileAndArchivePayloadsAndSafeJsfxEntry() {
         val valid = jsfxManifest()
+        val archive = valid.copy(
+            kind = "archive",
+            payloadUrl = "https://codeload.github.com/JoepVanlier/JSFX/zip/7d9b1456fbe4543406a4e927c89453a212cab3eb",
+        )
+        val extensionlessArchive = archive.copy(entry = "Effects/example")
 
-        validateRepositoryManifest(valid)
+        listOf(valid, archive, extensionlessArchive).forEach { manifest ->
+            validateRepositoryManifest(manifest)
+        }
+
+        listOf(
+            "installer",
+            "directory",
+            "zip",
+            "raw",
+            "unknown",
+            "ARCHIVE",
+            "",
+        ).forEach { kind ->
+            assertThrows("unsupported JSFX payload kind: $kind", IllegalArgumentException::class.java) {
+                validateRepositoryManifest(valid.copy(kind = kind))
+            }
+        }
 
         listOf(
             "non-jsfx format" to valid.copy(format = "JSFX"),
-            "archive payload kind" to valid.copy(kind = "archive"),
             "archive entry extension" to valid.copy(entry = "Effects/example.zip"),
+            "extensionless file entry" to valid.copy(entry = "Effects/example"),
+            "archive .jsfx-inc entry" to archive.copy(entry = "Effects/example.jsfx-inc"),
+            "archive arbitrary extension" to archive.copy(entry = "Effects/example.zip"),
             "uppercase entry extension" to valid.copy(entry = "Effects/example.JSFX"),
             "absolute entry" to valid.copy(entry = "/Effects/example.jsfx"),
             "traversal entry" to valid.copy(entry = "Effects/../escape.jsfx"),

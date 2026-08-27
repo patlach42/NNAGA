@@ -118,19 +118,30 @@ internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoMa
     validateFacetMetadata(manifest)
     require(manifest.schema == 1 && manifest.id.isNotBlank() && manifest.name.isNotBlank())
     require(packagePattern.matches(manifest.id) && packagePattern.matches(manifest.format) && versionPattern.matches(manifest.version))
-    val expectedKind = when (manifest.format) {
-        "lv2" -> "archive"
-        "wine_installer" -> "installer"
-        "wine_archive" -> "archive"
-        "wine_directory" -> "directory"
-        "jsfx" -> "file"
-        else -> ""
+    val expectedKinds = when (manifest.format) {
+        "lv2" -> setOf("archive")
+        "wine_installer" -> setOf("installer")
+        "wine_archive" -> setOf("archive")
+        "wine_directory" -> setOf("directory")
+        "jsfx" -> setOf("file", "archive")
+        else -> emptySet()
     }
-    require(expectedKind.isNotEmpty() && manifest.kind == expectedKind && manifest.payloadSize in 1..512L * 1024 * 1024)
+    require(expectedKinds.isNotEmpty() && manifest.kind in expectedKinds && manifest.payloadSize in 1..512L * 1024 * 1024)
     require(shaPattern.matches(manifest.payloadSha256) && manifest.arch.contains("arm64-v8a"))
     if (manifest.format == "jsfx") {
         val entry = manifest.entry.replace('\\', '/')
-        require(entry.isNotBlank() && !entry.startsWith('/') && !entry.split('/').contains("..") && entry.endsWith(".jsfx"))
+        require(entry.isNotBlank() && !entry.startsWith('/') && !entry.split('/').contains(".."))
+        when (manifest.kind) {
+            "file" -> require(entry.endsWith(".jsfx"))
+            "archive" -> {
+                val basename = entry.substringAfterLast('/')
+                require(basename.isNotBlank())
+                require(
+                    basename.endsWith(".jsfx") ||
+                        (!basename.contains('.') && !basename.endsWith(".jsfx-inc"))
+                )
+            }
+        }
     }
 }
 internal data class RepositorySourceRecord(
@@ -382,16 +393,20 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             val tmp = File(root, ".download-${UUID.randomUUID()}.tmp")
             var moved = false
             try {
-                require(root.isDirectory || root.mkdirs()) { "Failed to create repository directory: $root" }
-                dir.mkdirs()
-                download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl, m.format == "jsfx"), tmp, m.payloadSize)
-                require(sha256(tmp) == m.payloadSha256) { "Payload SHA-256 mismatch" }
                 if (m.format == "jsfx") {
-                    val payload = File(stage, m.entry).canonicalFile
-                    requireContained(payload, stage)
-                    payload.parentFile?.mkdirs()
-                    Files.move(tmp.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE)
-                    require(payload.isFile)
+                    when (m.kind) {
+                        "file" -> {
+                            val payload = File(stage, m.entry).canonicalFile
+                            requireContained(payload, stage)
+                            payload.parentFile?.mkdirs()
+                            Files.move(tmp.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                            require(payload.isFile)
+                        }
+                        "archive" -> {
+                            extractSafe(tmp, stage)
+                            validateEntry(stage, m.entry)
+                        }
+                    }
                 } else {
                     extractSafe(tmp, stage)
                     validateEntry(stage, m.entry)

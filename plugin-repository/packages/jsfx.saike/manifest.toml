@@ -1,0 +1,19 @@
+schema = 1
+id = "jsfx.saike"
+name = "Saike JSFX"
+version = "7d9b1456"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Joep Vanlier"
+tags = ["dynamics", "delay", "filter", "modulation", "utility"]
+description = "A broad collection of creative effects, dynamics processors, filters, delays, and utilities by Joep Vanlier."
+license = "MIT"
+
+[payload]
+kind = "archive"
+url = "https://codeload.github.com/JoepVanlier/JSFX/zip/7d9b1456fbe4543406a4e927c89453a212cab3eb"
+sha256 = "9114dc3a36c4451547a45f91174959d764d9191c823c988cbef96bf3aad28479"
+size = 27433299
+
+[install]
+entry = "JSFX-7d9b1456fbe4543406a4e927c89453a212cab3eb/Abyss/saike_abyss.jsfx"

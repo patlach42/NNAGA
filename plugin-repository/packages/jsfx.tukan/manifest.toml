@@ -1,0 +1,19 @@
+schema = 1
+id = "jsfx.tukan"
+name = "Tukan Studios JSFX"
+version = "e400035b"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "Tukan Studios"
+tags = ["equalizer", "compressor", "reverb", "delay", "modulation"]
+description = "Tukan Studios' extensive suite of mixing, dynamics, equalization, delay, reverb, and modulation JSFX."
+license = "custom"
+
+[payload]
+kind = "archive"
+url = "https://codeload.github.com/TukanStudios/TUKAN_STUDIOS_PLUGINS/zip/e400035bb4c02bf95c1adbef803cba2e4b6b36b5"
+sha256 = "a825fdcec71f842f9e6aa13ab64a1a5d70ef19a77e481d3a573da417ac4597b1"
+size = 409850943
+
+[install]
+entry = "TUKAN_STUDIOS_PLUGINS-e400035bb4c02bf95c1adbef803cba2e4b6b36b5/AC Trem (Tukan)"

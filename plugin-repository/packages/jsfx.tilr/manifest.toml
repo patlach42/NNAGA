@@ -1,0 +1,19 @@
+schema = 1
+id = "jsfx.tilr"
+name = "tilr JSFX"
+version = "cd533753"
+format = "jsfx"
+arch = ["arm64-v8a"]
+manufacturer = "tiagolr"
+tags = ["delay", "reverb", "modulation", "synthesis"]
+description = "A collection of creative delay, modulation, and synthesis-oriented JSFX by tiagolr."
+license = "MIT"
+
+[payload]
+kind = "archive"
+url = "https://codeload.github.com/tiagolr/tilr_jsfx/zip/cd5337533f20aff4d8ce8001e8cf16da94f23e67"
+sha256 = "019a26e5c522fe40b8bd3ed1bddc213d95a794c51d18340a6b4ac7f70f920faf"
+size = 5071625
+
+[install]
+entry = "tilr_jsfx-cd5337533f20aff4d8ce8001e8cf16da94f23e67/Delay/QuickDelay.jsfx"
