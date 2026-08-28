@@ -904,6 +904,32 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         channel.trySend(value)
     }
     suspend fun getParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int): Float = withContext(Dispatchers.IO) { runCatching { RackManager.getParameter(pathId, pluginIndex, portIndex) }.getOrDefault(0f) }
+    suspend fun getPluginManualLatencyFrames(pathId: RackPathId, pluginIndex: Int): Long =
+        withContext(Dispatchers.IO) {
+            runCatching { RackManager.getManualLatencyFrames(pathId, pluginIndex).toLong() }
+                .getOrDefault(0L)
+        }
+
+    fun setPluginManualLatencyFrames(
+        pathId: RackPathId,
+        pluginIndex: Int,
+        frames: Long,
+        onComplete: (Boolean) -> Unit = {}
+    ) {
+        if (frames !in 0L..Int.MAX_VALUE.toLong()) {
+            onComplete(false)
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = rackControlMutex.withLock {
+                RackManager.setManualLatencyFrames(pathId, pluginIndex, frames.toInt())
+            }
+            if (!ok) _errorMessage.value = "Unable to set manual plugin latency"
+            withContext(Dispatchers.Main) { onComplete(ok) }
+        }
+    }
+
+    fun sampleRateHz(): Float = native.getSampleRate()
     fun getPreferredUiTypeForPlugin(info: PluginInfo): UiType { val stored = PluginUiPreferenceManager.getStoredUiType(getApplication(), info.fullId); return if (stored != null && info.guiTypes.contains(stored)) stored else info.preferredUiType }
     fun setPreferredUiTypeForPlugin(id: String, type: UiType) = PluginUiPreferenceManager.setStoredUiType(getApplication(), id, type)
 

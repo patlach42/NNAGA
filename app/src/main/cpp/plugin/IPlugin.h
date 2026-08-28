@@ -51,6 +51,8 @@ struct PluginState {
     std::string format;
     std::vector<std::pair<uint32_t, float>> controlPortValues;
     std::vector<StateProperty> properties;
+    /** Host-only additive latency compensation; never passed to restoreState(). */
+    uint32_t manualLatencyFrames = 0;
 };
 
 /** Pending native file-picker request from an out-of-process plugin UI. */

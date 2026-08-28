@@ -102,6 +102,14 @@ std::mutex* nnagaNativeRackMutex() noexcept { return g_ctx ? &g_ctx->rackControl
 bool nnagaNativeEngineRunning() noexcept { return g_ctx && g_ctx->audioEngine && g_ctx->audioEngine->isRunning(); }
 const std::string& nnagaNativeJsfxRoot() noexcept { static const std::string empty; return g_ctx ? g_ctx->jsfxRoot : empty; }
 
+void nnagaNativeRebindPluginUIManager(int64_t pathId, PluginChain* chain) noexcept {
+    if (!g_ctx) return;
+    auto it = g_ctx->pluginUIManagers.find(static_cast<jlong>(pathId));
+    if (it != g_ctx->pluginUIManagers.end()) {
+        it->second->rebindChain(chain);
+    }
+}
+
 static PluginUIManager* getPluginUIManagerLocked(NativeContext& ctx, jlong pathId,
                                                   PluginChain* chain) {
     auto it = ctx.pluginUIManagers.find(pathId);
@@ -979,6 +987,25 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetParameter(
     }
 }
 
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetManualLatencyFrames(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint frames) {
+    if (!g_ctx || !g_ctx->audioEngine || frames < 0) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().setManualLatencyFrames(
+        static_cast<RackPathId>(pathId), pluginIndex, static_cast<uint32_t>(frames))
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jint JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetManualLatencyFrames(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex) {
+    if (!g_ctx || !g_ctx->audioEngine) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return static_cast<jint>(g_ctx->audioEngine->getRackGraph().getManualLatencyFrames(
+        static_cast<RackPathId>(pathId), pluginIndex));
+}
+
 JNIEXPORT jfloat JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameter(
     JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex) {
@@ -1006,13 +1033,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeCreateParallelWetReturn(
     JNIEnv*, jobject, jlong sourceId) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->pluginRegistry) return 0;
     std::lock_guard lock(g_ctx->rackControlMutex);
+    auto& graph = g_ctx->audioEngine->getRackGraph();
+    const auto previous = graph.getChain(static_cast<RackPathId>(sourceId));
+    (void)previous;
     RackPathId returnId = 0;
     std::string diagnostic;
-    if (!g_ctx->audioEngine->getRackGraph().createParallelWetReturn(
+    if (!graph.createParallelWetReturn(
             static_cast<RackPathId>(sourceId), *g_ctx->pluginRegistry,
             returnId, diagnostic)) {
         return 0;
     }
+    const auto replacement = graph.getChain(static_cast<RackPathId>(sourceId));
+    nativeRebindPluginUIManager(static_cast<int64_t>(sourceId), replacement.get());
     return static_cast<jlong>(returnId);
 }
 

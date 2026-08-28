@@ -37,6 +37,30 @@ PluginUIManager::~PluginUIManager() {
         destroyPluginUI(static_cast<int>(i));
     }
 }
+void PluginUIManager::rebindChain(PluginChain* chain) {
+    // Invalidate callbacks before destroying their UIs.  The caller retains
+    // the old shared chain while this synchronous teardown is in progress.
+    {
+        std::lock_guard uiLock(uiMutex_);
+        chain_ = nullptr;
+    }
+
+    size_t entryCount = 0;
+    {
+        std::lock_guard uiLock(uiMutex_);
+        entryCount = uiEntries_.size();
+    }
+    for (size_t i = 0; i < entryCount; ++i) {
+        destroyPluginUI(static_cast<int>(i));
+    }
+
+    {
+        std::lock_guard uiLock(uiMutex_);
+        chain_ = chain;
+    }
+}
+
+ 
 
 bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
                                      unsigned long parentWindowId,
@@ -77,6 +101,7 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
     auto paramCb = [this, indexPtr, detachedPtr](uint32_t portIndex, float value) {
         if (detachedPtr->load(std::memory_order_acquire)) return;
         int idx = indexPtr->load(std::memory_order_acquire);
+        std::lock_guard uiLock(uiMutex_);
         if (chain_) chain_->setParameter(idx, portIndex, value);
     };
 
@@ -86,6 +111,7 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
     ui->setAtomCallback([this, indexPtr, detachedPtr](uint32_t portIndex, uint32_t size, const void* data) {
         if (detachedPtr->load(std::memory_order_acquire)) return;
         int idx = indexPtr->load(std::memory_order_acquire);
+        std::lock_guard uiLock(uiMutex_);
         if (chain_) {
             chain_->injectAtom(idx, data, size);
         }

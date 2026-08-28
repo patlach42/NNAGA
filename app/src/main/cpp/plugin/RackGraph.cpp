@@ -699,6 +699,25 @@ TransportSnapshot RackGraph::getTransportSnapshot() const {
     }
 }
 std::shared_ptr<PluginChain> RackGraph::getChain(RackPathId id) const{std::lock_guard lock(controlMutex_);if(id==kMasterPathId)return master_;auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});return it==tracks_.end()?nullptr:(*it)->chain;}
+bool RackGraph::setManualLatencyFrames(RackPathId pathId, int pluginIndex, uint32_t frames) {
+    std::lock_guard lock(controlMutex_);
+    auto chain = pathId == kMasterPathId ? master_ : [&]() -> std::shared_ptr<PluginChain> {
+        auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n) { return n->id == pathId; });
+        return it == tracks_.end() ? nullptr : (*it)->chain;
+    }();
+    if (!chain) return false;
+    if (frames >= kLatencyHistoryFrames) frames = kLatencyHistoryFrames - 1;
+    if (!chain->setManualLatencyFrames(pluginIndex, frames)) return false;
+    return publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_));
+}
+uint32_t RackGraph::getManualLatencyFrames(RackPathId pathId, int pluginIndex) const {
+    std::lock_guard lock(controlMutex_);
+    auto chain = pathId == kMasterPathId ? master_ : [&]() -> std::shared_ptr<PluginChain> {
+        auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n) { return n->id == pathId; });
+        return it == tracks_.end() ? nullptr : (*it)->chain;
+    }();
+    return chain ? chain->getManualLatencyFrames(pluginIndex) : 0;
+}
 void RackGraph::setSampleRate(float rate,uint32_t buffer){std::lock_guard lock(controlMutex_);sampleRate_.store(rate);bufferSize_=buffer;for(auto& n:tracks_){n->sourceLeft.resize(buffer);n->sourceRight.resize(buffer);n->outputLeft.resize(buffer);n->outputRight.resize(buffer);n->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryWrite=0;n->chain->setSampleRate(rate,buffer);}master_->setSampleRate(rate,buffer);(void)publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
 void RackGraph::activate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->activate();master_->activate();}void RackGraph::deactivate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->deactivate();master_->deactivate();}void RackGraph::pauseAndResetTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,false,true);}
 RackGraph::State RackGraph::saveState(){std::lock_guard lock(controlMutex_);State s; s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); for(auto& n:tracks_){State::Track t; t.id=n->id; t.volume=n->volume.load(); t.inputArmed=n->inputArmed.load(); t.inputArmLocked=n->inputArmLocked.load(); t.inputSource=n->inputSource; t.chain=n->chain->saveChainState(); s.tracks.push_back(std::move(t));}s.master=master_->saveChainState();return s;}
@@ -883,7 +902,7 @@ bool RackGraph::createParallelWetReturn(
         auto wetReturn = std::make_shared<TrackNode>();
         wetReturn->id = newId;
         wetReturn->volume.store(1.0f);
-        wetReturn->inputArmed.store(false);
+        wetReturn->inputArmed.store(true);
         wetReturn->chain = std::move(wetChain);
         wetReturn->inputSource.kind = TrackInputSource::Kind::TrackOutput;
         wetReturn->inputSource.trackId = sourceId;
@@ -1465,28 +1484,32 @@ void RackGraph::process(
         const float volume = node.volume.load(std::memory_order_relaxed);
         const uint32_t pathLatency = snapshot->pathLatency[topoIndex];
         const uint32_t delay = globalLatency - pathLatency;
+        auto& historyL = node.latencyHistoryLeft;
+        auto& historyR = node.latencyHistoryRight;
+        uint32_t write = node.latencyHistoryWrite;
         if (directSingleTrack) {
             copyScaled(outputs[0], outputs[1], trackSignal[0], trackSignal[1], frames, volume);
-        } else if (delay == 0) {
-            if (!mixHasData) { copyScaled(snapshot->mixLeft.data(), snapshot->mixRight.data(), trackSignal[0], trackSignal[1], frames, volume); mixHasData = true; }
-            else mixScaled(snapshot->mixLeft.data(), snapshot->mixRight.data(), trackSignal[0], trackSignal[1], frames, volume);
+            // Keep a complete prehistory even while using the direct shortcut so
+            // a later transition to a mixed graph can apply latency immediately.
+            for (uint32_t frame = 0; frame < frames; ++frame) {
+                historyL[write] = trackSignal[0][frame];
+                historyR[write] = trackSignal[1][frame];
+                write = (write + 1) % kLatencyHistoryFrames;
+            }
         } else {
-            auto& historyL = node.latencyHistoryLeft;
-            auto& historyR = node.latencyHistoryRight;
-            uint32_t write = node.latencyHistoryWrite;
             for (uint32_t frame = 0; frame < frames; ++frame) {
                 const uint32_t read = (write + kLatencyHistoryFrames - delay) % kLatencyHistoryFrames;
-                const float delayedL = historyL[read] * volume;
-                const float delayedR = historyR[read] * volume;
+                const float delayedL = delay ? historyL[read] * volume : trackSignal[0][frame] * volume;
+                const float delayedR = delay ? historyR[read] * volume : trackSignal[1][frame] * volume;
                 historyL[write] = trackSignal[0][frame];
                 historyR[write] = trackSignal[1][frame];
                 if (!mixHasData) { snapshot->mixLeft[frame] = delayedL; snapshot->mixRight[frame] = delayedR; }
                 else { snapshot->mixLeft[frame] += delayedL; snapshot->mixRight[frame] += delayedR; }
                 write = (write + 1) % kLatencyHistoryFrames;
             }
-            node.latencyHistoryWrite = write;
             mixHasData = true;
         }
+        node.latencyHistoryWrite = write;
     }
     if (!directSingleTrack) {
         if (!mixHasData) {

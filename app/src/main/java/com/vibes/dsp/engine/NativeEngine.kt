@@ -519,6 +519,8 @@ class NativeEngine private constructor() {
     external fun nativeReorderRack(pathId: Long, fromPos: Int, toPos: Int): Boolean
     external fun nativeSetPluginFilePath(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String)
     external fun nativeSetParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float)
+    external fun nativeSetManualLatencyFrames(pathId: Long, pluginIndex: Int, frames: Int): Boolean
+    external fun nativeGetManualLatencyFrames(pathId: Long, pluginIndex: Int): Int
     external fun nativeGetParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float
     external fun nativeGetParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String
     external fun nativeGetRackSize(pathId: Long): Int
@@ -724,6 +726,10 @@ class NativeEngine private constructor() {
         nativeSetPluginFilePath(pathId, pluginIndex, propertyUri, filePath)
     fun setParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float) =
         nativeSetParameter(pathId, pluginIndex, portIndex, value)
+    fun setManualLatencyFrames(pathId: Long, pluginIndex: Int, frames: Int): Boolean =
+        nativeSetManualLatencyFrames(pathId, pluginIndex, frames)
+    fun getManualLatencyFrames(pathId: Long, pluginIndex: Int): Int =
+        nativeGetManualLatencyFrames(pathId, pluginIndex)
     fun getParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float =
         nativeGetParameter(pathId, pluginIndex, portIndex)
     fun getParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String =

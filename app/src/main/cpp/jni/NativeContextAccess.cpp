@@ -7,6 +7,7 @@ extern NativeContext* nnagaNativeContext() noexcept;
 extern guitarrackcraft::PluginRegistry* nnagaNativePluginRegistry() noexcept;
 extern guitarrackcraft::RackGraph* nnagaNativeRackGraph() noexcept;
 extern std::mutex* nnagaNativeRackMutex() noexcept;
+extern void nnagaNativeRebindPluginUIManager(int64_t, guitarrackcraft::PluginChain*) noexcept;
 extern bool nnagaNativeEngineRunning() noexcept;
 extern const std::string& nnagaNativeJsfxRoot() noexcept;
 namespace guitarrackcraft {
@@ -14,6 +15,9 @@ NativeContext* nativeContext() noexcept { return nnagaNativeContext(); }
 PluginRegistry* nativePluginRegistry() noexcept { return nnagaNativePluginRegistry(); }
 RackGraph* nativeRackGraph() noexcept { return nnagaNativeRackGraph(); }
 std::mutex* nativeRackMutex() noexcept { return nnagaNativeRackMutex(); }
+void nativeRebindPluginUIManager(int64_t pathId, PluginChain* chain) noexcept {
+    nnagaNativeRebindPluginUIManager(pathId, chain);
+}
 std::mutex& nativeRackControlMutex() noexcept { return *nnagaNativeRackMutex(); }
 bool nativeEngineRunning() noexcept { return nnagaNativeEngineRunning(); }
 const std::string& nativeJsfxRoot() noexcept { return nnagaNativeJsfxRoot(); }

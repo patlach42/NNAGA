@@ -39,6 +39,7 @@ namespace guitarrackcraft {
 struct PluginSlot {
     uint64_t instanceId;
     std::unique_ptr<IPlugin> plugin;
+    uint32_t manualLatencyFrames = 0;
 };
 
 class PluginChain {
@@ -67,6 +68,8 @@ public:
     IPlugin* getPlugin(int index);
     uint64_t getPluginInstanceId(int index) const;
     void setParameter(int pluginIndex, uint32_t portIndex, float value);
+    bool setManualLatencyFrames(int pluginIndex, uint32_t frames);
+    uint32_t getManualLatencyFrames(int pluginIndex) const;
     float getParameter(int pluginIndex, uint32_t portIndex) const;
 
     template <typename Callback>

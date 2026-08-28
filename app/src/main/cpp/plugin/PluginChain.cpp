@@ -289,8 +289,10 @@ uint32_t PluginChain::process(const float* const* inputs, float* const* outputs,
         }
         if (i + 1 == plugins_.size()) {
             uint64_t totalLatency = 0;
-            for (const auto& slot : plugins_)
+            for (const auto& slot : plugins_) {
                 totalLatency += slot.plugin->getLatencyFrames();
+                totalLatency += slot.manualLatencyFrames;
+            }
             latencyFrames_.store(static_cast<uint32_t>(
                 std::min<uint64_t>(totalLatency, UINT32_MAX)), std::memory_order_relaxed);
             return produced;
@@ -368,6 +370,24 @@ float PluginChain::getParameter(int pluginIndex, uint32_t portIndex) const {
     }
     return plugins_[pluginIndex].plugin->getParameter(portIndex);
 }
+bool PluginChain::setManualLatencyFrames(int pluginIndex, uint32_t frames) {
+    std::unique_lock lock(chainMutex_);
+    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) return false;
+    plugins_[pluginIndex].manualLatencyFrames = frames;
+    uint64_t total = 0;
+    for (const auto& slot : plugins_)
+        total += static_cast<uint64_t>(slot.plugin->getLatencyFrames()) + slot.manualLatencyFrames;
+    latencyFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(total, UINT32_MAX)),
+                         std::memory_order_release);
+    return true;
+}
+
+uint32_t PluginChain::getManualLatencyFrames(int pluginIndex) const {
+    std::shared_lock lock(chainMutex_);
+    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) return 0;
+    return plugins_[pluginIndex].manualLatencyFrames;
+}
+
 
 void PluginChain::setPluginFilePath(int pluginIndex, const std::string& propertyUri, const std::string& path) {
     std::shared_lock lock(chainMutex_);
@@ -391,6 +411,7 @@ PluginChain::ChainState PluginChain::saveChainState() {
     cs.plugins.reserve(plugins_.size());
     for (auto& slot : plugins_) {
         auto ps = slot.plugin->saveState();
+        ps.manualLatencyFrames = slot.manualLatencyFrames;
         const auto info = slot.plugin->getInfo();
         if (ps.format.empty()) ps.format = info.format;
         if (ps.pluginUri.empty()) {
@@ -415,10 +436,16 @@ PluginChain::ChainState PluginChain::saveChainState() {
 
 bool PluginChain::restorePluginState(int index, const PluginState& state) {
     std::unique_lock lock(chainMutex_);
-    if (index < 0 || index >= static_cast<int>(plugins_.size())) {
-        return false;
-    }
-    bool ok = plugins_[index].plugin->restoreState(state);
+    if (index < 0 || index >= static_cast<int>(plugins_.size())) return false;
+    PluginState pluginState = state;
+    pluginState.manualLatencyFrames = 0;
+    bool ok = plugins_[index].plugin->restoreState(pluginState);
+    plugins_[index].manualLatencyFrames = state.manualLatencyFrames;
+    uint64_t total = 0;
+    for (const auto& slot : plugins_)
+        total += static_cast<uint64_t>(slot.plugin->getLatencyFrames()) + slot.manualLatencyFrames;
+    latencyFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(total, UINT32_MAX)),
+                         std::memory_order_release);
     LOGI("restorePluginState: index=%d ok=%d", index, ok);
     return ok;
 }

@@ -157,6 +157,8 @@ public:
     std::vector<float> getTrackWaveformPeaks(RackPathId, uint32_t maxBuckets) const;
     std::shared_ptr<PluginChain> getChain(RackPathId) const;
     void setSampleRate(float, uint32_t); void activate(); void deactivate(); void pauseAndResetTransport();
+    bool setManualLatencyFrames(RackPathId pathId, int pluginIndex, uint32_t frames);
+    uint32_t getManualLatencyFrames(RackPathId pathId, int pluginIndex) const;
     struct SlotConfig {
         std::atomic<double> defaultLoopLengthBars{1.0};
         std::atomic<bool> enterOnPunch{false};

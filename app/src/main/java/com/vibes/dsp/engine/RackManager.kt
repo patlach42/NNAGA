@@ -26,6 +26,10 @@ object RackManager {
     fun reorder(pathId: RackPathId, fromPos: Int, toPos: Int): Boolean = native.reorderRack(pathId, fromPos, toPos)
     fun setPluginFilePath(pathId: RackPathId, pluginIndex: Int, propertyUri: String, filePath: String) = native.setPluginFilePath(pathId, pluginIndex, propertyUri, filePath)
     fun setParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int, value: Float) = native.setParameter(pathId, pluginIndex, portIndex, value)
+    fun setManualLatencyFrames(pathId: RackPathId, pluginIndex: Int, frames: Int): Boolean =
+        native.setManualLatencyFrames(pathId, pluginIndex, frames)
+    fun getManualLatencyFrames(pathId: RackPathId, pluginIndex: Int): Int =
+        native.getManualLatencyFrames(pathId, pluginIndex)
     fun getParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int): Float = native.getParameter(pathId, pluginIndex, portIndex)
     fun getParameterDisplay(pathId: RackPathId, pluginIndex: Int, portIndex: Int) =
         native.getParameterDisplay(pathId, pluginIndex, portIndex)

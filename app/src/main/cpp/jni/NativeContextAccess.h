@@ -3,6 +3,7 @@
  * NNAGA is free software under the GNU General Public License version 3.
  */
 #pragma once
+#include <cstdint>
 #include <mutex>
 #include <string>
 namespace guitarrackcraft { class PluginRegistry; class RackGraph; class PluginChain; }
@@ -13,6 +14,7 @@ PluginRegistry* nativePluginRegistry() noexcept;
 RackGraph* nativeRackGraph() noexcept;
 std::mutex* nativeRackMutex() noexcept;
 std::mutex& nativeRackControlMutex() noexcept;
+void nativeRebindPluginUIManager(int64_t pathId, PluginChain* chain) noexcept;
 bool nativeEngineRunning() noexcept;
 const std::string& nativeJsfxRoot() noexcept;
 namespace jni {

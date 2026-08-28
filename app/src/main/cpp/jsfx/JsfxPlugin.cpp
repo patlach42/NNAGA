@@ -119,8 +119,10 @@ uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, 
     const ysfx_real pdc = ysfx_get_pdc_delay(fx_);
     uint32_t channels[2] = {0, 0};
     ysfx_get_pdc_channels(fx_, channels);
+    const bool defaultChannels = channels[0] == 0 && channels[1] == 0;
+    const bool stereoChannels = channels[0] == 0 && channels[1] >= 2;
     if (std::isfinite(static_cast<double>(pdc)) && pdc >= 0 &&
-        channels[0] == 0 && channels[1] >= 2) {
+        (defaultChannels || stereoChannels)) {
         latencyFrames_.store(static_cast<uint32_t>(pdc), std::memory_order_relaxed);
     }
     uint32_t count = 0; ysfx_midi_event_t ev{};

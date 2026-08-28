@@ -40,6 +40,10 @@ public:
     void setPathId(int64_t pathId) { pathId_ = pathId; }
     void setChain(PluginChain* chain) { chain_ = chain; }
 
+    /** Tear down UIs bound to the current chain before switching chains.
+     *  The caller must retain the old chain until this call returns. */
+    void rebindChain(PluginChain* chain);
+
     bool createPluginUI(int pluginIndex, int displayNumber,
                         unsigned long parentWindowId,
                         const std::string& nativeLibDir = std::string(),

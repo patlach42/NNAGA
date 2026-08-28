@@ -59,7 +59,12 @@ public:
 class FakeLatencyPlugin final : public IPlugin {
 public:
     explicit FakeLatencyPlugin(uint32_t latencyFrames)
-        : latencyFrames_(latencyFrames) {}
+        : FakeLatencyPlugin(latencyFrames, latencyFrames) {}
+
+    FakeLatencyPlugin(uint32_t physicalLatencyFrames,
+                      uint32_t reportedLatencyFrames)
+        : physicalLatencyFrames_(physicalLatencyFrames),
+          reportedLatencyFrames_(reportedLatencyFrames) {}
 
     void activate(float, uint32_t) override {
         delayLeft_.fill(0.0f);
@@ -73,7 +78,7 @@ public:
                      const guitarrackcraft::AudioProcessContext&,
                      const guitarrackcraft::MidiEvent*, uint32_t,
                      guitarrackcraft::MidiEvent*, uint32_t) override {
-        if (latencyFrames_ == 0) {
+        if (physicalLatencyFrames_ == 0) {
             for (uint32_t frame = 0; frame < numFrames; ++frame) {
                 outputs[0][frame] = inputs[0][frame];
                 outputs[1][frame] = inputs[1][frame];
@@ -85,7 +90,44 @@ public:
             outputs[1][frame] = delayRight_[cursor_];
             delayLeft_[cursor_] = inputs[0][frame];
             delayRight_[cursor_] = inputs[1][frame];
-            cursor_ = (cursor_ + 1) % latencyFrames_;
+            cursor_ = (cursor_ + 1) % physicalLatencyFrames_;
+        }
+        return 0;
+    }
+
+    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+    uint32_t getLatencyFrames() const noexcept override {
+        return reportedLatencyFrames_;
+    }
+
+private:
+    static constexpr uint32_t kDelayCapacity = 64;
+    const uint32_t physicalLatencyFrames_;
+    const uint32_t reportedLatencyFrames_;
+    std::array<float, kDelayCapacity> delayLeft_{};
+    std::array<float, kDelayCapacity> delayRight_{};
+    uint32_t cursor_ = 0;
+};
+class MutableLatencyPlugin final : public IPlugin {
+public:
+    explicit MutableLatencyPlugin(uint32_t latencyFrames)
+        : latencyFrames_(latencyFrames) {}
+
+    void activate(float, uint32_t) override {}
+    void deactivate() override {}
+
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = inputs[0][frame];
+            outputs[1][frame] = inputs[1][frame];
         }
         return 0;
     }
@@ -97,13 +139,12 @@ public:
     uint32_t getNumOutputPorts() const override { return 2; }
     uint32_t getLatencyFrames() const noexcept override { return latencyFrames_; }
 
+    void setLatencyFrames(uint32_t latencyFrames) { latencyFrames_ = latencyFrames; }
+
 private:
-    static constexpr uint32_t kDelayCapacity = 64;
-    const uint32_t latencyFrames_;
-    std::array<float, kDelayCapacity> delayLeft_{};
-    std::array<float, kDelayCapacity> delayRight_{};
-    uint32_t cursor_ = 0;
+    uint32_t latencyFrames_;
 };
+
 
 class SnapshotGatePlugin final : public IPlugin {
 public:
@@ -4102,7 +4143,8 @@ TEST(RackGraphParallelWetReturnTest,
 
     EXPECT_EQ(returnAfter.id, returnId);
     EXPECT_FLOAT_EQ(returnAfter.volume, 1.0f);
-    EXPECT_FALSE(returnAfter.inputArmed);
+    EXPECT_TRUE(returnAfter.inputArmed);
+
     EXPECT_FALSE(returnAfter.inputArmLocked);
     const auto returnInput = graph.getTrackInputSource(returnId);
     EXPECT_EQ(returnInput.kind,
@@ -4121,6 +4163,44 @@ TEST(RackGraphParallelWetReturnTest,
     EXPECT_NE(returnChain->getPluginInstanceId(0), sourceInstanceA);
     EXPECT_NE(returnChain->getPluginInstanceId(1), sourceInstanceB);
 }
+TEST(RackGraphParallelWetReturnTest, ReturnCarriesPreFaderAudioAlongsideDrySource) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId source = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackVolume(source, 0.25f));
+    ASSERT_TRUE(graph.setTrackInputArmed(source, true));
+    ASSERT_TRUE(graph.setTrackInputHardwarePair(source, 0));
+
+    const auto sourceChain = graph.getChain(source);
+    ASSERT_NE(sourceChain, nullptr);
+    ASSERT_EQ(sourceChain->addPlugin(
+                  std::make_unique<ParallelWetTestPlugin>("parallel-a")),
+              0);
+
+    guitarrackcraft::PluginRegistry registry;
+    registry.registerFactory(std::make_unique<ParallelWetTestFactory>());
+    RackPathId returnId = 0;
+    std::string diagnostic;
+    ASSERT_TRUE(graph.createParallelWetReturn(
+                    source, registry, returnId, diagnostic))
+        << diagnostic;
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    buffers.left.fill(2.0f);
+    buffers.right.fill(-3.0f);
+    graph.process(buffers.inputs, 2, buffers.outputs, 4);
+
+    // The dry source is post-fader (0.25x), while the return taps the
+    // source before that fader. Both paths therefore contribute audibly.
+    for (uint32_t frame = 0; frame < 4; ++frame) {
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], 2.5f)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], -3.75f)
+            << "right frame " << frame;
+    }
+}
+
 
 TEST(RackGraphParallelWetReturnTest,
      FailedCloneLeavesSourceChainMetadataAndGraphUnchanged) {
@@ -4326,6 +4406,68 @@ TEST(RackGraphPdcTest, UnequalTrackLatenciesAlignAtFinalMix) {
     }
 }
 
+TEST(RackGraphPdcTest, ManualLatencyOverrideAlignsParallelTracksAndClearRestoresDirectMix) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId delayedTrack = graph.getTracks().front().id;
+    const RackPathId directTrack = graph.addTrack();
+    ASSERT_NE(directTrack, guitarrackcraft::kMasterPathId);
+
+    ASSERT_TRUE(graph.setTrackInputArmed(delayedTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(delayedTrack, 0));
+    ASSERT_TRUE(graph.setTrackInputArmed(directTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(directTrack, 1));
+
+    const auto delayedChain = graph.getChain(delayedTrack);
+    const auto directChain = graph.getChain(directTrack);
+    ASSERT_NE(delayedChain, nullptr);
+    ASSERT_NE(directChain, nullptr);
+    ASSERT_EQ(delayedChain->addPlugin(
+                  std::make_unique<FakeLatencyPlugin>(4, 0)),
+              0);
+    ASSERT_EQ(directChain->addPlugin(std::make_unique<FakeLatencyPlugin>(0)),
+              0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+    EXPECT_FALSE(graph.setManualLatencyFrames(delayedTrack, 1, 4));
+    EXPECT_EQ(graph.getManualLatencyFrames(delayedTrack, 1), 0u);
+    EXPECT_FALSE(graph.setManualLatencyFrames(0xfeed, 0, 4));
+
+    ASSERT_TRUE(graph.setManualLatencyFrames(delayedTrack, 0, 4));
+    EXPECT_EQ(graph.getManualLatencyFrames(delayedTrack, 0), 4u);
+    EXPECT_EQ(delayedChain->getLatencyFrames(), 4u);
+
+    clearBuffers(buffers);
+    buffers.left[0] = 1.0f;
+    buffers.right[0] = 2.0f;
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame == 4 ? 3.0f : 0.0f;
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
+
+    ASSERT_TRUE(graph.setManualLatencyFrames(delayedTrack, 0, 0));
+    EXPECT_EQ(graph.getManualLatencyFrames(delayedTrack, 0), 0u);
+    EXPECT_EQ(delayedChain->getLatencyFrames(), 0u);
+
+    clearBuffers(buffers);
+    buffers.left.fill(3.0f);
+    buffers.right.fill(4.0f);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame < 4 ? 4.0f : 7.0f;
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
+}
+
 TEST(RackGraphPdcTest, RoutedLatencyUsesRawPostChainTapsAndAccumulatedPath) {
     const std::array<guitarrackcraft::TrackInputTap, 2> taps = {{
         guitarrackcraft::TrackInputTap::PreFader,
@@ -4425,5 +4567,97 @@ TEST(RackGraphPdcTest, CompensatedProcessingDoesNotAllocate) {
             << "right frame " << frame;
     }
 }
+
+TEST(RackGraphPdcTest, LatencyChangeUsesContinuousHistoryWithoutAudioAllocation) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId changingTrack = graph.getTracks().front().id;
+    const RackPathId directTrack = graph.addTrack();
+    ASSERT_NE(directTrack, guitarrackcraft::kMasterPathId);
+
+    ASSERT_TRUE(graph.setTrackInputArmed(changingTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(changingTrack, 0));
+    ASSERT_TRUE(graph.setTrackInputArmed(directTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(directTrack, 1));
+
+    const auto changingChain = graph.getChain(changingTrack);
+    ASSERT_NE(changingChain, nullptr);
+    auto changingPlugin = std::make_unique<MutableLatencyPlugin>(0);
+    auto* changingPluginPtr = changingPlugin.get();
+    ASSERT_EQ(changingChain->addPlugin(std::move(changingPlugin)), 0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    buffers.right.fill(10.0f);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    // The chain publishes a changed latency after processing one block. The
+    // staging block is therefore still zero-delay; it must nevertheless
+    // populate history for the following compensated block.
+    changingPluginPtr->setLatencyFrames(4);
+    clearBuffers(buffers);
+    buffers.right.fill(20.0f);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    clearBuffers(buffers);
+    buffers.right.fill(30.0f);
+    allocation_probe::allocations = 0;
+    allocation_probe::enabled = true;
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+    allocation_probe::enabled = false;
+
+    EXPECT_EQ(allocation_probe::allocations, 0u);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame < 4 ? 20.0f : 30.0f;
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
+}
+
+TEST(RackGraphPdcTest, DirectShortcutTransitionUsesSeededHistoryAtBlockBoundary) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(track, 0));
+
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+    auto changingPlugin = std::make_unique<MutableLatencyPlugin>(0);
+    auto* changingPluginPtr = changingPlugin.get();
+    ASSERT_EQ(chain->addPlugin(std::move(changingPlugin)), 0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    buffers.left.fill(3.0f);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    // This block still uses the direct shortcut because the chain's cached
+    // latency is updated at the end of processing. A single path is already
+    // the global maximum, so it must not self-delay while entering the next block.
+    changingPluginPtr->setLatencyFrames(4);
+    clearBuffers(buffers);
+    buffers.left.fill(7.0f);
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    clearBuffers(buffers);
+    buffers.left.fill(11.0f);
+    allocation_probe::allocations = 0;
+    allocation_probe::enabled = true;
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+    allocation_probe::enabled = false;
+
+    EXPECT_EQ(allocation_probe::allocations, 0u);
+    // With no parallel lower-latency path, PDC adds no self-delay.
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], 11.0f)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], 11.0f)
+            << "right frame " << frame;
+    }
+}
+
 
 } // namespace

@@ -77,5 +77,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeImportDeviceChain(
     if (!RackStateCodec::decodeDeviceChain(bytes.data(), bytes.size(), encodedPath, chain, diagnostic) ||
         encodedPath != static_cast<guitarrackcraft::RackPathId>(pathId)) return JNI_FALSE;
     std::lock_guard<std::mutex> lock(*mutex);
-    return graph->importDeviceChain(static_cast<guitarrackcraft::RackPathId>(pathId), chain, *registry, diagnostic) ? JNI_TRUE : JNI_FALSE;
+    const auto previous = graph->getChain(static_cast<guitarrackcraft::RackPathId>(pathId));
+    (void)previous;
+    if (!graph->importDeviceChain(static_cast<guitarrackcraft::RackPathId>(pathId), chain, *registry, diagnostic)) {
+        return JNI_FALSE;
+    }
+    const auto replacement = graph->getChain(static_cast<guitarrackcraft::RackPathId>(pathId));
+    guitarrackcraft::nativeRebindPluginUIManager(static_cast<int64_t>(pathId), replacement.get());
+    return JNI_TRUE;
 }

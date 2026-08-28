@@ -172,7 +172,13 @@ import androidx.compose.animation.core.spring
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.ui.text.input.KeyboardType
+
+
 import kotlin.math.roundToInt
+import kotlin.math.roundToLong
 private const val FALLBACK_JSFX_WIDTH = 640
 private const val FALLBACK_JSFX_HEIGHT = 360
 
@@ -604,11 +610,9 @@ fun RackScreen(
                         value = tempoInput,
                         onValueChange = { tempoInput = it },
                         label = { Text("BPM") },
-                        singleLine = true,
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Decimal
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal
                         ),
-                        isError = tempoInput.isNotBlank() && validTempo == null,
                         shape = MaterialTheme.shapes.small,
                         colors = nnagaOutlinedTextFieldColors(),
                         supportingText = {
@@ -1737,6 +1741,68 @@ private fun PluginChromeButton(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun ManualLatencyDialog(
+    currentFrames: Long,
+    sampleRateHz: Float,
+    onDismiss: () -> Unit,
+    onApply: (Long) -> Unit
+) {
+    var unit by remember { mutableStateOf("Frames") }
+    var input by remember(currentFrames, unit) {
+        mutableStateOf(
+            if (unit == "Frames") currentFrames.toString()
+            else if (sampleRateHz > 0f) "%.3f".format(java.util.Locale.US, currentFrames * 1000.0 / sampleRateHz) else ""
+        )
+    }
+    val parsed = input.trim().toDoubleOrNull()
+    val valid = parsed != null && parsed.isFinite() && parsed >= 0.0 &&
+        ((unit == "Frames" && parsed <= Long.MAX_VALUE.toDouble()) ||
+            (unit == "Milliseconds" && sampleRateHz > 0f &&
+                parsed * sampleRateHz / 1000.0 <= Long.MAX_VALUE.toDouble()))
+    val frames = if (valid) {
+        if (unit == "Frames") parsed!!.toLong() else (parsed!! * sampleRateHz / 1000.0).roundToLong()
+    } else 0L
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Manual plugin latency") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    "Compensates latency that an undeclared plugin does not report, especially in parallel dry/wet paths.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = unit == "Frames", onClick = { unit = "Frames" }, label = { Text("Frames") })
+                    FilterChip(selected = unit == "Milliseconds", onClick = { unit = "Milliseconds" }, label = { Text("Milliseconds") })
+                }
+                OutlinedTextField(
+                    value = input,
+                    onValueChange = { input = it },
+                    label = { Text(unit) },
+                    singleLine = true,
+                    isError = input.isNotBlank() && !valid,
+                    supportingText = {
+                        if (input.isNotBlank() && !valid) Text(
+                            if (unit == "Milliseconds" && sampleRateHz <= 0f) "Sample rate unavailable"
+                            else "Enter a finite, non-negative value"
+                        )
+                    }
+                )
+                Text("Current override: $currentFrames frames", style = MaterialTheme.typography.bodySmall)
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onApply(0L) }) { Text("Clear") }
+                TextButton(enabled = valid, onClick = { onApply(frames) }) { Text("Apply") }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun PluginCard(
     plugin: RackPlugin,
     pluginIndex: Int,
@@ -1771,6 +1837,13 @@ fun PluginCard(
             if (fetched == null || fetched.parameterMetadataRevision > 0L) break
             delay(150)
         }
+    }
+    var showManualLatencyDialog by remember { mutableStateOf(false) }
+    var manualLatencyFrames by remember(pathId, plugin.instanceId, pluginIndex) {
+        mutableLongStateOf(0L)
+    }
+    LaunchedEffect(pathId, plugin.instanceId, pluginIndex) {
+        manualLatencyFrames = viewModel.getPluginManualLatencyFrames(pathId, pluginIndex)
     }
     val pluginInfo = pluginInfoState.value
 
@@ -1902,6 +1975,20 @@ fun PluginCard(
                                 }
                                 Divider()
                             }
+                            DropdownMenuItem(
+                                text = {
+                                    Text(if (manualLatencyFrames > 0L) "Manual latency (${manualLatencyFrames} frames)" else "Manual latency")
+                                },
+                                onClick = {
+                                    showContextMenu = false
+                                    showManualLatencyDialog = true
+                                },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(chromeIconSize))
+                                },
+                                modifier = Modifier.testTag("plugin_manual_latency")
+                            )
+                            Divider()
                             // Scale slider
                             val hasScale = (currentUiMode == UiType.X11 && !x11UserScale.isNaN()) ||
                                     (currentUiMode == UiType.MODGUI && !modguiUserScale.isNaN())
@@ -2020,6 +2107,7 @@ fun PluginCard(
                         PluginChromeButton(
                             compact = compact,
                             onClick = {
+
                                 com.vibes.dsp.ui.vst.VstKeyboardAction.showKeyboard(pathId, pluginIndex)
                             },
                             icon = Icons.Default.Keyboard,
@@ -2040,6 +2128,21 @@ fun PluginCard(
                             contentDescription = "Remove"
                         )
                     }
+                }
+                if (showManualLatencyDialog) {
+                    ManualLatencyDialog(
+                        currentFrames = manualLatencyFrames,
+                        sampleRateHz = viewModel.sampleRateHz(),
+                        onDismiss = { showManualLatencyDialog = false },
+                        onApply = { frames ->
+                            viewModel.setPluginManualLatencyFrames(pathId, pluginIndex, frames) { ok ->
+                                if (ok) {
+                                    manualLatencyFrames = frames
+                                    showManualLatencyDialog = false
+                                }
+                            }
+                        }
+                    )
                 }
 
                 val contentModifier = when {
