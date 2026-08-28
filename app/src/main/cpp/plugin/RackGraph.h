@@ -149,6 +149,7 @@ public:
     bool restoreState(const State&, const PluginRegistry&, std::string& diagnostic, bool restorePlugins = true);
     bool exportDeviceChain(RackPathId, PluginChain::ChainState&, std::string& diagnostic) const;
     bool importDeviceChain(RackPathId, const PluginChain::ChainState&, const PluginRegistry&, std::string& diagnostic);
+    bool createParallelWetReturn(RackPathId sourceId, const PluginRegistry&, RackPathId& returnId, std::string& diagnostic);
     bool setClipTransportPlaying(RackPathId, uint32_t, bool, LaunchQuantization);
     bool setClipTempoMode(RackPathId, uint32_t, ClipTempoMode);
     bool setClipSourceBpm(RackPathId, uint32_t, double);

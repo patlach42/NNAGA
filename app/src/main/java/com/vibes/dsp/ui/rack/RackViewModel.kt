@@ -79,6 +79,8 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     val midiNotes: StateFlow<Map<Pair<RackPathId, Int>, List<MidiNoteInfo>>> = _midiNotes.asStateFlow()
     private val _errorMessage = MutableStateFlow<String?>(null); val errorMessage = _errorMessage.asStateFlow()
     private val _blockingOperation = MutableStateFlow<String?>(null); val blockingOperation = _blockingOperation.asStateFlow()
+    private val _deviceChainGuidance = MutableStateFlow<String?>(null)
+    val deviceChainGuidance: StateFlow<String?> = _deviceChainGuidance.asStateFlow()
     private var lastUsbSignature: List<Long>? = null
     private var failedUsbSessionId: Long = 0
     private val lifecycleMutex = Mutex()
@@ -794,6 +796,29 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.addPlugin(pathId, pluginId, position) < 0) _errorMessage.value = "Failed to add plugin"; refreshSelectedPath() } }
     fun removePlugin(pathId: RackPathId, position: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.removePlugin(pathId, position)) _errorMessage.value = "Failed to remove plugin"; refreshSelectedPath() } }
     fun reorderPlugins(pathId: RackPathId, fromPos: Int, toPos: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.reorder(pathId, fromPos, toPos)) _errorMessage.value = "Failed to reorder plugins"; refreshSelectedPath() } }
+    fun createParallelWetReturn(pathId: RackPathId) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (pathId == MASTER_PATH_ID || !isKnownPath(pathId)) {
+                _errorMessage.value = "Select a track before creating a parallel return"
+                return@launch
+            }
+            val returnId = rackControlMutex.withLock {
+                withBlockingOperation("Creating parallel dry/wet return") {
+                    RackManager.createParallelWetReturn(pathId)
+                }
+            }
+            if (returnId == 0L) {
+                _errorMessage.value = "Unable to create parallel dry/wet return"
+                return@launch
+            }
+            refreshRackNow()
+            if (_tracks.value.any { it.id == returnId }) {
+                selectPath(returnId)
+            }
+            _deviceChainGuidance.value =
+                "Parallel return created: the source track is dry and the return contains its effect chain. Set effects wet-only, then balance the Mixer faders."
+        }
+    }
     fun saveDeviceChain(pathId: RackPathId, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             if (!isKnownPath(pathId)) {

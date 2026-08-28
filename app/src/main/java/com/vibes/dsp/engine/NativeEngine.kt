@@ -625,6 +625,7 @@ class NativeEngine private constructor() {
     fun idlePluginUIs(): Boolean = nativeIdlePluginUIs()
 
 
+    external fun nativeCreateParallelWetReturn(sourceId: Long): Long
     external fun nativeAddTrack(): Long
     external fun nativeRemoveTrack(trackId: Long): Boolean
     external fun nativeGetTracks(): Array<RackTrackInfo>
@@ -737,6 +738,7 @@ class NativeEngine private constructor() {
         nativeImportRackState(bytes, restorePlugins)
     fun exportDeviceChain(pathId: Long): ByteArray? = nativeExportDeviceChain(pathId)
     fun importDeviceChain(pathId: Long, bytes: ByteArray): Boolean = nativeImportDeviceChain(pathId, bytes)
+    fun createParallelWetReturn(sourceId: Long): Long = nativeCreateParallelWetReturn(sourceId)
 
     fun addTrack(): Long = nativeAddTrack()
     fun removeTrack(trackId: Long): Boolean = nativeRemoveTrack(trackId)

@@ -1002,6 +1002,21 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameterDisplay(
 }
 
 JNIEXPORT jlong JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeCreateParallelWetReturn(
+    JNIEnv*, jobject, jlong sourceId) {
+    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->pluginRegistry) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    RackPathId returnId = 0;
+    std::string diagnostic;
+    if (!g_ctx->audioEngine->getRackGraph().createParallelWetReturn(
+            static_cast<RackPathId>(sourceId), *g_ctx->pluginRegistry,
+            returnId, diagnostic)) {
+        return 0;
+    }
+    return static_cast<jlong>(returnId);
+}
+
+JNIEXPORT jlong JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeAddTrack(JNIEnv*, jobject) {
     if (!g_ctx || !g_ctx->audioEngine) return 0;
     std::lock_guard lock(g_ctx->rackControlMutex);

@@ -40,6 +40,8 @@ object RackManager {
     fun importDeviceChain(pathId: RackPathId, bytes: ByteArray): Boolean =
         native.importDeviceChain(pathId, bytes)
 
+    fun createParallelWetReturn(sourceId: RackPathId): RackPathId =
+        native.createParallelWetReturn(sourceId)
 
     fun addTrack(): RackPathId = native.addTrack()
     fun removeTrack(trackId: RackPathId): Boolean = native.removeTrack(trackId)

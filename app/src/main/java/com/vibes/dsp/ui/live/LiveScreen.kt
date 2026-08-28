@@ -236,6 +236,7 @@ fun LiveScreen(
     val xRunCount by viewModel.xRunCount.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
+    val deviceChainGuidance by viewModel.deviceChainGuidance.collectAsState()
     val slotsByTrack by viewModel.clipSlots.collectAsState()
     val peaksByTrack by viewModel.waveformPeaks.collectAsState()
     val notesByClip by viewModel.midiNotes.collectAsState()
@@ -449,6 +450,11 @@ fun LiveScreen(
         if (selectedTrack != null && selectedTrack.id != selectedTrackId) {
             selectedTrackId = selectedTrack.id
             selectedSlot = selectedTrack.selectedSlot
+        }
+    }
+    LaunchedEffect(selectedPath, tracks) {
+        if (selectedPath != MASTER_PATH_ID) {
+            tracks.firstOrNull { it.id == selectedPath }?.let { selectedTrackId = it.id }
         }
     }
 
@@ -929,6 +935,10 @@ fun LiveScreen(
                                 latencyMs = latencyMs,
                                 cpuLoad = cpuLoad,
                                 xRunCount = xRunCount,
+                                canCreateParallelReturn = selectedTrack != null &&
+                                    selectedPath != MASTER_PATH_ID,
+                                guidance = deviceChainGuidance,
+                                onCreateParallelReturn = viewModel::createParallelWetReturn,
                                 onBrowser = { path -> onNavigateToBrowser(path, -1) },
                                 onSaveChain = { path ->
                                     deviceChainPathId = path
@@ -1202,7 +1212,6 @@ private fun TileContainer(
         }
     }
 }
-
 @Composable
 private fun DevicesTile(
     devices: List<com.vibes.dsp.ui.rack.RackPlugin>,
@@ -1212,6 +1221,9 @@ private fun DevicesTile(
     latencyMs: Double,
     cpuLoad: Float,
     xRunCount: Int,
+    canCreateParallelReturn: Boolean,
+    guidance: String?,
+    onCreateParallelReturn: (Long) -> Unit,
     onBrowser: (Long) -> Unit,
     onSaveChain: (Long) -> Unit,
     onLoadChain: (Long) -> Unit,
@@ -1258,6 +1270,14 @@ private fun DevicesTile(
                             onLoadChain(pathId)
                         },
                     )
+                    DropdownMenuItem(
+                        text = { Text("Create parallel dry/wet return") },
+                        enabled = canCreateParallelReturn,
+                        onClick = {
+                            showDeviceChainMenu = false
+                            onCreateParallelReturn(pathId)
+                        },
+                    )
                 }
             }
             Text(
@@ -1283,6 +1303,18 @@ private fun DevicesTile(
                 )
                 Text("ADD", modifier = Modifier.padding(start = LiveDimensions.smallGap))
             }
+        }
+        guidance?.let {
+            Text(
+                text = it,
+                color = LiveColors.textMuted,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(
+                    start = LiveDimensions.gap,
+                    end = LiveDimensions.gap,
+                    bottom = LiveDimensions.smallGap,
+                ),
+            )
         }
         Box(Modifier.fillMaxWidth().weight(1f).clipToBounds()) {
             when {

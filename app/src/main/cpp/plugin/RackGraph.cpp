@@ -777,6 +777,166 @@ bool RackGraph::importDeviceChain(
     return true;
 }
 
+bool RackGraph::createParallelWetReturn(
+        RackPathId sourceId,
+        const PluginRegistry& registry,
+        RackPathId& returnId,
+        std::string& diagnostic) {
+    returnId = 0;
+    std::lock_guard lock(controlMutex_);
+    if (sourceId == kMasterPathId) {
+        diagnostic = "master-path";
+        return false;
+    }
+    if (statusPlaying_.load(std::memory_order_acquire) ||
+        mailbox_.desiredPlaying.load(std::memory_order_acquire)) {
+        diagnostic = "engine-running";
+        return false;
+    }
+    const auto sourceIt = std::find_if(
+        tracks_.begin(), tracks_.end(),
+        [&](const auto& node) { return node && node->id == sourceId; });
+    if (sourceIt == tracks_.end()) {
+        diagnostic = "path-not-found";
+        return false;
+    }
+
+    try {
+        const auto source = *sourceIt;
+        const auto saved = source->chain->saveChainState();
+        const float sampleRate = sampleRate_.load(std::memory_order_relaxed);
+
+        auto buildChain = [&](const PluginChain::ChainState& state)
+                -> std::shared_ptr<PluginChain> {
+            auto chain = std::make_shared<PluginChain>();
+            if (sampleRate > 0.0f) chain->setSampleRate(sampleRate, bufferSize_);
+            for (const auto& pluginState : state.plugins) {
+                if (pluginState.format.empty() || pluginState.pluginUri.empty()) {
+                    diagnostic = "invalid-plugin-id";
+                    return nullptr;
+                }
+                auto plugin = registry.createPlugin(
+                    pluginState.format + ":" + pluginState.pluginUri);
+                if (!plugin) {
+                    diagnostic = "plugin-create-failed:" + pluginState.format +
+                                 ":" + pluginState.pluginUri;
+                    return nullptr;
+                }
+                const int index = chain->addPlugin(std::move(plugin));
+                if (index < 0 || !chain->restorePluginState(index, pluginState)) {
+                    diagnostic = "plugin-restore-failed:" + pluginState.format +
+                                 ":" + pluginState.pluginUri;
+                    return nullptr;
+                }
+            }
+            return chain;
+        };
+
+        auto wetChain = buildChain(saved);
+        if (!wetChain) return false;
+        auto dryChain = std::make_shared<PluginChain>();
+        if (sampleRate > 0.0f) dryChain->setSampleRate(sampleRate, bufferSize_);
+
+        // Clone the source node so the existing graph remains untouched until
+        // the complete replacement snapshot has passed validation.
+        auto drySource = std::make_shared<TrackNode>();
+        drySource->id = source->id;
+        drySource->volume.store(source->volume.load(std::memory_order_relaxed));
+        drySource->inputArmed.store(source->inputArmed.load(std::memory_order_relaxed));
+        drySource->inputArmLocked.store(source->inputArmLocked.load(std::memory_order_relaxed));
+        drySource->inputSource = source->inputSource;
+        drySource->chain = std::move(dryChain);
+        drySource->slotConfig = source->slotConfig;
+        drySource->clipRuntime = source->clipRuntime;
+        drySource->activeSlot.store(source->activeSlot.load(std::memory_order_relaxed));
+        drySource->pendingSwitchSlot.store(source->pendingSwitchSlot.load(std::memory_order_relaxed));
+        drySource->pendingSwitchFrame = source->pendingSwitchFrame;
+        drySource->selectedSlot.store(source->selectedSlot.load(std::memory_order_relaxed));
+        drySource->defaultLoopLengthBars.store(source->defaultLoopLengthBars.load(std::memory_order_relaxed));
+        drySource->sourceLeft = source->sourceLeft;
+        drySource->sourceRight = source->sourceRight;
+        drySource->outputLeft = source->outputLeft;
+        drySource->outputRight = source->outputRight;
+        drySource->latencyHistoryLeft = source->latencyHistoryLeft;
+        drySource->latencyHistoryRight = source->latencyHistoryRight;
+        drySource->latencyHistoryWrite = source->latencyHistoryWrite;
+        drySource->midiScratch = source->midiScratch;
+        drySource->recordingSlot = source->recordingSlot;
+        drySource->recordLength = source->recordLength;
+        drySource->recordingGeneration = source->recordingGeneration;
+        drySource->recordQuantization.store(source->recordQuantization.load(std::memory_order_relaxed));
+        drySource->recordingPhase.store(source->recordingPhase.load(std::memory_order_relaxed));
+        drySource->recordPending.store(source->recordPending.load(std::memory_order_relaxed));
+        drySource->recording.store(source->recording.load(std::memory_order_relaxed));
+        drySource->recordComplete.store(source->recordComplete.load(std::memory_order_relaxed));
+        drySource->punchArmed.store(source->punchArmed.load(std::memory_order_relaxed));
+        drySource->recordingSlotAtomic.store(source->recordingSlotAtomic.load(std::memory_order_relaxed));
+        drySource->recordStartFrame.store(source->recordStartFrame.load(std::memory_order_relaxed));
+        drySource->recordFrame.store(source->recordFrame.load(std::memory_order_relaxed));
+        drySource->recordingGenerationActive.store(source->recordingGenerationActive.load(std::memory_order_relaxed));
+        drySource->punchCalibrationRemaining.store(source->punchCalibrationRemaining.load(std::memory_order_relaxed));
+        drySource->punchCalibrationFrames.store(source->punchCalibrationFrames.load(std::memory_order_relaxed));
+        drySource->punchNoiseSum.store(source->punchNoiseSum.load(std::memory_order_relaxed));
+        drySource->punchThreshold.store(source->punchThreshold.load(std::memory_order_relaxed));
+
+        const RackPathId newId = nextTrackId_;
+        auto wetReturn = std::make_shared<TrackNode>();
+        wetReturn->id = newId;
+        wetReturn->volume.store(1.0f);
+        wetReturn->inputArmed.store(false);
+        wetReturn->chain = std::move(wetChain);
+        wetReturn->inputSource.kind = TrackInputSource::Kind::TrackOutput;
+        wetReturn->inputSource.trackId = sourceId;
+        wetReturn->inputSource.tap = TrackInputTap::PreFader;
+        wetReturn->sourceLeft.resize(bufferSize_);
+        wetReturn->sourceRight.resize(bufferSize_);
+        wetReturn->outputLeft.resize(bufferSize_);
+        wetReturn->outputRight.resize(bufferSize_);
+        wetReturn->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);
+        wetReturn->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);
+
+        auto nodes = tracks_;
+        nodes[static_cast<size_t>(sourceIt - tracks_.begin())] = drySource;
+        nodes.push_back(wetReturn);
+        auto clips = clips_;
+        auto recs = recordingClips_;
+        clips.push_back(nullptr);
+        recs.push_back(nullptr);
+        auto mids = midiClips_;
+        auto slots = wavSlots_;
+        auto midiSlots = midiSlots_;
+        auto labels = clipLabelOverrides_;
+        mids.push_back(nullptr);
+        slots.emplace_back();
+        midiSlots.emplace_back();
+        labels.emplace_back();
+        auto next = buildSnapshotLocked(nodes, clips, recs);
+        if (!next) {
+            diagnostic = "invalid-routing";
+            return false;
+        }
+        if (!publishSnapshotLocked(std::move(next))) {
+            diagnostic = "publish-failed";
+            return false;
+        }
+
+        tracks_ = std::move(nodes);
+        clips_ = std::move(clips);
+        recordingClips_ = std::move(recs);
+        midiClips_.push_back(nullptr);
+        wavSlots_.emplace_back();
+        midiSlots_.emplace_back();
+        clipLabelOverrides_.emplace_back();
+        nextTrackId_ = newId + 1;
+        returnId = newId;
+        diagnostic.clear();
+        return true;
+    } catch (...) {
+        diagnostic = "allocation-failed";
+        return false;
+    }
+}
+
 bool RackGraph::restoreState(
         const State& state,
         const PluginRegistry& registry,

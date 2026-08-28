@@ -3966,6 +3966,212 @@ public:
     }
     bool initialize() override { return true; }
 };
+class ParallelWetTestPlugin final : public guitarrackcraft::IPlugin {
+public:
+    explicit ParallelWetTestPlugin(std::string id) : id_(std::move(id)) {}
+
+    void activate(float sampleRate, uint32_t) override {
+        activatedSampleRate_ = sampleRate;
+    }
+    void deactivate() override {}
+
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames,
+                     const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = inputs[0][frame];
+            outputs[1][frame] = inputs[1][frame];
+        }
+        return 0;
+    }
+
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.id = id_;
+        info.format = "TEST";
+        return info;
+    }
+    void setParameter(uint32_t portIndex, float value) override {
+        if (portIndex == 0) parameter_ = value;
+    }
+    float getParameter(uint32_t portIndex) const override {
+        return portIndex == 0 ? parameter_ : 0.0f;
+    }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+
+    guitarrackcraft::PluginState saveState() override {
+        guitarrackcraft::PluginState state;
+        state.format = "TEST";
+        state.pluginUri = id_;
+        state.controlPortValues.emplace_back(0u, parameter_);
+        return state;
+    }
+    bool restoreState(const guitarrackcraft::PluginState& state) override {
+        if (state.format != "TEST" || state.pluginUri != id_ ||
+            state.controlPortValues.size() != 1u ||
+            state.controlPortValues.front().first != 0u) {
+            return false;
+        }
+        parameter_ = state.controlPortValues.front().second;
+        return true;
+    }
+
+    float activatedSampleRate() const { return activatedSampleRate_; }
+
+private:
+    std::string id_;
+    float parameter_ = 0.0f;
+    float activatedSampleRate_ = 0.0f;
+};
+
+class ParallelWetTestFactory final : public guitarrackcraft::IPluginFactory {
+public:
+    std::string getFormat() const override { return "TEST"; }
+    std::vector<guitarrackcraft::PluginInfo> enumeratePlugins() override { return {}; }
+    std::unique_ptr<guitarrackcraft::IPlugin> createPlugin(
+        const std::string& pluginId) override {
+        if (pluginId == "parallel-a" || pluginId == "parallel-b") {
+            return std::make_unique<ParallelWetTestPlugin>(pluginId);
+        }
+        return nullptr;
+    }
+    bool initialize() override { return true; }
+};
+std::string firstPluginId(const std::shared_ptr<guitarrackcraft::PluginChain>& chain) {
+    if (!chain || chain->getSize() == 0) return {};
+    const auto* plugin = chain->getPlugin(0);
+    return plugin ? plugin->getInfo().id : std::string{};
+}
+
+TEST(RackGraphParallelWetReturnTest,
+     CreatesDrySourceAndClonedPreFaderReturnWithoutChangingSourceMetadata) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId source = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackVolume(source, 0.37f));
+    ASSERT_TRUE(graph.setTrackInputArmed(source, true));
+    ASSERT_TRUE(graph.setTrackInputArmLocked(source, true));
+    ASSERT_TRUE(graph.setTrackInputHardwarePair(source, 2));
+
+    const auto sourceChain = graph.getChain(source);
+    ASSERT_NE(sourceChain, nullptr);
+    ASSERT_EQ(sourceChain->addPlugin(
+                  std::make_unique<ParallelWetTestPlugin>("parallel-a")),
+              0);
+    ASSERT_EQ(sourceChain->addPlugin(
+                  std::make_unique<ParallelWetTestPlugin>("parallel-b")),
+              1);
+    sourceChain->setParameter(0, 0, 0.25f);
+    sourceChain->setParameter(1, 0, 0.75f);
+    const uint64_t sourceInstanceA = sourceChain->getPluginInstanceId(0);
+    const uint64_t sourceInstanceB = sourceChain->getPluginInstanceId(1);
+
+    const auto beforeTracks = graph.getTracks();
+    ASSERT_EQ(beforeTracks.size(), 1u);
+    const auto beforeInput = graph.getTrackInputSource(source);
+
+    guitarrackcraft::PluginRegistry registry;
+    registry.registerFactory(std::make_unique<ParallelWetTestFactory>());
+    RackPathId returnId = 0;
+    std::string diagnostic;
+    ASSERT_TRUE(graph.createParallelWetReturn(
+                    source, registry, returnId, diagnostic))
+        << diagnostic;
+    ASSERT_NE(returnId, 0u);
+    ASSERT_NE(returnId, source);
+
+    const auto tracks = graph.getTracks();
+    ASSERT_EQ(tracks.size(), 2u);
+    std::vector<guitarrackcraft::TrackSnapshot> sourceSnapshotStorage;
+    const auto& sourceAfter = trackSnapshot(graph, source, sourceSnapshotStorage);
+    std::vector<guitarrackcraft::TrackSnapshot> returnSnapshotStorage;
+    const auto& returnAfter = trackSnapshot(graph, returnId, returnSnapshotStorage);
+
+    EXPECT_FLOAT_EQ(sourceAfter.volume, beforeTracks.front().volume);
+    EXPECT_EQ(sourceAfter.inputArmed, beforeTracks.front().inputArmed);
+    EXPECT_EQ(sourceAfter.inputArmLocked, beforeTracks.front().inputArmLocked);
+    const auto sourceInputAfter = graph.getTrackInputSource(source);
+    EXPECT_EQ(sourceInputAfter.kind, beforeInput.kind);
+    EXPECT_EQ(sourceInputAfter.firstChannel, beforeInput.firstChannel);
+    EXPECT_EQ(sourceInputAfter.trackId, beforeInput.trackId);
+    EXPECT_EQ(sourceInputAfter.tap, beforeInput.tap);
+    EXPECT_EQ(graph.getChain(source)->getSize(), 0u);
+
+    EXPECT_EQ(returnAfter.id, returnId);
+    EXPECT_FLOAT_EQ(returnAfter.volume, 1.0f);
+    EXPECT_FALSE(returnAfter.inputArmed);
+    EXPECT_FALSE(returnAfter.inputArmLocked);
+    const auto returnInput = graph.getTrackInputSource(returnId);
+    EXPECT_EQ(returnInput.kind,
+              guitarrackcraft::TrackInputSource::Kind::TrackOutput);
+    EXPECT_EQ(returnInput.trackId, source);
+    EXPECT_EQ(returnInput.tap, guitarrackcraft::TrackInputTap::PreFader);
+
+    const auto returnChain = graph.getChain(returnId);
+    ASSERT_NE(returnChain, nullptr);
+    ASSERT_EQ(returnChain->getSize(), 2u);
+    EXPECT_EQ(firstPluginId(returnChain), "parallel-a");
+    ASSERT_NE(returnChain->getPlugin(1), nullptr);
+    EXPECT_EQ(returnChain->getPlugin(1)->getInfo().id, "parallel-b");
+    EXPECT_FLOAT_EQ(returnChain->getParameter(0, 0), 0.25f);
+    EXPECT_FLOAT_EQ(returnChain->getParameter(1, 0), 0.75f);
+    EXPECT_NE(returnChain->getPluginInstanceId(0), sourceInstanceA);
+    EXPECT_NE(returnChain->getPluginInstanceId(1), sourceInstanceB);
+}
+
+TEST(RackGraphParallelWetReturnTest,
+     FailedCloneLeavesSourceChainMetadataAndGraphUnchanged) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId source = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackVolume(source, 0.61f));
+    ASSERT_TRUE(graph.setTrackInputArmed(source, true));
+    ASSERT_TRUE(graph.setTrackInputHardwarePair(source, 4));
+
+    const auto sourceChain = graph.getChain(source);
+    ASSERT_NE(sourceChain, nullptr);
+    ASSERT_EQ(sourceChain->addPlugin(
+                  std::make_unique<ParallelWetTestPlugin>("parallel-a")),
+              0);
+    ASSERT_EQ(sourceChain->addPlugin(
+                  std::make_unique<ParallelWetTestPlugin>("parallel-missing")),
+              1);
+    sourceChain->setParameter(0, 0, 0.42f);
+    sourceChain->setParameter(1, 0, 0.84f);
+    const auto beforeTracks = graph.getTracks();
+    const auto beforeInput = graph.getTrackInputSource(source);
+
+    guitarrackcraft::PluginRegistry registry;
+    registry.registerFactory(std::make_unique<ParallelWetTestFactory>());
+    RackPathId returnId = 0;
+    std::string diagnostic;
+    EXPECT_FALSE(graph.createParallelWetReturn(
+        source, registry, returnId, diagnostic));
+    EXPECT_FALSE(diagnostic.empty());
+
+    const auto afterTracks = graph.getTracks();
+    ASSERT_EQ(afterTracks.size(), beforeTracks.size());
+    ASSERT_EQ(afterTracks.front().id, source);
+    EXPECT_FLOAT_EQ(afterTracks.front().volume, beforeTracks.front().volume);
+    EXPECT_EQ(afterTracks.front().inputArmed, beforeTracks.front().inputArmed);
+    EXPECT_EQ(afterTracks.front().inputArmLocked,
+              beforeTracks.front().inputArmLocked);
+    const auto afterInput = graph.getTrackInputSource(source);
+    EXPECT_EQ(afterInput.kind, beforeInput.kind);
+    EXPECT_EQ(afterInput.firstChannel, beforeInput.firstChannel);
+    EXPECT_EQ(afterInput.trackId, beforeInput.trackId);
+    EXPECT_EQ(afterInput.tap, beforeInput.tap);
+    ASSERT_EQ(graph.getChain(source)->getSize(), 2u);
+    EXPECT_EQ(firstPluginId(graph.getChain(source)), "parallel-a");
+    ASSERT_NE(graph.getChain(source)->getPlugin(1), nullptr);
+    EXPECT_EQ(graph.getChain(source)->getPlugin(1)->getInfo().id,
+              "parallel-missing");
+    EXPECT_FLOAT_EQ(graph.getChain(source)->getParameter(0, 0), 0.42f);
+    EXPECT_FLOAT_EQ(graph.getChain(source)->getParameter(1, 0), 0.84f);
+}
 
 guitarrackcraft::PluginState serializedPlugin(const char* id) {
     guitarrackcraft::PluginState state;
@@ -3974,11 +4180,6 @@ guitarrackcraft::PluginState serializedPlugin(const char* id) {
     return state;
 }
 
-std::string firstPluginId(const std::shared_ptr<guitarrackcraft::PluginChain>& chain) {
-    if (!chain || chain->getSize() == 0) return {};
-    const auto* plugin = chain->getPlugin(0);
-    return plugin ? plugin->getInfo().id : std::string{};
-}
 
 TEST(RackGraphStateRestoreTest,
      StartupRestorePreservesTracksButLeavesEveryPluginChainEmpty) {
