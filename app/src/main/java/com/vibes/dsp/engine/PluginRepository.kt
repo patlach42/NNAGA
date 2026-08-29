@@ -76,9 +76,23 @@ internal data class RepositoryCatalogEntry(
     val manufacturer: String,
     val tags: List<String>,
     val sourceName: String,
-    val sourceUrl: String,
+    val source: String,
+    val manifestUrl: String,
     val repositoryRoot: String,
 )
+
+internal fun validateRepositorySource(value: String): String {
+    val uri = URI(value.trim())
+    require(uri.scheme.equals("https", ignoreCase = true) && !uri.host.isNullOrBlank()) {
+        "Source must be absolute HTTPS: $value"
+    }
+    require(uri.userInfo == null && uri.query == null && uri.fragment == null && uri.path.isNotBlank()) {
+        "Unsafe source URL: $value"
+    }
+    require(!uri.path.endsWith(".git", ignoreCase = true))
+    require(uri.normalize().path == uri.path && !uri.rawPath.orEmpty().contains("%2e", ignoreCase = true))
+    return uri.normalize().toString()
+}
 
 internal fun parseRepositoryIndex(t: org.tomlj.TomlParseResult): List<RepositoryCatalogEntry> {
     require(!t.hasErrors()) { t.errors().joinToString("; ") }
@@ -98,7 +112,8 @@ internal fun parseRepositoryIndex(t: org.tomlj.TomlParseResult): List<Repository
             ).toList().map {
             it as? String ?: throw IllegalArgumentException("Invalid tags element")
         }
-        RepositoryCatalogEntry(
+        val source = validateRepositorySource(required("source"))
+        val entry = RepositoryCatalogEntry(
             manifest = required("manifest"),
             id = required("id"),
             name = required("name"),
@@ -108,9 +123,11 @@ internal fun parseRepositoryIndex(t: org.tomlj.TomlParseResult): List<Repository
             manufacturer = required("manufacturer"),
             tags = tags,
             sourceName = "",
-            sourceUrl = "",
+            source = source,
+            manifestUrl = "",
             repositoryRoot = "",
         )
+        entry
     }.also { entries ->
         val identities = entries.map { "${it.format}:${it.id}" }
         require(identities.toSet().size == identities.size) { "Duplicate package identity" }
@@ -119,8 +136,8 @@ internal fun parseRepositoryIndex(t: org.tomlj.TomlParseResult): List<Repository
 
 internal fun parseRepositoryManifest(
     text: String,
-    source: String,
-    url: String,
+    sourceName: String,
+    manifestUrl: String,
     repositoryRoot: String,
 ): PluginRepositoryService.RepoManifest {
     val toml = Toml.parse(text)
@@ -151,8 +168,12 @@ internal fun parseRepositoryManifest(
         val size = file.getLong("size") ?: 0L
         RepoManifestFile(fileUrl, hash, size, path)
     }
+    val schema = toml.getLong("schema")?.toInt() ?: 0
+    val declaredSource = toml.getString("source")?.takeIf { it.isNotBlank() }
+        ?.let(::validateRepositorySource)
+    require(declaredSource != null) { "Missing source" }
     return PluginRepositoryService.RepoManifest(
-        schema = toml.getLong("schema")?.toInt() ?: 0,
+        schema = schema,
         id = toml.getString("id").orEmpty(),
         name = toml.getString("name").orEmpty(),
         version = toml.getString("version").orEmpty(),
@@ -165,11 +186,12 @@ internal fun parseRepositoryManifest(
         kind = payload.getString("kind").orEmpty(),
         files = files,
         arch = toml.getArray("arch")?.toList()?.map(Any::toString).orEmpty(),
+        sourceName = sourceName,
+        source = declaredSource,
+        manifestUrl = manifestUrl,
+        repositoryRoot = repositoryRoot,
         manufacturer = manufacturer,
         tags = tags,
-        sourceName = source,
-        sourceUrl = url,
-        repositoryRoot = repositoryRoot,
     ).also(::validateFacetMetadata)
 }
 internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoManifest) {
@@ -178,7 +200,13 @@ internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoMa
     val shaPattern = Regex("[0-9a-f]{64}")
     validateFacetMetadata(manifest)
     require(manifest.schema == 1 && manifest.id.isNotBlank() && manifest.name.isNotBlank())
-    require(packagePattern.matches(manifest.id) && packagePattern.matches(manifest.format) && versionPattern.matches(manifest.version))
+    require(
+        packagePattern.matches(manifest.id) &&
+            packagePattern.matches(manifest.format) &&
+            versionPattern.matches(manifest.version),
+    )
+    val source = requireNotNull(manifest.source) { "Missing source" }
+    require(validateRepositorySource(source) == source) { "Non-canonical source" }
     val expectedKinds = when (manifest.format) {
         "lv2" -> setOf("archive")
         "wine_installer" -> setOf("installer")
@@ -365,7 +393,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
                     require(entry.version.matches(Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")))
                     require(entry.manufacturer.length <= 128 && entry.manufacturer.none { it.isISOControl() })
                     require(entry.tags.size <= 32 && entry.tags.all { it.isNotBlank() && it.length <= 64 && it.none(Char::isISOControl) })
-                    entry.copy(sourceName = source.name, sourceUrl = manifestUrl, repositoryRoot = repositoryRoot.toString())
+                    entry.copy(sourceName = source.name, manifestUrl = manifestUrl, repositoryRoot = repositoryRoot.toString())
                 }
                 val sourceIds = parsed.map { "${it.format}:${it.id}" }
                 require(sourceIds.toSet().size == sourceIds.size) { "Duplicate package identity" }
@@ -419,7 +447,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             requireContained(staged, root)
             val tmp = File(root, ".download-$token.tmp")
             try {
-                download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), m.payloadUrl, false), tmp, m.payloadSize)
+                download(resolveRepositoryPayloadUrl(m.manifestUrl, URI(m.repositoryRoot), m.payloadUrl, false), tmp, m.payloadSize)
                 require(sha256(tmp) == m.payloadSha256) { "Payload SHA-256 mismatch" }
                 Files.move(tmp.toPath(), staged.toPath())
                 stagedManifests[token] = StagedRepositoryPayload(m, staged)
@@ -464,11 +492,11 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             val m = fullManifest(id); val installRoot = if (m.format == "jsfx") jsfxInstalledRoot else installedRoot; val relative = if (m.format == "jsfx") m.id else "${m.format}/${m.id}"; val dir = File(installRoot, relative).canonicalFile; requireContained(dir, installRoot); val target = File(dir, m.version).canonicalFile; requireContained(target, dir); require(!target.exists() || update); val stage = File(dir, ".${m.version}.${UUID.randomUUID()}.staging"); val backup = File(dir, ".${m.version}.${UUID.randomUUID()}.backup"); val tmp = File(root, ".download-${UUID.randomUUID()}.tmp"); var moved = false
             try {
                 if (m.format == "jsfx" && m.kind == "files") {
-                    m.files.forEach { declared -> val payload = File(stage, declared.path.replace('\\', '/')).canonicalFile; requireContained(payload, stage); payload.parentFile?.mkdirs(); val ft = File(root, ".download-${UUID.randomUUID()}.tmp"); try { download(resolveRepositoryPayloadUrl(m.sourceUrl, URI(m.repositoryRoot), declared.url, true), ft, declared.size); require(ft.length() == declared.size); require(sha256(ft) == declared.sha256); Files.move(ft.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE) } finally { ft.delete() } }; validateEntry(stage, m.entry)
+                    m.files.forEach { declared -> val payload = File(stage, declared.path.replace('\\', '/')).canonicalFile; requireContained(payload, stage); payload.parentFile?.mkdirs(); val ft = File(root, ".download-${UUID.randomUUID()}.tmp"); try { download(resolveRepositoryPayloadUrl(m.manifestUrl, URI(m.repositoryRoot), declared.url, true), ft, declared.size); require(ft.length() == declared.size); require(sha256(ft) == declared.sha256); Files.move(ft.toPath(), payload.toPath(), StandardCopyOption.ATOMIC_MOVE) } finally { ft.delete() } }; validateEntry(stage, m.entry)
                 } else {
                     download(
                         resolveRepositoryPayloadUrl(
-                            m.sourceUrl,
+                            m.manifestUrl,
                             URI(m.repositoryRoot),
                             m.payloadUrl,
                             false,
@@ -499,9 +527,9 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
         cache[packageId]?.takeIf { manifestMatchesSummary(it, expected) }?.let { return it }
         cache.remove(packageId)
         val manifest = parseManifest(
-            fetchText(expected.sourceUrl),
+            fetchText(expected.manifestUrl),
             expected.sourceName,
-            expected.sourceUrl,
+            expected.manifestUrl,
             expected.repositoryRoot,
         )
         validate(manifest)
@@ -519,7 +547,9 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             manifest.description == entry.description &&
             manifest.manufacturer == entry.manufacturer &&
             manifest.tags == entry.tags &&
-            manifest.sourceUrl == entry.sourceUrl
+            manifest.source == entry.source &&
+            manifest.manifestUrl == entry.manifestUrl &&
+            manifest.repositoryRoot == entry.repositoryRoot
     private fun publishCurrent(){ publish(loadSources(), catalog.values.toList(), null) }
     private fun publish(
         sources: List<RepositorySourceRecord>,
@@ -548,6 +578,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
                 name = entry.name,
                 format = entry.format,
                 sourceName = entry.sourceName,
+                source = entry.source,
                 availableVersion = entry.version,
                 installedVersion = installedVersion,
                 description = entry.description,
@@ -562,6 +593,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
                 name = manifest.name,
                 format = manifest.format,
                 sourceName = manifest.sourceName,
+                source = manifest.source,
                 availableVersion = null,
                 installedVersion = installedPackage.version,
                 description = manifest.description,
@@ -608,7 +640,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             }
         return out
     }
-    private fun writeMetadata(dir:File,m:RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("manufacturer",m.manufacturer);put("tags",m.tags.joinToString("\u001f"));put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir,META)),null)} }
+    private fun writeMetadata(dir:File,m:RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("manufacturer",m.manufacturer);put("tags",m.tags.joinToString("\u001f"));m.source?.let { put("source", it) };put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir,META)),null)} }
     private fun readOwnership(dir:File): WineInstallOwnership? = runCatching { Properties().apply { load(FileInputStream(File(dir,META))) }.let { p -> WineInstallOwnership(p.getProperty("ownership.vstUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.executableUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.prefixPaths","").split(File.pathSeparator).filter(String::isNotBlank)) } }.getOrNull()
     private fun mergeOwnership(a: WineInstallOwnership, b: WineInstallOwnership) = WineInstallOwnership(
         (a.vstUuids + b.vstUuids).distinct(),
@@ -617,7 +649,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     )
     private fun readMetadata(dir:File): RepoManifest? = runCatching {
         Properties().apply { load(FileInputStream(File(dir, META))) }.let { p ->
-            RepoManifest(1, p.getProperty("id",""), p.getProperty("name",""), p.getProperty("version",""), p.getProperty("format",""), p.getProperty("description",""), "", "", 1, "", p.getProperty("kind","archive"), emptyList(), sourceName = "Installed", manufacturer = p.getProperty("manufacturer","Unknown"), tags = p.getProperty("tags","").split("\u001f").filter(String::isNotBlank))
+            RepoManifest(1, p.getProperty("id",""), p.getProperty("name",""), p.getProperty("version",""), p.getProperty("format",""), p.getProperty("description",""), "", "", 1, "", p.getProperty("kind","archive"), emptyList(), sourceName = "Installed", source = p.getProperty("source"), manufacturer = p.getProperty("manufacturer","Unknown"), tags = p.getProperty("tags","").split("\u001f").filter(String::isNotBlank))
         }
     }.getOrNull()
     private fun setPackageState(id:String,op:RepositoryPackageOperation?,progress:Float?,error:String?){state.value=state.value.copy(packages=state.value.packages.map{if(it.id==id)it.copy(operation=op,progress=progress,errorMessage=error,status=if(error!=null)RepositoryPackageStatus.Error else it.status)else it})}
@@ -647,12 +679,20 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
         if (migrated != stored) saveSources(migrated)
         return migrated
     }
-    private fun builtin()=RepositorySourceRecord("builtin","NNAGA Base",BUILTIN_INDEX_URL,true,false,null)
+    private fun builtin(): RepositorySourceRecord =
+        RepositorySourceRecord(
+            id = "builtin",
+            name = "NNAGA Plugin Repository",
+            url = BUILTIN_INDEX_URL,
+            enabled = true,
+            custom = false,
+            lastError = null,
+        )
+    data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val source:String?=null,val manifestUrl:String="",val repositoryRoot:String="",val manufacturer:String="Unknown",val tags:List<String> = emptyList(),val files:List<RepoManifestFile> = emptyList())
     private fun encode(s:RepositorySourceRecord)=Base64.encodeToString(listOf(s.id,s.name,s.url,s.enabled,s.custom,s.lastError?:"").joinToString("\u0001").toByteArray(),Base64.NO_WRAP)
     private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{RepositorySourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
-    data class RepoManifest(val schema:Int,val id:String,val name:String,val version:String,val format:String,val description:String,val payloadUrl:String,val payloadSha256:String,val payloadSize:Long,val entry:String,val kind:String,val arch:List<String>,val sourceName:String="",val sourceUrl:String="",val repositoryRoot:String="",val manufacturer:String="Unknown",val tags:List<String> = emptyList(),val files:List<RepoManifestFile> = emptyList())
     private data class Installed(val version:String,val manifest:RepoManifest)
-    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-27";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
+    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-28";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
     private fun sha256(b:ByteArray)=digest(b.inputStream())
     private fun sha256(f:File)=digest(f.inputStream())
     private fun digest(i:java.io.InputStream):String { val md=MessageDigest.getInstance("SHA-256"); i.use { val buf=ByteArray(8192); while(true){val n=it.read(buf);if(n<0)break;md.update(buf,0,n)} }; return md.digest().joinToString(""){"%02x".format(it)} }

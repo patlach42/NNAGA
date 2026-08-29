@@ -39,6 +39,9 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                         "descriptions": {
                             "Example": "  Stereo delay for spacious guitar echoes  "
                         },
+                        "sources": {
+                            "Example": "https://example.com/plugins/example"
+                        },
                     }
                 ),
                 encoding="utf-8",
@@ -79,11 +82,11 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                 payload = payload_path.read_bytes()
                 self.assertEqual(2, index["schema"])
                 self.assertEqual("nnaga-plugin-repository", index["repository"])
-                self.assertEqual("2026-08-27", index["release"])
+                self.assertEqual("2026-08-28", index["release"])
                 self.assertEqual(
                     [
                         {
-                            "manifest": "packages/lv2.example/manifest.toml?v=2026-08-27",
+                            "manifest": "packages/lv2.example/manifest.toml?v=2026-08-28",
                             "id": "lv2.example",
                             "name": "Example",
                             "version": "1.0.0",
@@ -91,11 +94,13 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                             "description": "Stereo delay for spacious guitar echoes.",
                             "manufacturer": "Example Audio",
                             "tags": ["Delay"],
+                            "source": "https://example.com/plugins/example",
                         }
                     ],
                     index["packages"],
                 )
                 self.assertEqual("lv2.example", manifest["id"])
+                self.assertEqual("https://example.com/plugins/example", manifest["source"])
                 self.assertEqual("Example Audio", manifest["manufacturer"])
                 self.assertEqual(["Delay"], manifest["tags"])
                 self.assertEqual(
@@ -143,9 +148,9 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                 self.assertFalse(stale_package_dir.exists())
                 self.assertFalse(stale_payload_file.exists())
                 self.assertFalse(stale_payload_dir.exists())
-                before_check = self._snapshot(output)
+                after_cleanup = self._snapshot(output)
                 self.assertEqual(0, generator.generate(check=True))
-                self.assertEqual(before_check, self._snapshot(output))
+                self.assertEqual(after_cleanup, self._snapshot(output))
 
     def test_target_display_names_preserve_install_entries_and_identity(self):
         manifests = self._generate_target_manifests()
@@ -157,6 +162,14 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
         self.assertEqual(
             "four_k_eq_2.lv2/manifest.ttl",
             manifests["lv2.fourkeq2"]["install"]["entry"],
+        )
+        self.assertEqual(
+            "https://github.com/x42/fil4.lv2",
+            manifests["lv2.fil4"]["source"],
+        )
+        self.assertEqual(
+            "https://github.com/4k-eq/4k-eq-2.lv2",
+            manifests["lv2.fourkeq2"]["source"],
         )
         for package in ("lv2.fil4", "lv2.fourkeq2"):
             self.assertIn("EQ", manifests[package]["tags"])
@@ -176,6 +189,7 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
             metadata = root / "plugin_metadata.json"
             descriptions = root / "plugin_descriptions.json"
             output = root / "output"
+            libs.mkdir(parents=True)
             for stem, binary in (("fil4", "fil4.so"), ("four_k_eq_2", "four_k_eq_2.so")):
                 bundle = assets / f"{stem}.lv2"
                 bundle.mkdir(parents=True)
@@ -184,14 +198,16 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
                     f"<http://example.test/{stem}> lv2:binary <{binary}> .\n",
                     encoding="utf-8",
                 )
-                (bundle / f"{stem}.ttl").write_text("", encoding="utf-8")
-                (libs / f"lib{binary}").parent.mkdir(parents=True, exist_ok=True)
                 (libs / f"lib{binary}").write_bytes(f"{stem} binary".encode())
             metadata.write_text(
                 json.dumps(
                     {
                         "authors": {"fil4": "x42", "4K EQ 2": "Dusk Audio"},
                         "categories": {"fil4": "EQPlugin", "4K EQ 2": "EQPlugin"},
+                        "sources": {
+                            "fil4": "https://github.com/x42/fil4.lv2",
+                            "4K EQ 2": "https://github.com/4k-eq/4k-eq-2.lv2",
+                        },
                     }
                 ),
                 encoding="utf-8",

@@ -32,6 +32,30 @@ class PluginRepositoryContractsTest {
     }
 
     @Test
+    fun validatesCanonicalHttpsSourceProvenance() {
+        assertEquals(
+            "https://github.com/JoepVanlier/JSFX",
+            validateRepositorySource("https://github.com/JoepVanlier/JSFX"),
+        )
+
+        listOf(
+            "blank" to "",
+            "whitespace" to "   ",
+            "relative" to "github.com/JoepVanlier/JSFX",
+            "non-HTTPS" to "http://github.com/JoepVanlier/JSFX",
+            "credentials" to "https://user:secret@github.com/JoepVanlier/JSFX",
+            "query" to "https://github.com/JoepVanlier/JSFX?tab=readme",
+            "fragment" to "https://github.com/JoepVanlier/JSFX#readme",
+            "no host" to "https:///JoepVanlier/JSFX",
+            "git suffix" to "https://github.com/JoepVanlier/JSFX.git",
+        ).forEach { (case, source) ->
+            assertThrows(case, IllegalArgumentException::class.java) {
+                validateRepositorySource(source)
+            }
+        }
+    }
+
+    @Test
     fun resolvesPayloadsInsideFileAndHttpsRepositoryRoots() {
         val cases = listOf(
             URI("file:///repo/index.toml") to URI("file:///repo/"),
@@ -239,6 +263,7 @@ class PluginRepositoryContractsTest {
             arch = ["arm64-v8a"]
             manufacturer = "Acme Audio"
             tags = ["JSFX"]
+            source = "https://github.com/JoepVanlier/JSFX"
 
             [payload]
             kind = "files"
@@ -258,8 +283,8 @@ class PluginRepositoryContractsTest {
             [install]
             entry = "Effects/example.jsfx"
             """.trimIndent(),
-            source = "Test source",
-            url = "https://plugins.example/repo/example.toml",
+            sourceName = "Test source",
+            manifestUrl = "https://plugins.example/repo/example.toml",
             repositoryRoot = "https://plugins.example/repo/",
         )
 
@@ -316,7 +341,8 @@ class PluginRepositoryContractsTest {
         files = files,
         arch = listOf("arm64-v8a"),
         sourceName = "Test source",
-        sourceUrl = "https://plugins.example/repo/example.toml",
+        source = "https://github.com/JoepVanlier/JSFX",
+        manifestUrl = "https://plugins.example/repo/example.toml",
         repositoryRoot = "https://plugins.example/repo/",
         manufacturer = "Acme Audio",
         tags = listOf("JSFX"),
@@ -337,7 +363,8 @@ class PluginRepositoryContractsTest {
         kind = "file",
         arch = listOf("arm64-v8a"),
         sourceName = "Test source",
-        sourceUrl = "https://plugins.example/repo/example.toml",
+        source = "https://github.com/JoepVanlier/JSFX",
+        manifestUrl = "https://plugins.example/repo/example.toml",
         repositoryRoot = "https://plugins.example/repo/",
         manufacturer = "Acme Audio",
         tags = listOf("JSFX"),
@@ -356,7 +383,7 @@ class PluginRepositoryContractsTest {
         val currentBuiltin = RepositorySourceRecord(
             id = "builtin",
             name = "NNAGA Base",
-            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-27",
+            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-28",
             enabled = true,
             custom = false,
             lastError = null,
@@ -380,7 +407,7 @@ class PluginRepositoryContractsTest {
         val builtin = RepositorySourceRecord(
             id = "builtin",
             name = "NNAGA Base",
-            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-27",
+            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-28",
             enabled = true,
             custom = false,
             lastError = null,
@@ -425,7 +452,7 @@ class PluginRepositoryContractsTest {
             """
             schema = 2
             repository = "NNAGA"
-            release = "2026-08-27"
+            release = "2026-08-28"
             packages = [
             """.trimIndent(),
         )
@@ -441,7 +468,7 @@ class PluginRepositoryContractsTest {
             """
             schema = 2
             repository = "NNAGA Plugin Repository"
-            release = "2026-08-27"
+            release = "2026-08-28"
 
             [[packages]]
             manifest = "packages/lv2/echo/manifest.toml"
@@ -452,6 +479,7 @@ class PluginRepositoryContractsTest {
             description = "A spatial delay"
             manufacturer = "Acme Audio"
             tags = ["Delay", "Stereo"]
+            source = "https://github.com/acme/echo"
 
             [[packages]]
             manifest = "packages/wine/foo/manifest.toml"
@@ -462,6 +490,8 @@ class PluginRepositoryContractsTest {
             description = "A Windows plug-in"
             manufacturer = "Tone Forge"
             tags = ["Compressor"]
+            source = "https://github.com/tone-forge/foo"
+
             """.trimIndent(),
         )
 
@@ -480,6 +510,35 @@ class PluginRepositoryContractsTest {
             listOf(listOf("Delay", "Stereo"), listOf("Compressor")),
             entries.map { it.tags },
         )
+        assertEquals(
+            listOf("https://github.com/acme/echo", "https://github.com/tone-forge/foo"),
+            entries.map { it.source },
+        )
+    }
+
+    @Test
+    fun schema2IndexRequiresSourceProvenance() {
+        val missingSource = Toml.parse(
+            """
+            schema = 2
+            repository = "NNAGA Plugin Repository"
+            release = "2026-08-28"
+
+            [[packages]]
+            manifest = "packages/lv2/example/manifest.toml"
+            id = "example"
+            name = "Example"
+            version = "1.0.0"
+            format = "lv2"
+            description = "A spatial delay"
+            manufacturer = "Acme Audio"
+            tags = ["Delay"]
+            """.trimIndent(),
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            parseRepositoryIndex(missingSource)
+        }
     }
 
     @Test
@@ -488,7 +547,7 @@ class PluginRepositoryContractsTest {
             """
             schema = 2
             repository = "NNAGA"
-            release = "2026-08-27"
+            release = "2026-08-28"
 
             [[packages]]
             manifest = "packages/one.toml"
@@ -499,6 +558,7 @@ class PluginRepositoryContractsTest {
             description = "First"
             manufacturer = "Acme"
             tags = []
+            source = "https://github.com/acme/one"
 
             [[packages]]
             manifest = "packages/two.toml"
@@ -509,6 +569,7 @@ class PluginRepositoryContractsTest {
             description = "Second"
             manufacturer = "Acme"
             tags = []
+            source = "https://github.com/acme/one"
             """.trimIndent(),
         )
         assertThrows(IllegalArgumentException::class.java) {
@@ -518,7 +579,7 @@ class PluginRepositoryContractsTest {
             """
             schema = 2
             repository = "NNAGA"
-            release = "2026-08-27"
+            release = "2026-08-28"
 
             [[packages]]
             manifest = "packages/lv2/same.toml"
@@ -529,6 +590,7 @@ class PluginRepositoryContractsTest {
             description = "LV2 package"
             manufacturer = "Acme"
             tags = []
+            source = "https://github.com/acme/same"
 
             [[packages]]
             manifest = "packages/jsfx/same.toml"
@@ -539,6 +601,7 @@ class PluginRepositoryContractsTest {
             description = "JSFX package"
             manufacturer = "Acme"
             tags = []
+            source = "https://github.com/acme/same"
             """.trimIndent(),
         )
         assertEquals(2, parseRepositoryIndex(sameIdDifferentFormats).size)
@@ -548,7 +611,7 @@ class PluginRepositoryContractsTest {
             """
             schema = 2
             repository = "NNAGA"
-            release = "2026-08-27"
+            release = "2026-08-28"
 
             [[packages]]
             manifest = "packages/one.toml"
@@ -558,6 +621,7 @@ class PluginRepositoryContractsTest {
             format = "lv2"
             manufacturer = "Acme"
             tags = []
+            source = "https://github.com/acme/one"
             """.trimIndent(),
         )
         assertThrows(IllegalArgumentException::class.java) {
@@ -579,6 +643,7 @@ class PluginRepositoryContractsTest {
             arch = ["arm64-v8a"]
             manufacturer = "Acme Audio"
             tags = ["Delay", "Creative"]
+            source = "https://github.com/JoepVanlier/JSFX"
 
             [payload]
             url = "payload/example.zip"
@@ -589,8 +654,8 @@ class PluginRepositoryContractsTest {
             [install]
             entry = "Example.lv2"
             """.trimIndent(),
-            source = "Test source",
-            url = "https://plugins.example/repo/example.toml",
+            sourceName = "Test source",
+            manifestUrl = "https://plugins.example/repo/example.toml",
             repositoryRoot = "https://plugins.example/repo/",
         )
 
@@ -603,6 +668,7 @@ class PluginRepositoryContractsTest {
         assertEquals("Example.lv2", manifest.entry)
         assertEquals("Acme Audio", manifest.manufacturer)
         assertEquals(listOf("Delay", "Creative"), manifest.tags)
+        assertEquals("https://github.com/JoepVanlier/JSFX", manifest.source)
         assertEquals("Test source", manifest.sourceName)
         assertEquals("https://plugins.example/repo/", manifest.repositoryRoot)
     }
@@ -618,6 +684,7 @@ class PluginRepositoryContractsTest {
             format = "lv2"
             description = "Malformed facet fixture"
             manufacturer = ""
+            source = "https://github.com/JoepVanlier/JSFX"
             tags = ["Delay"]
 
             [payload]
@@ -633,8 +700,8 @@ class PluginRepositoryContractsTest {
         assertThrows(IllegalArgumentException::class.java) {
             parseRepositoryManifest(
                 malformed,
-                source = "Test source",
-                url = "https://plugins.example/repo/blank-manufacturer.toml",
+                sourceName = "Test source",
+                manifestUrl = "https://plugins.example/repo/blank-manufacturer.toml",
                 repositoryRoot = "https://plugins.example/repo/",
             )
         }
@@ -645,6 +712,7 @@ class PluginRepositoryContractsTest {
         val malformed = """
             schema = 1
             id = "numeric.tag"
+            source = "https://github.com/JoepVanlier/JSFX"
             name = "Numeric Tag"
             version = "1.0.0"
             format = "lv2"
@@ -665,8 +733,8 @@ class PluginRepositoryContractsTest {
         assertThrows(IllegalArgumentException::class.java) {
             parseRepositoryManifest(
                 malformed,
-                source = "Test source",
-                url = "https://plugins.example/repo/numeric-tag.toml",
+                sourceName = "Test source",
+                manifestUrl = "https://plugins.example/repo/numeric-tag.toml",
                 repositoryRoot = "https://plugins.example/repo/",
             )
         }
@@ -684,6 +752,7 @@ class PluginRepositoryContractsTest {
             description = "Validation fixture"
             manufacturer = "Acme Audio"
             tags = ["Delay"]
+            source = "https://github.com/JoepVanlier/JSFX"
 
             [payload]
             url = "payload/valid.zip"
@@ -694,8 +763,8 @@ class PluginRepositoryContractsTest {
             [install]
             entry = "Valid.lv2"
             """.trimIndent(),
-            source = "Test source",
-            url = "https://plugins.example/repo/valid.toml",
+            sourceName = "Test source",
+            manifestUrl = "https://plugins.example/repo/valid.toml",
             repositoryRoot = "https://plugins.example/repo/",
         )
 

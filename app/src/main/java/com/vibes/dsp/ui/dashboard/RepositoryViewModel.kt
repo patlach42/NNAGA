@@ -61,6 +61,7 @@ data class RepositoryPackageItem(
     val installedVersion: String?,
     val description: String?,
     val status: RepositoryPackageStatus,
+    val source: String? = null,
     val operation: RepositoryPackageOperation? = null,
     val progress: Float? = null,
     val errorMessage: String? = null,

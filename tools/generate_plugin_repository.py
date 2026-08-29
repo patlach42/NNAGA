@@ -12,12 +12,14 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
 import re
 import shutil
 import tempfile
 import tomllib
 import zipfile
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 ASSETS = Path("app/src/main/assets/lv2")
 LIBS = Path("app/src/full/jniLibs/arm64-v8a")
@@ -25,7 +27,7 @@ METADATA = Path("app/src/main/assets/plugin_metadata.json")
 DESCRIPTION_SOURCE = Path("plugin_descriptions.json")
 OUTPUT = Path(os.environ.get("NNAGA_PLUGIN_REPOSITORY", "../nnaga-plugin-repository"))
 VERSION = "1.0.0"
-RELEASE = "2026-08-27"
+RELEASE = "2026-08-28"
 BINARY_RE = re.compile(r"(?:lv2:binary|guiext:binary|ui:binary)\s+<([^>]+)>")
 IDENTITY_ALIASES = {
     "GxVoodoFuzz": "GxVoodooFuzz",
@@ -50,6 +52,60 @@ LICENSES = {
 EXTRA_TAGS = {
     "fil4": ["Filter"],
     "4keq2": ["Filter"],
+    "doubletracker": ["Delay", "Stereo", "Utility"],
+}
+DEFAULT_LV2_SOURCE = "https://github.com/djshaji/GxPlugins.lv2.Android"
+LV2_SOURCES = {
+    "lv2.aidadsp": "https://github.com/AidaDSP/aidadsp-lv2",
+    "lv2.aidax": "https://github.com/AidaDSP/AIDA-X",
+    "lv2.collisiondrive": "https://github.com/brummer10/CollisionDrive",
+    "lv2.doubletracker": "https://github.com/Varcain/doubletracker.lv2",
+    "lv2.fil4": "https://github.com/x42/fil4.lv2",
+    "lv2.fourkeq2": "https://github.com/dusk-audio/dusk-audio-plugins",
+    "lv2.gxcabsim": "https://github.com/brummer10/GxCabSim.lv2",
+    "lv2.impulseloader": "https://github.com/brummer10/ImpulseLoader",
+    "lv2.metaltone": "https://github.com/brummer10/MetalTone",
+    "lv2.neuralampmodeler": "https://github.com/mikeoliphant/neural-amp-modeler-lv2",
+    "lv2.neuralrack": "https://github.com/brummer10/NeuralRack",
+    "lv2.xdarkterror": "https://github.com/brummer10/XDarkTerror.lv2",
+    "lv2.xtinyterror": "https://github.com/brummer10/XTinyTerror.lv2",
+}
+LV2_TAG_OVERRIDES = {
+    "lv2.gxfz1s": ["Distortion", "Saturation"],
+    "lv2.gxsloopyblue": ["Distortion", "Saturation"],
+    "lv2.gxtimray": ["Distortion", "Saturation"],
+    "lv2.gxaclipper": ["Distortion", "Dynamics"],
+    "lv2.gxamp": ["Amplifier", "Cabinet"],
+    "lv2.gxampstereo": ["Amplifier", "Cabinet", "Stereo"],
+    "lv2.gxbmp": ["Distortion", "Saturation"],
+    "lv2.gxcabinet": ["Cabinet", "Filter"],
+    "lv2.gxcolwah": ["Filter", "Modulation"],
+    "lv2.gxcompressor": ["Compressor", "Dynamics"],
+    "lv2.gxdetune": ["Pitch", "Modulation"],
+    "lv2.gxdigitaldelayst": ["Delay", "Stereo"],
+    "lv2.gxfuzzface": ["Distortion", "Saturation"],
+    "lv2.gxfuzzfacefm": ["Distortion", "Saturation"],
+    "lv2.gxgcb95": ["Filter", "Modulation"],
+    "lv2.gxjcm800pre": ["Amplifier", "Distortion"],
+    "lv2.gxjcm800prest": ["Amplifier", "Distortion", "Stereo"],
+    "lv2.gxmbcompressor": ["Compressor", "Dynamics"],
+    "lv2.gxmbdelay": ["Delay", "Filter"],
+    "lv2.gxmbdistortion": ["Distortion", "Saturation"],
+    "lv2.gxmbecho": ["Delay", "Filter"],
+    "lv2.gxmbreverb": ["Reverb", "Filter"],
+    "lv2.gxshimmizita": ["Reverb", "Pitch"],
+    "lv2.gxsusta": ["Distortion", "Saturation"],
+    "lv2.gxswitchedtremolo": ["Modulation"],
+    "lv2.gxtremolo": ["Modulation"],
+    "lv2.gxvibe": ["Modulation", "Phaser"],
+    "lv2.gxmetalamp": ["Amplifier", "Cabinet", "Distortion"],
+    "lv2.gxmetalhead": ["Amplifier", "Distortion"],
+    "lv2.gxtape": ["Filter", "Saturation"],
+    "lv2.gxtapest": ["Filter", "Saturation", "Stereo"],
+    "lv2.gxtubedelay": ["Delay", "Saturation"],
+    "lv2.gxtubetremelo": ["Modulation", "Saturation"],
+    "lv2.xdarkterror": ["Amplifier", "Distortion"],
+    "lv2.xtinyterror": ["Amplifier", "Distortion"],
 }
 
 
@@ -191,7 +247,7 @@ def _fallback_description(name: str, category: str) -> str:
     return f"{name} provides {kind} for guitar and music production."
 
 
-def metadata_for(name: str) -> tuple[str, list[str], str]:
+def metadata_for(name: str, package: str) -> tuple[str, list[str], str, str]:
     data = json.loads(METADATA.read_text(encoding="utf-8"))
     def canonical_map(values: dict) -> dict[str, str]:
         out: dict[str, str] = {}
@@ -203,6 +259,7 @@ def metadata_for(name: str) -> tuple[str, list[str], str]:
         return out
     authors = canonical_map(data.get("authors", {}))
     categories = canonical_map(data.get("categories", {}))
+    sources = canonical_map(data.get("sources", {}))
     description_data = json.loads(DESCRIPTION_SOURCE.read_text(encoding="utf-8"))
     descriptions = canonical_map(description_data.get("descriptions", description_data))
     aliases: dict[str, str] = {}
@@ -216,18 +273,36 @@ def metadata_for(name: str) -> tuple[str, list[str], str]:
     manufacturer = authors.get(key, "") or "Unknown"
     raw_category = categories.get(key, "")
     category = raw_category[:-6] if raw_category.endswith("Plugin") else raw_category
-    source = normalize_description(descriptions.get(key, ""))
+    description = normalize_description(descriptions.get(key, ""))
     if (
-        not source
-        or source.casefold() in _GENERIC_DESCRIPTIONS
-        or "provides" in source.casefold()
-        or "music production" in source.casefold()
-        or len(source) > 160
+        not description
+        or description.casefold() in _GENERIC_DESCRIPTIONS
+        or "music production" in description.casefold()
+        or len(description) > 180
     ):
-        source = _fallback_description(name, category)
-    tags = [category] if category else []
-    tags.extend(tag for tag in EXTRA_TAGS.get(key, []) if tag not in tags)
-    return manufacturer, tags, source
+        description = _fallback_description(name, category)
+    if not 30 <= len(description) <= 180:
+        raise ValueError(f"description must be 30-180 characters: {name}")
+    source = sources.get(key) or LV2_SOURCES.get(package, DEFAULT_LV2_SOURCE)
+    parsed_source = urlsplit(source)
+    unsafe_source = (
+        parsed_source.scheme != "https"
+        or not parsed_source.hostname
+        or parsed_source.username
+        or parsed_source.password
+        or parsed_source.query
+        or parsed_source.fragment
+        or not parsed_source.path
+        or parsed_source.path.lower().endswith(".git")
+        or "%2e" in parsed_source.path.lower()
+        or posixpath.normpath(parsed_source.path) != parsed_source.path
+    )
+    if unsafe_source:
+        raise ValueError(f"invalid plugin source URL: {source}")
+    tags = list(LV2_TAG_OVERRIDES.get(package, [category] if category else []))
+    if package not in LV2_TAG_OVERRIDES:
+        tags.extend(tag for tag in EXTRA_TAGS.get(key, []) if tag not in tags)
+    return manufacturer, tags, description, source
 
 
 def toml_string(value: str) -> str:
@@ -236,13 +311,13 @@ def toml_string(value: str) -> str:
 
 def manifest(package: str, name: str, bundle_stem: str, archive: bytes) -> str:
     digest = hashlib.sha256(archive).hexdigest()
-    manufacturer, tags, description = metadata_for(name)
+    manufacturer, tags, description, source = metadata_for(name, package)
     tags_text = "[" + ",".join(toml_string(tag) for tag in tags) + "]"
     license_name = license_for(name)
     return (f'schema = 1\nid = "{package}"\nname = {toml_string(name)}\nversion = "{VERSION}"\n'
-            f'format = "lv2"\narch = ["arm64-v8a"]\nmanufacturer = {toml_string(manufacturer)}\n'
-            f'tags = {tags_text}\ndescription = {toml_string(description)}\n'
-            f'license = {toml_string(license_name)}\n\n'
+            f'format = "lv2"\nsource = {toml_string(source)}\narch = ["arm64-v8a"]\n'
+            f'manufacturer = {toml_string(manufacturer)}\ntags = {tags_text}\n'
+            f'description = {toml_string(description)}\nlicense = {toml_string(license_name)}\n\n'
             f'[payload]\nkind = "archive"\nurl = "../../payload/{package}/{VERSION}.zip"\n'
             f'sha256 = "{digest}"\nsize = {len(archive)}\n\n'
             f'[install]\nentry = {toml_string(bundle_stem + ".lv2/manifest.ttl")}\n')
@@ -338,7 +413,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
             atomic_write(OUTPUT / "packages" / package / "manifest.toml", text.encode("utf-8"))
             atomic_write(OUTPUT / "payload" / package / f"{VERSION}.zip", archive)
         atomic_write(OUTPUT / "index.toml", index_text(records).encode("utf-8"))
-    unknown = [stem for _, stem, _, _ in records if metadata_for(stem)[0] == "Unknown"]
+    unknown = [stem for package, stem, _, _ in records if metadata_for(stem, package)[0] == "Unknown"]
     if unknown:
         print("Unknown plugin metadata:", flush=True)
         print("\n".join(sorted(unknown)), flush=True)
@@ -363,10 +438,12 @@ def index_text(records: list[tuple[str, str, bytes, str]]) -> str:
             f"manifest = {q(path.relative_to(OUTPUT).as_posix() + '?v=' + RELEASE)}\n"
             f"id = {q(data['id'])}\nname = {q(data['name'])}\n"
             f"version = {q(data['version'])}\nformat = {q(data['format'])}\n"
-            f"description = {q(data.get('description', ''))}\n"
-            f"manufacturer = {q(data.get('manufacturer', ''))}\ntags = {tags}\n"
+            f"description = {q(data['description'])}\n"
+            f"manufacturer = {q(data['manufacturer'])}\n"
+            f"source = {q(data['source'])}\n"
+            f"tags = {tags}\n"
         )
-    return "schema = 2\nrepository = \"nnaga-plugin-repository\"\nrelease = \"2026-08-27\"\n\n" + "\n".join(rows)
+    return f"schema = 2\nrepository = \"nnaga-plugin-repository\"\nrelease = \"{RELEASE}\"\n\n" + "\n".join(rows)
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="verify deterministic output without rewriting")

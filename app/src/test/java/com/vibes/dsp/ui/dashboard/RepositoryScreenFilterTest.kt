@@ -250,6 +250,7 @@ class RepositoryScreenFilterTest {
             name = name,
             format = "lv2",
             sourceName = "test-source",
+            source = "https://example.com/plugins/test-source",
             availableVersion = "1.0.0",
             installedVersion = null,
             description = description,
