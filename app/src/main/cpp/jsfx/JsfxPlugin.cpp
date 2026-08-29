@@ -123,7 +123,13 @@ uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, 
     const bool stereoChannels = channels[0] == 0 && channels[1] >= 2;
     if (std::isfinite(static_cast<double>(pdc)) && pdc >= 0 &&
         (defaultChannels || stereoChannels)) {
-        latencyFrames_.store(static_cast<uint32_t>(pdc), std::memory_order_relaxed);
+        constexpr double kMaxPdcFrames = 65535.0;
+        const double bounded = std::min(static_cast<double>(pdc), kMaxPdcFrames);
+        latencyFrames_.store(static_cast<uint32_t>(bounded), std::memory_order_relaxed);
+    } else {
+        // PDC is scoped to stereo output processing.  Do not retain a value
+        // from an earlier layout or invalid @pdc declaration.
+        latencyFrames_.store(0, std::memory_order_relaxed);
     }
     uint32_t count = 0; ysfx_midi_event_t ev{};
     while (count < outputCapacity && ysfx_receive_midi(fx_, &ev)) {

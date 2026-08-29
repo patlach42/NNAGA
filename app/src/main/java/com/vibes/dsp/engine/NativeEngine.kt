@@ -381,18 +381,20 @@ class NativeEngine private constructor() {
      */
     external fun nativeImportRackState(bytes: ByteArray, restorePlugins: Boolean = true): String?
     external fun nativeExportDeviceChain(pathId: Long): ByteArray?
-    external fun nativeImportDeviceChain(pathId: Long, bytes: ByteArray): Boolean
+    /** Returns null on success, otherwise a native diagnostic explaining rejection. */
+    external fun nativeImportDeviceChain(pathId: Long, bytes: ByteArray): String?
 
 
     /** Re-runs each PluginFactory's initialize() and rebuilds the registry's
      *  plugin cache. Used by the Manage VST UI (full flavor) so an imported
      *  VST appears in the browser without restarting the audio engine. */
     external fun nativeRefreshPluginRegistry(): Boolean
-
     external fun nativeGetRackPluginX11Display(pathId: Long, pluginIndex: Int): Int
     external fun nativeGetRackPluginEditorSize(pathId: Long, pluginIndex: Int): Long
-    external fun nativeGetRackPluginInstanceId(pathId: Long, pluginIndex: Int): Long
+    external fun nativeGetRackPluginInstanceId(pathId: Long, index: Int): Long
     external fun nativeGetRackPlugins(pathId: Long): Array<RackPluginEntry>
+    external fun nativeHasPluginLatencyOverflow(pathId: Long): Boolean
+    external fun nativeGetManualLatencyRemainingFrames(pathId: Long, pluginIndex: Int): Int
 
 
     /** Opens an app-permitted USB device FD using the selected transport driver. */
@@ -521,6 +523,8 @@ class NativeEngine private constructor() {
     external fun nativeSetParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float)
     external fun nativeSetManualLatencyFrames(pathId: Long, pluginIndex: Int, frames: Int): Boolean
     external fun nativeGetManualLatencyFrames(pathId: Long, pluginIndex: Int): Int
+    external fun nativeGetPluginLatencyFrames(pathId: Long, pluginIndex: Int): Long
+    external fun nativeGetPluginEffectiveLatencyFrames(pathId: Long, pluginIndex: Int): Long
     external fun nativeGetParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float
     external fun nativeGetParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String
     external fun nativeGetRackSize(pathId: Long): Int
@@ -627,7 +631,7 @@ class NativeEngine private constructor() {
     fun idlePluginUIs(): Boolean = nativeIdlePluginUIs()
 
 
-    external fun nativeCreateParallelWetReturn(sourceId: Long): Long
+    external fun nativeCreateParallelWetReturn(sourceId: Long): Array<String>
     external fun nativeAddTrack(): Long
     external fun nativeRemoveTrack(trackId: Long): Boolean
     external fun nativeGetTracks(): Array<RackTrackInfo>
@@ -730,6 +734,10 @@ class NativeEngine private constructor() {
         nativeSetManualLatencyFrames(pathId, pluginIndex, frames)
     fun getManualLatencyFrames(pathId: Long, pluginIndex: Int): Int =
         nativeGetManualLatencyFrames(pathId, pluginIndex)
+    fun getPluginLatencyFrames(pathId: Long, pluginIndex: Int): Long =
+        nativeGetPluginLatencyFrames(pathId, pluginIndex)
+    fun getPluginEffectiveLatencyFrames(pathId: Long, pluginIndex: Int): Long =
+        nativeGetPluginEffectiveLatencyFrames(pathId, pluginIndex)
     fun getParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float =
         nativeGetParameter(pathId, pluginIndex, portIndex)
     fun getParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String =
@@ -743,8 +751,8 @@ class NativeEngine private constructor() {
     fun importRackState(bytes: ByteArray, restorePlugins: Boolean = true): String? =
         nativeImportRackState(bytes, restorePlugins)
     fun exportDeviceChain(pathId: Long): ByteArray? = nativeExportDeviceChain(pathId)
-    fun importDeviceChain(pathId: Long, bytes: ByteArray): Boolean = nativeImportDeviceChain(pathId, bytes)
-    fun createParallelWetReturn(sourceId: Long): Long = nativeCreateParallelWetReturn(sourceId)
+    fun importDeviceChain(pathId: Long, bytes: ByteArray): String? = nativeImportDeviceChain(pathId, bytes)
+    fun createParallelWetReturn(sourceId: Long): Array<String> = nativeCreateParallelWetReturn(sourceId)
 
     fun addTrack(): Long = nativeAddTrack()
     fun removeTrack(trackId: Long): Boolean = nativeRemoveTrack(trackId)

@@ -3,8 +3,20 @@ package com.vibes.dsp.engine
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 
-data class ModelLoadedEvent(val pathId: RackPathId, val pluginIndex: Int, val modelName: String)
-data class VstTone3000FileSelectedEvent(val pathId: RackPathId, val pluginIndex: Int, val filePath: String)
+data class ModelLoadedEvent(
+    val pathId: RackPathId,
+    val pluginIndex: Int,
+    val modelName: String,
+)
+
+data class VstTone3000FileSelectedEvent(
+    val pathId: RackPathId,
+    val pluginIndex: Int,
+    val filePath: String,
+)
+
+data class ParallelReturnResult(val pathId: RackPathId, val diagnostic: String)
+
 
 /** Path-aware facade for the parallel track/master rack graph. */
 object RackManager {
@@ -26,13 +38,18 @@ object RackManager {
     fun reorder(pathId: RackPathId, fromPos: Int, toPos: Int): Boolean = native.reorderRack(pathId, fromPos, toPos)
     fun setPluginFilePath(pathId: RackPathId, pluginIndex: Int, propertyUri: String, filePath: String) = native.setPluginFilePath(pathId, pluginIndex, propertyUri, filePath)
     fun setParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int, value: Float) = native.setParameter(pathId, pluginIndex, portIndex, value)
+    fun getParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int): Float =
+        native.getParameter(pathId, pluginIndex, portIndex)
+    fun getParameterDisplay(pathId: RackPathId, pluginIndex: Int, portIndex: Int): String =
+        native.getParameterDisplay(pathId, pluginIndex, portIndex)
     fun setManualLatencyFrames(pathId: RackPathId, pluginIndex: Int, frames: Int): Boolean =
         native.setManualLatencyFrames(pathId, pluginIndex, frames)
     fun getManualLatencyFrames(pathId: RackPathId, pluginIndex: Int): Int =
         native.getManualLatencyFrames(pathId, pluginIndex)
-    fun getParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int): Float = native.getParameter(pathId, pluginIndex, portIndex)
-    fun getParameterDisplay(pathId: RackPathId, pluginIndex: Int, portIndex: Int) =
-        native.getParameterDisplay(pathId, pluginIndex, portIndex)
+    fun getPluginLatencyFrames(pathId: RackPathId, pluginIndex: Int): Long =
+        native.getPluginLatencyFrames(pathId, pluginIndex)
+    fun getPluginEffectiveLatencyFrames(pathId: RackPathId, pluginIndex: Int): Long =
+        native.getPluginEffectiveLatencyFrames(pathId, pluginIndex)
     fun getRackSize(pathId: RackPathId): Int = native.getRackSize(pathId)
     fun getRackPluginInfo(pathId: RackPathId, index: Int): PluginInfo? = native.getRackPluginInfo(pathId, index)
     fun getRackPluginInstanceId(pathId: RackPathId, index: Int): Long = native.getRackPluginInstanceId(pathId, index)
@@ -41,11 +58,18 @@ object RackManager {
     fun importRackState(bytes: ByteArray, restorePlugins: Boolean = true): String? =
         native.importRackState(bytes, restorePlugins)
     fun exportDeviceChain(pathId: RackPathId): ByteArray? = native.exportDeviceChain(pathId)
-    fun importDeviceChain(pathId: RackPathId, bytes: ByteArray): Boolean =
-        native.importDeviceChain(pathId, bytes)
+    fun importDeviceChain(pathId: RackPathId, bytes: ByteArray): String? =
+        native.nativeImportDeviceChain(pathId, bytes)
+    fun hasPluginLatencyOverflow(pathId: RackPathId): Boolean =
+        native.nativeHasPluginLatencyOverflow(pathId)
+    fun getManualLatencyRemainingFrames(pathId: RackPathId, pluginIndex: Int): Int =
+        native.nativeGetManualLatencyRemainingFrames(pathId, pluginIndex)
 
-    fun createParallelWetReturn(sourceId: RackPathId): RackPathId =
-        native.createParallelWetReturn(sourceId)
+    fun createParallelWetReturn(sourceId: RackPathId): ParallelReturnResult {
+        val result = native.nativeCreateParallelWetReturn(sourceId)
+        val id = result.getOrNull(0)?.toLongOrNull() ?: 0L
+        return ParallelReturnResult(id, result.getOrNull(1).orEmpty())
+    }
 
     fun addTrack(): RackPathId = native.addTrack()
     fun removeTrack(trackId: RackPathId): Boolean = native.removeTrack(trackId)

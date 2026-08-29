@@ -132,7 +132,7 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
         pluginCount_.store(
             static_cast<uint32_t>(plugins_.size()),
             std::memory_order_release);
-        latencyFrames_.store(0, std::memory_order_relaxed);
+        recomputeLatencyLocked();
         LOGI("addPlugin: index=%d sampleRate=%.0f", index, sampleRate_);
         return index;
     }
@@ -152,7 +152,7 @@ bool PluginChain::removePlugin(int index) {
         pluginCount_.store(
             static_cast<uint32_t>(plugins_.size()),
             std::memory_order_release);
-        latencyFrames_.store(0, std::memory_order_relaxed);
+        recomputeLatencyLocked();
     }
 
     // Wine VST teardown can block while the helper process exits. Detach first
@@ -223,7 +223,7 @@ bool PluginChain::reorderPlugins(int fromIndex, int toIndex) {
     plugins_.erase(plugins_.begin() + fromIndex);
     
     plugins_.insert(plugins_.begin() + toIndex, std::move(plugin));
-    latencyFrames_.store(0, std::memory_order_relaxed);
+    recomputeLatencyLocked();
     
     return true;
 }
@@ -293,6 +293,8 @@ uint32_t PluginChain::process(const float* const* inputs, float* const* outputs,
                 totalLatency += slot.plugin->getLatencyFrames();
                 totalLatency += slot.manualLatencyFrames;
             }
+            const bool overflow = totalLatency > kMaxSupportedPdcFrames;
+            latencyOverflow_.store(overflow, std::memory_order_release);
             latencyFrames_.store(static_cast<uint32_t>(
                 std::min<uint64_t>(totalLatency, UINT32_MAX)), std::memory_order_relaxed);
             return produced;
@@ -309,17 +311,18 @@ uint32_t PluginChain::process(const float* const* inputs, float* const* outputs,
 void PluginChain::setSampleRate(float sampleRate, uint32_t bufferSize) {
     std::unique_lock lock(chainMutex_);
     sampleRate_ = sampleRate;
-    latencyFrames_.store(0, std::memory_order_relaxed);
     bufferSize_ = bufferSize;
     renderBufferSize_ = bufferSize_;
     ensureBuffers(renderBufferSize_, 2);
     for (auto& slot : plugins_) {
         slot.plugin->activate(sampleRate, bufferSize);
     }
+    recomputeLatencyLocked();
 }
 
 void PluginChain::activate() {
-    latencyFrames_.store(0, std::memory_order_relaxed);
+    std::unique_lock lock(chainMutex_);
+    recomputeLatencyLocked();
     // No-op: plugins are activated individually in setSampleRate() and addPlugin().
 }
 
@@ -330,7 +333,8 @@ void PluginChain::deactivate() {
     for (auto& slot : plugins_) {
         slot.plugin->deactivate();
     }
-    latencyFrames_.store(0, std::memory_order_relaxed);
+    latencyFrames_.store(0, std::memory_order_release);
+    latencyOverflow_.store(false, std::memory_order_release);
     LOGI("deactivate() done tid=%ld", getTid());
 }
 
@@ -372,13 +376,16 @@ float PluginChain::getParameter(int pluginIndex, uint32_t portIndex) const {
 }
 bool PluginChain::setManualLatencyFrames(int pluginIndex, uint32_t frames) {
     std::unique_lock lock(chainMutex_);
-    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) return false;
+    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size()) ||
+        frames > kMaxSupportedPdcFrames) return false;
+    const uint32_t previous = plugins_[pluginIndex].manualLatencyFrames;
     plugins_[pluginIndex].manualLatencyFrames = frames;
-    uint64_t total = 0;
-    for (const auto& slot : plugins_)
-        total += static_cast<uint64_t>(slot.plugin->getLatencyFrames()) + slot.manualLatencyFrames;
-    latencyFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(total, UINT32_MAX)),
-                         std::memory_order_release);
+    recomputeLatencyLocked();
+    if (latencyOverflow_.load(std::memory_order_acquire)) {
+        plugins_[pluginIndex].manualLatencyFrames = previous;
+        recomputeLatencyLocked();
+        return false;
+    }
     return true;
 }
 
@@ -388,20 +395,42 @@ uint32_t PluginChain::getManualLatencyFrames(int pluginIndex) const {
     return plugins_[pluginIndex].manualLatencyFrames;
 }
 
+uint32_t PluginChain::getRemainingPdcFrames(int pluginIndex) const {
+    std::shared_lock lock(chainMutex_);
+    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) return 0;
+    uint64_t used = plugins_[pluginIndex].plugin->getLatencyFrames();
+    for (size_t i = 0; i < plugins_.size(); ++i) {
+        if (i == static_cast<size_t>(pluginIndex)) continue;
+        used += static_cast<uint64_t>(plugins_[i].plugin->getLatencyFrames()) +
+                plugins_[i].manualLatencyFrames;
+    }
+    return used >= kMaxSupportedPdcFrames
+        ? 0 : static_cast<uint32_t>(kMaxSupportedPdcFrames - used);
+}
+
+uint32_t PluginChain::getPluginLatencyFrames(int pluginIndex) const noexcept {
+    std::shared_lock lock(chainMutex_);
+    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) return 0;
+    return plugins_[pluginIndex].plugin->getLatencyFrames();
+}
+
+uint32_t PluginChain::getPluginEffectiveLatencyFrames(int pluginIndex) const noexcept {
+    std::shared_lock lock(chainMutex_);
+    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) return 0;
+    const uint64_t total = static_cast<uint64_t>(plugins_[pluginIndex].plugin->getLatencyFrames()) +
+                           plugins_[pluginIndex].manualLatencyFrames;
+    return static_cast<uint32_t>(std::min<uint64_t>(total, UINT32_MAX));
+}
 
 void PluginChain::setPluginFilePath(int pluginIndex, const std::string& propertyUri, const std::string& path) {
     std::shared_lock lock(chainMutex_);
-    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) {
-        return;
-    }
+    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) return;
     plugins_[pluginIndex].plugin->setFilePath(propertyUri, path);
 }
 
 void PluginChain::injectAtom(int pluginIndex, const void* data, uint32_t size) {
     std::shared_lock lock(chainMutex_);
-    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) {
-        return;
-    }
+    if (pluginIndex < 0 || pluginIndex >= static_cast<int>(plugins_.size())) return;
     plugins_[pluginIndex].plugin->injectAtom(data, size);
 }
 
@@ -420,8 +449,6 @@ PluginChain::ChainState PluginChain::saveChainState() {
             ps.pluginUri = (colon != std::string::npos && id.substr(0, colon) == ps.format)
                 ? id.substr(colon + 1) : std::move(id);
         }
-        // saveState implementations may omit controls; capture the complete
-        // current control surface so a snapshot is sufficient to recreate it.
         if (ps.controlPortValues.empty()) {
             for (const auto& port : info.ports) {
                 if (port.isInput && port.isControl && !port.isReadOnly)
@@ -436,39 +463,52 @@ PluginChain::ChainState PluginChain::saveChainState() {
 
 bool PluginChain::restorePluginState(int index, const PluginState& state) {
     std::unique_lock lock(chainMutex_);
-    if (index < 0 || index >= static_cast<int>(plugins_.size())) return false;
+    if (index < 0 || index >= static_cast<int>(plugins_.size()) ||
+        state.manualLatencyFrames > kMaxSupportedPdcFrames) return false;
+    const PluginState oldState = plugins_[index].plugin->saveState();
+    const uint32_t previousManual = plugins_[index].manualLatencyFrames;
     PluginState pluginState = state;
     pluginState.manualLatencyFrames = 0;
-    bool ok = plugins_[index].plugin->restoreState(pluginState);
+    if (!plugins_[index].plugin->restoreState(pluginState)) {
+        (void)plugins_[index].plugin->restoreState(oldState);
+        recomputeLatencyLocked();
+        return false;
+    }
     plugins_[index].manualLatencyFrames = state.manualLatencyFrames;
-    uint64_t total = 0;
-    for (const auto& slot : plugins_)
-        total += static_cast<uint64_t>(slot.plugin->getLatencyFrames()) + slot.manualLatencyFrames;
-    latencyFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(total, UINT32_MAX)),
-                         std::memory_order_release);
-    LOGI("restorePluginState: index=%d ok=%d", index, ok);
-    return ok;
+    recomputeLatencyLocked();
+    if (latencyOverflow_.load(std::memory_order_acquire)) {
+        plugins_[index].manualLatencyFrames = previousManual;
+        (void)plugins_[index].plugin->restoreState(oldState);
+        recomputeLatencyLocked();
+        return false;
+    }
+    LOGI("restorePluginState: index=%d ok=1", index);
+    return true;
+}
+
+void PluginChain::recomputeLatencyLocked() noexcept {
+    uint64_t totalLatency = 0;
+    for (const auto& slot : plugins_) {
+        totalLatency += static_cast<uint64_t>(slot.plugin->getLatencyFrames()) +
+                        slot.manualLatencyFrames;
+    }
+    const bool overflow = totalLatency > kMaxSupportedPdcFrames;
+    latencyOverflow_.store(overflow, std::memory_order_release);
+    latencyFrames_.store(static_cast<uint32_t>(
+        std::min<uint64_t>(totalLatency, UINT32_MAX)), std::memory_order_release);
 }
 
 void PluginChain::ensureBuffers(uint32_t numFrames, uint32_t numChannels) {
-    if (intermediateBuffers_.size() < numChannels) {
-        intermediateBuffers_.resize(numChannels);
-    }
+    if (intermediateBuffers_.size() < numChannels) intermediateBuffers_.resize(numChannels);
     for (auto& buffer : intermediateBuffers_) {
-        if (buffer.size() < numFrames) {
-            buffer.resize(numFrames);
-        }
+        if (buffer.size() < numFrames) buffer.resize(numFrames);
     }
 }
 
 void PluginChain::clearOutputs(float* const* outputs, uint32_t numFrames) const noexcept {
-    if (!outputs || numFrames == 0) {
-        return;
-    }
+    if (!outputs || numFrames == 0) return;
     for (uint32_t channel = 0; channel < 2; ++channel) {
-        if (outputs[channel]) {
-            std::memset(outputs[channel], 0, numFrames * sizeof(float));
-        }
+        if (outputs[channel]) std::memset(outputs[channel], 0, numFrames * sizeof(float));
     }
 }
 

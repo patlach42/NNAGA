@@ -72,6 +72,9 @@ struct NativeContext {
     std::unique_ptr<AudioEngine> audioEngine;
     std::unique_ptr<PluginRegistry> pluginRegistry;
     std::unordered_map<jlong, std::unique_ptr<PluginUIManager>> pluginUIManagers;
+    // Keep replaced chains alive while their UI callbacks are synchronously
+    // torn down after a full-rack restore.
+    std::unordered_map<jlong, std::shared_ptr<PluginChain>> pendingRackRestoreChains;
     std::mutex rackControlMutex;
     std::string lv2Path;
     std::string nativeLibDir;
@@ -108,6 +111,32 @@ void nnagaNativeRebindPluginUIManager(int64_t pathId, PluginChain* chain) noexce
     if (it != g_ctx->pluginUIManagers.end()) {
         it->second->rebindChain(chain);
     }
+}
+
+void nnagaNativePrepareRackStateImport() noexcept {
+    if (!g_ctx || !g_ctx->audioEngine) return;
+    g_ctx->pendingRackRestoreChains.clear();
+    auto& graph = g_ctx->audioEngine->getRackGraph();
+    for (const auto& manager : g_ctx->pluginUIManagers) {
+        g_ctx->pendingRackRestoreChains.emplace(
+            manager.first, graph.getChain(static_cast<RackPathId>(manager.first)));
+    }
+}
+
+void nnagaNativeCommitRackStateImport() noexcept {
+    if (!g_ctx || !g_ctx->audioEngine) return;
+    auto& graph = g_ctx->audioEngine->getRackGraph();
+    // Do not release the old chains until every manager has completed its
+    // synchronous callback/UI teardown.
+    for (const auto& manager : g_ctx->pluginUIManagers) {
+        const auto replacement = graph.getChain(static_cast<RackPathId>(manager.first));
+        manager.second->rebindChain(replacement.get());
+    }
+    g_ctx->pendingRackRestoreChains.clear();
+}
+
+void nnagaNativeAbortRackStateImport() noexcept {
+    if (g_ctx) g_ctx->pendingRackRestoreChains.clear();
 }
 
 static PluginUIManager* getPluginUIManagerLocked(NativeContext& ctx, jlong pathId,
@@ -1005,6 +1034,41 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetManualLatencyFrames(
     return static_cast<jint>(g_ctx->audioEngine->getRackGraph().getManualLatencyFrames(
         static_cast<RackPathId>(pathId), pluginIndex));
 }
+JNIEXPORT jint JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetManualLatencyRemainingFrames(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex) {
+    if (!g_ctx || !g_ctx->audioEngine) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return static_cast<jint>(g_ctx->audioEngine->getRackGraph().getManualLatencyRemainingFrames(
+        static_cast<RackPathId>(pathId), pluginIndex));
+}
+JNIEXPORT jlong JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetPluginLatencyFrames(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex) {
+    if (!g_ctx || !g_ctx->audioEngine) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return static_cast<jlong>(g_ctx->audioEngine->getRackGraph().getPluginLatencyFrames(
+        static_cast<RackPathId>(pathId), pluginIndex));
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetPluginEffectiveLatencyFrames(
+    JNIEnv*, jobject, jlong pathId, jint pluginIndex) {
+    if (!g_ctx || !g_ctx->audioEngine) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return static_cast<jlong>(g_ctx->audioEngine->getRackGraph().getPluginEffectiveLatencyFrames(
+        static_cast<RackPathId>(pathId), pluginIndex));
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeHasPluginLatencyOverflow(
+    JNIEnv*, jobject, jlong pathId) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().hasPluginLatencyOverflow(
+        static_cast<RackPathId>(pathId)) ? JNI_TRUE : JNI_FALSE;
+}
+
 
 JNIEXPORT jfloat JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameter(
@@ -1028,24 +1092,35 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameterDisplay(
     return env->NewStringUTF(display.c_str());
 }
 
-JNIEXPORT jlong JNICALL
+JNIEXPORT jobjectArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeCreateParallelWetReturn(
-    JNIEnv*, jobject, jlong sourceId) {
-    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->pluginRegistry) return 0;
+    JNIEnv* env, jobject, jlong sourceId) {
+    auto result = env->NewObjectArray(2, env->FindClass("java/lang/String"), nullptr);
+    if (!result) return nullptr;
+    auto set = [&](int index, const char* value) {
+        env->SetObjectArrayElement(result, index, env->NewStringUTF(value));
+    };
+    set(0, "0");
+    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->pluginRegistry) {
+        set(1, "engine-unavailable");
+        return result;
+    }
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto& graph = g_ctx->audioEngine->getRackGraph();
-    const auto previous = graph.getChain(static_cast<RackPathId>(sourceId));
-    (void)previous;
     RackPathId returnId = 0;
     std::string diagnostic;
     if (!graph.createParallelWetReturn(
             static_cast<RackPathId>(sourceId), *g_ctx->pluginRegistry,
             returnId, diagnostic)) {
-        return 0;
+        set(1, diagnostic.c_str());
+        return result;
     }
     const auto replacement = graph.getChain(static_cast<RackPathId>(sourceId));
     nativeRebindPluginUIManager(static_cast<int64_t>(sourceId), replacement.get());
-    return static_cast<jlong>(returnId);
+    const std::string id = std::to_string(static_cast<jlong>(returnId));
+    env->SetObjectArrayElement(result, 0, env->NewStringUTF(id.c_str()));
+    set(1, "");
+    return result;
 }
 
 JNIEXPORT jlong JNICALL
@@ -1523,14 +1598,21 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeCreatePluginUI(
     LOGI("nativeCreatePluginUI ENTER tid=%ld path=%ld plugin=%d display=%d parent=0x%lx",
          getTid(), static_cast<long>(pathId), pluginIndex, displayNumber,
          (unsigned long)parentWindowId);
-    auto chain = g_ctx && g_ctx->audioEngine
-        ? g_ctx->audioEngine->getRackGraph().getChain(pathId) : nullptr;
-    PluginUIManager* manager = nullptr;
     std::unique_lock<std::mutex> rackLock;
-    if (g_ctx && g_ctx->audioEngine && chain && pluginIndex >= 0 &&
+    PluginUIManager* manager = nullptr;
+    if (!g_ctx || !g_ctx->audioEngine) {
+        setDisplayPhase(displayNumber, DisplayState::Phase::None);
+        setCreatingPluginUI(false);
+        return JNI_FALSE;
+    }
+    // Fetch and validate the chain while holding the same lock used by rack
+    // mutations; otherwise a replacement can invalidate the selected slot
+    // between validation and UI-manager binding.
+    rackLock = std::unique_lock<std::mutex>(g_ctx->rackControlMutex);
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    if (chain && pluginIndex >= 0 &&
         static_cast<size_t>(pluginIndex) < chain->getSize() &&
         static_cast<jlong>(chain->getPluginInstanceId(pluginIndex)) == pluginInstanceId) {
-        rackLock = std::unique_lock<std::mutex>(g_ctx->rackControlMutex);
         manager = getPluginUIManagerLocked(*g_ctx, pathId, chain.get());
     }
     if (!manager) {

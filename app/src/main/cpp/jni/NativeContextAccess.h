@@ -15,6 +15,9 @@ RackGraph* nativeRackGraph() noexcept;
 std::mutex* nativeRackMutex() noexcept;
 std::mutex& nativeRackControlMutex() noexcept;
 void nativeRebindPluginUIManager(int64_t pathId, PluginChain* chain) noexcept;
+void nativePrepareRackStateImport() noexcept;
+void nativeCommitRackStateImport() noexcept;
+void nativeAbortRackStateImport() noexcept;
 bool nativeEngineRunning() noexcept;
 const std::string& nativeJsfxRoot() noexcept;
 namespace jni {

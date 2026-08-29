@@ -130,6 +130,10 @@ private:
 
     int32_t latencyControlPosition_ = -1;
     std::vector<std::unique_ptr<float>> controlPorts_;
+    /** UI-thread parameter handoff; values are consumed at process block start. */
+    std::vector<std::unique_ptr<std::atomic<float>>> pendingControlPorts_;
+    /** Whether each control port is an LV2 input (false means output mirror). */
+    std::vector<bool> controlPortInputs_;
     /** Global LV2 port index for each control port (same order as controlPorts_). */
     std::vector<uint32_t> controlPortIndices_;
     std::vector<std::vector<float>> audioInputBuffers_;

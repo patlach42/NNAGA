@@ -44,6 +44,8 @@ struct PluginSlot {
 
 class PluginChain {
 public:
+    static constexpr uint32_t kMaxSupportedPdcFrames = 65535;
+ 
     PluginChain() = default;
     ~PluginChain();
 
@@ -61,6 +63,11 @@ public:
 
     void setSampleRate(float sampleRate, uint32_t bufferSize = 0);
     uint32_t getLatencyFrames() const noexcept { return latencyFrames_.load(std::memory_order_relaxed); }
+    // True when the live chain latency exceeds the finite PDC/history budget.
+    // In that state getLatencyFrames() is informational, not an alignment claim.
+    bool hasLatencyOverflow() const noexcept {
+        return latencyOverflow_.load(std::memory_order_relaxed);
+    }
     void activate();
     void deactivate();
 
@@ -70,6 +77,10 @@ public:
     void setParameter(int pluginIndex, uint32_t portIndex, float value);
     bool setManualLatencyFrames(int pluginIndex, uint32_t frames);
     uint32_t getManualLatencyFrames(int pluginIndex) const;
+    // Capacity available for the selected slot's manual compensation.
+    uint32_t getRemainingPdcFrames(int pluginIndex) const;
+    uint32_t getPluginLatencyFrames(int pluginIndex) const noexcept;
+    uint32_t getPluginEffectiveLatencyFrames(int pluginIndex) const noexcept;
     float getParameter(int pluginIndex, uint32_t portIndex) const;
 
     template <typename Callback>
@@ -122,7 +133,7 @@ private:
     mutable std::shared_mutex chainMutex_;
     std::atomic<uint32_t> pluginCount_{0};
     std::atomic<uint32_t> latencyFrames_{0};
-
+    std::atomic<bool> latencyOverflow_{false};
     float sampleRate_ = 0.0f;
     uint32_t bufferSize_ = 0;
 
@@ -136,6 +147,7 @@ private:
 
     void ensureBuffers(uint32_t numFrames, uint32_t numChannels);
     void clearOutputs(float* const* outputs, uint32_t numFrames) const noexcept;
+    void recomputeLatencyLocked() noexcept;
 
     std::deque<std::unique_ptr<IPlugin>> teardownQueue_;
     std::mutex teardownMutex_;

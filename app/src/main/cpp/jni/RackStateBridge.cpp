@@ -37,7 +37,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeImportRackState(
     guitarrackcraft::RackGraph::State state; std::string diagnostic;
     if (!RackStateCodec::decode(bytes.data(),bytes.size(),state,diagnostic)) return env->NewStringUTF(diagnostic.c_str());
     std::lock_guard<std::mutex> lock(*mutex);
-    if (!graph->restoreState(state,*registry,diagnostic,restorePlugins == JNI_TRUE)) return env->NewStringUTF(diagnostic.c_str());
+    guitarrackcraft::nativePrepareRackStateImport();
+    if (!graph->restoreState(state,*registry,diagnostic,restorePlugins == JNI_TRUE)) {
+        guitarrackcraft::nativeAbortRackStateImport();
+        return env->NewStringUTF(diagnostic.c_str());
+    }
+    guitarrackcraft::nativeCommitRackStateImport();
     return nullptr;
 }
 
@@ -59,30 +64,37 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeExportDeviceChain(
     return out;
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeImportDeviceChain(
         JNIEnv* env, jobject, jlong pathId, jbyteArray input) {
-    if (!input) return JNI_FALSE;
+    auto diagnosticString = [&](const std::string& diagnostic) -> jstring {
+        return env->NewStringUTF(diagnostic.c_str());
+    };
+    if (!input) return diagnosticString("invalid-input:null");
     auto* graph = guitarrackcraft::nativeRackGraph();
     auto* registry = guitarrackcraft::nativePluginRegistry();
     auto* mutex = guitarrackcraft::nativeRackMutex();
-    if (!graph || !registry || !mutex) return JNI_FALSE;
+    if (!graph || !registry || !mutex) return diagnosticString("engine-unavailable");
     const jsize size = env->GetArrayLength(input);
-    if (size <= 0 || static_cast<size_t>(size) > RackStateCodec::kMaxBlobBytes) return JNI_FALSE;
+    if (size <= 0 || static_cast<size_t>(size) > RackStateCodec::kMaxBlobBytes) {
+        return diagnosticString("invalid-size");
+    }
     std::vector<uint8_t> bytes(static_cast<size_t>(size));
     env->GetByteArrayRegion(input, 0, size, reinterpret_cast<jbyte*>(bytes.data()));
     guitarrackcraft::RackPathId encodedPath = 0;
     guitarrackcraft::PluginChain::ChainState chain;
     std::string diagnostic;
-    if (!RackStateCodec::decodeDeviceChain(bytes.data(), bytes.size(), encodedPath, chain, diagnostic) ||
-        encodedPath != static_cast<guitarrackcraft::RackPathId>(pathId)) return JNI_FALSE;
+    if (!RackStateCodec::decodeDeviceChain(bytes.data(), bytes.size(), encodedPath, chain, diagnostic)) {
+        return diagnosticString(diagnostic);
+    }
+    if (encodedPath != static_cast<guitarrackcraft::RackPathId>(pathId)) {
+        return diagnosticString("path-mismatch");
+    }
     std::lock_guard<std::mutex> lock(*mutex);
-    const auto previous = graph->getChain(static_cast<guitarrackcraft::RackPathId>(pathId));
-    (void)previous;
     if (!graph->importDeviceChain(static_cast<guitarrackcraft::RackPathId>(pathId), chain, *registry, diagnostic)) {
-        return JNI_FALSE;
+        return diagnosticString(diagnostic);
     }
     const auto replacement = graph->getChain(static_cast<guitarrackcraft::RackPathId>(pathId));
     guitarrackcraft::nativeRebindPluginUIManager(static_cast<int64_t>(pathId), replacement.get());
-    return JNI_TRUE;
+    return nullptr;
 }

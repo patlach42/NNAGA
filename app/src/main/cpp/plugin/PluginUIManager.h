@@ -29,8 +29,8 @@
 
 namespace guitarrackcraft {
 
+class IPlugin;
 class PluginChain;
-
 class PluginUIManager {
 public:
     PluginUIManager() = default;
@@ -38,7 +38,8 @@ public:
 
 
     void setPathId(int64_t pathId) { pathId_ = pathId; }
-    void setChain(PluginChain* chain) { chain_ = chain; }
+    int64_t pathId() const noexcept { return pathId_; }
+    void setChain(PluginChain* chain) { rebindChain(chain); }
 
     /** Tear down UIs bound to the current chain before switching chains.
      *  The caller must retain the old chain until this call returns. */
@@ -94,18 +95,19 @@ public:
      *  with the chain's erase. Call BEFORE chain.removePlugin. */
     void detachAndShiftForRemoval(int chainIndex);
 
-private:
     struct UIEntry {
         std::unique_ptr<LV2PluginUI> ui;
         int displayNumber = -1;
+        IPlugin* plugin = nullptr; // stable instance identity
         std::shared_ptr<std::atomic<int>> pluginIndex; // mutable index read by closures
-        std::shared_ptr<std::atomic<bool>> detached;   // set true after detachPlugin()
+        std::shared_ptr<std::atomic<bool>> detached;   // lifetime token
     };
 
     PluginChain* chain_ = nullptr;
     std::vector<UIEntry> uiEntries_;
     mutable std::mutex uiMutex_;
     int64_t pathId_ = 0;
+    uint64_t chainGeneration_ = 0;
     std::atomic<bool> paused_{false};
 };
 

@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.sync.withLock
 import android.net.Uri
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 
 import com.vibes.dsp.ui.live.ClipLauncherPreferences
 
@@ -45,6 +46,12 @@ internal fun detectLoopTempoBpm(durationSeconds: Double, referenceBpm: Double): 
         ?.second
 }
 data class RackPlugin(val index: Int, val name: String, val pluginId: String, val instanceId: Long)
+data class PluginLatencyFrames(
+    val reported: Long = 0L,
+    val manual: Long = 0L,
+    val effective: Long = 0L,
+    val overflow: Boolean = false
+)
 
 data class MeterState(
     val inputLevel: Float = 0f,
@@ -85,6 +92,8 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private var failedUsbSessionId: Long = 0
     private val lifecycleMutex = Mutex()
     private val rackControlMutex = Mutex()
+    // Only the latest asynchronous path refresh may publish its result.
+    private val selectedPathRefreshGeneration = AtomicLong(0L)
     private var restartJob: Job? = null
     private var autoStartAttempted = false
     @Volatile private var nativeReady = false
@@ -231,16 +240,28 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun refreshSelectedPath(forceNewInstanceIds: Boolean = false) {
         if (!nativeReady) return
         val path = _selectedPathId.value
+        val generation = selectedPathRefreshGeneration.incrementAndGet()
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 val entries = RackManager.getRackPlugins(path).toList()
+                // A slower request for a previously selected path must never
+                // overwrite the currently selected chain.
+                if (_selectedPathId.value != path ||
+                    selectedPathRefreshGeneration.get() != generation
+                ) return@runCatching
                 val old = _selectedPathPlugins.value
                 val ids = if (forceNewInstanceIds) emptyMap() else old.associateBy { it.instanceId }
                 _selectedPathPlugins.value = entries.map { e ->
                     val previous = ids[e.instanceId]
                     RackPlugin(e.index, e.info.name.ifEmpty { e.info.id }, e.info.fullId, previous?.instanceId ?: e.instanceId)
                 }
-            }.onFailure { _errorMessage.value = "Failed to get rack plugins: ${it.message}" }
+            }.onFailure {
+                if (_selectedPathId.value == path &&
+                    selectedPathRefreshGeneration.get() == generation
+                ) {
+                    _errorMessage.value = "Failed to get rack plugins: ${it.message}"
+                }
+            }
         }
     }
     fun addTrack() { viewModelScope.launch(Dispatchers.IO) { val id = RackManager.addTrack(); if (id != 0L) { refreshRackNow(); selectPath(id) } else _errorMessage.value = "Failed to add track" } }
@@ -770,11 +791,15 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         refreshRack()
         return result
     }
-    fun transportPlay() { setTransportPlaying(true) }
-    fun transportPause() { setTransportPlaying(false) }
+    fun transportPlay() {
+        setTransportPlaying(true)
+    }
+    fun transportPause() {
+        setTransportPlaying(false)
+    }
     fun transportRestart() {
         viewModelScope.launch(Dispatchers.IO) {
-            RackManager.restartTransport()
+            if (!RackManager.restartTransport()) _errorMessage.value = "Unable to restart transport"
             refreshTransport()
         }
     }
@@ -786,12 +811,25 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             refreshTrackTransport()
         }
     }
-    fun setTransportBpm(bpm: Double) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportBpm(bpm); refreshTransport() } }
+    fun setTransportBpm(bpm: Double) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!RackManager.setTransportBpm(bpm)) _errorMessage.value = "Unable to set transport tempo"
+            refreshTransport()
+        }
+    }
     private fun refreshTransport() { if (nativeReady) runCatching { _transport.value = RackManager.getTransportInfo() } }
     private fun refreshTrackTransport() {
         if (nativeReady) runCatching { _tracks.value = RackManager.getTracks().toList() }
     }
-    private fun setTransportPlaying(value: Boolean) { viewModelScope.launch(Dispatchers.IO) { RackManager.setTransportPlaying(value); refreshTransport(); refreshTrackTransport() } }
+    private fun setTransportPlaying(value: Boolean) {
+        viewModelScope.launch(Dispatchers.IO) {
+            if (!RackManager.setTransportPlaying(value)) {
+                _errorMessage.value = if (value) "Unable to start transport" else "Unable to pause transport"
+            }
+            refreshTransport()
+            refreshTrackTransport()
+        }
+    }
 
     fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.addPlugin(pathId, pluginId, position) < 0) _errorMessage.value = "Failed to add plugin"; refreshSelectedPath() } }
     fun removePlugin(pathId: RackPathId, position: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.removePlugin(pathId, position)) _errorMessage.value = "Failed to remove plugin"; refreshSelectedPath() } }
@@ -802,15 +840,29 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                 _errorMessage.value = "Select a track before creating a parallel return"
                 return@launch
             }
-            val returnId = rackControlMutex.withLock {
+            if (_transport.value.playing) {
+                val message = "Stop transport before creating a parallel return, then tap Create parallel return again."
+                _errorMessage.value = message
+                _deviceChainGuidance.value = message
+                return@launch
+            }
+            val result = rackControlMutex.withLock {
                 withBlockingOperation("Creating parallel dry/wet return") {
                     RackManager.createParallelWetReturn(pathId)
                 }
             }
-            if (returnId == 0L) {
-                _errorMessage.value = "Unable to create parallel dry/wet return"
+            if (result.pathId == 0L) {
+                val diagnostic = result.diagnostic.ifBlank { "create-failed" }
+                val message = if (diagnostic == "engine-running" || diagnostic == "transport-playing") {
+                    "Stop transport before creating a parallel return, then tap Create parallel return again."
+                } else {
+                    "Unable to create parallel dry/wet return ($diagnostic)"
+                }
+                _errorMessage.value = message
+                _deviceChainGuidance.value = message
                 return@launch
             }
+            val returnId = result.pathId
             refreshRackNow()
             if (_tracks.value.any { it.id == returnId }) {
                 selectPath(returnId)
@@ -848,14 +900,21 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             runCatching {
                 val bytes = getApplication<Application>().contentResolver.openInputStream(uri)?.use { it.readBytes() }
                     ?: error("Unable to open source document")
-                if (!RackManager.importDeviceChain(pathId, bytes)) {
-                    error("Invalid or incompatible device chain")
+                val diagnostic = RackManager.importDeviceChain(pathId, bytes)
+                if (diagnostic != null) {
+                    val message = if (diagnostic == "engine-running" || diagnostic == "transport-playing") {
+                        "Stop transport before loading a device chain, then try again."
+                    } else {
+                        "Unable to load device chain ($diagnostic)"
+                    }
+                    _deviceChainGuidance.value = message
+                    error(message)
                 }
             }.onSuccess {
                 if (_selectedPathId.value == pathId) refreshSelectedPath()
             }.onFailure {
                 Log.e("RackViewModel", "Failed to load device chain", it)
-                _errorMessage.value = "Unable to load device chain: ${it.message}"
+                _errorMessage.value = it.message ?: "Unable to load device chain"
             }
         }
     }
@@ -909,6 +968,23 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             runCatching { RackManager.getManualLatencyFrames(pathId, pluginIndex).toLong() }
                 .getOrDefault(0L)
         }
+    suspend fun getPluginLatencyFrames(pathId: RackPathId, pluginIndex: Int): PluginLatencyFrames =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                PluginLatencyFrames(
+                    reported = RackManager.getPluginLatencyFrames(pathId, pluginIndex),
+                    manual = RackManager.getManualLatencyFrames(pathId, pluginIndex).toLong(),
+                    effective = RackManager.getPluginEffectiveLatencyFrames(pathId, pluginIndex),
+                    overflow = RackManager.hasPluginLatencyOverflow(pathId)
+                )
+            }.getOrDefault(PluginLatencyFrames())
+        }
+
+    suspend fun getManualLatencyRemainingFrames(pathId: RackPathId, pluginIndex: Int): Long =
+        withContext(Dispatchers.IO) {
+            runCatching { RackManager.getManualLatencyRemainingFrames(pathId, pluginIndex).toLong() }
+                .getOrDefault(0L)
+        }
 
     fun setPluginManualLatencyFrames(
         pathId: RackPathId,
@@ -916,7 +992,8 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         frames: Long,
         onComplete: (Boolean) -> Unit = {}
     ) {
-        if (frames !in 0L..Int.MAX_VALUE.toLong()) {
+        if (frames !in 0L..65535L) {
+            _errorMessage.value = "Manual plugin latency must be between 0 and 65535 frames"
             onComplete(false)
             return
         }

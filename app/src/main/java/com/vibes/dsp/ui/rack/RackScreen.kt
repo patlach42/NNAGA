@@ -1743,6 +1743,7 @@ private fun PluginChromeButton(
 @Composable
 private fun ManualLatencyDialog(
     currentFrames: Long,
+    remainingFrames: Long,
     sampleRateHz: Float,
     onDismiss: () -> Unit,
     onApply: (Long) -> Unit
@@ -1755,10 +1756,13 @@ private fun ManualLatencyDialog(
         )
     }
     val parsed = input.trim().toDoubleOrNull()
+    val maxFrames = remainingFrames.coerceIn(0L, 65535L)
+    val integralFrames = parsed?.let { it.isFinite() && it >= 0.0 &&
+        it <= maxFrames.toDouble() && it == it.toLong().toDouble() } == true
     val valid = parsed != null && parsed.isFinite() && parsed >= 0.0 &&
-        ((unit == "Frames" && parsed <= Long.MAX_VALUE.toDouble()) ||
+        ((unit == "Frames" && integralFrames) ||
             (unit == "Milliseconds" && sampleRateHz > 0f &&
-                parsed * sampleRateHz / 1000.0 <= Long.MAX_VALUE.toDouble()))
+                parsed * sampleRateHz / 1000.0 <= maxFrames.toDouble()))
     val frames = if (valid) {
         if (unit == "Frames") parsed!!.toLong() else (parsed!! * sampleRateHz / 1000.0).roundToLong()
     } else 0L
@@ -1784,11 +1788,16 @@ private fun ManualLatencyDialog(
                     supportingText = {
                         if (input.isNotBlank() && !valid) Text(
                             if (unit == "Milliseconds" && sampleRateHz <= 0f) "Sample rate unavailable"
-                            else "Enter a finite, non-negative value"
+                            else if (unit == "Frames" && parsed != null && parsed.isFinite() &&
+                                parsed >= 0.0 && parsed <= maxFrames.toDouble() && !integralFrames
+                            ) "Frames must be a whole number from 0 to $maxFrames"
+                            else if (unit == "Milliseconds")
+                                "Enter a finite value that converts to 0–$maxFrames frames"
+                            else "Enter a finite whole number from 0 to $maxFrames frames"
                         )
                     }
                 )
-                Text("Current override: $currentFrames frames", style = MaterialTheme.typography.bodySmall)
+                Text("Current override: $currentFrames frames · remaining chain budget: $maxFrames", style = MaterialTheme.typography.bodySmall)
             }
         },
         confirmButton = {
@@ -1839,23 +1848,43 @@ fun PluginCard(
         }
     }
     var showManualLatencyDialog by remember { mutableStateOf(false) }
-    var manualLatencyFrames by remember(pathId, plugin.instanceId, pluginIndex) {
-        mutableLongStateOf(0L)
+    val latencyFrames by produceState(
+        initialValue = PluginLatencyFrames(),
+        key1 = pathId,
+        key2 = plugin.instanceId,
+        key3 = pluginIndex
+    ) {
+        while (true) {
+            value = viewModel.getPluginLatencyFrames(pathId, pluginIndex)
+            delay(250)
+        }
     }
-    LaunchedEffect(pathId, plugin.instanceId, pluginIndex) {
-        manualLatencyFrames = viewModel.getPluginManualLatencyFrames(pathId, pluginIndex)
+    val remainingLatencyFrames by produceState(
+        initialValue = 0L,
+        key1 = pathId,
+        key2 = plugin.instanceId,
+        key3 = pluginIndex
+    ) {
+        while (true) {
+            value = viewModel.getManualLatencyRemainingFrames(pathId, pluginIndex)
+            delay(250)
+        }
     }
     val pluginInfo = pluginInfoState.value
 
-    Surface(
-        modifier = modifier,
-        color = MaterialTheme.colorScheme.surface,
-        shape = MaterialTheme.shapes.small,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    Column(
+        modifier = modifier.then(
+            if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth()
+        )
     ) {
-        Column(
-            modifier = if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth()
-        ) {
+            Text(
+                "Latency: reported ${latencyFrames.reported} frames, " +
+                    "manual ${latencyFrames.manual} frames, " +
+                    "effective ${latencyFrames.effective} frames" +
+                    if (latencyFrames.overflow) " · OVERFLOW: alignment unavailable" else "",
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+            )
             // Parameter controls / plugin UI — always in composition to avoid re-renders
             if (pluginInfo != null) {
                 val context = LocalContext.current
@@ -1977,7 +2006,7 @@ fun PluginCard(
                             }
                             DropdownMenuItem(
                                 text = {
-                                    Text(if (manualLatencyFrames > 0L) "Manual latency (${manualLatencyFrames} frames)" else "Manual latency")
+                                    Text(if (latencyFrames.manual > 0L) "Manual latency (${latencyFrames.manual} frames)" else "Manual latency")
                                 },
                                 onClick = {
                                     showContextMenu = false
@@ -2131,13 +2160,13 @@ fun PluginCard(
                 }
                 if (showManualLatencyDialog) {
                     ManualLatencyDialog(
-                        currentFrames = manualLatencyFrames,
+                        currentFrames = latencyFrames.manual,
+                        remainingFrames = remainingLatencyFrames,
                         sampleRateHz = viewModel.sampleRateHz(),
                         onDismiss = { showManualLatencyDialog = false },
                         onApply = { frames ->
                             viewModel.setPluginManualLatencyFrames(pathId, pluginIndex, frames) { ok ->
                                 if (ok) {
-                                    manualLatencyFrames = frames
                                     showManualLatencyDialog = false
                                 }
                             }
@@ -2212,14 +2241,25 @@ fun PluginCard(
                     x11FileRequestPending = null
                 }
 
-                // Poll for X11 UI file requests when X11 UI is visible
-                val x11UiActive = currentUiMode == UiType.X11
+                // Poll for X11 UI file requests only while the rack and X11 UI are visible.
+                val x11UiActive = currentUiMode == UiType.X11 && isRackVisible
                 LaunchedEffect(x11UiActive, x11DisplayNumber) {
                     if (x11UiActive && x11DisplayNumber >= 0) {
                         while (isActive) {
-                            val req = X11Bridge.pollFileRequest(pathId)
-                            if (req != null && req.size == 3 && req[0].toLong() == pathId) {
-                                x11FileRequestPending = Triple(req[0].toLong(), req[1].toInt(), req[2])
+                            // Do not dequeue another native request while this one is
+                            // being handled by a dialog or SAF picker. Native polling
+                            // consumes the request, so polling here would otherwise
+                            // silently replace the active request and lose it.
+                            if (x11FileRequestPending == null) {
+                                val req = X11Bridge.pollFileRequest(pathId)
+                                if (req != null && req.size == 3) {
+                                    val requestPath = req[0].toLongOrNull()
+                                    val requestPlugin = req[1].toIntOrNull()
+                                    if (requestPath == pathId && requestPlugin != null) {
+                                        x11FileRequestPending = Triple(requestPath, requestPlugin, req[2])
+                                        showX11FilePicker = true
+                                    }
+                                }
                             }
                             delay(100)
                         }
@@ -2504,7 +2544,7 @@ fun PluginCard(
                                     pluginIndex = pluginIndex,
                                     displayNumber = x11DisplayNumber,
                                     isVisible = (expanded || isFullscreen) && currentUiMode == UiType.X11 &&
-                                        (!isAnyPluginFullscreen || isFullscreen),
+                                        isRackVisible && (!isAnyPluginFullscreen || isFullscreen),
                                     shouldDestroyOnDispose = true,
                                     modifier = Modifier.fillMaxSize(),
                                     onPluginSizeKnown = { w, h, scale ->
@@ -2569,7 +2609,7 @@ fun PluginCard(
                                 pathId,
                                 pluginIndex,
                                 isFullscreen = isFullscreen,
-                                isVisible = expanded || isFullscreen,
+                                isVisible = (expanded || isFullscreen) && isRackVisible,
                                 onPluginSizeKnown = { w, h ->
                                     x11PluginNaturalW = w
                                     x11PluginNaturalH = h
@@ -2648,9 +2688,9 @@ fun PluginCard(
                 var modelFiles by remember { mutableStateOf<List<java.io.File>>(emptyList()) }
 
                 // Observe model loaded events from external sources (e.g. Tone3000 download)
-                LaunchedEffect(pluginIndex) {
+                LaunchedEffect(pathId, pluginIndex) {
                     RackManager.modelLoadedEvents.collect { event ->
-                        if (event.pluginIndex == pluginIndex) {
+                        if (event.pathId == pathId && event.pluginIndex == pluginIndex) {
                             modelActiveModelName = event.modelName
                         }
                     }
@@ -2700,7 +2740,7 @@ fun PluginCard(
                                 pluginIndex = pluginIndex,
                                 pluginInfo = pluginInfo,
                                 isVisible = (expanded || modguiFullscreen) && modguiOnScreen &&
-                                    (!isAnyPluginFullscreen || isFullscreen),
+                                    isRackVisible && (!isAnyPluginFullscreen || isFullscreen),
                                 modifier = Modifier
                                     .then(if (modguiFullscreen) Modifier.fillMaxWidth() else Modifier.fillMaxWidth(fraction = effectiveScale))
                                     .height(heightDp),
@@ -2856,14 +2896,13 @@ fun PluginCard(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                      }
-                    }
-                    }
-                }
+                        } // end Slider content Column
+                    } // end UiType.SLIDERS branch
+                    } // end currentUiMode when
+                } // end visibility if
                 } // end contentModifier Column
-            }
-        }
-    }
+            } // end pluginInfo if
+        } // end outer PluginCard Column
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

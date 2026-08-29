@@ -400,6 +400,23 @@ static void publish_param_values(VstpocShared* shm, AEffect* eff);
 static int clamped_param_count(AEffect* eff);
 static float clamp_normalized_param(float value);
 static void drain_primary_param_mailbox(int plugin_index, AEffect* eff);
+static void publish_latency(VstpocShared* shm) {
+    if (!shm) return;
+    uint32_t plugin = 0;
+    for (int i = 0; i < g_pluginCount; ++i) {
+        AEffect* e = g_plugins[i].eff;
+        if (e && e->initialDelay > 0)
+            plugin += (uint32_t)e->initialDelay > UINT32_MAX - plugin
+                   ? UINT32_MAX - plugin : (uint32_t)e->initialDelay;
+    }
+    const uint32_t quantum = g_transport.block_frames;
+    uint64_t seq = __atomic_load_n(&shm->latency_seq, __ATOMIC_RELAXED);
+    __atomic_store_n(&shm->latency_seq, seq + 1u, __ATOMIC_RELEASE);
+    shm->plugin_latency_frames = plugin;
+    shm->bridge_quantum_frames = quantum;
+    shm->latency_layout_v = 1u;
+    __atomic_store_n(&shm->latency_seq, seq + 2u, __ATOMIC_RELEASE);
+}
 
 /* Host-frame window procedure. Used ONLY when VSTPOC_HOST_FRAME=1 (the
  * PC launcher sets this; Android leaves it unset). In that mode each
@@ -1564,13 +1581,9 @@ int main(int argc, char** argv) {
     }
 
     /* Probe: does this plugin advertise an editor? Don't call effEditGetRect
-     * here — JUCE-based plugins bind their MessageManager to the FIRST
-     * thread that touches their editor API. If main thread calls
-     * effEditGetRect, JUCE pins the message thread to main; the per-plugin
-     * editor thread's later effEditGetRect then deadlocks waiting for main
-     * (which is in the audio loop, not pumping messages). The editor thread
-     * does its own effEditGetRect right before effEditOpen — that's the
-     * only thread that should touch editor APIs. */
+     * here — JUCE-based plugins bind their MessageManager to the first
+     * thread that touches their editor API. The editor thread performs
+     * effEditGetRect immediately before effEditOpen. */
     LOG("flags=0x%x hasEditor=%d\n", (unsigned)eff->flags,
         (eff->flags & effFlagsHasEditor) ? 1 : 0);
 
@@ -1585,6 +1598,7 @@ int main(int argc, char** argv) {
      * Multi-plugin note: only publishes the FIRST plugin's params for
      * now. Later commits extend the shared layout for per-plugin params. */
     publish_params(shm, eff);
+    publish_latency(shm);
 
     /* signal Android side */
     write_status(shm, 1, NULL);
@@ -1691,6 +1705,7 @@ int main(int argc, char** argv) {
             write_status(shm, 2, "invalid VST2 sample rate");
             goto teardown;
         }
+        publish_latency((VstpocShared*)shm);
         /* Param draining moved to the editor thread to avoid a user32-CS
          * deadlock: WagnerSharp's setParameter touches its GUI state and
          * acquires the wine user32 critical section, which the editor

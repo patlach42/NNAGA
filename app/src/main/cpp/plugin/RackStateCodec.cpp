@@ -43,7 +43,9 @@ bool chainR(R& reader, PluginChain::ChainState& chain, bool hasManualLatency) {
         }
         if (hasManualLatency) {
             plugin.manualLatencyFrames = reader.u32();
-            if (!reader.ok) return false;
+            if (!reader.ok ||
+                plugin.manualLatencyFrames > PluginChain::kMaxSupportedPdcFrames)
+                return false;
         }
         chain.plugins.push_back(std::move(plugin));
     }

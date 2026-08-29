@@ -78,12 +78,20 @@ std::unique_ptr<RackGraph::GraphSnapshot> RackGraph::buildSnapshotLocked(const s
     };
     for (uint32_t i = 0; i < nodes.size(); ++i) if (!visit(i)) return nullptr;
     snapshot->pathLatency.assign(nodes.size(), 0);
+    snapshot->pathLatencyOverflow.assign(nodes.size(), false);
     for (const uint32_t i : snapshot->topoOrder) {
         uint64_t latency = snapshot->tracks[i].node->chain->getLatencyFrames();
+        bool overflow = snapshot->tracks[i].node->chain->hasLatencyOverflow();
         const int32_t route = snapshot->tracks[i].routeIndex;
-        if (route >= 0) latency += snapshot->pathLatency[static_cast<uint32_t>(route)];
-        snapshot->pathLatency[i] = static_cast<uint32_t>(
-            std::min<uint64_t>(latency, kLatencyHistoryFrames - 1));
+        if (route >= 0) {
+            latency += snapshot->pathLatency[static_cast<uint32_t>(route)];
+            overflow = overflow ||
+                snapshot->pathLatencyOverflow[static_cast<uint32_t>(route)];
+        }
+        if (latency > PluginChain::kMaxSupportedPdcFrames) overflow = true;
+        snapshot->pathLatencyOverflow[i] = overflow;
+        snapshot->pathLatency[i] = overflow
+            ? 0 : static_cast<uint32_t>(latency);
     }
     return snapshot;
 }
@@ -705,10 +713,25 @@ bool RackGraph::setManualLatencyFrames(RackPathId pathId, int pluginIndex, uint3
         auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n) { return n->id == pathId; });
         return it == tracks_.end() ? nullptr : (*it)->chain;
     }();
-    if (!chain) return false;
-    if (frames >= kLatencyHistoryFrames) frames = kLatencyHistoryFrames - 1;
+    if (!chain || frames > PluginChain::kMaxSupportedPdcFrames) return false;
+    const uint32_t previous = chain->getManualLatencyFrames(pluginIndex);
     if (!chain->setManualLatencyFrames(pluginIndex, frames)) return false;
-    return publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_));
+    auto next = buildSnapshotLocked(tracks_, clips_, recordingClips_);
+    if (!next) {
+        (void)chain->setManualLatencyFrames(pluginIndex, previous);
+        return false;
+    }
+    for (bool overflow : next->pathLatencyOverflow) {
+        if (overflow) {
+            (void)chain->setManualLatencyFrames(pluginIndex, previous);
+            return false;
+        }
+    }
+    if (!publishSnapshotLocked(std::move(next))) {
+        (void)chain->setManualLatencyFrames(pluginIndex, previous);
+        return false;
+    }
+    return true;
 }
 uint32_t RackGraph::getManualLatencyFrames(RackPathId pathId, int pluginIndex) const {
     std::lock_guard lock(controlMutex_);
@@ -717,6 +740,40 @@ uint32_t RackGraph::getManualLatencyFrames(RackPathId pathId, int pluginIndex) c
         return it == tracks_.end() ? nullptr : (*it)->chain;
     }();
     return chain ? chain->getManualLatencyFrames(pluginIndex) : 0;
+}
+uint32_t RackGraph::getManualLatencyRemainingFrames(RackPathId pathId, int pluginIndex) const {
+    std::lock_guard lock(controlMutex_);
+    auto chain = pathId == kMasterPathId ? master_ : [&]() -> std::shared_ptr<PluginChain> {
+        auto it = std::find_if(tracks_.begin(), tracks_.end(),
+            [&](const auto& n) { return n->id == pathId; });
+        return it == tracks_.end() ? nullptr : (*it)->chain;
+    }();
+    return chain ? chain->getRemainingPdcFrames(pluginIndex) : 0;
+}
+uint32_t RackGraph::getPluginLatencyFrames(RackPathId pathId, int pluginIndex) const {
+    std::lock_guard lock(controlMutex_);
+    auto chain = pathId == kMasterPathId ? master_ : [&]() -> std::shared_ptr<PluginChain> {
+        auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n) { return n->id == pathId; });
+        return it == tracks_.end() ? nullptr : (*it)->chain;
+    }();
+    return chain ? chain->getPluginLatencyFrames(pluginIndex) : 0;
+}
+uint32_t RackGraph::getPluginEffectiveLatencyFrames(RackPathId pathId, int pluginIndex) const {
+    std::lock_guard lock(controlMutex_);
+    auto chain = pathId == kMasterPathId ? master_ : [&]() -> std::shared_ptr<PluginChain> {
+        auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n) { return n->id == pathId; });
+        return it == tracks_.end() ? nullptr : (*it)->chain;
+    }();
+    return chain ? chain->getPluginEffectiveLatencyFrames(pluginIndex) : 0;
+}
+bool RackGraph::hasPluginLatencyOverflow(RackPathId pathId) const {
+    std::lock_guard lock(controlMutex_);
+    auto chain = pathId == kMasterPathId ? master_ : [&]() -> std::shared_ptr<PluginChain> {
+        auto it = std::find_if(tracks_.begin(), tracks_.end(),
+            [&](const auto& n) { return n->id == pathId; });
+        return it == tracks_.end() ? nullptr : (*it)->chain;
+    }();
+    return chain && chain->hasLatencyOverflow();
 }
 void RackGraph::setSampleRate(float rate,uint32_t buffer){std::lock_guard lock(controlMutex_);sampleRate_.store(rate);bufferSize_=buffer;for(auto& n:tracks_){n->sourceLeft.resize(buffer);n->sourceRight.resize(buffer);n->outputLeft.resize(buffer);n->outputRight.resize(buffer);n->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryWrite=0;n->chain->setSampleRate(rate,buffer);}master_->setSampleRate(rate,buffer);(void)publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
 void RackGraph::activate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->activate();master_->activate();}void RackGraph::deactivate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->deactivate();master_->deactivate();}void RackGraph::pauseAndResetTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,false,true);}
@@ -1128,15 +1185,58 @@ void RackGraph::process(
     if (rate <= 0.0) rate = 48000.0;
     const bool masterEmpty = snapshot->master->isEmptyForAudio();
     uint32_t globalLatency = 0;
+    bool globalLatencyOverflow = false;
     for (const uint32_t topoIndex : snapshot->topoOrder) {
         uint64_t path = snapshot->tracks[topoIndex].node->chain->getLatencyFrames();
+        bool overflow = snapshot->tracks[topoIndex].node->chain->hasLatencyOverflow();
         const int32_t route = snapshot->tracks[topoIndex].routeIndex;
-        if (route >= 0) path += snapshot->pathLatency[static_cast<uint32_t>(route)];
-        const uint32_t clamped = static_cast<uint32_t>(std::min<uint64_t>(path, kLatencyHistoryFrames - 1));
-        snapshot->pathLatency[topoIndex] = clamped;
-        globalLatency = std::max(globalLatency, clamped);
+        if (route >= 0) {
+            const uint32_t source = static_cast<uint32_t>(route);
+            path += snapshot->pathLatency[source];
+            overflow = overflow || snapshot->pathLatencyOverflow[source];
+        }
+        if (path > PluginChain::kMaxSupportedPdcFrames) overflow = true;
+        snapshot->pathLatencyOverflow[topoIndex] = overflow;
+        const uint32_t effective = overflow ? 0 : static_cast<uint32_t>(path);
+        snapshot->pathLatency[topoIndex] = effective;
+        globalLatencyOverflow = globalLatencyOverflow || overflow;
+        globalLatency = std::max(globalLatency, effective);
+    }
+    // An overflowing path cannot be represented by the fixed history buffer.
+    // Disable PDC alignment for this block rather than silently claiming it.
+    if (globalLatencyOverflow) globalLatency = 0;
+    // A latency/PDC change invalidates the old timeline.  Do this only at the
+    // block boundary, before any track consumes its history.
+    const bool globalLatencyChanged = globalLatency != audioGlobalLatency_ ||
+        globalLatencyOverflow != audioLatencyOverflow_;
+    if (globalLatencyChanged) {
+        for (const auto& view : snapshot->tracks) {
+            auto& node = *view.node;
+            node.latencyHistoryWrite = 0;
+            node.latencyHistoryValid = 0;
+        }
+    }
+    for (const uint32_t topoIndex : snapshot->topoOrder) {
+        auto& view = snapshot->tracks[topoIndex];
+        auto& node = *view.node;
+        const auto& input = view.inputSource;
+        const bool inputChanged = !node.audioInputSourceInitialized ||
+            node.audioInputSource.kind != input.kind ||
+            node.audioInputSource.firstChannel != input.firstChannel ||
+            node.audioInputSource.trackId != input.trackId ||
+            node.audioInputSource.tap != input.tap;
+        if (globalLatencyOverflow || !node.audioLatencyInitialized || inputChanged ||
+            node.audioPathLatency != snapshot->pathLatency[topoIndex]) {
+            node.latencyHistoryWrite = 0;
+            node.latencyHistoryValid = 0;
+        }
+        node.audioPathLatency = snapshot->pathLatency[topoIndex];
+        node.audioInputSource = input;
+        node.audioLatencyInitialized = true;
+        node.audioInputSourceInitialized = true;
     }
     audioGlobalLatency_ = globalLatency;
+    audioLatencyOverflow_ = globalLatencyOverflow;
     const bool directSingleTrack = masterEmpty && snapshot->tracks.size() == 1 && globalLatency == 0;
     bool mixHasData = false;
     const double bpm = std::clamp(audioBpm_, 20.0, 400.0);
@@ -1483,10 +1583,12 @@ void RackGraph::process(
         }
         const float volume = node.volume.load(std::memory_order_relaxed);
         const uint32_t pathLatency = snapshot->pathLatency[topoIndex];
-        const uint32_t delay = globalLatency - pathLatency;
+        const uint32_t delay = (!globalLatencyOverflow && globalLatency >= pathLatency)
+            ? globalLatency - pathLatency : 0;
         auto& historyL = node.latencyHistoryLeft;
         auto& historyR = node.latencyHistoryRight;
         uint32_t write = node.latencyHistoryWrite;
+        uint32_t valid = node.latencyHistoryValid;
         if (directSingleTrack) {
             copyScaled(outputs[0], outputs[1], trackSignal[0], trackSignal[1], frames, volume);
             // Keep a complete prehistory even while using the direct shortcut so
@@ -1495,21 +1597,29 @@ void RackGraph::process(
                 historyL[write] = trackSignal[0][frame];
                 historyR[write] = trackSignal[1][frame];
                 write = (write + 1) % kLatencyHistoryFrames;
+                valid = std::min<uint32_t>(kLatencyHistoryFrames, valid + 1);
             }
         } else {
             for (uint32_t frame = 0; frame < frames; ++frame) {
+                const bool historyReady = valid >= delay;
                 const uint32_t read = (write + kLatencyHistoryFrames - delay) % kLatencyHistoryFrames;
-                const float delayedL = delay ? historyL[read] * volume : trackSignal[0][frame] * volume;
-                const float delayedR = delay ? historyR[read] * volume : trackSignal[1][frame] * volume;
+                const float delayedL = delay
+                    ? (historyReady ? historyL[read] : 0.0f) * volume
+                    : trackSignal[0][frame] * volume;
+                const float delayedR = delay
+                    ? (historyReady ? historyR[read] : 0.0f) * volume
+                    : trackSignal[1][frame] * volume;
                 historyL[write] = trackSignal[0][frame];
                 historyR[write] = trackSignal[1][frame];
                 if (!mixHasData) { snapshot->mixLeft[frame] = delayedL; snapshot->mixRight[frame] = delayedR; }
                 else { snapshot->mixLeft[frame] += delayedL; snapshot->mixRight[frame] += delayedR; }
                 write = (write + 1) % kLatencyHistoryFrames;
+                valid = std::min<uint32_t>(kLatencyHistoryFrames, valid + 1);
             }
             mixHasData = true;
         }
         node.latencyHistoryWrite = write;
+        node.latencyHistoryValid = valid;
     }
     if (!directSingleTrack) {
         if (!mixHasData) {

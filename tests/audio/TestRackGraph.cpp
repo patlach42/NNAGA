@@ -3906,24 +3906,38 @@ TEST(RackGraphSnapshotTest, TrackAndSlotSnapshotsDoNotMixCallbackGenerations) {
     const auto& racedTrack = racedTracks.front();
     const auto& racedSlot = racedSlots.front();
 
+    // These getters perform independent bounded status reads. Under callback
+    // contention, they may legitimately observe adjacent generations, so
+    // validate each result against the callback's monotonic before/after
+    // window instead of requiring cross-call timestamp equality.
+    const auto expectStatusInWindow = [](const auto& raced,
+                                         const auto& before,
+                                         const auto& after,
+                                         const char* getter) {
+        EXPECT_GE(raced.transportFrame, before.transportFrame) << getter;
+        EXPECT_LE(raced.transportFrame, after.transportFrame) << getter;
+        EXPECT_GE(raced.musicalQuarterNotes,
+                  before.musicalQuarterNotes)
+            << getter;
+        EXPECT_LE(raced.musicalQuarterNotes,
+                  after.musicalQuarterNotes)
+            << getter;
+        EXPECT_GT(raced.sampleRate, 0.0) << getter;
+        EXPECT_GE(raced.sampleRate, before.sampleRate) << getter;
+        EXPECT_LE(raced.sampleRate, after.sampleRate) << getter;
+        EXPECT_GT(raced.capturedAtMonotonicNanos, 0u) << getter;
+        EXPECT_GE(raced.capturedAtMonotonicNanos,
+                  before.capturedAtMonotonicNanos)
+            << getter;
+        EXPECT_LE(raced.capturedAtMonotonicNanos,
+                  after.capturedAtMonotonicNanos)
+            << getter;
+    };
 
-    EXPECT_EQ(racedTrack.transportFrame, afterTrack.transportFrame);
-    EXPECT_DOUBLE_EQ(racedTrack.musicalQuarterNotes,
-                     afterTrack.musicalQuarterNotes);
-    EXPECT_DOUBLE_EQ(racedTrack.sampleRate, afterTrack.sampleRate);
-    EXPECT_EQ(racedTrack.capturedAtMonotonicNanos,
-              afterTrack.capturedAtMonotonicNanos);
-    EXPECT_EQ(racedSlot.transportFrame, afterSlot->transportFrame);
-    EXPECT_DOUBLE_EQ(racedSlot.musicalQuarterNotes,
-                     afterSlot->musicalQuarterNotes);
-    EXPECT_DOUBLE_EQ(racedSlot.sampleRate, afterSlot->sampleRate);
-    EXPECT_EQ(racedSlot.capturedAtMonotonicNanos,
-              afterSlot->capturedAtMonotonicNanos);
-    EXPECT_EQ(racedTrack.transportFrame, racedSlot.transportFrame);
-    EXPECT_DOUBLE_EQ(racedTrack.musicalQuarterNotes,
-                     racedSlot.musicalQuarterNotes);
-    EXPECT_EQ(racedTrack.capturedAtMonotonicNanos,
-              racedSlot.capturedAtMonotonicNanos);
+    expectStatusInWindow(racedTrack, beforeTracks.front(), afterTrack,
+                         "getTracks");
+    expectStatusInWindow(racedSlot, *beforeSlot, *afterSlot,
+                         "getTrackClipSlots");
 }
 
 TEST(RackGraphStatusSnapshotTest,
@@ -3953,7 +3967,10 @@ using guitarrackcraft::RackPathId;
 
 class RestorableTestPlugin final : public guitarrackcraft::IPlugin {
 public:
-    explicit RestorableTestPlugin(std::string id) : id_(std::move(id)) {}
+    explicit RestorableTestPlugin(std::string id, uint32_t latencyFrames = 0)
+        : id_(std::move(id)), latencyFrames_(latencyFrames) {}
+
+    uint32_t getLatencyFrames() const noexcept override { return latencyFrames_; }
 
     void activate(float, uint32_t) override {}
     void deactivate() override {}
@@ -3993,6 +4010,7 @@ public:
 
 private:
     std::string id_;
+    const uint32_t latencyFrames_;
 };
 class RestorableTestFactory final : public guitarrackcraft::IPluginFactory {
 public:
@@ -4371,6 +4389,187 @@ TEST(RackGraphStateRestoreTest,
     EXPECT_EQ(firstPluginId(graph.getChain(guitarrackcraft::kMasterPathId)),
               "master");
 }
+TEST(RackGraphPdcTest, DynamicReportedLatencyDropClearsChainCache) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId track = graph.getTracks().front().id;
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+
+    auto plugin = std::make_unique<MutableLatencyPlugin>(4);
+    auto* pluginPtr = plugin.get();
+    ASSERT_EQ(chain->addPlugin(std::move(plugin)), 0);
+    EXPECT_EQ(chain->getLatencyFrames(), 4u);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    pluginPtr->setLatencyFrames(0);
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    // The public reported-latency seam can change at runtime; the aggregate
+    // cache must publish zero rather than retaining the previous value.
+    EXPECT_EQ(chain->getLatencyFrames(), 0u);
+    EXPECT_FALSE(chain->hasLatencyOverflow());
+}
+
+TEST(RackGraphPdcTest, ChainMutationAndRestoreUpdateLatencyCacheAndRollback) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId track = graph.getTracks().front().id;
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+
+    constexpr uint32_t maxPdc =
+        guitarrackcraft::PluginChain::kMaxSupportedPdcFrames;
+    ASSERT_EQ(chain->addPlugin(
+                  std::make_unique<RestorableTestPlugin>("latency-a", 7)),
+              0);
+    EXPECT_EQ(chain->getLatencyFrames(), 7u);
+    EXPECT_FALSE(chain->hasLatencyOverflow());
+
+    guitarrackcraft::PluginState restored;
+    restored.format = "TEST";
+    restored.pluginUri = "latency-a";
+    restored.manualLatencyFrames = 13;
+    ASSERT_TRUE(chain->restorePluginState(0, restored));
+    EXPECT_EQ(chain->getLatencyFrames(), 20u);
+    EXPECT_EQ(chain->getManualLatencyFrames(0), 13u);
+
+    // Bring the chain exactly to the supported limit, then reject a restore
+    // that would overflow it. The old manual value and cache must survive.
+    ASSERT_EQ(chain->addPlugin(std::make_unique<RestorableTestPlugin>(
+                  "latency-b", maxPdc - 20)),
+              1);
+    EXPECT_EQ(chain->getLatencyFrames(), maxPdc);
+    EXPECT_FALSE(chain->hasLatencyOverflow());
+
+    restored.manualLatencyFrames = 14;
+    EXPECT_FALSE(chain->restorePluginState(0, restored));
+    EXPECT_EQ(chain->getManualLatencyFrames(0), 13u);
+    EXPECT_EQ(chain->getLatencyFrames(), maxPdc);
+    EXPECT_FALSE(chain->hasLatencyOverflow());
+
+    ASSERT_TRUE(chain->removePlugin(1));
+    EXPECT_EQ(chain->getLatencyFrames(), 20u);
+    EXPECT_FALSE(chain->hasLatencyOverflow());
+    ASSERT_TRUE(chain->removePlugin(0));
+    EXPECT_EQ(chain->getLatencyFrames(), 0u);
+    EXPECT_FALSE(chain->hasLatencyOverflow());
+}
+
+TEST(RackGraphPdcTest,
+     OverflowingPathDoesNotSuppressValidMixedPathOrUnderflowItsDelay) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId overflowingTrack = graph.getTracks().front().id;
+    const RackPathId validTrack = graph.addTrack();
+    ASSERT_NE(validTrack, guitarrackcraft::kMasterPathId);
+
+    ASSERT_TRUE(graph.setTrackInputArmed(overflowingTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(overflowingTrack, 0));
+    ASSERT_TRUE(graph.setTrackInputArmed(validTrack, true));
+    ASSERT_TRUE(graph.setTrackInputHardwareMono(validTrack, 1));
+
+    const auto overflowingChain = graph.getChain(overflowingTrack);
+    const auto validChain = graph.getChain(validTrack);
+    ASSERT_NE(overflowingChain, nullptr);
+    ASSERT_NE(validChain, nullptr);
+    constexpr uint32_t maxPdc =
+        guitarrackcraft::PluginChain::kMaxSupportedPdcFrames;
+    ASSERT_EQ(overflowingChain->addPlugin(
+                  std::make_unique<FakeLatencyPlugin>(0, maxPdc)),
+              0);
+    ASSERT_EQ(overflowingChain->addPlugin(
+                  std::make_unique<FakeLatencyPlugin>(0, maxPdc)),
+              1);
+    ASSERT_EQ(validChain->addPlugin(
+                  std::make_unique<FakeLatencyPlugin>(0, 0)),
+              0);
+    ASSERT_TRUE(overflowingChain->hasLatencyOverflow());
+    EXPECT_TRUE(graph.hasPluginLatencyOverflow(overflowingTrack));
+    EXPECT_FALSE(validChain->hasLatencyOverflow());
+    EXPECT_FALSE(graph.hasPluginLatencyOverflow(validTrack));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        buffers.left[frame] = 10.0f + static_cast<float>(frame);
+        buffers.right[frame] = 100.0f + static_cast<float>(frame);
+    }
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    // Overflow disables alignment rather than silencing the graph. Both
+    // independent paths remain audible, including the valid path.
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected =
+            buffers.left[frame] + buffers.right[frame];
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
+}
+
+TEST(RackGraphPdcTest, ManualLatencyOverrideRejectsCumulativeChainBudget) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId track = graph.getTracks().front().id;
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+
+    ASSERT_EQ(chain->addPlugin(std::make_unique<FakeLatencyPlugin>(0, 0)), 0);
+    ASSERT_EQ(chain->addPlugin(std::make_unique<FakeLatencyPlugin>(0, 0)), 1);
+
+    constexpr uint32_t maxPdc = guitarrackcraft::PluginChain::kMaxSupportedPdcFrames;
+    ASSERT_TRUE(chain->setManualLatencyFrames(0, maxPdc / 2));
+    ASSERT_TRUE(chain->setManualLatencyFrames(1, maxPdc - maxPdc / 2));
+    EXPECT_EQ(chain->getLatencyFrames(), maxPdc);
+
+    EXPECT_FALSE(chain->setManualLatencyFrames(
+        1, maxPdc - maxPdc / 2 + 1));
+    EXPECT_EQ(chain->getManualLatencyFrames(0), maxPdc / 2);
+    EXPECT_EQ(chain->getManualLatencyFrames(1), maxPdc - maxPdc / 2);
+    EXPECT_EQ(chain->getLatencyFrames(), maxPdc);
+}
+
+TEST(RackGraphPdcTest, RoutedPathBudgetRejectionPreservesRouteAndManualState) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId sourceTrack = graph.getTracks().front().id;
+    const RackPathId routedTrack = graph.addTrack();
+    ASSERT_NE(routedTrack, guitarrackcraft::kMasterPathId);
+
+    const auto sourceChain = graph.getChain(sourceTrack);
+    const auto routedChain = graph.getChain(routedTrack);
+    ASSERT_NE(sourceChain, nullptr);
+    ASSERT_NE(routedChain, nullptr);
+    constexpr uint32_t maxPdc = guitarrackcraft::PluginChain::kMaxSupportedPdcFrames;
+    ASSERT_EQ(sourceChain->addPlugin(std::make_unique<FakeLatencyPlugin>(0, 0)), 0);
+    ASSERT_EQ(routedChain->addPlugin(std::make_unique<FakeLatencyPlugin>(0, 0)), 0);
+
+    ASSERT_TRUE(graph.setManualLatencyFrames(sourceTrack, 0, maxPdc));
+    EXPECT_EQ(graph.getManualLatencyFrames(sourceTrack, 0), maxPdc);
+    EXPECT_EQ(sourceChain->getLatencyFrames(), maxPdc);
+
+    ASSERT_TRUE(graph.setTrackInputArmed(routedTrack, true));
+    ASSERT_TRUE(graph.setTrackInputTrack(
+        routedTrack, sourceTrack, guitarrackcraft::TrackInputTap::PostFader));
+
+    EXPECT_FALSE(graph.setManualLatencyFrames(routedTrack, 0, 1));
+    EXPECT_EQ(graph.getManualLatencyFrames(routedTrack, 0), 0u);
+    EXPECT_EQ(routedChain->getLatencyFrames(), 0u);
+
+    const auto destinationSource = graph.getTrackInputSource(routedTrack);
+    EXPECT_EQ(destinationSource.kind,
+              guitarrackcraft::TrackInputSource::Kind::TrackOutput);
+    EXPECT_EQ(destinationSource.trackId, sourceTrack);
+    EXPECT_EQ(destinationSource.tap,
+              guitarrackcraft::TrackInputTap::PostFader);
+}
+
 TEST(RackGraphPdcTest, UnequalTrackLatenciesAlignAtFinalMix) {
     RackGraph graph;
     configure(graph, 64);
@@ -4466,6 +4665,30 @@ TEST(RackGraphPdcTest, ManualLatencyOverrideAlignsParallelTracksAndClearRestores
         EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
             << "right frame " << frame;
     }
+}
+
+TEST(RackGraphPdcTest, EffectiveLatencyCombinesReportedAndManualComponentsPerPlugin) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId track = graph.getTracks().front().id;
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+
+    ASSERT_EQ(chain->addPlugin(std::make_unique<FakeLatencyPlugin>(2, 7)), 0);
+    ASSERT_EQ(chain->addPlugin(std::make_unique<FakeLatencyPlugin>(3, 11)), 1);
+
+    EXPECT_EQ(graph.getPluginLatencyFrames(track, 0), 7u);
+    EXPECT_EQ(graph.getPluginLatencyFrames(track, 1), 11u);
+    EXPECT_EQ(graph.getPluginEffectiveLatencyFrames(track, 0), 7u);
+    EXPECT_EQ(graph.getPluginEffectiveLatencyFrames(track, 1), 11u);
+
+    ASSERT_TRUE(graph.setManualLatencyFrames(track, 0, 5));
+    ASSERT_TRUE(graph.setManualLatencyFrames(track, 1, 4));
+
+    EXPECT_EQ(graph.getManualLatencyFrames(track, 0), 5u);
+    EXPECT_EQ(graph.getManualLatencyFrames(track, 1), 4u);
+    EXPECT_EQ(graph.getPluginEffectiveLatencyFrames(track, 0), 12u);
+    EXPECT_EQ(graph.getPluginEffectiveLatencyFrames(track, 1), 15u);
 }
 
 TEST(RackGraphPdcTest, RoutedLatencyUsesRawPostChainTapsAndAccumulatedPath) {
@@ -4568,7 +4791,8 @@ TEST(RackGraphPdcTest, CompensatedProcessingDoesNotAllocate) {
     }
 }
 
-TEST(RackGraphPdcTest, LatencyChangeUsesContinuousHistoryWithoutAudioAllocation) {
+TEST(RackGraphPdcTest,
+     LatencyChangeResetsHistoryBeforeCompensatedBlockWithoutAudioAllocation) {
     RackGraph graph;
     configure(graph, 64);
     const RackPathId changingTrack = graph.getTracks().front().id;
@@ -4588,27 +4812,61 @@ TEST(RackGraphPdcTest, LatencyChangeUsesContinuousHistoryWithoutAudioAllocation)
 
     StereoBuffers buffers;
     clearBuffers(buffers);
-    buffers.right.fill(10.0f);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        buffers.left[frame] = 10.0f + static_cast<float>(frame);
+        buffers.right[frame] = 100.0f + static_cast<float>(frame);
+    }
     graph.process(buffers.inputs, 2, buffers.outputs, 8);
 
-    // The chain publishes a changed latency after processing one block. The
-    // staging block is therefore still zero-delay; it must nevertheless
-    // populate history for the following compensated block.
+    // The chain publishes its changed latency after processing the staging
+    // block. The next boundary must discard both paths' old timelines.
     changingPluginPtr->setLatencyFrames(4);
     clearBuffers(buffers);
-    buffers.right.fill(20.0f);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        buffers.left[frame] = 20.0f + static_cast<float>(frame);
+        buffers.right[frame] = 200.0f + static_cast<float>(frame);
+    }
     graph.process(buffers.inputs, 2, buffers.outputs, 8);
 
     clearBuffers(buffers);
-    buffers.right.fill(30.0f);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        buffers.left[frame] = 30.0f + static_cast<float>(frame);
+        buffers.right[frame] = 300.0f + static_cast<float>(frame);
+    }
     allocation_probe::allocations = 0;
     allocation_probe::enabled = true;
     graph.process(buffers.inputs, 2, buffers.outputs, 8);
     allocation_probe::enabled = false;
 
     EXPECT_EQ(allocation_probe::allocations, 0u);
+    // The changing path is already at the global maximum, while the
+    // previously direct path warms up from an empty history.
     for (uint32_t frame = 0; frame < 8; ++frame) {
-        const float expected = frame < 4 ? 20.0f : 30.0f;
+        const float expected = frame < 4
+            ? 30.0f + static_cast<float>(frame)
+            : 30.0f + static_cast<float>(frame) +
+                  300.0f + static_cast<float>(frame - 4);
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
+            << "left frame " << frame;
+        EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)
+            << "right frame " << frame;
+    }
+
+    clearBuffers(buffers);
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        buffers.left[frame] = 40.0f + static_cast<float>(frame);
+        buffers.right[frame] = 400.0f + static_cast<float>(frame);
+    }
+    graph.process(buffers.inputs, 2, buffers.outputs, 8);
+
+    // History starts at the transition boundary: no stale pre-transition
+    // sample or duplicated read-head value may precede the aligned signal.
+    for (uint32_t frame = 0; frame < 8; ++frame) {
+        const float expected = frame < 4
+            ? 40.0f + static_cast<float>(frame) +
+                  300.0f + static_cast<float>(frame + 4)
+            : 40.0f + static_cast<float>(frame) +
+                  400.0f + static_cast<float>(frame - 4);
         EXPECT_FLOAT_EQ(buffers.outputLeft[frame], expected)
             << "left frame " << frame;
         EXPECT_FLOAT_EQ(buffers.outputRight[frame], expected)

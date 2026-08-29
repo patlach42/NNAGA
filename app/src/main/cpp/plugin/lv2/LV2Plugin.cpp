@@ -380,6 +380,16 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
         processing_.store(false, std::memory_order_seq_cst);
         return passthroughMidi();
     }
+
+    // Control ports are owned by the DSP instance while it runs.  Apply the
+    // atomically published UI values here, at the block boundary, so no UI
+    // thread ever races a plugin read of a float port.
+    for (size_t i = 0; i < controlPorts_.size() && i < pendingControlPorts_.size(); ++i) {
+        if (controlPorts_[i] && pendingControlPorts_[i] &&
+            i < controlPortInputs_.size() && controlPortInputs_[i]) {
+            *controlPorts_[i] = pendingControlPorts_[i]->load(std::memory_order_acquire);
+        }
+    }
     for (size_t i = 0; i < audioInputPorts_.size() && i < 2; ++i) {
         if (inputs[i] && audioInputPorts_[i]) std::memcpy(audioInputPorts_[i], inputs[i], maxCopy * sizeof(float));
     }
@@ -522,10 +532,26 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
         workerInterface_->end_run(workerHandle);
     }
     if (latencyControlPosition_ >= 0 &&
-        static_cast<size_t>(latencyControlPosition_) < controlPorts_.size()) {
+        static_cast<size_t>(latencyControlPosition_) < controlPorts_.size() &&
+        controlPorts_[static_cast<size_t>(latencyControlPosition_)]) {
         const float reported = *controlPorts_[static_cast<size_t>(latencyControlPosition_)];
-        if (std::isfinite(reported) && reported >= 0.0f)
-            latencyFrames_.store(static_cast<uint32_t>(reported), std::memory_order_relaxed);
+        if (std::isfinite(reported) && reported >= 0.0f) {
+            constexpr float kMaxPdcFrames = 65535.0f;
+            const float bounded = std::min(reported, kMaxPdcFrames);
+            latencyFrames_.store(static_cast<uint32_t>(bounded), std::memory_order_relaxed);
+        } else {
+            latencyFrames_.store(0, std::memory_order_relaxed);
+        }
+    } else {
+        latencyFrames_.store(0, std::memory_order_relaxed);
+    }
+    // Publish LV2 output controls only after run(), through atomics consumed by
+    // UI/state readers. They are never written back into the DSP input ports.
+    for (size_t i = 0; i < controlPorts_.size() && i < pendingControlPorts_.size(); ++i) {
+        if (controlPorts_[i] && pendingControlPorts_[i] &&
+            i < controlPortInputs_.size() && !controlPortInputs_[i]) {
+            pendingControlPorts_[i]->store(*controlPorts_[i], std::memory_order_release);
+        }
     }
     for (auto& ap : atomPorts_) {
         if (ap.isInput) continue;
@@ -712,12 +738,15 @@ PluginInfo LV2Plugin::getInfo() const {
     
     return info;
 }
-
+    
 void LV2Plugin::setParameter(uint32_t portIndex, float value) {
-    // portIndex is the global LV2 port index; map to control buffer index
+    // Publish input controls through an atomic mailbox. The audio callback
+    // copies the value into the connected LV2 float port at block boundaries.
     for (size_t k = 0; k < controlPortIndices_.size(); ++k) {
-        if (controlPortIndices_[k] == portIndex && k < controlPorts_.size() && controlPorts_[k]) {
-            *controlPorts_[k].get() = value;
+        if (controlPortIndices_[k] == portIndex &&
+            k < pendingControlPorts_.size() && pendingControlPorts_[k] &&
+            k < controlPortInputs_.size() && controlPortInputs_[k]) {
+            pendingControlPorts_[k]->store(value, std::memory_order_release);
             return;
         }
     }
@@ -725,12 +754,14 @@ void LV2Plugin::setParameter(uint32_t portIndex, float value) {
 
 float LV2Plugin::getParameter(uint32_t portIndex) const {
     for (size_t k = 0; k < controlPortIndices_.size(); ++k) {
-        if (controlPortIndices_[k] == portIndex && k < controlPorts_.size() && controlPorts_[k]) {
-            return *controlPorts_[k].get();
+        if (controlPortIndices_[k] == portIndex &&
+            k < pendingControlPorts_.size() && pendingControlPorts_[k]) {
+            return pendingControlPorts_[k]->load(std::memory_order_acquire);
         }
     }
     return 0.0f;
 }
+
 
 uint32_t LV2Plugin::getNumInputPorts() const {
     return static_cast<uint32_t>(audioInputPorts_.size());
@@ -841,6 +872,8 @@ void LV2Plugin::initializePorts() {
     }
 
     controlPorts_.clear();
+    pendingControlPorts_.clear();
+    controlPortInputs_.clear();
     controlPortIndices_.clear();
     latencyControlPosition_ = -1;
     audioInputBuffers_.clear();
@@ -853,6 +886,9 @@ void LV2Plugin::initializePorts() {
     uint32_t numPorts = lilv_plugin_get_num_ports(plugin_);
     LilvNode* audioClass = lilv_new_uri(world_, LILV_URI_AUDIO_PORT);
     LilvNode* controlClass = lilv_new_uri(world_, LILV_URI_CONTROL_PORT);
+    LilvNode* latencyDesignation = lilv_new_uri(world_, LV2_CORE__latency);
+    const LilvPort* designatedLatencyPort =
+        lilv_plugin_get_port_by_designation(plugin_, controlClass, latencyDesignation);
     LilvNode* atomClass = lilv_new_uri(world_, LILV_URI_ATOM_PORT);
     LilvNode* inputClass = lilv_new_uri(world_, LILV_URI_INPUT_PORT);
     LilvNode* atomSupports = lilv_new_uri(world_, LV2_ATOM__supports);
@@ -871,14 +907,20 @@ void LV2Plugin::initializePorts() {
             LilvNode* minNode = nullptr;
             LilvNode* maxNode = nullptr;
             lilv_port_get_range(plugin_, port, &defNode, &minNode, &maxNode);
-            if (defNode) { defaultVal = static_cast<float>(lilv_node_as_float(defNode)); lilv_node_free(defNode); }
+            if (defNode) {
+                defaultVal = static_cast<float>(lilv_node_as_float(defNode));
+                lilv_node_free(defNode);
+            }
             if (minNode) lilv_node_free(minNode);
             if (maxNode) lilv_node_free(maxNode);
             const size_t position = controlPorts_.size();
             controlPorts_.push_back(std::unique_ptr<float>(new float(defaultVal)));
+            pendingControlPorts_.push_back(
+                std::unique_ptr<std::atomic<float>>(new std::atomic<float>(defaultVal)));
+            controlPortInputs_.push_back(isInput);
             controlPortIndices_.push_back(i);
-            const LilvNode* symbol = lilv_port_get_symbol(plugin_, port);
-            if (!isInput && symbol && std::strcmp(lilv_node_as_string(symbol), "latency") == 0)
+            // lv2:latency is a port designation; symbols are not normative.
+            if (!isInput && port == designatedLatencyPort)
                 latencyControlPosition_ = static_cast<int32_t>(position);
         } else if (isAudio) {
             if (isInput) { audioInputBuffers_.emplace_back(kMaxLv2BufferFrames, 0.0f); audioInputPorts_.push_back(audioInputBuffers_.back().data()); }
@@ -897,7 +939,7 @@ void LV2Plugin::initializePorts() {
             atomPorts_.push_back({i, isInput, supportsMidi, bufIdx});
         }
     }
-    lilv_node_free(audioClass);
+    lilv_node_free(latencyDesignation);
     lilv_node_free(atomSupports);
     lilv_node_free(midiEventNode);
     lilv_node_free(controlClass);
@@ -963,9 +1005,11 @@ PluginState LV2Plugin::saveState() {
     if (uri) state.pluginUri = lilv_node_as_string(uri);
 
     // Control port values
-    for (size_t k = 0; k < controlPorts_.size(); ++k) {
-        if (controlPorts_[k] && k < controlPortIndices_.size()) {
-            state.controlPortValues.emplace_back(controlPortIndices_[k], *controlPorts_[k]);
+    for (size_t k = 0; k < pendingControlPorts_.size(); ++k) {
+        if (pendingControlPorts_[k] && k < controlPortIndices_.size()) {
+            state.controlPortValues.emplace_back(
+                controlPortIndices_[k],
+                pendingControlPorts_[k]->load(std::memory_order_acquire));
         }
     }
 

@@ -46,6 +46,7 @@ public:
                      uint32_t outputCapacity) override;
 
     guitarrackcraft::PluginInfo getInfo() const override;
+    uint32_t getLatencyFrames() const noexcept override;
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
     std::string getParameterDisplay(uint32_t portIndex) const override;
@@ -105,6 +106,9 @@ private:
     std::vector<uint8_t> saveGuestStateBlob() const;
     bool restoreGuestStateBlob(const std::vector<uint8_t>& blob) const;
 
+    // Last seqlock-consistent total latency. Readers use this while the guest
+    // is publishing a new value so contention never transiently reports zero.
+    mutable std::atomic<uint32_t> lastStableLatencyFrames_{0};
     std::atomic<int32_t> underruns_{0};
 };
 

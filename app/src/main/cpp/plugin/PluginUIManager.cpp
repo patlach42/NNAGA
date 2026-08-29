@@ -38,11 +38,12 @@ PluginUIManager::~PluginUIManager() {
     }
 }
 void PluginUIManager::rebindChain(PluginChain* chain) {
-    // Invalidate callbacks before destroying their UIs.  The caller retains
-    // the old shared chain while this synchronous teardown is in progress.
+    // Invalidate callbacks before destroying their UIs. The caller retains
+    // the old chain while this synchronous teardown is in progress.
     {
         std::lock_guard uiLock(uiMutex_);
         chain_ = nullptr;
+        ++chainGeneration_;
     }
 
     size_t entryCount = 0;
@@ -57,6 +58,7 @@ void PluginUIManager::rebindChain(PluginChain* chain) {
     {
         std::lock_guard uiLock(uiMutex_);
         chain_ = chain;
+        ++chainGeneration_;
     }
 }
 
@@ -70,17 +72,20 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
     LOGI("createPluginUI entry: pluginIndex=%d displayNumber=%d parentWindowId=0x%lx",
          pluginIndex, displayNumber, parentWindowId);
 
-    if (!chain_) return false;
-
-    // Destroy any existing UI at this index before creating a new one.
-    // Without this, the unique_ptr move-assignment below would destroy the
-    // old UI inline via its destructor, bypassing gracefulShutdown and the
-    // display-thread fallback in destroyPluginUI. If the old UI's X11
-    // display is already gone during a graph reload, inline cleanup crashes
-    // with a NULL-pointer dereference in libX11.
+    // Tear down any prior UI before taking the chain snapshot. This prevents
+    // a concurrent rebind from making an old snapshot destroy a new UI.
     destroyPluginUI(pluginIndex);
 
-    IPlugin* plugin = chain_->getPlugin(pluginIndex);
+    PluginChain* chainSnapshot = nullptr;
+    uint64_t generationSnapshot = 0;
+    {
+        std::lock_guard uiLock(uiMutex_);
+        chainSnapshot = chain_;
+        generationSnapshot = chainGeneration_;
+    }
+    if (!chainSnapshot) return false;
+
+    IPlugin* plugin = chainSnapshot->getPlugin(pluginIndex);
     if (!plugin) {
         LOGI("createPluginUI: invalid index %d", pluginIndex);
         return false;
@@ -98,22 +103,32 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
     auto ui = std::make_unique<LV2PluginUI>();
     auto indexPtr = std::make_shared<std::atomic<int>>(pluginIndex);
     auto detachedPtr = std::make_shared<std::atomic<bool>>(false);
-    auto paramCb = [this, indexPtr, detachedPtr](uint32_t portIndex, float value) {
+    auto paramCb = [this, plugin, detachedPtr](uint32_t portIndex, float value) {
         if (detachedPtr->load(std::memory_order_acquire)) return;
-        int idx = indexPtr->load(std::memory_order_acquire);
         std::lock_guard uiLock(uiMutex_);
-        if (chain_) chain_->setParameter(idx, portIndex, value);
+        if (!chain_) return;
+        for (const auto& entry : uiEntries_) {
+            if (entry.plugin == plugin && entry.detached == detachedPtr &&
+                entry.pluginIndex) {
+                chain_->setParameter(entry.pluginIndex->load(std::memory_order_acquire),
+                                     portIndex, value);
+                return;
+            }
+        }
     };
 
-    /* Forward atom messages from X11 UI to DSP plugin (DPF state sync, etc.)
-     * Use chain_->injectAtom() which holds the shared_lock while calling into
-     * the plugin, preventing removePlugin from destroying it mid-call. */
-    ui->setAtomCallback([this, indexPtr, detachedPtr](uint32_t portIndex, uint32_t size, const void* data) {
+    /* Forward atom messages from X11 UI to DSP plugin (DPF state sync, etc.). */
+    ui->setAtomCallback([this, plugin, detachedPtr](uint32_t portIndex, uint32_t size, const void* data) {
         if (detachedPtr->load(std::memory_order_acquire)) return;
-        int idx = indexPtr->load(std::memory_order_acquire);
         std::lock_guard uiLock(uiMutex_);
-        if (chain_) {
-            chain_->injectAtom(idx, data, size);
+        if (!chain_) return;
+        for (const auto& entry : uiEntries_) {
+            if (entry.plugin == plugin && entry.detached == detachedPtr &&
+                entry.pluginIndex) {
+                chain_->injectAtom(entry.pluginIndex->load(std::memory_order_acquire),
+                                   data, size);
+                return;
+            }
         }
     });
 
@@ -154,31 +169,58 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
         return false;
     }
 
-    LOGI("createPluginUI: taking uiMutex_ to store UI at index %d", pluginIndex);
-    std::lock_guard uiLock(uiMutex_);
-    if (static_cast<int>(uiEntries_.size()) <= pluginIndex) {
-        uiEntries_.resize(pluginIndex + 1);
+    bool stale = false;
+    {
+        std::lock_guard uiLock(uiMutex_);
+        stale = chain_ != chainSnapshot || chainGeneration_ != generationSnapshot;
+        if (!stale) {
+            if (static_cast<int>(uiEntries_.size()) <= pluginIndex) {
+                uiEntries_.resize(pluginIndex + 1);
+            }
+            uiEntries_[pluginIndex].ui = std::move(ui);
+            uiEntries_[pluginIndex].displayNumber = displayNumber;
+            uiEntries_[pluginIndex].plugin = plugin;
+            uiEntries_[pluginIndex].pluginIndex = indexPtr;
+            uiEntries_[pluginIndex].detached = detachedPtr;
+        }
     }
-    uiEntries_[pluginIndex].ui = std::move(ui);
-    uiEntries_[pluginIndex].displayNumber = displayNumber;
-    uiEntries_[pluginIndex].pluginIndex = indexPtr;
-    uiEntries_[pluginIndex].detached = detachedPtr;
-    LOGI("createPluginUI: done (UI stored at index %d)", pluginIndex);
+    if (stale) {
+        detachedPtr->store(true, std::memory_order_release);
+        auto uiShared = std::make_shared<std::unique_ptr<LV2PluginUI>>(std::move(ui));
+        bool posted = withDisplayPostTaskAndWait(displayNumber, [uiShared, displayNumber]() {
+            if (*uiShared) {
+                (*uiShared)->gracefulShutdown(displayNumber, 1000);
+                (*uiShared)->cleanup();
+                uiShared->reset();
+            }
+        });
+        if (!posted) {
+            getX11Worker().postAndWait([uiShared, displayNumber]() {
+                if (*uiShared) {
+                    (*uiShared)->gracefulShutdown(displayNumber, 1000);
+                    (*uiShared)->cleanup();
+                    uiShared->reset();
+                }
+            });
+        }
+        return false;
+    }
 
     LOGI("createPluginUI: requesting initial frame for display=%d", displayNumber);
 
     if (display) {
-        display->setIdleCallback([this, indexPtr, detachedPtr]() {
-            if (paused_.load(std::memory_order_acquire)) return;  // paused during reorder
-            if (detachedPtr->load(std::memory_order_acquire)) return;  // plugin detached
+        display->setIdleCallback([this, plugin, detachedPtr]() {
+            if (paused_.load(std::memory_order_acquire)) return;
+            if (detachedPtr->load(std::memory_order_acquire)) return;
             auto start = std::chrono::steady_clock::now();
             std::lock_guard uiLock(uiMutex_);
-            int idx = indexPtr->load(std::memory_order_acquire);
-            if (idx >= 0 && idx < static_cast<int>(uiEntries_.size())) {
-                auto& entry = uiEntries_[idx];
-                if (entry.ui && entry.ui->isValid()) {
+            if (!chain_) return;
+            for (auto& entry : uiEntries_) {
+                if (entry.plugin == plugin && entry.detached == detachedPtr &&
+                    entry.ui && entry.ui->isValid()) {
                     entry.ui->idle();
-                    entry.ui->syncOutputPorts(chain_ ? chain_->getChainMutex() : nullptr);
+                    entry.ui->syncOutputPorts(chain_->getChainMutex());
+                    break;
                 }
             }
             auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -204,9 +246,13 @@ void PluginUIManager::destroyPluginUI(int pluginIndex) {
     {
         std::lock_guard uiLock(uiMutex_);
         if (pluginIndex >= 0 && pluginIndex < static_cast<int>(uiEntries_.size())) {
-            uiToDestroy = std::move(uiEntries_[pluginIndex].ui);
-            displayNumber = uiEntries_[pluginIndex].displayNumber;
-            uiEntries_[pluginIndex].displayNumber = -1;
+            auto& entry = uiEntries_[pluginIndex];
+            if (entry.detached) entry.detached->store(true, std::memory_order_release);
+            entry.plugin = nullptr;
+            uiToDestroy = std::move(entry.ui);
+            displayNumber = entry.displayNumber;
+            entry.displayNumber = -1;
+            entry.pluginIndex.reset();
         }
     }
 
@@ -339,37 +385,33 @@ void PluginUIManager::detachAndShiftForRemoval(int chainIndex) {
 
 void PluginUIManager::notifyUIParameterChange(int pluginIndex, uint32_t portIndex, float value) {
     int displayNumber = -1;
+    IPlugin* plugin = nullptr;
+    std::shared_ptr<std::atomic<bool>> token;
     {
         std::lock_guard uiLock(uiMutex_);
-        if (pluginIndex < static_cast<int>(uiEntries_.size())) {
+        if (pluginIndex >= 0 && pluginIndex < static_cast<int>(uiEntries_.size())) {
             auto& entry = uiEntries_[pluginIndex];
             if (entry.ui && entry.ui->isValid() && entry.displayNumber >= 0) {
                 displayNumber = entry.displayNumber;
+                plugin = entry.plugin;
+                token = entry.detached;
             }
         }
     }
-    if (displayNumber >= 0) {
-        int pi = pluginIndex;
-        uint32_t port = portIndex;
-        float val = value;
-        withDisplayPostTask(displayNumber, [this, pi, port, val]() {
+    if (displayNumber >= 0 && plugin && token) {
+        withDisplayPostTask(displayNumber, [this, plugin, token, portIndex, value]() {
+            if (token->load(std::memory_order_acquire)) return;
             std::lock_guard uiLk(uiMutex_);
-            if (pi < static_cast<int>(uiEntries_.size())) {
-                auto& e = uiEntries_[pi];
-                if (e.ui && e.ui->isValid()) {
-                    e.ui->portEvent(port, val);
+            for (auto& entry : uiEntries_) {
+                if (entry.plugin == plugin && entry.detached == token &&
+                    !token->load(std::memory_order_acquire) &&
+                    entry.ui && entry.ui->isValid()) {
+                    entry.ui->portEvent(portIndex, value);
+                    return;
                 }
             }
         });
     }
-}
-
-bool PluginUIManager::hasUIForPlugin(int pluginIndex) const {
-    std::lock_guard uiLock(uiMutex_);
-    if (pluginIndex >= 0 && pluginIndex < static_cast<int>(uiEntries_.size())) {
-        return uiEntries_[pluginIndex].ui != nullptr;
-    }
-    return false;
 }
 
 bool PluginUIManager::pollFileRequest(FileRequest& out) {
@@ -391,29 +433,33 @@ bool PluginUIManager::pollFileRequest(FileRequest& out) {
 
 void PluginUIManager::deliverFileToUI(int pluginIndex, const std::string& propertyUri, const std::string& filePath) {
     int displayNumber = -1;
+    IPlugin* plugin = nullptr;
+    std::shared_ptr<std::atomic<bool>> token;
     {
         std::lock_guard uiLock(uiMutex_);
         if (pluginIndex >= 0 && pluginIndex < static_cast<int>(uiEntries_.size())) {
             auto& entry = uiEntries_[pluginIndex];
             if (entry.ui && entry.ui->isValid() && entry.displayNumber >= 0) {
                 displayNumber = entry.displayNumber;
+                plugin = entry.plugin;
+                token = entry.detached;
             }
         }
     }
-    if (displayNumber < 0) {
+    if (displayNumber < 0 || !plugin || !token) {
         LOGI("deliverFileToUI: no active UI for plugin %d", pluginIndex);
         return;
     }
 
-    int pi = pluginIndex;
-    std::string prop = propertyUri;
-    std::string path = filePath;
-    withDisplayPostTask(displayNumber, [this, pi, prop, path]() {
+    withDisplayPostTask(displayNumber, [this, plugin, token, propertyUri, filePath]() {
+        if (token->load(std::memory_order_acquire)) return;
         std::lock_guard uiLk(uiMutex_);
-        if (pi < static_cast<int>(uiEntries_.size())) {
-            auto& e = uiEntries_[pi];
-            if (e.ui && e.ui->isValid()) {
-                e.ui->deliverFilePath(prop, path);
+        for (auto& entry : uiEntries_) {
+            if (entry.plugin == plugin && entry.detached == token &&
+                !token->load(std::memory_order_acquire) &&
+                entry.ui && entry.ui->isValid()) {
+                entry.ui->deliverFilePath(propertyUri, filePath);
+                return;
             }
         }
     });

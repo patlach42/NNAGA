@@ -161,12 +161,15 @@ WineVstPlugin::~WineVstPlugin() {
 }
 
 void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
+    // A new guest lifecycle must never inherit latency from the previous one.
+    lastStableLatencyFrames_.store(0, std::memory_order_release);
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize;
     prepare();
 }
 
 void WineVstPlugin::prepare() {
+    lastStableLatencyFrames_.store(0, std::memory_order_release);
     if (prepared_.load()) return;
 
     // Per-plugin shm + picker files. Naming matches vstpoc convention so
@@ -310,8 +313,10 @@ void WineVstPlugin::prepare() {
 }
 
 void WineVstPlugin::deactivate() {
+    // Clear before tearing down the ring so readers cannot observe a dead
+    // guest's last stable value as current latency.
+    lastStableLatencyFrames_.store(0, std::memory_order_release);
     if (!prepared_.exchange(false)) return;
-    if (ring_) ring_->signalStop();
     if (guest_) {
         if (!guest_->waitFor(3000)) {
             LOGW("WineVstPlugin[%s]: guest didn't exit on stop_flag, killing",
@@ -418,6 +423,27 @@ int32_t WineVstPlugin::getEditorWidth() const {
 int32_t WineVstPlugin::getEditorHeight() const {
     return (ring_ && ring_->raw()) ? ring_->raw()->editor_height : 0;
 }
+uint32_t WineVstPlugin::getLatencyFrames() const noexcept {
+    const VstpocShared* shared = ring_ ? ring_->raw() : nullptr;
+    // The stable value is only a contention fallback during a live session.
+    if (!prepared_.load(std::memory_order_acquire) || !shared) return 0;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const uint64_t before = __atomic_load_n(&shared->latency_seq, __ATOMIC_ACQUIRE);
+        if (before == 0 || (before & 1u)) continue;
+        const uint32_t plugin = shared->plugin_latency_frames;
+        const uint32_t bridge = shared->bridge_quantum_frames;
+        const uint64_t after = __atomic_load_n(&shared->latency_seq, __ATOMIC_ACQUIRE);
+        if (before == after && !(after & 1u)) {
+            const uint64_t total = static_cast<uint64_t>(plugin) + bridge;
+            const uint32_t stable =
+                total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
+            lastStableLatencyFrames_.store(stable, std::memory_order_release);
+            return stable;
+        }
+    }
+    return lastStableLatencyFrames_.load(std::memory_order_acquire);
+}
+
 
 bool WineVstPlugin::pollNativeFilePicker(guitarrackcraft::NativeFilePickerRequest& request) {
     if (!picker_) return false;

@@ -289,6 +289,57 @@ TEST(RackStateCodecTest, V1PayloadDefaultsManualLatencyOverridesToZero) {
     ASSERT_EQ(decoded.tracks.front().chain.plugins.size(), 1u);
     EXPECT_EQ(decoded.tracks.front().chain.plugins.front().manualLatencyFrames, 0u);
 }
+TEST(RackStateCodecTest, V2PayloadRejectsOversizedManualLatencyOverrideAtomically) {
+    RackGraph::State expected;
+    RackGraph::State::Track track;
+    track.id = 23;
+    track.chain.plugins.push_back(plugin("JSFX", "JSFX:oversized", {}));
+    expected.tracks.push_back(track);
+
+    std::vector<uint8_t> encoded = RackStateCodec::encode(expected);
+    ASSERT_FALSE(encoded.empty());
+    ASSERT_EQ(getU32(encoded, 4), 2u);
+
+    const size_t manualLatencyOffset =
+        40 + 4 + 4 + std::string("JSFX").size() +
+        4 + std::string("JSFX:oversized").size() + 4 + 4;
+    putU32(encoded, manualLatencyOffset,
+           PluginChain::kMaxSupportedPdcFrames + 1);
+    refreshCrc(encoded);
+
+    RackGraph::State existing = fixtureState();
+    existing.tracks[0].id = 999;
+    const RackGraph::State before = existing;
+    std::string error;
+    EXPECT_FALSE(RackStateCodec::decode(
+        encoded.data(), encoded.size(), existing, error));
+    EXPECT_EQ(error, "invalid-track");
+    expectState(existing, before);
+}
+
+TEST(RackStateCodecTest, V2PayloadAcceptsMaximumManualLatencyOverride) {
+    RackGraph::State expected;
+    RackGraph::State::Track track;
+    track.id = 23;
+    track.chain.plugins.push_back(plugin(
+        "JSFX", "JSFX:maximum",
+        {}, {}, PluginChain::kMaxSupportedPdcFrames));
+    expected.tracks.push_back(track);
+
+    std::string error;
+    const std::vector<uint8_t> encoded =
+        RackStateCodec::encode(expected, &error);
+    ASSERT_FALSE(encoded.empty()) << error;
+
+    RackGraph::State decoded;
+    ASSERT_TRUE(RackStateCodec::decode(
+        encoded.data(), encoded.size(), decoded, error)) << error;
+    ASSERT_EQ(decoded.tracks.size(), 1u);
+    ASSERT_EQ(decoded.tracks.front().chain.plugins.size(), 1u);
+    EXPECT_EQ(decoded.tracks.front().chain.plugins.front().manualLatencyFrames,
+              PluginChain::kMaxSupportedPdcFrames);
+}
+
 
 TEST(RackStateCodecTest, CrcFlipIsRejectedWithoutReplacingExistingState) {
     const RackGraph::State expected = fixtureState();

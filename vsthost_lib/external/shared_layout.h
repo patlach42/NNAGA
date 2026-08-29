@@ -25,8 +25,8 @@
 #define VSTPOC_PARAM_UNIT_LEN      24     /* display unit, e.g. dB/Hz/ms */
 #define VSTPOC_PARAM_DISPLAY_LEN   64     /* current plugin-formatted value */
 
-#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435337) /* "VSTPOCS7" */
-#define VSTPOC_SHARED_LAYOUT_VERSION 7u
+#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435338) /* "VSTPOCS8" */
+#define VSTPOC_SHARED_LAYOUT_VERSION 8u
 #define VSTPOC_TRANSPORT_QUEUE_CAPACITY 1024u
 #define VSTPOC_FEATURE_PLANAR_AUDIO (UINT64_C(1) << 0)
 #define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1)
@@ -263,6 +263,15 @@ typedef struct {
     _Alignas(VSTPOC_CACHELINE) char param_display_values[VSTPOC_MAX_PARAMS][VSTPOC_PARAM_DISPLAY_LEN];
     _Alignas(VSTPOC_CACHELINE) uint64_t param_desired_seq[VSTPOC_MAX_PARAMS];
     _Alignas(VSTPOC_CACHELINE) float param_desired_values[VSTPOC_MAX_PARAMS];
+
+    /* Latency extension (layout v8), append-only. The guest publishes the
+     * plugin's own delay and the fixed shared-ring bridge quantum. A seqlock
+     * lets the host read both values without locks or torn updates. */
+    _Alignas(VSTPOC_CACHELINE) uint64_t latency_seq;
+    uint32_t plugin_latency_frames;
+    uint32_t bridge_quantum_frames;
+    uint32_t latency_layout_v;
+    uint32_t latency_reserved;
 } VstpocShared;
 
 /* Native file-picker channel — lives in its OWN mmap file

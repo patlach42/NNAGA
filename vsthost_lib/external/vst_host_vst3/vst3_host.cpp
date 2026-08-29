@@ -1178,10 +1178,10 @@ private:
     std::atomic<uint32> refCount_{1};
 };
 
-/* Set by restartComponent(kIoChanged) on the plugin's UI thread, consumed by
- * the audio thread to re-query the bus arrangement when a plugin switches
- * Mono<->Stereo at runtime (The Anvil does this from its own footer). */
+/* Set by restartComponent(kIoChanged) or kLatencyChanged on the plugin UI
+ * thread; consumed by the audio thread at block boundaries. */
 static std::atomic<int> g_ioChanged{0};
+static std::atomic<int> g_latencyChanged{0};
 
 /* Lock-free SPSC ring relaying the controller's parameter edits (performEdit,
  * UI thread) to the audio thread, which drains them into process()'s
@@ -1638,9 +1638,9 @@ public:
     }
     tresult PLUGIN_API endEdit (ParamID id) SMTG_OVERRIDE { if (logEdits()) LOG("EDIT endEdit id=%u\n", (unsigned)id); return kResultOk; }
     tresult PLUGIN_API restartComponent (int32 flags) SMTG_OVERRIDE {
-        /* The Anvil toggles Mono<->Stereo from its UI and signals kIoChanged;
-         * flag the audio thread to re-query the bus arrangement. */
+        /* I/O and latency changes are consumed safely by the audio thread. */
         if (flags & kIoChanged) g_ioChanged.store(1, std::memory_order_release);
+        if (flags & kLatencyChanged) g_latencyChanged.store(1, std::memory_order_release);
         return kResultOk;
     }
 
@@ -2098,6 +2098,18 @@ static void update_channel_layout(IAudioProcessor* /*processor*/)
 static double g_configured_rate = 0.0;
 static uint32 g_configured_block = 0;
 static bool g_component_active = false;
+static void publish_latency(VstpocShared* shm, IAudioProcessor* processor,
+                            uint32_t bridgeQuantum) {
+    if (!shm || !processor) return;
+    const uint32_t plugin = processor->getLatencySamples();
+    const uint64_t seq = __atomic_load_n(&shm->latency_seq, __ATOMIC_RELAXED);
+    __atomic_store_n(&shm->latency_seq, seq + 1u, __ATOMIC_RELEASE);
+    shm->plugin_latency_frames = plugin;
+    shm->bridge_quantum_frames = bridgeQuantum;
+    shm->latency_layout_v = 1u;
+    __atomic_store_n(&shm->latency_seq, seq + 2u, __ATOMIC_RELEASE);
+}
+
 static bool g_processor_running = false;
 
 
@@ -2412,6 +2424,10 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
             g_shm->stop_flag = 1;
             break;
         }
+        if (g_latencyChanged.exchange(0, std::memory_order_acquire) ||
+            (stats_blocks & 63u) == 0)
+            publish_latency((VstpocShared*)g_shm, processor,
+                            (uint32_t)blockFrames);
         uint64_t ih = __atomic_load_n(&g_shm->audio_in_head, __ATOMIC_ACQUIRE);
         uint64_t it = __atomic_load_n(&g_shm->audio_in_tail, __ATOMIC_RELAXED);
         uint64_t available = ih - it;
