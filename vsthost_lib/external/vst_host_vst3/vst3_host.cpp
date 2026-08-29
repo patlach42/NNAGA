@@ -103,7 +103,7 @@ static HostTransport g_transport{};
 static bool read_transport(const VstpocShared* shm) {
     if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        shm->shared_layout_size != sizeof(VstpocShared)) { g_transport.valid = false; return false; }
+        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V7_SIZE) { g_transport.valid = false; return false; }
     uint64 tail = __atomic_load_n(&shm->transport_queue_tail, __ATOMIC_RELAXED);
     uint64 head = __atomic_load_n(&shm->transport_queue_head, __ATOMIC_ACQUIRE);
     if (tail == head) return false;
@@ -1089,14 +1089,14 @@ static VstpocShared* map_shared(const char* path)
     CloseHandle(fh);
     if (shm && (shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
                 shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-                shm->shared_layout_size < sizeof(VstpocShared) ||
+                shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V7_SIZE ||
                 (shm->shared_feature_bits & (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET)) !=
                     (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET))) {
         LOG("incompatible shared layout/features: magic=%llx version=%u size=%u features=%llx expected=%u\n",
             (unsigned long long)shm->shared_layout_magic,
             (unsigned)shm->shared_layout_version,
             (unsigned)shm->shared_layout_size,
-            (unsigned long long)shm->shared_feature_bits, (unsigned)sizeof(VstpocShared));
+            (unsigned long long)shm->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V7_SIZE);
         UnmapViewOfFile(shm);
         return NULL;
     }

@@ -55,7 +55,7 @@ SharedRing::SharedRing(const std::string& path) {
             }
         }
     }
-    data_->shared_layout_size = static_cast<uint32_t>(sizeof(VstpocShared));
+    data_->shared_layout_size = static_cast<uint32_t>(VSTPOC_SHARED_LAYOUT_V7_SIZE);
     LOGI("SharedRing: mapped %s (%zu bytes)", path.c_str(), sizeof(VstpocShared));
 }
 SharedRing::~SharedRing() {

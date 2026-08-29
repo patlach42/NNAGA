@@ -15,6 +15,7 @@
 #define VSTPOC_SHARED_LAYOUT_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define VSTPOC_AUDIO_RING_FRAMES  16384   /* power of 2; ~340 ms at 48 kHz stereo */
 #define VSTPOC_PARAM_RING_MSGS     64     /* power of 2 */
@@ -273,6 +274,11 @@ typedef struct {
     uint32_t latency_layout_v;
     uint32_t latency_reserved;
 } VstpocShared;
+
+/* Legacy v7 guests validate this exact prefix size. The latency extension
+ * remains mapped in the current allocation, but is outside the advertised
+ * compatibility layout. */
+#define VSTPOC_SHARED_LAYOUT_V7_SIZE offsetof(VstpocShared, latency_seq)
 
 /* Native file-picker channel — lives in its OWN mmap file
  * (vst_picker_pN.dat next to vst_shm_pN.dat) so wine's comdlg32 hook
