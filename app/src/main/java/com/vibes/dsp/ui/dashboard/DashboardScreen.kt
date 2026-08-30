@@ -17,6 +17,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -41,6 +44,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Divider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -52,8 +56,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
@@ -62,11 +70,15 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.vibes.dsp.R
 import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaOutlinedButton
 import com.vibes.dsp.ui.components.NnagaTextButton
+import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import com.vibes.dsp.engine.PluginRepositoryService
 import com.vibes.dsp.ui.dashboard.RepositoryPackageItem
 import com.vibes.dsp.ui.rack.RackViewModel
@@ -85,6 +97,9 @@ private object DashboardDimensions {
     val divider = 1.dp
     val selectedIndicator = 2.dp
     val brandWidth = 200.dp
+    val brandActionWidth = 200.dp
+    val brandActionTopSpacing = 24.dp
+    val brandActionSpacing = 8.dp
 }
 
 enum class DashboardSection(val argument: String) {
@@ -118,6 +133,8 @@ fun DashboardScreen(
     repositoryViewModel: RepositoryViewModel,
     repositoryService: PluginRepositoryService,
     onRepositoryInstall: (RepositoryPackageItem) -> Unit,
+    onSaveProject: (String) -> Unit,
+    onOpenProject: () -> Unit,
     pendingRepositoryPackageId: String? = null,
     onRepositoryHandoff: () -> Unit = {},
     onNavigateToToneDetail: (Tone, String?) -> Unit,
@@ -165,6 +182,8 @@ fun DashboardScreen(
                     DashboardSection.Dashboard -> DashboardContent(
                         repositoryViewModel = repositoryViewModel,
                         onRepositoryInstall = onRepositoryInstall,
+                        onSaveProject = onSaveProject,
+                        onOpenProject = onOpenProject,
                         onTabSelected = { selectedDashboardTab = it },
                         selectedTab = selectedDashboardTab,
                         onNavigateBack = onNavigateBack,
@@ -337,6 +356,8 @@ private fun TopLevelTab(
 private fun DashboardContent(
     repositoryViewModel: RepositoryViewModel,
     onRepositoryInstall: (RepositoryPackageItem) -> Unit,
+    onSaveProject: (String) -> Unit,
+    onOpenProject: () -> Unit,
     selectedTab: DashboardTab,
     onTabSelected: (DashboardTab) -> Unit,
     onNavigateBack: () -> Unit,
@@ -372,7 +393,11 @@ private fun DashboardContent(
                     onCloseSourceManagement = { manageRepositorySources = false },
                     modifier = Modifier.weight(1f),
                 )
-                DashboardTab.Main -> BrandHome(modifier = Modifier.weight(1f))
+                DashboardTab.Main -> BrandHome(
+                    onSaveProject = onSaveProject,
+                    onOpenProject = onOpenProject,
+                    modifier = Modifier.weight(1f),
+                )
                 DashboardTab.Tone3000 -> Tone3000Screen(
                     onNavigateBack = onNavigateBack,
                     onNavigateToDetail = onNavigateToToneDetail,
@@ -458,21 +483,60 @@ private fun InnerTabs(
 }
 
 @Composable
-private fun BrandHome(modifier: Modifier = Modifier) {
+private fun BrandHome(
+    onSaveProject: (String) -> Unit,
+    onOpenProject: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     var showAbout by rememberSaveable { mutableStateOf(false) }
+    var showProjectNameDialog by rememberSaveable { mutableStateOf(false) }
+    var projectName by rememberSaveable { mutableStateOf(DEFAULT_PROJECT_NAME) }
+    var projectNameTouched by rememberSaveable { mutableStateOf(false) }
+    val normalizedProjectName = normalizeProjectName(projectName)
+    val projectNameError = projectNameError(projectName)
     val uriHandler = LocalUriHandler.current
 
     Box(
         modifier = modifier.fillMaxWidth(),
         contentAlignment = Alignment.Center,
     ) {
-        Image(
-            painter = painterResource(R.drawable.nnaga_brand_mark),
-            contentDescription = "NNAGA",
-            modifier = Modifier.width(DashboardDimensions.brandWidth),
-            contentScale = ContentScale.FillWidth,
-            colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
-        )
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Image(
+                painter = painterResource(R.drawable.nnaga_brand_mark),
+                contentDescription = "NNAGA",
+                modifier = Modifier.width(DashboardDimensions.brandWidth),
+                contentScale = ContentScale.FillWidth,
+                colorFilter = ColorFilter.tint(MaterialTheme.colorScheme.primary),
+            )
+            Spacer(modifier = Modifier.height(DashboardDimensions.brandActionTopSpacing))
+            NnagaButton(
+                onClick = {
+                    projectName = DEFAULT_PROJECT_NAME
+                    projectNameTouched = false
+                    showProjectNameDialog = true
+                },
+                modifier = Modifier.width(DashboardDimensions.brandActionWidth),
+            ) {
+                Text("Save Project")
+            }
+            Spacer(modifier = Modifier.height(DashboardDimensions.brandActionSpacing))
+            NnagaOutlinedButton(
+                onClick = onOpenProject,
+                modifier = Modifier.width(DashboardDimensions.brandActionWidth),
+            ) {
+                Text("Open Project Folder")
+            }
+            Text(
+                text = "Select the .nnaga project directory.",
+                modifier = Modifier
+                    .padding(top = DashboardDimensions.brandActionSpacing)
+                    .width(DashboardDimensions.brandActionWidth),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         NnagaIconButton(
             onClick = { showAbout = true },
             modifier = Modifier
@@ -485,6 +549,26 @@ private fun BrandHome(modifier: Modifier = Modifier) {
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+
+    if (showProjectNameDialog) {
+        ProjectNameDialog(
+            projectName = projectName,
+            error = if (projectNameTouched) projectNameError else null,
+            confirmEnabled = projectNameError == null,
+            normalizedProjectName = normalizedProjectName,
+            onProjectNameChange = {
+                projectName = it
+                projectNameTouched = true
+            },
+            onDismiss = { showProjectNameDialog = false },
+            onConfirm = {
+                normalizedProjectName?.let { name ->
+                    showProjectNameDialog = false
+                    onSaveProject(name)
+                }
+            },
+        )
     }
 
     if (showAbout) {
@@ -522,5 +606,104 @@ private fun BrandHome(modifier: Modifier = Modifier) {
                 }
             },
         )
+    }
+}
+
+private const val PROJECT_SUFFIX = ".nnaga"
+private const val DEFAULT_PROJECT_NAME = "Project"
+private val SIMPLE_PROJECT_NAME = Regex("[\\p{L}\\p{N}][\\p{L}\\p{N} _-]*")
+
+private fun normalizeProjectName(input: String): String? {
+    val trimmed = input.trim()
+    val baseName = if (trimmed.endsWith(PROJECT_SUFFIX, ignoreCase = true)) {
+        trimmed.dropLast(PROJECT_SUFFIX.length).trimEnd()
+    } else {
+        trimmed
+    }
+    return if (baseName.matches(SIMPLE_PROJECT_NAME)) "$baseName$PROJECT_SUFFIX" else null
+}
+
+private fun projectNameError(input: String): String? {
+    val trimmed = input.trim()
+    if (trimmed.isEmpty()) return "Enter a project name."
+    return if (normalizeProjectName(trimmed) == null) {
+        "Use letters, numbers, spaces, hyphens, or underscores."
+    } else {
+        null
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun ProjectNameDialog(
+    projectName: String,
+    error: String?,
+    confirmEnabled: Boolean,
+    normalizedProjectName: String?,
+    onProjectNameChange: (String) -> Unit,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Save Project") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(DashboardDimensions.brandActionSpacing)) {
+                Text(
+                    text = "Name the project, then select its parent folder. NNAGA will create a new .nnaga directory there.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                OutlinedTextField(
+                    value = projectName,
+                    onValueChange = onProjectNameChange,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .focusRequester(focusRequester),
+                    label = { Text("Project name") },
+                    supportingText = {
+                        Text(
+                            text = error ?: normalizedProjectName.orEmpty(),
+                            color = if (error != null) {
+                                MaterialTheme.colorScheme.error
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    },
+                    isError = error != null,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            if (confirmEnabled) {
+                                keyboardController?.hide()
+                                onConfirm()
+                            }
+                        },
+                    ),
+                    colors = nnagaOutlinedTextFieldColors(),
+                )
+            }
+        },
+        confirmButton = {
+            NnagaButton(
+                onClick = onConfirm,
+                enabled = confirmEnabled,
+            ) {
+                Text("Choose Parent Folder")
+            }
+        },
+        dismissButton = {
+            NnagaTextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
+    )
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
     }
 }

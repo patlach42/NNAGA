@@ -1207,6 +1207,25 @@ bool RackGraph::restoreState(
         midiAssets.emplace_back();
         for (const auto& c : saved.clipSlots) {
             if (c.slot >= 4096) { diagnostic = "invalid-clip-slot"; return false; }
+            const auto validLoopBars = [](double bars) {
+                return bars == .25 || bars == 1.0 || bars == 2.0 ||
+                       bars == 4.0 || bars == 8.0 || bars == 16.0;
+            };
+            if (!std::isfinite(c.sourceBpm) || c.sourceBpm < 20.0 ||
+                c.sourceBpm > 400.0 ||
+                c.tempoMode < static_cast<int>(ClipTempoMode::Original) ||
+                c.tempoMode > static_cast<int>(ClipTempoMode::Repitch) ||
+                !validLoopBars(c.loopLengthBars) ||
+                !validLoopBars(c.defaultLoopLengthBars) ||
+                !std::isfinite(c.loopStartQuarterNotes) ||
+                c.loopStartQuarterNotes < 0.0 ||
+                !std::isfinite(c.loopLengthQuarterNotes) ||
+                c.loopLengthQuarterNotes <= 0.0 ||
+                static_cast<uint8_t>(c.launchQuantization) >
+                    static_cast<uint8_t>(LaunchQuantization::None)) {
+                diagnostic = "invalid-clip-config";
+                return false;
+            }
             if (wavSlots.back().size() <= c.slot) wavSlots.back().resize(c.slot + 1);
             if (midiSlots.back().size() <= c.slot) midiSlots.back().resize(c.slot + 1);
             if (wavAssets.back().size() <= c.slot) wavAssets.back().resize(c.slot + 1);
@@ -1214,9 +1233,11 @@ bool RackGraph::restoreState(
             if (labels.back().size() <= c.slot) labels.back().resize(c.slot + 1);
             wavAssets.back()[c.slot] = c.assetId; midiAssets.back()[c.slot] = c.midiAssetId;
             labels.back()[c.slot] = c.displayName;
-            node->clipRuntime.resize(std::max(node->clipRuntime.size(), size_t(c.slot + 1)));
-            node->slotConfig.resize(std::max(node->slotConfig.size(), size_t(c.slot + 1)));
-            ensureClipRuntimeLocked(*node, c.slot); ensureSlotConfigLocked(*node, c.slot);
+            if (!ensureClipRuntimeLocked(*node, c.slot) ||
+                !ensureSlotConfigLocked(*node, c.slot)) {
+                diagnostic = "allocation-failed";
+                return false;
+            }
             node->clipRuntime[c.slot]->sourceBpm.store(c.sourceBpm);
             node->clipRuntime[c.slot]->tempoMode.store(c.tempoMode);
             node->clipRuntime[c.slot]->looping.store(c.looping);

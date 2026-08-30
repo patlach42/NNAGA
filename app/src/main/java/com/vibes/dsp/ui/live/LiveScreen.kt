@@ -361,12 +361,6 @@ fun LiveScreen(
         deviceChainPathId = null
         if (uri != null && pathId != null) viewModel.loadDeviceChain(pathId, uri)
     }
-    val saveProjectLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/zip"),
-    ) { uri -> if (uri != null) viewModel.saveProject(uri) }
-    val openProjectLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.OpenDocument(),
-    ) { uri -> if (uri != null) viewModel.openProject(uri) }
 
     LaunchedEffect(Unit) {
         viewModel.setRackVisible(true)
@@ -771,17 +765,6 @@ fun LiveScreen(
                 onDashboard = onNavigateToDashboard,
                 onToggleEdit = { editTiles = !editTiles },
             )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                NnagaTextButton(onClick = { saveProjectLauncher.launch("project.nnaga") }) {
-                    Text("Save project")
-                }
-                NnagaTextButton(onClick = { openProjectLauncher.launch(arrayOf("application/zip", "application/octet-stream")) }) {
-                    Text("Open project")
-                }
-            }
             if (!hideTransportWithoutLauncher || "launcher" in visibleTiles) {
                 TransportBar(
                     playing = transport.playing,

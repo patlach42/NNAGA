@@ -267,6 +267,42 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun addTrack() { viewModelScope.launch(Dispatchers.IO) { val id = RackManager.addTrack(); if (id != 0L) { refreshRackNow(); selectPath(id) } else _errorMessage.value = "Failed to add track" } }
     fun removeTrack(trackId: RackPathId) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.removeTrack(trackId)) refreshRackNow() else _errorMessage.value = "Failed to remove track" } }
+    fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { RackManager.addPlugin(pathId, pluginId, position) }
+                .onSuccess { index ->
+                    if (index < 0) _errorMessage.value = "Unable to add plugin"
+                }
+                .onFailure { failure ->
+                    _errorMessage.value = failure.message ?: "Unable to add plugin"
+                }
+            refreshSelectedPath()
+        }
+    }
+    fun removePlugin(pathId: RackPathId, position: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { RackManager.removePlugin(pathId, position) }
+                .onFailure { failure ->
+                    _errorMessage.value = failure.message ?: "Unable to remove plugin"
+                }
+                .onSuccess { removed ->
+                    if (!removed) _errorMessage.value = "Unable to remove plugin"
+                }
+            refreshSelectedPath()
+        }
+    }
+    fun reorderPlugins(pathId: RackPathId, fromPos: Int, toPos: Int) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { RackManager.reorder(pathId, fromPos, toPos) }
+                .onFailure { failure ->
+                    _errorMessage.value = failure.message ?: "Unable to reorder plugin"
+                }
+                .onSuccess { reordered ->
+                    if (!reordered) _errorMessage.value = "Unable to reorder plugin"
+                }
+            refreshSelectedPath()
+        }
+    }
     fun setTrackVolume(trackId: RackPathId, volume: Float) {
         val clamped = volume.coerceIn(0f, 1f)
         _tracks.value = _tracks.value.map { track ->
@@ -421,13 +457,16 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             val loaded = withBlockingOperation(if (midi) "Importing MIDI clip" else "Importing audio clip") {
                 withContext(Dispatchers.IO) {
                     val extension = if (midi) ".mid" else ".wav"
+                    runCatching {
+                        resolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
                     val durable = if (midi) {
-                        resolver.openInputStream(uri)?.use { projectStore.importMedia(it, extension) } ?: return@withContext false
+                        resolver.openInputStream(uri)?.use { projectStore.importMedia(it, extension, uri) } ?: return@withContext false
                     } else {
                         val decoded = File.createTempFile("clip_decode_", ".wav", getApplication<Application>().cacheDir)
                         try {
                             AudioImportDecoder.copyOrDecode(getApplication(), uri, decoded)
-                            decoded.inputStream().use { projectStore.importMedia(it, ".wav") }
+                            decoded.inputStream().use { projectStore.importMedia(it, ".wav", uri) }
                         } finally { decoded.delete() }
                     }
                     val assetId = durable.first
@@ -814,21 +853,14 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.addPlugin(pathId, pluginId, position) < 0) _errorMessage.value = "Failed to add plugin"; refreshSelectedPath() } }
-    fun removePlugin(pathId: RackPathId, position: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.removePlugin(pathId, position)) _errorMessage.value = "Failed to remove plugin"; refreshSelectedPath() } }
-    fun reorderPlugins(pathId: RackPathId, fromPos: Int, toPos: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.reorder(pathId, fromPos, toPos)) _errorMessage.value = "Failed to reorder plugins"; refreshSelectedPath() } }
-    fun saveProject(uri: Uri) {
+    fun saveProject(parentTreeUri: Uri, projectName: String) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching {
                 rackControlMutex.withLock {
                     val diagnostic = RackManager.materializeProjectMedia(projectStore.mediaDirectoryPath())
-                    if (diagnostic != null) {
-                        error("Unable to materialize project media: $diagnostic")
-                    }
+                    if (diagnostic != null) error("Unable to materialize project media: $diagnostic")
                     val snapshot = RackManager.getProjectStateSnapshot()
-                    getApplication<Application>().contentResolver.openOutputStream(uri)?.use {
-                        projectStore.writeBundle(snapshot.rackState, snapshot.mediaRefs, it)
-                    } ?: error("Unable to open destination document")
+                    projectStore.writeBundle(snapshot.rackState, snapshot.mediaRefs, parentTreeUri, projectName)
                 }
             }.onFailure {
                 Log.e("RackViewModel", "Failed to save project", it)
@@ -870,47 +902,52 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun openProject(uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             var bundle: ProjectBundleStore.Bundle? = null
-            var oldSnapshot: ProjectStateSnapshot? = null
-            var replacementStarted = false
             try {
-                val loadedBundle = getApplication<Application>().contentResolver.openInputStream(uri)?.use {
-                    projectStore.readBundle(it)
-                } ?: error("Unable to open project")
+                val loadedBundle = projectStore.readBundle(uri)
                 bundle = loadedBundle
-                oldSnapshot = RackManager.getProjectStateSnapshot()
-                val diagnostic = RackManager.importRackState(loadedBundle.rackState)
-                replacementStarted = true
-                if (diagnostic != null) error("Unable to load project ($diagnostic)")
 
-                val importedSnapshot = RackManager.getProjectStateSnapshot()
-                val referencedAssetIds = importedSnapshot.mediaRefs.map { it.assetId }.toSet()
-                require(loadedBundle.assets.keys == referencedAssetIds) {
-                    "Project media does not match clip references"
-                }
-                hydrateProject(importedSnapshot, loadedBundle.assets)
+                rackControlMutex.withLock {
+                    require(RackManager.stopTransport()) { "Unable to stop transport" }
+                    val oldSnapshot = RackManager.getProjectStateSnapshot()
+                    try {
+                        val diagnostic = RackManager.importRackState(loadedBundle.rackState)
+                        if (diagnostic != null) error("Unable to load project ($diagnostic)")
 
-                // Durable media is changed only after native import and every
-                // clip hydration have completed successfully.
-                projectStore.installAssets(loadedBundle)
-                projectStore.deleteStagedAssets(loadedBundle)
-                refreshRackNow(force = true)
-                _tracks.value.forEach { track ->
-                    refreshTrackClipSlotsNow(track.id)
-                    loadTrackWaveform(track.id)
-                }
-                refreshTransport(); refreshTrackTransport()
-            } catch (failure: Throwable) {
-                val originalMessage = failure.message
-                oldSnapshot?.let { snapshot ->
-                    if (replacementStarted) {
+                        val importedSnapshot = RackManager.getProjectStateSnapshot()
+                        val referencedAssetIds = importedSnapshot.mediaRefs.map { it.assetId }.toSet()
+                        require(loadedBundle.assets.keys == referencedAssetIds) {
+                            "Project media does not match clip references"
+                        }
+                        hydrateProject(importedSnapshot, loadedBundle.assets)
+
+                        // Durable media is changed only after native import and every
+                        // clip hydration have completed successfully.
+                        projectStore.installAssets(loadedBundle)
+                        projectStore.deleteStagedAssets(loadedBundle)
+                        refreshRackNow(force = true)
+                        _tracks.value.forEach { track ->
+                            refreshTrackClipSlotsNow(track.id)
+                            loadTrackWaveform(track.id)
+                        }
+                        refreshTransport(); refreshTrackTransport()
+                    } catch (failure: Throwable) {
                         runCatching {
                             RackManager.stopTransport()
-                            val diagnostic = RackManager.importRackState(snapshot.rackState)
+                            val diagnostic = RackManager.importRackState(oldSnapshot.rackState)
                             if (diagnostic != null) error("Rollback failed ($diagnostic)")
-                            hydrateProject(snapshot, emptyMap())
+                            hydrateProject(oldSnapshot, emptyMap())
+                            refreshRackNow(force = true)
+                            _tracks.value.forEach { track ->
+                                refreshTrackClipSlotsNow(track.id)
+                                loadTrackWaveform(track.id)
+                            }
+                            refreshTransport(); refreshTrackTransport()
                         }
+                        throw failure
                     }
                 }
+            } catch (failure: Throwable) {
+                val originalMessage = failure.message
                 bundle?.let(projectStore::deleteStagedAssets)
                 Log.e("RackViewModel", "Failed to open project", failure)
                 _errorMessage.value = "Unable to open project: $originalMessage"

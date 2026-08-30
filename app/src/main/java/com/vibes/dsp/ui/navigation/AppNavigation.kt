@@ -18,12 +18,20 @@
  */
 
 package com.vibes.dsp.ui.navigation
+import android.content.ContentResolver
+import android.content.Intent
+import android.net.Uri
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -124,6 +132,25 @@ fun AppNavigation(
         factory = RepositoryViewModel.factory(repositoryService),
     )
     val rackViewModel: RackViewModel = viewModel()
+    var pendingProjectName by rememberSaveable { mutableStateOf<String?>(null) }
+    val saveProjectLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        val projectName = pendingProjectName
+        pendingProjectName = null
+        if (uri != null && projectName != null) {
+            context.contentResolver.takeProjectPermission(uri)
+            rackViewModel.saveProject(uri, projectName)
+        }
+    }
+    val openProjectLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree(),
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takeProjectPermission(uri)
+            rackViewModel.openProject(uri)
+        }
+    }
     LaunchedEffect(engineReady) {
         if (engineReady) rackViewModel.onNativeEngineReady()
     }
@@ -189,6 +216,11 @@ fun AppNavigation(
                 viewModel = rackViewModel,
                 repositoryViewModel = repositoryViewModel,
                 repositoryService = repositoryService,
+                onSaveProject = { projectName ->
+                    pendingProjectName = projectName
+                    saveProjectLauncher.launch(null)
+                },
+                onOpenProject = { openProjectLauncher.launch(null) },
                 onRepositoryInstall = { item ->
                     if (item.format == "wine_installer" ||
                         item.format == "wine_archive" ||
@@ -304,3 +336,16 @@ fun AppNavigation(
             }
         }
     }
+
+private fun ContentResolver.takeProjectPermission(uri: Uri) {
+    val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+    try {
+        takePersistableUriPermission(uri, flags)
+    } catch (_: SecurityException) {
+        try {
+            takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: SecurityException) {
+            // The provider may not support persistable grants; the immediate grant remains usable.
+        }
+    }
+}

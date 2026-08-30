@@ -6,6 +6,7 @@
 #include "../plugin/RackStateCodec.h"
 #include <jni.h>
 #include <mutex>
+#include <exception>
 #include <string>
 #include <vector>
 using guitarrackcraft::RackStateCodec;
@@ -86,20 +87,32 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeImportRackState(
     auto* graph=guitarrackcraft::nativeRackGraph(); auto* registry=guitarrackcraft::nativePluginRegistry();
     auto* mutex=guitarrackcraft::nativeRackMutex();
     if (!graph || !registry || !mutex) return env->NewStringUTF("engine-unavailable");
-    const jsize size=env->GetArrayLength(input);
-    if (size<=0 || static_cast<size_t>(size)>RackStateCodec::kMaxBlobBytes) return env->NewStringUTF("invalid-size");
-    std::vector<uint8_t> bytes(static_cast<size_t>(size));
-    env->GetByteArrayRegion(input,0,size,reinterpret_cast<jbyte*>(bytes.data()));
-    guitarrackcraft::RackGraph::State state; std::string diagnostic;
-    if (!RackStateCodec::decode(bytes.data(),bytes.size(),state,diagnostic)) return env->NewStringUTF(diagnostic.c_str());
-    std::lock_guard<std::mutex> lock(*mutex);
-    guitarrackcraft::nativePrepareRackStateImport();
-    if (!graph->restoreState(state,*registry,diagnostic,restorePlugins == JNI_TRUE)) {
-        guitarrackcraft::nativeAbortRackStateImport();
-        return env->NewStringUTF(diagnostic.c_str());
+    bool prepared = false;
+    std::unique_lock<std::mutex> lock;
+    try {
+        const jsize size=env->GetArrayLength(input);
+        std::vector<uint8_t> bytes(static_cast<size_t>(size));
+        env->GetByteArrayRegion(input,0,size,reinterpret_cast<jbyte*>(bytes.data()));
+        guitarrackcraft::RackGraph::State state; std::string diagnostic;
+        if (!RackStateCodec::decode(bytes.data(),bytes.size(),state,diagnostic)) return env->NewStringUTF(diagnostic.c_str());
+        lock = std::unique_lock<std::mutex>(*mutex);
+        guitarrackcraft::nativePrepareRackStateImport();
+        prepared = true;
+        if (!graph->restoreState(state,*registry,diagnostic,restorePlugins == JNI_TRUE)) {
+            guitarrackcraft::nativeAbortRackStateImport();
+            prepared = false;
+            return env->NewStringUTF(diagnostic.c_str());
+        }
+        guitarrackcraft::nativeCommitRackStateImport();
+        prepared = false;
+        return nullptr;
+    } catch (const std::exception&) {
+        if (prepared) guitarrackcraft::nativeAbortRackStateImport();
+        return env->NewStringUTF("restore-exception");
+    } catch (...) {
+        if (prepared) guitarrackcraft::nativeAbortRackStateImport();
+        return env->NewStringUTF("restore-exception");
     }
-    guitarrackcraft::nativeCommitRackStateImport();
-    return nullptr;
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
@@ -184,12 +197,17 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackClipAssetId(
         JNIEnv* env, jobject, jlong trackId, jint slot, jboolean isMidi, jstring assetId) {
     if (!assetId || slot < 0) return JNI_FALSE;
     auto* graph = guitarrackcraft::nativeRackGraph();
-    if (!graph) return JNI_FALSE;
+    auto* mutex = guitarrackcraft::nativeRackMutex();
+    if (!graph || !mutex) return JNI_FALSE;
     const char* chars = env->GetStringUTFChars(assetId, nullptr);
     if (!chars) return JNI_FALSE;
-    const bool ok = graph->setTrackClipAssetId(
-        static_cast<guitarrackcraft::RackPathId>(trackId),
-        static_cast<uint32_t>(slot), isMidi == JNI_TRUE, chars);
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(*mutex);
+        ok = graph->setTrackClipAssetId(
+            static_cast<guitarrackcraft::RackPathId>(trackId),
+            static_cast<uint32_t>(slot), isMidi == JNI_TRUE, chars);
+    }
     env->ReleaseStringUTFChars(assetId, chars);
     return ok ? JNI_TRUE : JNI_FALSE;
 }
