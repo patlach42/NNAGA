@@ -239,6 +239,17 @@ data class ClipSlotInfo(
     val loopStartQuarterNotes: Double = 0.0,
     val loopLengthQuarterNotes: Double = 4.0,
 )
+ 
+data class ProjectClipMediaRef(
+    val trackId: RackPathId,
+    val slot: Int,
+    val assetId: String,
+    val isMidi: Boolean,
+)
+data class ProjectStateSnapshot(
+    val rackState: ByteArray,
+    val mediaRefs: Array<ProjectClipMediaRef>,
+)
 
 data class MidiNoteInfo(
     val startMicroseconds: Long,
@@ -380,6 +391,16 @@ class NativeEngine private constructor() {
      * diagnostic explaining why the blob was rejected.
      */
     external fun nativeImportRackState(bytes: ByteArray, restorePlugins: Boolean = true): String?
+    external fun nativeGetProjectClipMediaRefs(): Array<ProjectClipMediaRef>
+    /** Materializes loaded WAV clips without assets into [directory]; null on success, diagnostic on failure. */
+    external fun nativeMaterializeProjectMedia(directory: String): String?
+    external fun nativeGetProjectStateSnapshot(): ProjectStateSnapshot
+    external fun nativeSetTrackClipAssetId(
+        trackId: Long,
+        slot: Int,
+        isMidi: Boolean,
+        assetId: String,
+    ): Boolean
     external fun nativeExportDeviceChain(pathId: Long): ByteArray?
     /** Returns null on success, otherwise a native diagnostic explaining rejection. */
     external fun nativeImportDeviceChain(pathId: Long, bytes: ByteArray): String?
@@ -749,6 +770,11 @@ class NativeEngine private constructor() {
     fun exportRackState(): ByteArray = nativeExportRackState()
     fun importRackState(bytes: ByteArray, restorePlugins: Boolean = true): String? =
         nativeImportRackState(bytes, restorePlugins)
+    fun getProjectClipMediaRefs(): Array<ProjectClipMediaRef> = nativeGetProjectClipMediaRefs()
+    fun materializeProjectMedia(directory: String): String? = nativeMaterializeProjectMedia(directory)
+    fun getProjectStateSnapshot(): ProjectStateSnapshot = nativeGetProjectStateSnapshot()
+    fun setTrackClipAssetId(trackId: Long, slot: Int, isMidi: Boolean, assetId: String): Boolean =
+        nativeSetTrackClipAssetId(trackId, slot, isMidi, assetId)
     fun exportDeviceChain(pathId: Long): ByteArray? = nativeExportDeviceChain(pathId)
     fun importDeviceChain(pathId: Long, bytes: ByteArray): String? = nativeImportDeviceChain(pathId, bytes)
 

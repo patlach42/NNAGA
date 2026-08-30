@@ -52,7 +52,6 @@ import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import com.vibes.dsp.engine.AudioEngine
 import com.vibes.dsp.engine.EngineInitHelper
-import com.vibes.dsp.engine.RackStateStore
 import com.vibes.dsp.engine.NativeEngine
 import com.vibes.dsp.ui.components.NnagaButton
 import com.vibes.dsp.ui.loading.PluginExtractScreen
@@ -63,12 +62,10 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : ComponentActivity() {
     private val audioPermissionLauncher = registerForActivityResult(
@@ -84,10 +81,6 @@ class MainActivity : ComponentActivity() {
     private var startupState by mutableStateOf<StartupState>(StartupState.Initializing)
     private var extractedCount by mutableIntStateOf(0)
     private var extractTotalCount by mutableIntStateOf(0)
-    private val rackStateStore by lazy { RackStateStore(applicationContext) }
-    private companion object {
-        val rackStateRestoreAttempted = AtomicBoolean(false)
-    }
 
     override fun onNewIntent(intent: android.content.Intent?) {
         super.onNewIntent(intent)
@@ -186,7 +179,6 @@ class MainActivity : ComponentActivity() {
                     prepareLv2AndInitEngine()
                 }
                 if (initialized) {
-                    restoreRackStateOnce()
                     startupState = StartupState.Ready
                     refreshPluginRegistryAfterBackgroundSetup()
                     maybeRunAhbSpike()
@@ -204,34 +196,6 @@ class MainActivity : ComponentActivity() {
                     "Startup failed: ${t.message ?: "unexpected initialization error"}. Retry."
                 )
             }
-        }
-    }
-    private suspend fun restoreRackStateOnce() {
-        if (!rackStateRestoreAttempted.compareAndSet(false, true)) return
-        withContext(Dispatchers.IO) {
-            val bytes = rackStateStore.load() ?: return@withContext
-            try {
-                val diagnostic = NativeEngine.getInstance().importRackState(bytes)
-                if (diagnostic == null) {
-                    android.util.Log.i("RackStateStore", "Restored rack state (${bytes.size} bytes)")
-                } else {
-                    android.util.Log.e("RackStateStore", "Native rack state restore rejected: $diagnostic")
-                    rackStateStore.quarantine(diagnostic)
-                }
-            } catch (t: Throwable) {
-                android.util.Log.e("RackStateStore", "Rack state restore failed", t)
-                rackStateStore.quarantine(t.message ?: "restore failed")
-            }
-        }
-    }
-
-    private suspend fun saveRackState() = withContext(Dispatchers.IO) {
-        try {
-            val bytes = NativeEngine.getInstance().exportRackState()
-            rackStateStore.save(bytes)
-            android.util.Log.i("RackStateStore", "Saved rack state (${bytes.size} bytes)")
-        } catch (t: Throwable) {
-            android.util.Log.e("RackStateStore", "Rack state save failed", t)
         }
     }
 
@@ -487,13 +451,6 @@ class MainActivity : ComponentActivity() {
         android.util.Log.i("AudioLifecycle", "MainActivity.onPause (isFinishing=$isFinishing)")
     }
 
-    override fun onStop() {
-        if (EngineInitHelper.isInitialized) {
-            runBlocking { saveRackState() }
-        }
-        android.util.Log.i("AudioLifecycle", "MainActivity.onStop (isFinishing=$isFinishing)")
-        super.onStop()
-    }
 
     override fun onDestroy() {
         super.onDestroy()

@@ -62,6 +62,7 @@ data class MeterState(
 
 class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val native = NativeEngine.getInstance()
+    private val projectStore = ProjectBundleStore(getApplication<Application>())
     private val _isEngineRunning = MutableStateFlow(false); val isEngineRunning = _isEngineRunning.asStateFlow()
     private val _latencyMs = MutableStateFlow(0.0); val latencyMs = _latencyMs.asStateFlow()
     private val _meterState = MutableStateFlow(MeterState()); val meterState = _meterState.asStateFlow()
@@ -405,61 +406,43 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             val resolver = getApplication<Application>().contentResolver
             val sourceName = runCatching {
                 resolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
-                    ?.use { cursor ->
-                        if (cursor.moveToFirst()) cursor.getString(0) else null
-                    }
-            }.getOrNull()
-                ?: uri.path?.substringBefore('?')?.substringAfterLast('/')
-                ?: "Clip"
+                    ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+            }.getOrNull() ?: uri.path?.substringBefore('?')?.substringAfterLast('/') ?: "Clip"
             val displayName = sourceName.substringBeforeLast('.', sourceName).ifBlank { "Clip" }
             val mimeType = resolver.getType(uri)?.lowercase()
             val midi = uri.lastPathSegment?.substringBefore('?')?.lowercase()?.let {
                 it.endsWith(".mid") || it.endsWith(".midi")
             } == true || mimeType in setOf("audio/midi", "audio/x-midi", "application/x-midi")
-            val isWav = sourceName.substringAfterLast('.', "").equals("wav", ignoreCase = true) ||
+            val isWav = sourceName.substringAfterLast('.', "").equals("wav", true) ||
                 mimeType in setOf("audio/wav", "audio/x-wav", "audio/wave")
-            val detectedBpm = if (!midi && isWav &&
-                ClipLauncherPreferences.getAutoDetectBpmFromFilename(getApplication())) {
-                parseClipSourceBpmFromFilename(sourceName)
-            } else null
+            val detectedBpm = if (!midi && isWav && ClipLauncherPreferences.getAutoDetectBpmFromFilename(getApplication()))
+                parseClipSourceBpmFromFilename(sourceName) else null
             var modeSetFailed = false
             val loaded = withBlockingOperation(if (midi) "Importing MIDI clip" else "Importing audio clip") {
                 withContext(Dispatchers.IO) {
                     val extension = if (midi) ".mid" else ".wav"
-                    val source = File.createTempFile("clip_import_", extension, getApplication<Application>().cacheDir)
-                    try {
-                        resolver.openInputStream(uri)?.use { input ->
-                            source.outputStream().use(input::copyTo)
-                        } ?: return@withContext false
-                        if (midi) RackManager.loadTrackClipMidi(trackId, slot, source.absolutePath, displayName)
-                        else {
-                            val wav = File.createTempFile("clip_import_decoded_", ".wav", getApplication<Application>().cacheDir)
-                            try {
-                                AudioImportDecoder.copyOrDecode(getApplication(), uri, wav)
-                                val durationBpm = if (detectedBpm == null &&
-                                    ClipLauncherPreferences.getAutoDetectLoopTempo(getApplication())) {
-                                    AudioImportDecoder.readWavDurationSeconds(wav)
-                                        ?.let { detectLoopTempoBpm(it, _transport.value.beatsPerMinute) }
-                                } else null
-                                val selectedBpm = detectedBpm ?: durationBpm
-                                val wavLoaded = RackManager.loadTrackClipWav(
-                                    trackId,
-                                    slot,
-                                    wav.absolutePath,
-                                    displayName,
-                                    selectedBpm ?: _transport.value.beatsPerMinute,
-                                )
-                                if (wavLoaded && selectedBpm != null) {
-                                    modeSetFailed = !RackManager.setClipTempoMode(
-                                        trackId,
-                                        slot,
-                                        ClipTempoMode.Stretch,
-                                    )
-                                }
-                                wavLoaded
-                            } finally { wav.delete() }
-                        }
-                    } finally { source.delete() }
+                    val durable = if (midi) {
+                        resolver.openInputStream(uri)?.use { projectStore.importMedia(it, extension) } ?: return@withContext false
+                    } else {
+                        val decoded = File.createTempFile("clip_decode_", ".wav", getApplication<Application>().cacheDir)
+                        try {
+                            AudioImportDecoder.copyOrDecode(getApplication(), uri, decoded)
+                            decoded.inputStream().use { projectStore.importMedia(it, ".wav") }
+                        } finally { decoded.delete() }
+                    }
+                    val assetId = durable.first
+                    val ok = if (midi) RackManager.loadTrackClipMidi(trackId, slot, durable.second.absolutePath, displayName)
+                    else {
+                        val bpm = detectedBpm ?: if (ClipLauncherPreferences.getAutoDetectLoopTempo(getApplication()))
+                            AudioImportDecoder.readWavDurationSeconds(durable.second)?.let {
+                                detectLoopTempoBpm(it, _transport.value.beatsPerMinute)
+                            } else null
+                        val wavOk = RackManager.loadTrackClipWav(trackId, slot, durable.second.absolutePath, displayName,
+                            bpm ?: _transport.value.beatsPerMinute)
+                        if (wavOk && bpm != null) modeSetFailed = !RackManager.setClipTempoMode(trackId, slot, ClipTempoMode.Stretch)
+                        wavOk
+                    }
+                    if (ok) RackManager.setTrackClipAssetId(trackId, slot, midi, assetId) else false
                 }
             }
             if (!loaded) _errorMessage.value = "Unable to load clip media"
@@ -834,6 +817,107 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.addPlugin(pathId, pluginId, position) < 0) _errorMessage.value = "Failed to add plugin"; refreshSelectedPath() } }
     fun removePlugin(pathId: RackPathId, position: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.removePlugin(pathId, position)) _errorMessage.value = "Failed to remove plugin"; refreshSelectedPath() } }
     fun reorderPlugins(pathId: RackPathId, fromPos: Int, toPos: Int) { viewModelScope.launch(Dispatchers.IO) { if (!RackManager.reorder(pathId, fromPos, toPos)) _errorMessage.value = "Failed to reorder plugins"; refreshSelectedPath() } }
+    fun saveProject(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                rackControlMutex.withLock {
+                    val diagnostic = RackManager.materializeProjectMedia(projectStore.mediaDirectoryPath())
+                    if (diagnostic != null) {
+                        error("Unable to materialize project media: $diagnostic")
+                    }
+                    val snapshot = RackManager.getProjectStateSnapshot()
+                    getApplication<Application>().contentResolver.openOutputStream(uri)?.use {
+                        projectStore.writeBundle(snapshot.rackState, snapshot.mediaRefs, it)
+                    } ?: error("Unable to open destination document")
+                }
+            }.onFailure {
+                Log.e("RackViewModel", "Failed to save project", it)
+                _errorMessage.value = "Unable to save project: ${it.message}"
+            }
+        }
+    }
+
+    private fun hydrateProject(
+        snapshot: ProjectStateSnapshot,
+        stagedAssets: Map<String, File>,
+    ) {
+        snapshot.mediaRefs.forEach { ref ->
+            val file = stagedAssets[ref.assetId] ?: projectStore.mediaFile(ref.assetId)
+            require(file != null && file.isFile) { "Missing project asset: ${ref.assetId}" }
+            val clip = RackManager.getTrackClipSlots(ref.trackId)
+                .firstOrNull { it.slot == ref.slot }
+            require(clip != null) { "Missing project clip ${ref.trackId}:${ref.slot}" }
+            val loaded = if (ref.isMidi) {
+                RackManager.loadTrackClipMidi(ref.trackId, ref.slot, file.absolutePath, clip.displayName)
+            } else {
+                RackManager.loadTrackClipWav(
+                    ref.trackId,
+                    ref.slot,
+                    file.absolutePath,
+                    clip.displayName,
+                    clip.sourceBpm,
+                )
+            }
+            require(loaded && RackManager.setTrackClipAssetId(
+                ref.trackId,
+                ref.slot,
+                ref.isMidi,
+                ref.assetId,
+            )) { "Unable to hydrate project clip ${ref.trackId}:${ref.slot}" }
+        }
+    }
+
+    fun openProject(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            var bundle: ProjectBundleStore.Bundle? = null
+            var oldSnapshot: ProjectStateSnapshot? = null
+            var replacementStarted = false
+            try {
+                val loadedBundle = getApplication<Application>().contentResolver.openInputStream(uri)?.use {
+                    projectStore.readBundle(it)
+                } ?: error("Unable to open project")
+                bundle = loadedBundle
+                oldSnapshot = RackManager.getProjectStateSnapshot()
+                val diagnostic = RackManager.importRackState(loadedBundle.rackState)
+                replacementStarted = true
+                if (diagnostic != null) error("Unable to load project ($diagnostic)")
+
+                val importedSnapshot = RackManager.getProjectStateSnapshot()
+                val referencedAssetIds = importedSnapshot.mediaRefs.map { it.assetId }.toSet()
+                require(loadedBundle.assets.keys == referencedAssetIds) {
+                    "Project media does not match clip references"
+                }
+                hydrateProject(importedSnapshot, loadedBundle.assets)
+
+                // Durable media is changed only after native import and every
+                // clip hydration have completed successfully.
+                projectStore.installAssets(loadedBundle)
+                projectStore.deleteStagedAssets(loadedBundle)
+                refreshRackNow(force = true)
+                _tracks.value.forEach { track ->
+                    refreshTrackClipSlotsNow(track.id)
+                    loadTrackWaveform(track.id)
+                }
+                refreshTransport(); refreshTrackTransport()
+            } catch (failure: Throwable) {
+                val originalMessage = failure.message
+                oldSnapshot?.let { snapshot ->
+                    if (replacementStarted) {
+                        runCatching {
+                            RackManager.stopTransport()
+                            val diagnostic = RackManager.importRackState(snapshot.rackState)
+                            if (diagnostic != null) error("Rollback failed ($diagnostic)")
+                            hydrateProject(snapshot, emptyMap())
+                        }
+                    }
+                }
+                bundle?.let(projectStore::deleteStagedAssets)
+                Log.e("RackViewModel", "Failed to open project", failure)
+                _errorMessage.value = "Unable to open project: $originalMessage"
+            }
+        }
+    }
+
     fun saveDeviceChain(pathId: RackPathId, uri: Uri) {
         viewModelScope.launch(Dispatchers.IO) {
             if (!isKnownPath(pathId)) {

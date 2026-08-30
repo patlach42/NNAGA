@@ -12,7 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <thread>
+#include <tuple>
 #include <vector>
 
 #include "PluginRegistry.h"
@@ -107,6 +107,23 @@ struct TransportSnapshot { bool playing; double positionSec; double beatsPerMinu
 class RackGraph {
 public:
     struct State {
+        struct ClipSlot {
+            uint32_t slot = 0;
+            bool wav = false;
+            bool midi = false;
+            std::string assetId;
+            std::string midiAssetId;
+            std::string displayName;
+            double sourceBpm = 120.0;
+            int tempoMode = 0;
+            bool looping = false;
+            double loopLengthBars = 1.0;
+            double defaultLoopLengthBars = 1.0;
+            double loopStartQuarterNotes = 0.0;
+            double loopLengthQuarterNotes = 4.0;
+            bool enterOnPunch = false;
+            LaunchQuantization launchQuantization = LaunchQuantization::Bar;
+        };
         struct Track {
             RackPathId id = 0;
             float volume = 1.0f;
@@ -114,6 +131,9 @@ public:
             bool inputArmLocked = false;
             TrackInputSource inputSource{};
             PluginChain::ChainState chain;
+            uint32_t selectedSlot = 0;
+            double defaultLoopLengthBars = 1.0;
+            std::vector<ClipSlot> clipSlots;
         };
         std::vector<Track> tracks;
         PluginChain::ChainState master;
@@ -123,6 +143,9 @@ public:
         uint64_t samplePosition = 0;
         double musicalQuarterNotes = 0.0;
     };
+    bool setTrackClipAssetId(RackPathId, uint32_t, bool, const std::string&);
+    bool materializeProjectMedia(const std::string& directory, std::string& diagnostic);
+    std::vector<std::tuple<RackPathId, uint32_t, std::string, bool>> getProjectClipMediaRefs() const;
     RackGraph(); ~RackGraph();
     RackPathId addTrack(); bool removeTrack(RackPathId); std::vector<TrackSnapshot> getTracks() const; std::vector<TrackClipSlotInfo> getTrackClipSlots(RackPathId) const; std::vector<MidiNoteInfo> getTrackClipMidiNotes(RackPathId,uint32_t) const;
     bool setTrackVolume(RackPathId, float); bool setTrackInputArmed(RackPathId, bool); bool setTrackInputArmLocked(RackPathId, bool); void setAvailableInputChannelCount(int32_t) noexcept;
@@ -149,6 +172,7 @@ public:
     bool restoreState(const State&, const PluginRegistry&, std::string& diagnostic, bool restorePlugins = true);
     bool exportDeviceChain(RackPathId, PluginChain::ChainState&, std::string& diagnostic) const;
     bool importDeviceChain(RackPathId, const PluginChain::ChainState&, const PluginRegistry&, std::string& diagnostic);
+    bool createParallelWetReturn(RackPathId sourceId, const PluginRegistry&, RackPathId& returnId, std::string& diagnostic);
     bool setClipTransportPlaying(RackPathId, uint32_t, bool, LaunchQuantization);
     bool setClipTempoMode(RackPathId, uint32_t, ClipTempoMode);
     bool setClipSourceBpm(RackPathId, uint32_t, double);
@@ -230,6 +254,7 @@ public:
     void writeMailboxLocked(bool, bool, bool, bool=false, double=120); std::unique_ptr<GraphSnapshot> buildSnapshotLocked(const std::vector<std::shared_ptr<TrackNode>>&, const std::vector<std::shared_ptr<const WavClip>>&, const std::vector<std::shared_ptr<WavClip>>& = {}) const; bool publishSnapshotLocked(std::unique_ptr<GraphSnapshot>); bool startTrackRecordingLocked(RackPathId, uint32_t, double, LaunchQuantization, bool); static double clipDuration(const WavClip&); void reclaimerLoop(); void reclaimRetired();
     bool audioLatencyOverflow_ = false;
     static constexpr uint32_t kLatencyHistoryFrames = 65536;
+    std::vector<std::vector<std::string>> wavAssetIds_, midiAssetIds_;
     uint32_t audioGlobalLatency_ = 0;
     bool clearIncompleteRecordingLocked(size_t) noexcept;
     bool reserveIncompleteRecordingLocked(size_t, RecordingPhase&) noexcept;

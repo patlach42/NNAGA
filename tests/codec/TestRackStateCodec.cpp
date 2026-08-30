@@ -74,11 +74,29 @@ void expectProperty(const StateProperty& actual, const StateProperty& expected) 
     EXPECT_EQ(actual.value, expected.value);
 }
 
+void expectClipSlot(const RackGraph::State::ClipSlot& actual,
+                    const RackGraph::State::ClipSlot& expected) {
+    EXPECT_EQ(actual.slot, expected.slot);
+    EXPECT_EQ(actual.wav, expected.wav);
+    EXPECT_EQ(actual.midi, expected.midi);
+    EXPECT_EQ(actual.assetId, expected.assetId);
+    EXPECT_EQ(actual.midiAssetId, expected.midiAssetId);
+    EXPECT_EQ(actual.displayName, expected.displayName);
+    EXPECT_EQ(actual.sourceBpm, expected.sourceBpm);
+    EXPECT_EQ(actual.tempoMode, expected.tempoMode);
+    EXPECT_EQ(actual.looping, expected.looping);
+    EXPECT_EQ(actual.loopLengthBars, expected.loopLengthBars);
+    EXPECT_EQ(actual.defaultLoopLengthBars, expected.defaultLoopLengthBars);
+    EXPECT_EQ(actual.loopStartQuarterNotes, expected.loopStartQuarterNotes);
+    EXPECT_EQ(actual.loopLengthQuarterNotes, expected.loopLengthQuarterNotes);
+    EXPECT_EQ(actual.enterOnPunch, expected.enterOnPunch);
+    EXPECT_EQ(actual.launchQuantization, expected.launchQuantization);
+}
+
 void expectPlugin(const PluginState& actual, const PluginState& expected) {
     EXPECT_EQ(actual.format, expected.format);
     EXPECT_EQ(actual.pluginUri, expected.pluginUri);
     EXPECT_EQ(actual.manualLatencyFrames, expected.manualLatencyFrames);
-    ASSERT_EQ(actual.controlPortValues.size(), expected.controlPortValues.size());
     for (size_t i = 0; i < expected.controlPortValues.size(); ++i) {
         EXPECT_EQ(actual.controlPortValues[i].first, expected.controlPortValues[i].first);
         EXPECT_EQ(actual.controlPortValues[i].second, expected.controlPortValues[i].second);
@@ -101,6 +119,11 @@ void expectState(const RackGraph::State& actual, const RackGraph::State& expecte
         EXPECT_EQ(a.inputSource.tap, e.inputSource.tap);
         EXPECT_EQ(a.inputSource.firstChannel, e.inputSource.firstChannel);
         EXPECT_EQ(a.inputSource.trackId, e.inputSource.trackId);
+        EXPECT_EQ(a.selectedSlot, e.selectedSlot);
+        EXPECT_EQ(a.defaultLoopLengthBars, e.defaultLoopLengthBars);
+        ASSERT_EQ(a.clipSlots.size(), e.clipSlots.size());
+        for (size_t j = 0; j < e.clipSlots.size(); ++j)
+            expectClipSlot(a.clipSlots[j], e.clipSlots[j]);
         ASSERT_EQ(a.chain.plugins.size(), e.chain.plugins.size());
         for (size_t j = 0; j < e.chain.plugins.size(); ++j)
             expectPlugin(a.chain.plugins[j], e.chain.plugins[j]);
@@ -114,6 +137,7 @@ void expectState(const RackGraph::State& actual, const RackGraph::State& expecte
     EXPECT_EQ(actual.samplePosition, expected.samplePosition);
     EXPECT_EQ(actual.musicalQuarterNotes, expected.musicalQuarterNotes);
 }
+
 
 uint32_t crc32(const uint8_t* data, size_t size) {
     uint32_t crc = 0xffffffffu;
@@ -254,13 +278,118 @@ std::optional<size_t> firstPropertyLengthOffset(
         return std::nullopt;
     return propertyOffset;
 }
+// Strip the v3 track configuration and clip records while retaining the
+// version-2 chain/global wire format. This keeps compatibility tests based on
+// payloads emitted by the current encoder rather than hand-built bytes.
+std::vector<uint8_t> makeV2Payload(const std::vector<uint8_t>& v3) {
+    if (v3.size() < 12 || getU32(v3, 4) != 3u)
+        return {};
+    const size_t limit = v3.size() - 4;
+    size_t offset = 8;
+    uint32_t trackCount = 0;
+    if (!readU32(v3, limit, offset, trackCount))
+        return {};
+
+    std::vector<uint8_t> v2(v3.begin(), v3.begin() + 12);
+    putU32(v2, 4, 2);
+    const auto copyRange = [&v2, &v3](size_t begin, size_t end) {
+        v2.insert(v2.end(), v3.begin() + begin, v3.begin() + end);
+    };
+    for (uint32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
+        const size_t trackStart = offset;
+        if (!skipBytes(v3, limit, offset, 28u) ||
+            !skipBytes(v3, limit, offset, 12u))
+            return {};
+        uint32_t clipCount = 0;
+        if (!readU32(v3, limit, offset, clipCount))
+            return {};
+        for (uint32_t clipIndex = 0; clipIndex < clipCount; ++clipIndex) {
+            if (!skipBytes(v3, limit, offset, 6u) ||
+                !skipWireString(v3, limit, offset) ||
+                !skipWireString(v3, limit, offset) ||
+                !skipWireString(v3, limit, offset) ||
+                !skipBytes(v3, limit, offset, 47u))
+                return {};
+        }
+        copyRange(trackStart, trackStart + 28u);
+        const size_t chainStart = offset;
+        std::optional<size_t> unusedPropertyOffset;
+        if (!skipChain(v3, limit, offset, 3u, unusedPropertyOffset))
+            return {};
+        copyRange(chainStart, offset);
+    }
+
+    const size_t masterStart = offset;
+    std::optional<size_t> unusedPropertyOffset;
+    if (!skipChain(v3, limit, offset, 3u, unusedPropertyOffset))
+        return {};
+    copyRange(masterStart, offset);
+    // BPM, transport state, transport frame, sample position, and musical
+    // quarter notes are identical in v2 and v3.
+    const size_t globalStart = offset;
+    if (!skipBytes(v3, limit, offset, 33u) || offset != limit)
+        return {};
+    copyRange(globalStart, limit);
+    v2.resize(v2.size() + 4u);
+    refreshCrc(v2);
+    return v2;
+}
+
 
 TEST(RackStateCodecTest, RoundTripPreservesRoutingPluginsParametersAndBinaryProperties) {
     const RackGraph::State expected = fixtureState();
     std::string error;
     const std::vector<uint8_t> encoded = RackStateCodec::encode(expected, &error);
     ASSERT_FALSE(encoded.empty()) << error;
-    EXPECT_EQ(getU32(encoded, 4), 2u);
+    EXPECT_EQ(getU32(encoded, 4), 3u);
+
+    RackGraph::State decoded;
+    ASSERT_TRUE(RackStateCodec::decode(encoded.data(), encoded.size(), decoded, error)) << error;
+    expectState(decoded, expected);
+}
+
+TEST(RackStateCodecTest,
+     V3RoundTripPreservesClipConfigurationAssetIdsAndCompletePluginChains) {
+    RackGraph::State expected = fixtureState();
+    auto& track = expected.tracks.front();
+    track.selectedSlot = 9;
+    track.defaultLoopLengthBars = 3.5;
+
+    RackGraph::State::ClipSlot wav;
+    wav.slot = 9;
+    wav.wav = true;
+    wav.assetId = "opaque-wav-asset-id";
+    wav.displayName = "Loop (WAV)";
+    wav.sourceBpm = 98.25;
+    wav.tempoMode = 2;
+    wav.looping = true;
+    wav.loopLengthBars = 7.0;
+    wav.defaultLoopLengthBars = 2.0;
+    wav.loopStartQuarterNotes = 1.25;
+    wav.loopLengthQuarterNotes = 28.0;
+    wav.enterOnPunch = true;
+    wav.launchQuantization = LaunchQuantization::Eighth;
+
+    RackGraph::State::ClipSlot midi;
+    midi.slot = 12;
+    midi.midi = true;
+    midi.midiAssetId = "opaque-midi-asset-id";
+    midi.displayName = "Bass MIDI";
+    midi.sourceBpm = 143.75;
+    midi.tempoMode = 1;
+    midi.looping = false;
+    midi.loopLengthBars = 5.5;
+    midi.defaultLoopLengthBars = 1.5;
+    midi.loopStartQuarterNotes = 2.0;
+    midi.loopLengthQuarterNotes = 22.0;
+    midi.enterOnPunch = false;
+    midi.launchQuantization = LaunchQuantization::None;
+    track.clipSlots = {wav, midi};
+
+    std::string error;
+    const std::vector<uint8_t> encoded = RackStateCodec::encode(expected, &error);
+    ASSERT_FALSE(encoded.empty()) << error;
+    EXPECT_EQ(getU32(encoded, 4), 3u);
 
     RackGraph::State decoded;
     ASSERT_TRUE(RackStateCodec::decode(encoded.data(), encoded.size(), decoded, error)) << error;
@@ -274,14 +403,16 @@ TEST(RackStateCodecTest, V1PayloadDefaultsManualLatencyOverridesToZero) {
     track.chain.plugins.push_back(plugin("JSFX", "JSFX:legacy", {}));
     expected.tracks.push_back(track);
 
-    const std::vector<uint8_t> encoded = RackStateCodec::encode(expected);
+    const std::vector<uint8_t> v3 = RackStateCodec::encode(expected);
+    ASSERT_FALSE(v3.empty());
+    const std::vector<uint8_t> encoded = makeV2Payload(v3);
     ASSERT_FALSE(encoded.empty());
+    EXPECT_EQ(getU32(encoded, 4), 2u);
     const size_t manualLatencyOffset =
         40 + 4 + 4 + std::string("JSFX").size() +
         4 + std::string("JSFX:legacy").size() + 4 + 4;
     EXPECT_EQ(getU32(encoded, manualLatencyOffset), 0u);
     const std::vector<uint8_t> v1 = makeV1Payload(encoded, manualLatencyOffset);
-
     RackGraph::State decoded;
     std::string error;
     ASSERT_TRUE(RackStateCodec::decode(v1.data(), v1.size(), decoded, error)) << error;
@@ -296,7 +427,9 @@ TEST(RackStateCodecTest, V2PayloadRejectsOversizedManualLatencyOverrideAtomicall
     track.chain.plugins.push_back(plugin("JSFX", "JSFX:oversized", {}));
     expected.tracks.push_back(track);
 
-    std::vector<uint8_t> encoded = RackStateCodec::encode(expected);
+    const std::vector<uint8_t> v3 = RackStateCodec::encode(expected);
+    ASSERT_FALSE(v3.empty());
+    std::vector<uint8_t> encoded = makeV2Payload(v3);
     ASSERT_FALSE(encoded.empty());
     ASSERT_EQ(getU32(encoded, 4), 2u);
 
@@ -327,9 +460,11 @@ TEST(RackStateCodecTest, V2PayloadAcceptsMaximumManualLatencyOverride) {
     expected.tracks.push_back(track);
 
     std::string error;
-    const std::vector<uint8_t> encoded =
-        RackStateCodec::encode(expected, &error);
-    ASSERT_FALSE(encoded.empty()) << error;
+    const std::vector<uint8_t> v3 = RackStateCodec::encode(expected, &error);
+    ASSERT_FALSE(v3.empty()) << error;
+    const std::vector<uint8_t> encoded = makeV2Payload(v3);
+    ASSERT_FALSE(encoded.empty());
+    ASSERT_EQ(getU32(encoded, 4), 2u);
 
     RackGraph::State decoded;
     ASSERT_TRUE(RackStateCodec::decode(
@@ -375,7 +510,9 @@ TEST(RackStateCodecTest, TruncatedPayloadIsRejectedWithoutPartialState) {
 
 TEST(RackStateCodecTest, InvalidCountsAndLengthsAreRejectedWithoutPartialState) {
     const RackGraph::State expected = fixtureState();
-    const std::vector<uint8_t> encoded = RackStateCodec::encode(expected);
+    const std::vector<uint8_t> v3 = RackStateCodec::encode(expected);
+    ASSERT_FALSE(v3.empty());
+    const std::vector<uint8_t> encoded = makeV2Payload(v3);
     ASSERT_FALSE(encoded.empty());
 
     struct Corruption {
@@ -429,7 +566,38 @@ TEST(RackStateCodecTest, DeviceChainEnvelopeRoundTripPreservesPathAndPlugins) {
         encoded.data(), encoded.size(), pathId, decoded, error)) << error;
     EXPECT_EQ(pathId, 42u);
     ASSERT_EQ(decoded.plugins.size(), 1u);
+
     expectPlugin(decoded.plugins.front(), expected.plugins.front());
+}
+
+TEST(RackStateCodecTest, DeviceChainDecodeRejectsProjectWithClipData) {
+    RackGraph::State project;
+    RackGraph::State::Track track;
+    track.id = 314;
+    track.chain.plugins.push_back(plugin("LV2", "http://example.test/clip", {{2, 0.4f}}));
+    RackGraph::State::ClipSlot clip;
+    clip.slot = 4;
+    clip.wav = true;
+    clip.assetId = "opaque-project-wav";
+    clip.displayName = "Project clip";
+    track.clipSlots.push_back(clip);
+    project.tracks.push_back(track);
+
+    std::string error;
+    const std::vector<uint8_t> encoded = RackStateCodec::encode(project, &error);
+    ASSERT_FALSE(encoded.empty()) << error;
+
+    RackPathId pathId = 99;
+    PluginChain::ChainState existing;
+    existing.plugins.push_back(plugin("JSFX", "http://example.test/old", {{1, 0.2f}}));
+    const RackPathId beforePath = pathId;
+    const PluginChain::ChainState beforeChain = existing;
+    EXPECT_FALSE(RackStateCodec::decodeDeviceChain(
+        encoded.data(), encoded.size(), pathId, existing, error));
+    EXPECT_EQ(error, "not-device-chain");
+    EXPECT_EQ(pathId, beforePath);
+    ASSERT_EQ(existing.plugins.size(), beforeChain.plugins.size());
+    expectPlugin(existing.plugins.front(), beforeChain.plugins.front());
 }
 
 TEST(RackStateCodecTest,
@@ -439,10 +607,10 @@ TEST(RackStateCodecTest,
     std::vector<uint8_t> damaged = RackStateCodec::encodeDeviceChain(42, source);
     ASSERT_FALSE(damaged.empty());
 
-    // The scoped chain begins after the fixed 40-byte envelope prefix. Keep
-    // the CRC valid so this exercises bounded decoding, not only checksum
-    // rejection.
-    putU32(damaged, 40, std::numeric_limits<uint32_t>::max());
+    // The v3 track envelope is 56 bytes before the scoped chain's plugin
+    // count. Keep the CRC valid so this exercises bounded decoding, not only
+    // checksum rejection.
+    putU32(damaged, 56, std::numeric_limits<uint32_t>::max());
     refreshCrc(damaged);
 
     PluginChain::ChainState existing;

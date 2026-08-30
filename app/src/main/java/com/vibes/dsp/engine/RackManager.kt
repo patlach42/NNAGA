@@ -56,6 +56,11 @@ object RackManager {
     fun exportRackState(): ByteArray = native.exportRackState()
     fun importRackState(bytes: ByteArray, restorePlugins: Boolean = true): String? =
         native.importRackState(bytes, restorePlugins)
+    fun getProjectStateSnapshot(): ProjectStateSnapshot = native.getProjectStateSnapshot()
+    fun materializeProjectMedia(directory: String): String? = native.materializeProjectMedia(directory)
+    fun getProjectClipMediaRefs(): Array<ProjectClipMediaRef> = native.getProjectClipMediaRefs()
+    fun setTrackClipAssetId(trackId: RackPathId, slot: Int, isMidi: Boolean, assetId: String): Boolean =
+        native.setTrackClipAssetId(trackId, slot, isMidi, assetId)
     fun exportDeviceChain(pathId: RackPathId): ByteArray? = native.exportDeviceChain(pathId)
     fun importDeviceChain(pathId: RackPathId, bytes: ByteArray): String? =
         native.nativeImportDeviceChain(pathId, bytes)

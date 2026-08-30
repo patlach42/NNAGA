@@ -1,9 +1,9 @@
 #include <gtest/gtest.h>
 
 #include "plugin/RackGraph.h"
-#include "plugin/PluginRegistry.h"
+#include "utils/WavIO.h"
 
-#include <array>
+#include <filesystem>
 #include <atomic>
 #include <limits>
 #include <cstddef>
@@ -13,6 +13,7 @@
 #include <string>
 #include <thread>
 #include <vector>
+#include <unistd.h>
 #include <utility>
 
 namespace allocation_probe {
@@ -4676,6 +4677,142 @@ TEST(RackGraphPdcTest, DirectShortcutTransitionUsesSeededHistoryAtBlockBoundary)
         EXPECT_FLOAT_EQ(buffers.outputRight[frame], 11.0f)
             << "right frame " << frame;
     }
+}
+
+class TempMediaDirectory {
+public:
+    TempMediaDirectory() {
+        char pattern[] = "/tmp/grc_rack_media_tests_XXXXXX";
+        if (const char* path = ::mkdtemp(pattern)) path_ = path;
+    }
+
+    ~TempMediaDirectory() {
+        if (!path_.empty()) {
+            std::error_code error;
+            std::filesystem::remove_all(path_, error);
+        }
+    }
+
+    const std::string& path() const { return path_; }
+
+private:
+    std::string path_;
+};
+
+bool isOpaqueWavAssetId(const std::string& id) {
+    if (id.size() != 36 || id.compare(32, 4, ".wav") != 0) return false;
+    for (size_t i = 0; i < 32; ++i) {
+        const char c = id[i];
+        if (!((c >= '0' && c <= '9') ||
+              (c >= 'a' && c <= 'f') ||
+              (c >= 'A' && c <= 'F'))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+size_t regularFileCount(const std::string& directory) {
+    size_t count = 0;
+    std::error_code error;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (entry.is_regular_file(error)) ++count;
+    }
+    return count;
+}
+
+TEST(RackGraphProjectMediaTest, MaterializesMissingWavAssetAndReusesPublishedId) {
+    TempMediaDirectory directory;
+    ASSERT_FALSE(directory.path().empty());
+
+    RackGraph graph;
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, 0,
+        makeClip({0.0f, 0.5f, -0.5f, 1.0f}, 48'000,
+                 {-1.0f, 0.25f, 0.75f, 0.0f}, "recorded.wav")));
+    ASSERT_TRUE(graph.getProjectClipMediaRefs().empty());
+
+    std::string diagnostic = "stale-diagnostic";
+    ASSERT_TRUE(graph.materializeProjectMedia(directory.path(), diagnostic));
+    EXPECT_TRUE(diagnostic.empty());
+
+    const auto firstRefs = graph.getProjectClipMediaRefs();
+    ASSERT_EQ(firstRefs.size(), 1u);
+    const auto& [firstTrack, firstSlot, assetId, isMidi] = firstRefs.front();
+    EXPECT_EQ(firstTrack, track);
+    EXPECT_EQ(firstSlot, 0u);
+    EXPECT_FALSE(isMidi);
+    ASSERT_TRUE(isOpaqueWavAssetId(assetId));
+
+    const auto materialized = std::filesystem::path(directory.path()) / assetId;
+    std::error_code error;
+    ASSERT_TRUE(std::filesystem::is_regular_file(materialized, error));
+    ASSERT_FALSE(error);
+    ASSERT_GT(std::filesystem::file_size(materialized, error), 44u);
+    ASSERT_FALSE(error);
+
+    std::vector<float> samples;
+    uint32_t sampleRate = 0;
+    uint32_t channels = 0;
+    ASSERT_TRUE(guitarrackcraft::readWavFile(
+        materialized.string(), samples, sampleRate, channels));
+    EXPECT_EQ(sampleRate, 48'000u);
+    EXPECT_EQ(channels, 2u);
+    ASSERT_EQ(samples.size(), 8u);
+    constexpr float kPcm16ReadbackTolerance = 1.0f / 32768.0f + 1e-6f;
+    EXPECT_NEAR(samples[0], 0.0f, kPcm16ReadbackTolerance);
+    EXPECT_NEAR(samples[1], -1.0f, kPcm16ReadbackTolerance);
+    EXPECT_NEAR(samples[2], 0.5f, kPcm16ReadbackTolerance);
+    EXPECT_NEAR(samples[3], 0.25f, kPcm16ReadbackTolerance);
+    EXPECT_EQ(regularFileCount(directory.path()), 1u);
+
+    diagnostic = "stale-diagnostic";
+    ASSERT_TRUE(graph.materializeProjectMedia(directory.path(), diagnostic));
+    EXPECT_TRUE(diagnostic.empty());
+    const auto secondRefs = graph.getProjectClipMediaRefs();
+    ASSERT_EQ(secondRefs.size(), 1u);
+    EXPECT_EQ(std::get<2>(secondRefs.front()), assetId);
+    EXPECT_EQ(regularFileCount(directory.path()), 1u);
+}
+
+TEST(RackGraphProjectMediaTest, InvalidMissingWavDoesNotPublishAssetId) {
+    TempMediaDirectory directory;
+    ASSERT_FALSE(directory.path().empty());
+
+    RackGraph graph;
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, 0, makeClip({0.25f, -0.25f}, 48'000, {}, "invalid.wav")));
+
+    std::string diagnostic;
+    EXPECT_FALSE(graph.materializeProjectMedia(directory.path(), diagnostic));
+    EXPECT_EQ(diagnostic, "invalid-wav-clip");
+    EXPECT_TRUE(graph.getProjectClipMediaRefs().empty());
+    EXPECT_EQ(regularFileCount(directory.path()), 0u);
+}
+
+TEST(RackGraphProjectMediaTest, ExistingWavAssetIdIsNotRematerialized) {
+    TempMediaDirectory directory;
+    ASSERT_FALSE(directory.path().empty());
+
+    RackGraph graph;
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, 0, makeClip({0.25f, -0.25f}, 48'000,
+                           {-0.5f, 0.5f}, "existing.wav")));
+    ASSERT_TRUE(graph.setTrackClipAssetId(track, 0, false, "existing.wav"));
+
+    std::string diagnostic;
+    ASSERT_TRUE(graph.materializeProjectMedia(directory.path(), diagnostic));
+    EXPECT_TRUE(diagnostic.empty());
+    const auto refs = graph.getProjectClipMediaRefs();
+    ASSERT_EQ(refs.size(), 1u);
+    EXPECT_EQ(std::get<0>(refs.front()), track);
+    EXPECT_EQ(std::get<1>(refs.front()), 0u);
+    EXPECT_EQ(std::get<2>(refs.front()), "existing.wav");
+    EXPECT_FALSE(std::get<3>(refs.front()));
+    EXPECT_EQ(regularFileCount(directory.path()), 0u);
 }
 
 

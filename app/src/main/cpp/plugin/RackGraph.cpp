@@ -1,11 +1,15 @@
 #include "RackGraph.h"
+#include "../utils/WavIO.h"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <functional>
+#include <random>
+#include <sstream>
 #include <unordered_map>
 #include <unordered_set>
 namespace guitarrackcraft {
@@ -97,7 +101,7 @@ std::unique_ptr<RackGraph::GraphSnapshot> RackGraph::buildSnapshotLocked(const s
 }
 bool RackGraph::publishSnapshotLocked(std::unique_ptr<GraphSnapshot> next){ if(!next)return false; std::unique_ptr<RetiredSnapshot> retired; if(activeOwner_){retired=std::make_unique<RetiredSnapshot>();retired->owner=std::move(activeOwner_);} auto* raw=next.get(); activeOwner_=std::move(next); activeSnapshot_.exchange(raw,std::memory_order_release); if(retired){std::lock_guard lock(reclaimerMutex_);retired->next=retired_;retired_=retired.release();reclaimerWake_.notify_one();} return true; }
 RackPathId RackGraph::addTrack(){std::lock_guard lock(controlMutex_);try{auto node=std::make_shared<TrackNode>();node->id=nextTrackId_;node->chain=std::make_shared<PluginChain>();node->sourceLeft.resize(bufferSize_);node->sourceRight.resize(bufferSize_);node->outputLeft.resize(bufferSize_);node->outputRight.resize(bufferSize_);node->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);node->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);if(sampleRate_.load()>0)node->chain->setSampleRate(sampleRate_.load(),bufferSize_);auto nodes=tracks_;auto clips=clips_;auto recs=recordingClips_;auto slots=wavSlots_;auto midiSlots=midiSlots_;auto labels=clipLabelOverrides_;nodes.push_back(node);clips.push_back(nullptr);recs.push_back(nullptr);slots.push_back({});midiSlots.push_back({});labels.push_back({});if(!publishSnapshotLocked(buildSnapshotLocked(nodes,clips,recs)))return 0;tracks_=std::move(nodes);clips_=std::move(clips);recordingClips_=std::move(recs);wavSlots_=std::move(slots);midiSlots_=std::move(midiSlots);clipLabelOverrides_=std::move(labels);midiClips_.push_back(nullptr);return nextTrackId_++;}catch(...){return 0;}}
-bool RackGraph::removeTrack(RackPathId id){std::lock_guard lock(controlMutex_);if(id==kMasterPathId||tracks_.size()<=1)return false;auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;auto nodes=tracks_;auto clips=clips_;auto recs=recordingClips_;auto mids=midiClips_;auto ws=wavSlots_;auto ms=midiSlots_;auto labels=clipLabelOverrides_;auto i=static_cast<size_t>(it-tracks_.begin());nodes.erase(nodes.begin()+i);clips.erase(clips.begin()+i);recs.erase(recs.begin()+i);mids.erase(mids.begin()+i);ws.erase(ws.begin()+i);ms.erase(ms.begin()+i);labels.erase(labels.begin()+i);if(!publishSnapshotLocked(buildSnapshotLocked(nodes,clips,recs)))return false;tracks_=std::move(nodes);clips_=std::move(clips);recordingClips_=std::move(recs);midiClips_=std::move(mids);wavSlots_=std::move(ws);midiSlots_=std::move(ms);clipLabelOverrides_=std::move(labels);return true;}
+bool RackGraph::removeTrack(RackPathId id){std::lock_guard lock(controlMutex_);if(id==kMasterPathId||tracks_.size()<=1)return false;auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;auto nodes=tracks_;auto clips=clips_;auto recs=recordingClips_;auto mids=midiClips_;auto ws=wavSlots_;auto ms=midiSlots_;auto labels=clipLabelOverrides_;auto wa=wavAssetIds_;auto ma=midiAssetIds_;auto i=static_cast<size_t>(it-tracks_.begin());nodes.erase(nodes.begin()+i);clips.erase(clips.begin()+i);recs.erase(recs.begin()+i);mids.erase(mids.begin()+i);ws.erase(ws.begin()+i);ms.erase(ms.begin()+i);labels.erase(labels.begin()+i);wa.erase(wa.begin()+i);ma.erase(ma.begin()+i);if(!publishSnapshotLocked(buildSnapshotLocked(nodes,clips,recs)))return false;tracks_=std::move(nodes);clips_=std::move(clips);recordingClips_=std::move(recs);midiClips_=std::move(mids);wavSlots_=std::move(ws);midiSlots_=std::move(ms);clipLabelOverrides_=std::move(labels);wavAssetIds_=std::move(wa);midiAssetIds_=std::move(ma);return true;}
 std::vector<TrackSnapshot> RackGraph::getTracks() const {
     std::lock_guard lock(controlMutex_);
     std::vector<TrackSnapshot> result;
@@ -202,39 +206,49 @@ bool RackGraph::attachTrackWavSlot(RackPathId id,uint32_t slot,std::shared_ptr<c
     if(!c || c->sampleRate == 0 || c->left.empty() || !std::isfinite(c->sourceBpm) || c->sourceBpm < 20.0 || c->sourceBpm > 400.0)return false; std::lock_guard lock(controlMutex_);
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
     if(it==tracks_.end())return false;
+    const bool freshRuntime = slot >= (*it)->clipRuntime.size() || !(*it)->clipRuntime[slot];
     if(!ensureClipRuntimeLocked(**it,slot))return false;
     auto ws=wavSlots_; const size_t i=static_cast<size_t>(it-tracks_.begin());
     if(i>=ws.size())return false; if(slot>=ws[i].size())ws[i].resize(static_cast<size_t>(slot)+1);
     const double importedBpm = c->sourceBpm;
     auto old=wavSlots_; auto oldRuntime=(*it)->clipRuntime;
     ws[i][slot]=std::move(c); wavSlots_=ws;
-    (*it)->clipRuntime[slot]=std::make_shared<ClipRuntime>();
-    (*it)->clipRuntime[slot]->loopLengthBars.store(slot<(*it)->slotConfig.size()&&(*it)->slotConfig[slot] ? (*it)->slotConfig[slot]->defaultLoopLengthBars.load() : (*it)->defaultLoopLengthBars.load());
-    (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store(static_cast<double>(ws[i][slot]->left.size()) / static_cast<double>(ws[i][slot]->sampleRate) * importedBpm / 60.0);
-    (*it)->clipRuntime[slot]->sourceBpm.store(importedBpm, std::memory_order_release);
+    if(freshRuntime){
+        (*it)->clipRuntime[slot]=std::make_shared<ClipRuntime>();
+        (*it)->clipRuntime[slot]->loopLengthBars.store(slot<(*it)->slotConfig.size()&&(*it)->slotConfig[slot] ? (*it)->slotConfig[slot]->defaultLoopLengthBars.load() : (*it)->defaultLoopLengthBars.load());
+        (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store(static_cast<double>(ws[i][slot]->left.size()) / static_cast<double>(ws[i][slot]->sampleRate) * importedBpm / 60.0);
+        (*it)->clipRuntime[slot]->sourceBpm.store(importedBpm, std::memory_order_release);
+    }
     if(i>=clipLabelOverrides_.size())clipLabelOverrides_.resize(i+1);
     if(slot>=clipLabelOverrides_[i].size())clipLabelOverrides_[i].resize(static_cast<size_t>(slot)+1);
-    clipLabelOverrides_[i][slot].clear();
+    if(freshRuntime) clipLabelOverrides_[i][slot].clear();
     if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){wavSlots_=std::move(old);(*it)->clipRuntime=std::move(oldRuntime);return false;} return true;
 }
 bool RackGraph::unloadTrackWavSlot(RackPathId id,uint32_t slot){
     std::lock_guard lock(controlMutex_); auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
     if(it==tracks_.end())return false; const size_t i=static_cast<size_t>(it-tracks_.begin());
-    auto ws=wavSlots_; if(i>=ws.size()||slot>=ws[i].size())return false; ws[i][slot].reset();
+    auto ws=wavSlots_; auto wa=wavAssetIds_;
+    const bool hasSlot=i<ws.size()&&slot<ws[i].size();
+    const bool hasAsset=i<wa.size()&&slot<wa[i].size();
+    if(!hasSlot&&!hasAsset)return false;
+    if(hasSlot)ws[i][slot].reset();
+    if(hasAsset)wa[i][slot].clear();
     if(i<clipLabelOverrides_.size()&&slot<clipLabelOverrides_[i].size())clipLabelOverrides_[i][slot].clear();
-    auto old=wavSlots_; auto oldRuntime=(*it)->clipRuntime; wavSlots_=ws;
-    const bool hasOther=slot<midiSlots_[i].size()&&midiSlots_[i][slot];
+    auto old=wavSlots_; auto oldAssets=wavAssetIds_; auto oldRuntime=(*it)->clipRuntime; wavSlots_=ws; wavAssetIds_=wa;
+    const bool hasOther=i<midiSlots_.size()&&slot<midiSlots_[i].size()&&midiSlots_[i][slot];
     if(hasOther){
         (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store((*it)->clipRuntime[slot]->loopLengthBars.load() * 4.0);
     } else if(slot<(*it)->clipRuntime.size()) (*it)->clipRuntime[slot].reset();
     if((*it)->activeSlot.load()==static_cast<int32_t>(slot))(*it)->activeSlot.store(-1);
     if((*it)->pendingSwitchSlot.load()==static_cast<int32_t>(slot)){(*it)->pendingSwitchSlot.store(-1);(*it)->pendingSwitchFrame=std::numeric_limits<uint64_t>::max();}
-    if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){wavSlots_=std::move(old);(*it)->clipRuntime=std::move(oldRuntime);return false;} return true;
+    if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){wavSlots_=std::move(old);wavAssetIds_=std::move(oldAssets);(*it)->clipRuntime=std::move(oldRuntime);return false;} return true;
 }
 bool RackGraph::attachTrackMidiSlot(RackPathId id,uint32_t slot,std::shared_ptr<const MidiClip> c){
     if(!c || c->durationMicroseconds == 0 || c->events.empty())return false; std::lock_guard lock(controlMutex_);
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
-    if(it==tracks_.end()||!ensureClipRuntimeLocked(**it,slot))return false;
+    if(it==tracks_.end())return false;
+    const bool freshRuntime = slot >= (*it)->clipRuntime.size() || !(*it)->clipRuntime[slot];
+    if(!ensureClipRuntimeLocked(**it,slot))return false;
     auto ms=midiSlots_; const size_t i=static_cast<size_t>(it-tracks_.begin());
     if(i>=ms.size())return false; if(slot>=ms[i].size())ms[i].resize(static_cast<size_t>(slot)+1);
     ms[i][slot]=std::move(c);
@@ -242,26 +256,33 @@ bool RackGraph::attachTrackMidiSlot(RackPathId id,uint32_t slot,std::shared_ptr<
     const size_t eventCount = ms[i][slot]->events.size();
     (*it)->midiScratch.resize(std::min(kMaxMidiEventsPerBlock, eventCount * 64u));
     auto old=midiSlots_; auto oldRuntime=(*it)->clipRuntime; midiSlots_=ms;
-    (*it)->clipRuntime[slot]=std::make_shared<ClipRuntime>();
-    (*it)->clipRuntime[slot]->loopLengthBars.store(slot<(*it)->slotConfig.size()&&(*it)->slotConfig[slot] ? (*it)->slotConfig[slot]->defaultLoopLengthBars.load() : (*it)->defaultLoopLengthBars.load());
-    (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store(static_cast<double>(ms[i][slot]->durationMicroseconds) * ms[i][slot]->sourceBpm / 60'000'000.0);
-    (*it)->clipRuntime[slot]->sourceBpm.store(ms[i][slot]->sourceBpm, std::memory_order_release);
+    if(freshRuntime){
+        (*it)->clipRuntime[slot]=std::make_shared<ClipRuntime>();
+        (*it)->clipRuntime[slot]->loopLengthBars.store(slot<(*it)->slotConfig.size()&&(*it)->slotConfig[slot] ? (*it)->slotConfig[slot]->defaultLoopLengthBars.load() : (*it)->defaultLoopLengthBars.load());
+        (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store(static_cast<double>(ms[i][slot]->durationMicroseconds) * ms[i][slot]->sourceBpm / 60'000'000.0);
+        (*it)->clipRuntime[slot]->sourceBpm.store(ms[i][slot]->sourceBpm, std::memory_order_release);
+    }
     if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){midiSlots_=std::move(old);(*it)->clipRuntime=std::move(oldRuntime);return false;} return true;
 }
 bool RackGraph::unloadTrackMidiSlot(RackPathId id,uint32_t slot){
     std::lock_guard lock(controlMutex_);
     auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});
     if(it==tracks_.end())return false; const size_t i=static_cast<size_t>(it-tracks_.begin());
-    auto ms=midiSlots_; if(i>=ms.size()||slot>=ms[i].size())return false; ms[i][slot].reset();
+    auto ms=midiSlots_; auto ma=midiAssetIds_;
+    const bool hasSlot=i<ms.size()&&slot<ms[i].size();
+    const bool hasAsset=i<ma.size()&&slot<ma[i].size();
+    if(!hasSlot&&!hasAsset)return false;
+    if(hasSlot)ms[i][slot].reset();
+    if(hasAsset)ma[i][slot].clear();
     if(i<clipLabelOverrides_.size()&&slot<clipLabelOverrides_[i].size())clipLabelOverrides_[i][slot].clear();
-    auto old=midiSlots_; auto oldRuntime=(*it)->clipRuntime; midiSlots_=ms;
-    const bool hasOther=slot<wavSlots_[i].size()&&wavSlots_[i][slot];
+    auto old=midiSlots_; auto oldAssets=midiAssetIds_; auto oldRuntime=(*it)->clipRuntime; midiSlots_=ms; midiAssetIds_=ma;
+    const bool hasOther=i<wavSlots_.size()&&slot<wavSlots_[i].size()&&wavSlots_[i][slot];
     if(hasOther){
         (*it)->clipRuntime[slot]->loopLengthQuarterNotes.store((*it)->clipRuntime[slot]->loopLengthBars.load() * 4.0);
     } else if(slot<(*it)->clipRuntime.size()) (*it)->clipRuntime[slot].reset();
     if((*it)->activeSlot.load()==static_cast<int32_t>(slot))(*it)->activeSlot.store(-1);
     if((*it)->pendingSwitchSlot.load()==static_cast<int32_t>(slot)){(*it)->pendingSwitchSlot.store(-1);(*it)->pendingSwitchFrame=std::numeric_limits<uint64_t>::max();}
-    if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){midiSlots_=std::move(old);(*it)->clipRuntime=std::move(oldRuntime);return false;}
+    if(!publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_))){midiSlots_=std::move(old);midiAssetIds_=std::move(oldAssets);(*it)->clipRuntime=std::move(oldRuntime);return false;}
     return true;
 }
 bool RackGraph::renameTrackClip(RackPathId id,int32_t slot,const std::string& displayName){if(slot<0||displayName.empty()||displayName.find_first_not_of(" \t\n\r") == std::string::npos)return false;std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;const size_t i=static_cast<size_t>(it-tracks_.begin());const size_t s=static_cast<size_t>(slot);if(i>=wavSlots_.size()||i>=midiSlots_.size()||(s>=wavSlots_[i].size()||!wavSlots_[i][s])&&(s>=midiSlots_[i].size()||!midiSlots_[i][s]))return false;if(i>=clipLabelOverrides_.size())clipLabelOverrides_.resize(i+1);if(s>=clipLabelOverrides_[i].size())clipLabelOverrides_[i].resize(s+1);clipLabelOverrides_[i][s]=displayName;return true;}
@@ -777,7 +798,86 @@ bool RackGraph::hasPluginLatencyOverflow(RackPathId pathId) const {
 }
 void RackGraph::setSampleRate(float rate,uint32_t buffer){std::lock_guard lock(controlMutex_);sampleRate_.store(rate);bufferSize_=buffer;for(auto& n:tracks_){n->sourceLeft.resize(buffer);n->sourceRight.resize(buffer);n->outputLeft.resize(buffer);n->outputRight.resize(buffer);n->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryWrite=0;n->chain->setSampleRate(rate,buffer);}master_->setSampleRate(rate,buffer);(void)publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
 void RackGraph::activate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->activate();master_->activate();}void RackGraph::deactivate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->deactivate();master_->deactivate();}void RackGraph::pauseAndResetTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,false,true);}
-RackGraph::State RackGraph::saveState(){std::lock_guard lock(controlMutex_);State s; s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); for(auto& n:tracks_){State::Track t; t.id=n->id; t.volume=n->volume.load(); t.inputArmed=n->inputArmed.load(); t.inputArmLocked=n->inputArmLocked.load(); t.inputSource=n->inputSource; t.chain=n->chain->saveChainState(); s.tracks.push_back(std::move(t));}s.master=master_->saveChainState();return s;}
+bool RackGraph::setTrackClipAssetId(RackPathId id,uint32_t slot,bool midi,const std::string& asset){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto&n){return n->id==id;});if(it==tracks_.end()||asset.empty())return false;size_t i=it-tracks_.begin();auto&v=midi?midiAssetIds_:wavAssetIds_;if(v.size()<=i)v.resize(i+1);if(v[i].size()<=slot)v[i].resize(slot+1);v[i][slot]=asset;return true;}
+
+bool RackGraph::materializeProjectMedia(const std::string& directory, std::string& diagnostic) {
+    namespace fs = std::filesystem;
+    std::lock_guard lock(controlMutex_);
+    diagnostic.clear();
+    std::error_code ec;
+    if (directory.empty() || !fs::is_directory(fs::path(directory), ec)) {
+        diagnostic = "media-directory-unavailable";
+        return false;
+    }
+
+    struct PendingAsset { size_t track; size_t slot; std::string id; };
+    std::vector<PendingAsset> pending;
+    std::random_device random;
+    for (size_t track = 0; track < wavSlots_.size(); ++track) {
+        for (size_t slot = 0; slot < wavSlots_[track].size(); ++slot) {
+            const auto& clip = wavSlots_[track][slot];
+            const bool hasAsset = track < wavAssetIds_.size() &&
+                slot < wavAssetIds_[track].size() && !wavAssetIds_[track][slot].empty();
+            if (!clip || hasAsset) continue;
+            if (clip->sampleRate == 0 || clip->left.empty() ||
+                clip->left.size() != clip->right.size() ||
+                clip->left.size() > (kMaxWavSamples / 2U) ||
+                clip->left.size() > (std::numeric_limits<uint32_t>::max() / 4U)) {
+                diagnostic = "invalid-wav-clip";
+                return false;
+            }
+            std::string id;
+            fs::path target;
+            do {
+                std::ostringstream name;
+                for (int i = 0; i < 4; ++i) {
+                    name.width(8);
+                    name.fill('0');
+                    name << std::hex << static_cast<uint32_t>(random());
+                }
+                id = name.str() + ".wav";
+                target = fs::path(directory) / id;
+                ec.clear();
+            } while (fs::exists(target, ec));
+            if (ec) {
+                diagnostic = "media-directory-unavailable";
+                return false;
+            }
+            std::vector<float> interleaved;
+            interleaved.reserve(clip->left.size() * 2);
+            for (size_t frame = 0; frame < clip->left.size(); ++frame) {
+                interleaved.push_back(clip->left[frame]);
+                interleaved.push_back(clip->right[frame]);
+            }
+            const fs::path temporary = target.string() + ".tmp";
+            fs::remove(temporary, ec);
+            if (!writeWavFile(temporary.string(), interleaved, clip->sampleRate, 2)) {
+                fs::remove(temporary, ec);
+                diagnostic = "wav-write-failed";
+                return false;
+            }
+            fs::rename(temporary, target, ec);
+            if (ec) {
+                fs::remove(temporary, ec);
+                diagnostic = "wav-publish-failed";
+                return false;
+            }
+            pending.push_back({track, slot, std::move(id)});
+        }
+    }
+    if (!pending.empty()) {
+        auto assets = wavAssetIds_;
+        if (assets.size() < wavSlots_.size()) assets.resize(wavSlots_.size());
+        for (const auto& item : pending) {
+            if (assets[item.track].size() <= item.slot) assets[item.track].resize(item.slot + 1);
+            assets[item.track][item.slot] = item.id;
+        }
+        wavAssetIds_ = std::move(assets);
+    }
+    return true;
+}
+std::vector<std::tuple<RackPathId,uint32_t,std::string,bool>> RackGraph::getProjectClipMediaRefs() const{std::lock_guard lock(controlMutex_);std::vector<std::tuple<RackPathId,uint32_t,std::string,bool>> out;for(size_t i=0;i<tracks_.size();++i){for(size_t j=0;j<(i<wavAssetIds_.size()?wavAssetIds_[i].size():0);++j)if(!wavAssetIds_[i][j].empty())out.emplace_back(tracks_[i]->id,j,wavAssetIds_[i][j],false);for(size_t j=0;j<(i<midiAssetIds_.size()?midiAssetIds_[i].size():0);++j)if(!midiAssetIds_[i][j].empty())out.emplace_back(tracks_[i]->id,j,midiAssetIds_[i][j],true);}return out;}
+RackGraph::State RackGraph::saveState(){std::lock_guard lock(controlMutex_);State s; s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); for(size_t i=0;i<tracks_.size();++i){auto& n=tracks_[i];State::Track t; t.id=n->id; t.volume=n->volume.load(); t.inputArmed=n->inputArmed.load(); t.inputArmLocked=n->inputArmLocked.load(); t.inputSource=n->inputSource; t.selectedSlot=n->selectedSlot.load(); t.defaultLoopLengthBars=n->defaultLoopLengthBars.load(); t.chain=n->chain->saveChainState(); const size_t count=std::max({i<wavSlots_.size()?wavSlots_[i].size():0,i<midiSlots_.size()?midiSlots_[i].size():0,i< n->clipRuntime.size()?n->clipRuntime.size():0}); for(size_t j=0;j<count;++j){State::ClipSlot c;c.slot=static_cast<uint32_t>(j);c.wav=i<wavSlots_.size()&&j<wavSlots_[i].size()&&wavSlots_[i][j];c.midi=i<midiSlots_.size()&&j<midiSlots_[i].size()&&midiSlots_[i][j];c.assetId=i<wavAssetIds_.size()&&j<wavAssetIds_[i].size()?wavAssetIds_[i][j]:std::string();c.midiAssetId=i<midiAssetIds_.size()&&j<midiAssetIds_[i].size()?midiAssetIds_[i][j]:std::string();c.displayName=i<clipLabelOverrides_.size()&&j<clipLabelOverrides_[i].size()?clipLabelOverrides_[i][j]:std::string();if(j<n->clipRuntime.size()&&n->clipRuntime[j]){auto&r=*n->clipRuntime[j];c.sourceBpm=r.sourceBpm.load();c.tempoMode=r.tempoMode.load();c.looping=r.looping.load();c.loopLengthBars=r.loopLengthBars.load();c.loopStartQuarterNotes=r.loopStartQuarterNotes.load();c.loopLengthQuarterNotes=r.loopLengthQuarterNotes.load();c.launchQuantization=LaunchQuantization(r.desiredQuantization.load());}if(j<n->slotConfig.size()&&n->slotConfig[j]){c.defaultLoopLengthBars=n->slotConfig[j]->defaultLoopLengthBars.load();c.enterOnPunch=n->slotConfig[j]->enterOnPunch.load();c.launchQuantization=LaunchQuantization(n->slotConfig[j]->punchQuantization.load());}if(c.wav||c.midi||!c.assetId.empty()||!c.midiAssetId.empty())t.clipSlots.push_back(std::move(c));}s.tracks.push_back(std::move(t));}s.master=master_->saveChainState();return s;}
 bool RackGraph::exportDeviceChain(
         RackPathId pathId,
         PluginChain::ChainState& chain,
@@ -852,6 +952,173 @@ bool RackGraph::importDeviceChain(
     diagnostic.clear();
     return true;
 }
+bool RackGraph::createParallelWetReturn(
+        RackPathId sourceId,
+        const PluginRegistry& registry,
+        RackPathId& returnId,
+        std::string& diagnostic) {
+    returnId = 0;
+    std::lock_guard lock(controlMutex_);
+    if (sourceId == kMasterPathId) {
+        diagnostic = "master-path";
+        return false;
+    }
+    if (statusPlaying_.load(std::memory_order_acquire) ||
+        mailbox_.desiredPlaying.load(std::memory_order_acquire)) {
+        diagnostic = "engine-running";
+        return false;
+    }
+    const auto sourceIt = std::find_if(
+        tracks_.begin(), tracks_.end(),
+        [&](const auto& node) { return node && node->id == sourceId; });
+    if (sourceIt == tracks_.end()) {
+        diagnostic = "path-not-found";
+        return false;
+    }
+
+    try {
+        const auto source = *sourceIt;
+        const auto saved = source->chain->saveChainState();
+        const float sampleRate = sampleRate_.load(std::memory_order_relaxed);
+
+        auto buildChain = [&](const PluginChain::ChainState& state)
+                -> std::shared_ptr<PluginChain> {
+            auto chain = std::make_shared<PluginChain>();
+            if (sampleRate > 0.0f) chain->setSampleRate(sampleRate, bufferSize_);
+            for (const auto& pluginState : state.plugins) {
+                if (pluginState.format.empty() || pluginState.pluginUri.empty()) {
+                    diagnostic = "invalid-plugin-id";
+                    return nullptr;
+                }
+                auto plugin = registry.createPlugin(
+                    pluginState.format + ":" + pluginState.pluginUri);
+                if (!plugin) {
+                    diagnostic = "plugin-create-failed:" + pluginState.format +
+                                 ":" + pluginState.pluginUri;
+                    return nullptr;
+                }
+                const int index = chain->addPlugin(std::move(plugin));
+                if (index < 0 || !chain->restorePluginState(index, pluginState)) {
+                    diagnostic = "plugin-restore-failed:" + pluginState.format +
+                                 ":" + pluginState.pluginUri;
+                    return nullptr;
+                }
+            }
+            return chain;
+        };
+
+        auto wetChain = buildChain(saved);
+        if (!wetChain) return false;
+        auto dryChain = std::make_shared<PluginChain>();
+        if (sampleRate > 0.0f) dryChain->setSampleRate(sampleRate, bufferSize_);
+
+        // Clone the source node so the existing graph remains untouched until
+        // the complete replacement snapshot has passed validation.
+        auto drySource = std::make_shared<TrackNode>();
+        drySource->id = source->id;
+        drySource->volume.store(source->volume.load(std::memory_order_relaxed));
+        drySource->inputArmed.store(source->inputArmed.load(std::memory_order_relaxed));
+        drySource->inputArmLocked.store(source->inputArmLocked.load(std::memory_order_relaxed));
+        drySource->inputSource = source->inputSource;
+        drySource->chain = std::move(dryChain);
+        drySource->slotConfig = source->slotConfig;
+        drySource->clipRuntime = source->clipRuntime;
+        drySource->activeSlot.store(source->activeSlot.load(std::memory_order_relaxed));
+        drySource->pendingSwitchSlot.store(source->pendingSwitchSlot.load(std::memory_order_relaxed));
+        drySource->pendingSwitchFrame = source->pendingSwitchFrame;
+        drySource->selectedSlot.store(source->selectedSlot.load(std::memory_order_relaxed));
+        drySource->defaultLoopLengthBars.store(source->defaultLoopLengthBars.load(std::memory_order_relaxed));
+        drySource->sourceLeft = source->sourceLeft;
+        drySource->sourceRight = source->sourceRight;
+        drySource->outputLeft = source->outputLeft;
+        drySource->outputRight = source->outputRight;
+        drySource->latencyHistoryLeft = source->latencyHistoryLeft;
+        drySource->latencyHistoryRight = source->latencyHistoryRight;
+        drySource->latencyHistoryWrite = source->latencyHistoryWrite;
+        drySource->midiScratch = source->midiScratch;
+        drySource->recordingSlot = source->recordingSlot;
+        drySource->recordLength = source->recordLength;
+        drySource->recordingGeneration = source->recordingGeneration;
+        drySource->recordQuantization.store(source->recordQuantization.load(std::memory_order_relaxed));
+        drySource->recordingPhase.store(source->recordingPhase.load(std::memory_order_relaxed));
+        drySource->recordPending.store(source->recordPending.load(std::memory_order_relaxed));
+        drySource->recording.store(source->recording.load(std::memory_order_relaxed));
+        drySource->recordComplete.store(source->recordComplete.load(std::memory_order_relaxed));
+        drySource->punchArmed.store(source->punchArmed.load(std::memory_order_relaxed));
+        drySource->recordingSlotAtomic.store(source->recordingSlotAtomic.load(std::memory_order_relaxed));
+        drySource->recordStartFrame.store(source->recordStartFrame.load(std::memory_order_relaxed));
+        drySource->recordFrame.store(source->recordFrame.load(std::memory_order_relaxed));
+        drySource->recordingGenerationActive.store(source->recordingGenerationActive.load(std::memory_order_relaxed));
+        drySource->punchCalibrationRemaining.store(source->punchCalibrationRemaining.load(std::memory_order_relaxed));
+        drySource->punchCalibrationFrames.store(source->punchCalibrationFrames.load(std::memory_order_relaxed));
+        drySource->punchNoiseSum.store(source->punchNoiseSum.load(std::memory_order_relaxed));
+        drySource->punchThreshold.store(source->punchThreshold.load(std::memory_order_relaxed));
+
+        const RackPathId newId = nextTrackId_;
+        auto wetReturn = std::make_shared<TrackNode>();
+        wetReturn->id = newId;
+        wetReturn->volume.store(1.0f);
+        wetReturn->inputArmed.store(false);
+        wetReturn->chain = std::move(wetChain);
+        wetReturn->inputSource.kind = TrackInputSource::Kind::TrackOutput;
+        wetReturn->inputSource.trackId = sourceId;
+        wetReturn->inputSource.tap = TrackInputTap::PreFader;
+        wetReturn->sourceLeft.resize(bufferSize_);
+        wetReturn->sourceRight.resize(bufferSize_);
+        wetReturn->outputLeft.resize(bufferSize_);
+        wetReturn->outputRight.resize(bufferSize_);
+        wetReturn->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);
+        wetReturn->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);
+
+        auto nodes = tracks_;
+        nodes[static_cast<size_t>(sourceIt - tracks_.begin())] = drySource;
+        nodes.push_back(wetReturn);
+        auto clips = clips_;
+        auto recs = recordingClips_;
+        clips.push_back(nullptr);
+        recs.push_back(nullptr);
+        auto mids = midiClips_;
+        auto slots = wavSlots_;
+        auto midiSlots = midiSlots_;
+        auto labels = clipLabelOverrides_;
+        auto wavAssets = wavAssetIds_;
+        auto midiAssets = midiAssetIds_;
+        if (wavAssets.size() < tracks_.size()) wavAssets.resize(tracks_.size());
+        if (midiAssets.size() < tracks_.size()) midiAssets.resize(tracks_.size());
+        mids.push_back(nullptr);
+        slots.emplace_back();
+        midiSlots.emplace_back();
+        labels.emplace_back();
+        wavAssets.emplace_back();
+        midiAssets.emplace_back();
+        auto next = buildSnapshotLocked(nodes, clips, recs);
+        if (!next) {
+            diagnostic = "invalid-routing";
+            return false;
+        }
+        if (!publishSnapshotLocked(std::move(next))) {
+            diagnostic = "publish-failed";
+            return false;
+        }
+
+        tracks_ = std::move(nodes);
+        clips_ = std::move(clips);
+        recordingClips_ = std::move(recs);
+        midiClips_ = std::move(mids);
+        wavSlots_ = std::move(slots);
+        midiSlots_ = std::move(midiSlots);
+        clipLabelOverrides_ = std::move(labels);
+        wavAssetIds_ = std::move(wavAssets);
+        midiAssetIds_ = std::move(midiAssets);
+        nextTrackId_ = newId + 1;
+        returnId = newId;
+        diagnostic.clear();
+        return true;
+    } catch (...) {
+        diagnostic = "allocation-failed";
+        return false;
+    }
+}
 
 
 bool RackGraph::restoreState(
@@ -878,7 +1145,7 @@ bool RackGraph::restoreState(
     std::vector<std::shared_ptr<const MidiClip>> midiClips;
     std::vector<std::vector<std::shared_ptr<const MidiClip>>> midiSlots;
     std::vector<std::vector<std::string>> labels;
-    nodes.reserve(state.tracks.size());
+    std::vector<std::vector<std::string>> wavAssets, midiAssets;
 
     const float sampleRate = sampleRate_.load();
     const auto restoreChain = [&](const PluginChain::ChainState& saved,
@@ -927,14 +1194,40 @@ bool RackGraph::restoreState(
         node->outputRight.resize(bufferSize_);
         node->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);
         node->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);
-
-        nodes.push_back(std::move(node));
+        node->selectedSlot.store(saved.selectedSlot);
+        node->defaultLoopLengthBars.store(saved.defaultLoopLengthBars);
+        nodes.push_back(node);
         clips.push_back(nullptr);
         recordingClips.push_back(nullptr);
         midiClips.push_back(nullptr);
         wavSlots.emplace_back();
         midiSlots.emplace_back();
         labels.emplace_back();
+        wavAssets.emplace_back();
+        midiAssets.emplace_back();
+        for (const auto& c : saved.clipSlots) {
+            if (c.slot >= 4096) { diagnostic = "invalid-clip-slot"; return false; }
+            if (wavSlots.back().size() <= c.slot) wavSlots.back().resize(c.slot + 1);
+            if (midiSlots.back().size() <= c.slot) midiSlots.back().resize(c.slot + 1);
+            if (wavAssets.back().size() <= c.slot) wavAssets.back().resize(c.slot + 1);
+            if (midiAssets.back().size() <= c.slot) midiAssets.back().resize(c.slot + 1);
+            if (labels.back().size() <= c.slot) labels.back().resize(c.slot + 1);
+            wavAssets.back()[c.slot] = c.assetId; midiAssets.back()[c.slot] = c.midiAssetId;
+            labels.back()[c.slot] = c.displayName;
+            node->clipRuntime.resize(std::max(node->clipRuntime.size(), size_t(c.slot + 1)));
+            node->slotConfig.resize(std::max(node->slotConfig.size(), size_t(c.slot + 1)));
+            ensureClipRuntimeLocked(*node, c.slot); ensureSlotConfigLocked(*node, c.slot);
+            node->clipRuntime[c.slot]->sourceBpm.store(c.sourceBpm);
+            node->clipRuntime[c.slot]->tempoMode.store(c.tempoMode);
+            node->clipRuntime[c.slot]->looping.store(c.looping);
+            node->clipRuntime[c.slot]->loopLengthBars.store(c.loopLengthBars);
+            node->clipRuntime[c.slot]->loopStartQuarterNotes.store(c.loopStartQuarterNotes);
+            node->clipRuntime[c.slot]->loopLengthQuarterNotes.store(c.loopLengthQuarterNotes);
+            node->clipRuntime[c.slot]->desiredQuantization.store(uint8_t(c.launchQuantization));
+            node->slotConfig[c.slot]->defaultLoopLengthBars.store(c.defaultLoopLengthBars);
+            node->slotConfig[c.slot]->enterOnPunch.store(c.enterOnPunch);
+            node->slotConfig[c.slot]->punchQuantization.store(uint8_t(c.launchQuantization));
+        }
     }
 
     auto master = std::make_shared<PluginChain>();
@@ -958,6 +1251,8 @@ bool RackGraph::restoreState(
     wavSlots_ = std::move(wavSlots);
     midiSlots_ = std::move(midiSlots);
     clipLabelOverrides_ = std::move(labels);
+    wavAssetIds_ = std::move(wavAssets);
+    midiAssetIds_ = std::move(midiAssets);
     master_ = std::move(master);
     nextTrackId_ = 1;
     for (const auto& node : tracks_) {

@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <limits>
 
 #define LOG_TAG "WavIO"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -160,6 +161,11 @@ bool writeWavFile(const std::string& path,
                   const std::vector<float>& samples,
                   uint32_t sampleRate,
                   uint32_t numChannels) {
+    if (sampleRate == 0 || (numChannels != 1 && numChannels != 2) ||
+        samples.empty() || samples.size() > kMaxWavSamples ||
+        samples.size() > (std::numeric_limits<uint32_t>::max() / 2U)) {
+        return false;
+    }
     std::ofstream file(path, std::ios::binary);
     if (!file.is_open()) {
         LOGE("Cannot create file: %s", path.c_str());
@@ -170,7 +176,7 @@ bool writeWavFile(const std::string& path,
     uint32_t dataSize = static_cast<uint32_t>(samples.size() * (bitsPerSample / 8));
     uint32_t fileSize = 36 + dataSize;
 
-    WavHeader header;
+    WavHeader header{};
     std::memcpy(header.riff, "RIFF", 4);
     header.fileSize = fileSize - 8;
     std::memcpy(header.wave, "WAVE", 4);
@@ -179,13 +185,14 @@ bool writeWavFile(const std::string& path,
     header.audioFormat = 1;
     header.numChannels = static_cast<uint16_t>(numChannels);
     header.sampleRate = sampleRate;
-    header.byteRate = sampleRate * numChannels * bitsPerSample / 8;
-    header.blockAlign = static_cast<uint16_t>(numChannels * bitsPerSample / 8);
     header.bitsPerSample = bitsPerSample;
+    header.blockAlign = header.numChannels * (bitsPerSample / 8);
+    header.byteRate = sampleRate * numChannels * bitsPerSample / 8;
     std::memcpy(header.data, "data", 4);
     header.dataSize = dataSize;
-
     file.write(reinterpret_cast<const char*>(&header), sizeof(WavHeader));
+    if (!file) return false;
+    
 
     std::vector<int16_t> intSamples(samples.size());
     for (size_t i = 0; i < samples.size(); ++i) {
@@ -194,8 +201,7 @@ bool writeWavFile(const std::string& path,
     }
 
     file.write(reinterpret_cast<const char*>(intSamples.data()), dataSize);
-
-    return true;
+    return file.good();
 }
 
 } // namespace guitarrackcraft
