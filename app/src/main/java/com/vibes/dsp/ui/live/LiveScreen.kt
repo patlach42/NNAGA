@@ -935,10 +935,7 @@ fun LiveScreen(
                                 latencyMs = latencyMs,
                                 cpuLoad = cpuLoad,
                                 xRunCount = xRunCount,
-                                canCreateParallelReturn = selectedTrack != null &&
-                                    selectedPath != MASTER_PATH_ID,
                                 guidance = deviceChainGuidance,
-                                onCreateParallelReturn = viewModel::createParallelWetReturn,
                                 onBrowser = { path -> onNavigateToBrowser(path, -1) },
                                 onSaveChain = { path ->
                                     deviceChainPathId = path
@@ -1221,9 +1218,7 @@ private fun DevicesTile(
     latencyMs: Double,
     cpuLoad: Float,
     xRunCount: Int,
-    canCreateParallelReturn: Boolean,
     guidance: String?,
-    onCreateParallelReturn: (Long) -> Unit,
     onBrowser: (Long) -> Unit,
     onSaveChain: (Long) -> Unit,
     onLoadChain: (Long) -> Unit,
@@ -1268,14 +1263,6 @@ private fun DevicesTile(
                         onClick = {
                             showDeviceChainMenu = false
                             onLoadChain(pathId)
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("Create parallel dry/wet return") },
-                        enabled = canCreateParallelReturn,
-                        onClick = {
-                            showDeviceChainMenu = false
-                            onCreateParallelReturn(pathId)
                         },
                     )
                 }

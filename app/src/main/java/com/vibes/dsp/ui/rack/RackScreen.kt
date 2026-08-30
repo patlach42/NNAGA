@@ -1877,14 +1877,6 @@ fun PluginCard(
             if (isFullscreen) Modifier.fillMaxSize() else Modifier.fillMaxWidth()
         )
     ) {
-            Text(
-                "Latency: reported ${latencyFrames.reported} frames, " +
-                    "manual ${latencyFrames.manual} frames, " +
-                    "effective ${latencyFrames.effective} frames" +
-                    if (latencyFrames.overflow) " · OVERFLOW: alignment unavailable" else "",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
-            )
             // Parameter controls / plugin UI — always in composition to avoid re-renders
             if (pluginInfo != null) {
                 val context = LocalContext.current

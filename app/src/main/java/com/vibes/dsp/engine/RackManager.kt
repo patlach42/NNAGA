@@ -15,10 +15,9 @@ data class VstTone3000FileSelectedEvent(
     val filePath: String,
 )
 
-data class ParallelReturnResult(val pathId: RackPathId, val diagnostic: String)
 
 
-/** Path-aware facade for the parallel track/master rack graph. */
+/** Path-aware facade for the track/master rack graph. */
 object RackManager {
     private val native get() = NativeEngine.getInstance()
 
@@ -65,11 +64,6 @@ object RackManager {
     fun getManualLatencyRemainingFrames(pathId: RackPathId, pluginIndex: Int): Int =
         native.nativeGetManualLatencyRemainingFrames(pathId, pluginIndex)
 
-    fun createParallelWetReturn(sourceId: RackPathId): ParallelReturnResult {
-        val result = native.nativeCreateParallelWetReturn(sourceId)
-        val id = result.getOrNull(0)?.toLongOrNull() ?: 0L
-        return ParallelReturnResult(id, result.getOrNull(1).orEmpty())
-    }
 
     fun addTrack(): RackPathId = native.addTrack()
     fun removeTrack(trackId: RackPathId): Boolean = native.removeTrack(trackId)

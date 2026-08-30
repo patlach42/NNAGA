@@ -1092,36 +1092,6 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameterDisplay(
     return env->NewStringUTF(display.c_str());
 }
 
-JNIEXPORT jobjectArray JNICALL
-Java_com_vibes_dsp_engine_NativeEngine_nativeCreateParallelWetReturn(
-    JNIEnv* env, jobject, jlong sourceId) {
-    auto result = env->NewObjectArray(2, env->FindClass("java/lang/String"), nullptr);
-    if (!result) return nullptr;
-    auto set = [&](int index, const char* value) {
-        env->SetObjectArrayElement(result, index, env->NewStringUTF(value));
-    };
-    set(0, "0");
-    if (!g_ctx || !g_ctx->audioEngine || !g_ctx->pluginRegistry) {
-        set(1, "engine-unavailable");
-        return result;
-    }
-    std::lock_guard lock(g_ctx->rackControlMutex);
-    auto& graph = g_ctx->audioEngine->getRackGraph();
-    RackPathId returnId = 0;
-    std::string diagnostic;
-    if (!graph.createParallelWetReturn(
-            static_cast<RackPathId>(sourceId), *g_ctx->pluginRegistry,
-            returnId, diagnostic)) {
-        set(1, diagnostic.c_str());
-        return result;
-    }
-    const auto replacement = graph.getChain(static_cast<RackPathId>(sourceId));
-    nativeRebindPluginUIManager(static_cast<int64_t>(sourceId), replacement.get());
-    const std::string id = std::to_string(static_cast<jlong>(returnId));
-    env->SetObjectArrayElement(result, 0, env->NewStringUTF(id.c_str()));
-    set(1, "");
-    return result;
-}
 
 JNIEXPORT jlong JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeAddTrack(JNIEnv*, jobject) {
