@@ -108,8 +108,8 @@ add_subdirectory("${LOWLATENCY_AUDIO_ROOT}" "${CMAKE_CURRENT_BINARY_DIR}/liblowl
 add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/oboe"
                  "${CMAKE_CURRENT_BINARY_DIR}/oboe")
 
-# ysfx JSFX engine (portable EEL plus graphics API; host supplies Android UI).
-set(YSFX_PORTABLE ON CACHE BOOL "" FORCE)
+# ysfx JSFX engine (native AArch64 EEL, Android UI host)
+set(YSFX_PORTABLE OFF CACHE BOOL "" FORCE)
 set(YSFX_GFX ON CACHE BOOL "" FORCE)
 set(YSFX_PLUGIN OFF CACHE BOOL "" FORCE)
 set(YSFX_TESTS OFF CACHE BOOL "" FORCE)
