@@ -94,20 +94,30 @@ class RepositoryScreenFilterTest {
     }
 
     @Test
-    fun formatGroupMapsLv2JsfxAndEveryWineFormat() {
+    fun formatGroupMapsLv2NativeJsfxAndEveryWineFormat() {
         val mixed = catalog + listOf(
             catalog.first().copy(
-                id = "jsfx-f",
+                id = "native-f",
+                name = "Native Utility",
+                format = "native",
+            ),
+            catalog.first().copy(
+                id = "native-g",
+                name = "Uppercase Native Utility",
+                format = "NATIVE",
+            ),
+            catalog.first().copy(
+                id = "jsfx-h",
                 name = "JSFX Utility",
                 format = "jsfx",
             ),
             catalog.first().copy(
-                id = "wine-g",
+                id = "wine-i",
                 name = "Wine VST",
                 format = "wine_archive",
             ),
             catalog.first().copy(
-                id = "wine-h",
+                id = "wine-j",
                 name = "Wine Installer",
                 format = "wine_installer",
             ),
@@ -133,9 +143,20 @@ class RepositoryScreenFilterTest {
                 query = "",
                 manufacturer = null,
                 tags = emptySet(),
+                formatGroup = "nAtIvE",
+            ),
+            "native-f",
+            "native-g",
+        )
+        assertIds(
+            filterRepositoryPackages(
+                mixed,
+                query = "",
+                manufacturer = null,
+                tags = emptySet(),
                 formatGroup = "jsfx",
             ),
-            "jsfx-f",
+            "jsfx-h",
         )
         assertIds(
             filterRepositoryPackages(
@@ -145,8 +166,8 @@ class RepositoryScreenFilterTest {
                 tags = emptySet(),
                 formatGroup = "wInE",
             ),
-            "wine-g",
-            "wine-h",
+            "wine-i",
+            "wine-j",
         )
         assertIds(
             filterRepositoryPackages(
@@ -180,6 +201,7 @@ class RepositoryScreenFilterTest {
             "wine-shimmer",
         )
     }
+
 
     @Test
     fun paginationKeepsOrderAndHonorsPageBoundaries() {

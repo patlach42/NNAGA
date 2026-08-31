@@ -23,6 +23,7 @@ from urllib.parse import urlsplit
 
 ASSETS = Path("app/src/main/assets/lv2")
 LIBS = Path("app/src/full/jniLibs/arm64-v8a")
+NATIVE_LIBS = Path("build/native_plugins/arm64-v8a")
 METADATA = Path("app/src/main/assets/plugin_metadata.json")
 DESCRIPTION_SOURCE = Path("plugin_descriptions.json")
 NATIVE_METADATA = (
@@ -344,7 +345,7 @@ def native_record(metadata_path: Path) -> tuple[str, str, bytes, str]:
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     package = metadata["repository_id"]
     library = metadata["library"]
-    binary = LIBS / library
+    binary = NATIVE_LIBS / library
     if not binary.is_file():
         raise SystemExit(f"missing native plugin binary: {binary}")
     archive = archive_bytes("arm64-v8a", {library: binary.read_bytes()})
@@ -405,6 +406,10 @@ def generate(check: bool = False, output: Path | None = None) -> int:
         if native_record_value[0] in seen:
             raise SystemExit(f"duplicate package id: {native_record_value[0]}")
         records.append(native_record_value)
+    record_versions = {
+        package: str(tomllib.loads(text)["version"])
+        for package, _, _, text in records
+    }
     if check:
         errors: list[str] = []
         expected_packages = {package for package, *_ in records}
@@ -416,7 +421,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
             errors.extend(f"{kind}/{name}" for name in extras + missing_dirs)
         for package, stem, archive, text in records:
             mp = OUTPUT / "packages" / package / "manifest.toml"
-            zp = OUTPUT / "payload" / package / f"{VERSION}.zip"
+            zp = OUTPUT / "payload" / package / f"{record_versions[package]}.zip"
             for directory, expected in ((mp.parent, {mp.name}), (zp.parent, {zp.name})):
                 if directory.is_dir():
                     errors.extend(str(path) for path in sorted(directory.iterdir()) if path.name not in expected)
@@ -441,7 +446,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
         for package in expected_packages:
             for directory, keep in (
                 (OUTPUT / "packages" / package, "manifest.toml"),
-                (OUTPUT / "payload" / package, f"{VERSION}.zip"),
+                (OUTPUT / "payload" / package, f"{record_versions[package]}.zip"),
             ):
                 if directory.is_dir():
                     for child in directory.iterdir():
@@ -452,7 +457,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
                                 child.unlink()
         for package, stem, archive, text in records:
             atomic_write(OUTPUT / "packages" / package / "manifest.toml", text.encode("utf-8"))
-            atomic_write(OUTPUT / "payload" / package / f"{VERSION}.zip", archive)
+            atomic_write(OUTPUT / "payload" / package / f"{record_versions[package]}.zip", archive)
         atomic_write(OUTPUT / "index.toml", index_text(records).encode("utf-8"))
     unknown = [stem for package, stem, _, _ in records if package.startswith("lv2.") and metadata_for(stem, package)[0] == "Unknown"]
     if unknown:

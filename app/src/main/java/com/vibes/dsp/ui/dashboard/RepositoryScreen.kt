@@ -86,7 +86,7 @@ import kotlin.math.min
 
 internal const val REPOSITORY_PAGE_SIZE = 25
 
-private val REPOSITORY_FORMAT_GROUPS = listOf("LV2", "Wine", "JSFX")
+private val REPOSITORY_FORMAT_GROUPS = listOf("LV2", "Native", "Wine", "JSFX")
 
 private object RepositoryDimensions {
     val compactPadding = 8.dp
@@ -1188,6 +1188,7 @@ internal fun filterRepositoryPackages(
         val matchesFormat = when (normalizedFormatGroup) {
             "" -> true
             "lv2" -> packageFormat.equals("lv2", ignoreCase = true)
+            "native" -> packageFormat.equals("native", ignoreCase = true)
             "wine" -> packageFormat.startsWith("wine_", ignoreCase = true)
             "jsfx" -> packageFormat.equals("jsfx", ignoreCase = true)
             else -> false

@@ -248,6 +248,7 @@ add_custom_target(all_plugins
         fil4_done
         dusk_4keq_done
         nnaga_native_filter_done
+        nnaga_native_shuffle_done
     COMMENT "All plugins built"
 )
 
