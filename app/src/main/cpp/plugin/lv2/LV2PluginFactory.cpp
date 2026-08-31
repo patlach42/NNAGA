@@ -26,7 +26,7 @@
 #include <cerrno>
 #include <cstring>
 #include <dirent.h>
-#include <fstream>
+#include <filesystem>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -87,6 +87,18 @@ bool LV2PluginFactory::initialize() {
         if (uri) info.id = lilv_node_as_string(uri);
         if (name) info.name = lilv_node_as_string(name);
         info.format = "LV2";
+        const LilvNode* bundleUri = lilv_plugin_get_bundle_uri(plugin);
+        if (bundleUri) {
+            char* bundlePath = lilv_file_uri_parse(lilv_node_as_string(bundleUri), nullptr);
+            if (bundlePath) {
+                const std::filesystem::path parsedPath(bundlePath);
+                lilv_free(bundlePath);
+                std::error_code error;
+                const std::filesystem::path canonicalPath =
+                    std::filesystem::weakly_canonical(parsedPath, error);
+                if (!error) info.originPath = canonicalPath.string();
+            }
+        }
         info.ports.reserve(lilv_plugin_get_num_ports(plugin));
         discoverModgui(plugin, info);
         discoverX11UI(plugin, info);

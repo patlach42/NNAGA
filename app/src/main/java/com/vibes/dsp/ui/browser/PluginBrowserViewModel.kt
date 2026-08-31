@@ -34,21 +34,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-/**
- * Category information for a plugin.
- */
-data class PluginCategory(
-    val name: String,
-    val plugins: List<PluginInfo>
-)
-
-/**
- * Author group containing categories of plugins.
- */
-data class AuthorGroup(
-    val name: String,
-    val categories: List<PluginCategory>
-)
 
 /**
  * Mapping of plugin names to their categories based on GxPlugins.lv2 README.
@@ -134,48 +119,108 @@ object PluginCategoryMapping {
     }
 }
 
+internal data class PluginBrowserEntry(
+    val plugin: PluginInfo,
+    val author: String,
+    val tags: List<String>,
+    val type: String
+)
+
+internal data class PluginBrowserFilters(
+    val author: String? = null,
+    val tags: Set<String> = emptySet(),
+    val type: String? = null
+)
+
+internal fun resolvePluginRepositoryFacet(
+    plugin: PluginInfo,
+    facets: List<com.vibes.dsp.engine.InstalledPluginFacets>
+): com.vibes.dsp.engine.InstalledPluginFacets? {
+    val candidates = when (plugin.format) {
+        "VST2", "VST3" -> facets.filter {
+            plugin.id in it.vstUuids
+        }
+        "JSFX" -> Regex("""^repository/([^/]+)/([^/]+)/""").find(plugin.id)?.let { m ->
+            facets.filter {
+                it.packageFormat.equals("JSFX", true) &&
+                    it.packageId == m.groupValues[1] && it.version == m.groupValues[2]
+            }
+        } ?: emptyList()
+        "LV2", "NATIVE" -> {
+            val origin = runCatching { java.io.File(plugin.originPath).canonicalFile }.getOrNull()
+            if (origin == null) emptyList() else facets.filter {
+                it.packageFormat.equals(plugin.format, true) &&
+                    runCatching { origin.toPath().startsWith(it.versionDirectory.canonicalFile.toPath()) }.getOrDefault(false)
+            }
+        }
+        else -> emptyList()
+    }
+    return candidates.singleOrNull()
+}
+
+internal fun makePluginBrowserEntry(
+    plugin: PluginInfo,
+    metadata: PluginMetadata,
+    facets: List<com.vibes.dsp.engine.InstalledPluginFacets>
+): PluginBrowserEntry {
+    val facet = resolvePluginRepositoryFacet(plugin, facets)
+    val staticAuthor = PluginCategoryMapping.getAuthor(plugin.name, plugin.format, metadata.authors)
+    val author = facet?.manufacturer?.trim()?.takeIf { it.isNotBlank() && !it.equals("Unknown", true) } ?: staticAuthor
+    val category = PluginCategoryMapping.getCategory(plugin.name, metadata.categories)
+    val tags = (listOf(category).filterNot { it.equals("Other", true) } + (facet?.tags ?: emptyList()))
+        .map(String::trim).filter(String::isNotBlank)
+        .distinctBy { it.lowercase() }.sortedWith(String.CASE_INSENSITIVE_ORDER)
+    return PluginBrowserEntry(plugin, author, tags, plugin.format)
+}
+
+internal fun computeVisibleEntries(
+    entries: List<PluginBrowserEntry>,
+    filters: PluginBrowserFilters,
+    favorites: Set<String>
+): List<PluginBrowserEntry> {
+    val filtered = entries.filter { e ->
+        (filters.author == null || e.author.equals(filters.author, true)) &&
+            (filters.type == null || e.type.equals(filters.type, true)) &&
+            filters.tags.all { wanted -> e.tags.any { it.equals(wanted, true) } }
+    }
+    return filtered.sortedWith(compareByDescending<PluginBrowserEntry> { it.plugin.fullId in favorites }
+        .thenBy(String.CASE_INSENSITIVE_ORDER) { it.plugin.name }
+        .thenBy { it.plugin.fullId })
+}
+
+
 class PluginBrowserViewModel(application: Application) : AndroidViewModel(application) {
 
-    companion object {
-        const val FAVORITES_GROUP = "Favorites"
-    }
-
-    private val appContext: Context = application.applicationContext
-    
+    private val appContext = application.applicationContext
     private val _plugins = MutableStateFlow<List<PluginInfo>>(emptyList())
     val plugins: StateFlow<List<PluginInfo>> = _plugins.asStateFlow()
-    
-    private val _groupedPlugins = MutableStateFlow<List<AuthorGroup>>(emptyList())
-    val groupedPlugins: StateFlow<List<AuthorGroup>> = _groupedPlugins.asStateFlow()
-    
+    private val _entries = MutableStateFlow<List<PluginBrowserEntry>>(emptyList())
+    internal val entries: StateFlow<List<PluginBrowserEntry>> = _entries.asStateFlow()
+    private val _visibleEntries = MutableStateFlow<List<PluginBrowserEntry>>(emptyList())
+    internal val visibleEntries: StateFlow<List<PluginBrowserEntry>> = _visibleEntries.asStateFlow()
+    private val _filters = MutableStateFlow(PluginBrowserFilters())
+    internal val filters: StateFlow<PluginBrowserFilters> = _filters.asStateFlow()
+
+    private val _authorOptions = MutableStateFlow<List<String>>(emptyList())
+    val authorOptions: StateFlow<List<String>> = _authorOptions.asStateFlow()
+    private val _tagOptions = MutableStateFlow<List<String>>(emptyList())
+    val tagOptions: StateFlow<List<String>> = _tagOptions.asStateFlow()
+    private val _typeOptions = MutableStateFlow<List<String>>(emptyList())
+    val typeOptions: StateFlow<List<String>> = _typeOptions.asStateFlow()
+
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-    
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage.asStateFlow()
-
-    /** Shown as Snackbar when add-to-rack fails (e.g. plugin binary missing). */
     private val _addFailureMessage = MutableStateFlow<String?>(null)
     val addFailureMessage: StateFlow<String?> = _addFailureMessage.asStateFlow()
-
     private val _blockingOperation = MutableStateFlow<String?>(null)
     val blockingOperation: StateFlow<String?> = _blockingOperation.asStateFlow()
-    
     private val _favorites = MutableStateFlow<Set<String>>(emptySet())
     val favorites: StateFlow<Set<String>> = _favorites.asStateFlow()
 
-    /** Tracks which authors are expanded. Initially only Favorites is expanded. */
-    private val _expandedAuthors = MutableStateFlow<Set<String>>(setOf(FAVORITES_GROUP))
-    val expandedAuthors: StateFlow<Set<String>> = _expandedAuthors.asStateFlow()
-    
-    /** Tracks which categories are expanded (key is "Author|Category") */
-    private val _expandedCategories = MutableStateFlow<Set<String>>(emptySet())
-    val expandedCategories: StateFlow<Set<String>> = _expandedCategories.asStateFlow()
-    
-    /** Plugin metadata loaded from assets */
     private var pluginMetadata: PluginMetadata? = null
-    
-    /** Set of plugin names that have working binaries */
+    private var repositoryFacets: List<com.vibes.dsp.engine.InstalledPluginFacets> = emptyList()
     private var availablePlugins: Set<String> = emptySet()
 
     init {
@@ -185,285 +230,150 @@ class PluginBrowserViewModel(application: Application) : AndroidViewModel(applic
             loadPluginsInternal()
         }
     }
-    
-    /**
-     * Load plugin metadata (descriptions and thumbnails) from JSON file.
-     */
+
+    /** Each optional metadata source is isolated so a corrupt overlay cannot hide plugins. */
     private fun loadMetadata() {
-        try {
-            appContext.assets.open("plugin_metadata.json").use { inputStream ->
-                val jsonString = inputStream.bufferedReader().use { it.readText() }
-                val json = JSONObject(jsonString)
-                
-                val descriptions = mutableMapOf<String, String>()
-                val thumbnails = mutableMapOf<String, String>()
-                val available = mutableSetOf<String>()
-                
-                json.optJSONObject("descriptions")?.let { descObj ->
-                    descObj.keys().forEach { key ->
-                        descriptions[key] = descObj.optString(key, "")
+        var static: PluginMetadata? = null
+        runCatching {
+            appContext.assets.open("plugin_metadata.json").use { input ->
+                val json = JSONObject(input.bufferedReader().use { it.readText() })
+                fun map(name: String) = buildMap {
+                    json.optJSONObject(name)?.keys()?.forEach { put(it, json.optJSONObject(name)!!.optString(it, "")) }
+                }
+                val available = buildSet {
+                    json.optJSONArray("availablePlugins")?.let { a ->
+                        for (i in 0 until a.length()) add(a.optString(i, ""))
                     }
                 }
-                
-                json.optJSONObject("thumbnails")?.let { thumbObj ->
-                    thumbObj.keys().forEach { key ->
-                        thumbnails[key] = thumbObj.optString(key, "")
-                    }
-                }
-                
-                json.optJSONArray("availablePlugins")?.let { availableArr ->
-                    for (i in 0 until availableArr.length()) {
-                        available.add(availableArr.optString(i, ""))
-                    }
-                }
-                
-                val authors = mutableMapOf<String, String>()
-                json.optJSONObject("authors")?.let { authObj ->
-                    authObj.keys().forEach { key ->
-                        authors[key] = authObj.optString(key, "")
-                    }
-                }
+                static = PluginMetadata(map("descriptions"), map("thumbnails"), map("authors"), map("categories"))
+                availablePlugins = available
+            }
+        }.onFailure {
+            android.util.Log.w("PluginBrowser", "Failed to load plugin metadata: ${it.message}")
+            static = PluginMetadata(emptyMap(), emptyMap(), emptyMap(), emptyMap())
+            availablePlugins = emptySet()
+        }
+        pluginMetadata = static
 
-                val categories = mutableMapOf<String, String>()
-                json.optJSONObject("categories")?.let { catObj ->
-                    catObj.keys().forEach { key ->
-                        categories[key] = catObj.optString(key, "")
-                    }
-                }
+        repositoryFacets = runCatching {
+            com.vibes.dsp.engine.readInstalledPluginFacets(appContext.filesDir)
+        }.getOrElse {
+            android.util.Log.w("PluginBrowser", "Failed to load repository facets: ${it.message}")
+            emptyList()
+        }
 
-                // Runtime overlay: imported VSTs (full flavor) live in
-                // filesDir/vst_plugins/registry.json and aren't in the static
-                // plugin_metadata.json. Extract each one's architecture (is64Bit ->
-                // x86/x64) for the arch badge; the author group is handled by
-                // getAuthor() returning "Windows VST" for VST formats. DO NOT append to
-                // `available` — the native engine already enumerates VSTs via the
-                // registered VstFactory, and adding to `available` flips the filter from
-                // "show all" to "show only listed", which hides every LV2 plugin.
-                val vstArch = mutableMapOf<String, Boolean>()
-                runCatching {
-                    val regFile = java.io.File(appContext.filesDir, "vst_plugins/registry.json")
-                    if (regFile.exists()) {
-                        val arr = JSONObject(regFile.readText()).optJSONArray("plugins")
-                        if (arr != null) {
-                            for (i in 0 until arr.length()) {
-                                val obj = arr.optJSONObject(i) ?: continue
-                                val name = obj.optString("displayName").orEmpty()
-                                if (name.isNotEmpty()) vstArch[name.lowercase()] = obj.optBoolean("is64Bit", true)
-                            }
-                            android.util.Log.i("PluginBrowser", "Loaded arch for ${arr.length()} imported VST(s)")
+        val arch = runCatching {
+            val result = mutableMapOf<String, Boolean>()
+            val file = java.io.File(appContext.filesDir, "vst_plugins/registry.json")
+            if (file.exists()) {
+                JSONObject(file.readText()).optJSONArray("plugins")?.let { a ->
+                    for (i in 0 until a.length()) {
+                        val o = a.optJSONObject(i) ?: continue
+                        o.optString("displayName").takeIf { it.isNotBlank() }?.let {
+                            result[it.lowercase()] = o.optBoolean("is64Bit", true)
                         }
                     }
                 }
-
-                pluginMetadata = PluginMetadata(descriptions, thumbnails, authors, categories, vstArch)
-                availablePlugins = available
-
-                android.util.Log.i("PluginBrowser", "Loaded ${available.size} available plugins with binaries")
             }
-        } catch (e: Exception) {
-            android.util.Log.w("PluginBrowser", "Failed to load plugin metadata: ${e.message}")
-            pluginMetadata = PluginMetadata(emptyMap(), emptyMap(), emptyMap(), emptyMap())
-            availablePlugins = emptySet()
+            result
+        }.getOrElse {
+            android.util.Log.w("PluginBrowser", "Failed to load VST registry overlay: ${it.message}")
+            emptyMap()
         }
+        pluginMetadata = (pluginMetadata ?: PluginMetadata(emptyMap(), emptyMap(), emptyMap(), emptyMap())).copy(archByName = arch)
     }
-    
-    /**
-     * Apply metadata (description and thumbnail) to a plugin.
-     * Uses case-insensitive matching since plugin names can have different casing
-     * (e.g., "GxVMK2" vs "GxVmk2").
-     */
+
     private fun applyMetadata(plugin: PluginInfo): PluginInfo {
         val metadata = pluginMetadata ?: return plugin
-        
-        // Find matching metadata by plugin name (case-insensitive)
-        val normalizedPluginName = plugin.name.lowercase()
-        
-        val description = metadata.descriptions.entries
-            .find { it.key.lowercase() == normalizedPluginName }
-            ?.value ?: ""
-        
-        val thumbnailPath = metadata.thumbnails.entries
-            .find { it.key.lowercase() == normalizedPluginName }
-            ?.value ?: ""
-        
-        // Architecture for the badge: Windows VSTs are x86/x64 (from the registry's
-        // is64Bit), LV2 plugins are native (ARM).
-        val arch = when {
-            plugin.format == "VST2" || plugin.format == "VST3" ->
-                metadata.archByName[normalizedPluginName]?.let { if (it) "x64" else "x86" } ?: ""
-            plugin.format == "LV2" || plugin.format == "NATIVE" -> "native"
+        val key = plugin.name.lowercase()
+        val description = metadata.descriptions.entries.firstOrNull { it.key.lowercase() == key }?.value ?: ""
+        val thumbnail = metadata.thumbnails.entries.firstOrNull { it.key.lowercase() == key }?.value ?: ""
+        val arch = when (plugin.format) {
+            "VST2", "VST3" -> metadata.archByName[key]?.let { if (it) "x64" else "x86" } ?: ""
+            "LV2", "NATIVE" -> "native"
             else -> ""
         }
-
-        return plugin.copy(
-            description = description,
-            thumbnailPath = thumbnailPath,
-            arch = arch
-        )
+        return plugin.copy(description = description, thumbnailPath = thumbnail, arch = arch)
     }
 
-    private fun loadPlugins() {
-        viewModelScope.launch { loadPluginsInternal() }
+
+    private fun buildEntry(plugin: PluginInfo): PluginBrowserEntry {
+        val metadata = pluginMetadata ?: PluginMetadata(emptyMap(), emptyMap(), emptyMap(), emptyMap())
+        return makePluginBrowserEntry(plugin, metadata, repositoryFacets)
+    }
+
+
+    private suspend fun refreshInternal() = withContext(Dispatchers.IO) {
+        loadMetadata()
+        loadPluginsInternal()
     }
 
     private suspend fun loadPluginsInternal() {
         _isLoading.value = true
         _errorMessage.value = null
-
         try {
-            val (allPluginCount, filteredPlugins) =
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    val allPlugins = RackManager.getAvailablePlugins()
-                    val availablePluginNamesLower =
-                        availablePlugins.map { it.lowercase() }.toSet()
-
-                    // Native enumeration and metadata mapping stay off Main:
-                    // registry scans and VST metadata can be expensive.
-                    val filtered = if (availablePluginNamesLower.isEmpty()) {
-                        allPlugins.map { applyMetadata(it) }
-                    } else {
-                        allPlugins.filter { plugin ->
-                            plugin.format == "NATIVE" ||
-                                availablePluginNamesLower.contains(plugin.name.lowercase())
-                        }.map { applyMetadata(it) }
-                    }
-                    allPlugins.size to filtered
-                }
-
-            android.util.Log.i(
-                "PluginBrowser",
-                "Showing ${filteredPlugins.size} out of $allPluginCount discovered plugins"
-            )
-
-            _plugins.value = filteredPlugins
-            _groupedPlugins.value = groupPluginsByAuthorAndCategory(filteredPlugins)
+            val all = withContext(Dispatchers.IO) { RackManager.getAvailablePlugins() }
+            val listed = availablePlugins.map { it.lowercase() }.toSet()
+            val filtered = if (listed.isEmpty()) all else all.filter {
+                it.format == "NATIVE" || listed.contains(it.name.lowercase())
+            }
+            val mapped = filtered.map(::applyMetadata)
+            _plugins.value = mapped
+            _entries.value = mapped.map(::buildEntry)
+            updateFacetState()
+            android.util.Log.i("PluginBrowser", "Showing ${mapped.size} out of ${all.size} discovered plugins")
         } catch (e: Exception) {
             _errorMessage.value = "Failed to load plugins: ${e.message}"
-        } finally {
-            _isLoading.value = false
-        }
+        } finally { _isLoading.value = false }
     }
-    
-    /**
-     * Groups plugins first by author, then by category within each author.
-     */
-    private fun groupPluginsByAuthorAndCategory(plugins: List<PluginInfo>): List<AuthorGroup> {
-        val metadataAuthors = pluginMetadata?.authors ?: emptyMap()
-        val metadataCategories = pluginMetadata?.categories ?: emptyMap()
-        val byAuthor = plugins.groupBy { PluginCategoryMapping.getAuthor(it.name, it.format, metadataAuthors) }
 
-        val authorGroups = byAuthor.map { (author, authorPlugins) ->
-            val byCategory = authorPlugins.groupBy { PluginCategoryMapping.getCategory(it.name, metadataCategories) }
-
-            val sortedCategories = byCategory.toList()
-                .sortedBy { (category, _) ->
-                    if (category == "Other") "\uFFFF" else category
-                }
-                .map { (category, catPlugins) ->
-                    PluginCategory(
-                        name = category,
-                        plugins = catPlugins.sortedBy { it.name }
-                    )
-                }
-
-            AuthorGroup(
-                name = author,
-                categories = sortedCategories
-            )
-        }.sortedBy {
-            when (it.name) {
-                PluginCategoryMapping.AUTHOR_WINDOWS_VST -> 0
-                PluginCategoryMapping.AUTHOR_NEURAL_AMP -> 1
-                PluginCategoryMapping.AUTHOR_AIDA_DSP -> 2
-                PluginCategoryMapping.AUTHOR_GUITARIX -> 3
-                PluginCategoryMapping.AUTHOR_BRUMMER10 -> 4
-                PluginCategoryMapping.AUTHOR_GXPLUGINS -> 5
-                else -> 6
-            }
-        }
-
-        // Prepend Favorites group if any favorites exist
-        val favIds = _favorites.value
-        if (favIds.isEmpty()) return authorGroups
-
-        val favPlugins = plugins.filter { favIds.contains(it.fullId) }
-        if (favPlugins.isEmpty()) return authorGroups
-
-        val byCategory = favPlugins.groupBy { PluginCategoryMapping.getCategory(it.name, metadataCategories) }
-        val favCategories = byCategory.toList()
-            .sortedBy { (category, _) ->
-                if (category == "Other") "\uFFFF" else category
-            }
-            .map { (category, catPlugins) ->
-                PluginCategory(
-                    name = category,
-                    plugins = catPlugins.sortedBy { it.name }
-                )
-            }
-        val favGroup = AuthorGroup(name = FAVORITES_GROUP, categories = favCategories)
-        return listOf(favGroup) + authorGroups
+    private fun updateFacetState() {
+        val es = _entries.value
+        fun distinct(values: List<String>) = values.map(String::trim).filter(String::isNotBlank)
+            .distinctBy { it.lowercase() }.sortedWith(String.CASE_INSENSITIVE_ORDER)
+        _authorOptions.value = distinct(es.map { it.author })
+        _tagOptions.value = distinct(es.flatMap { it.tags })
+        val preferred = listOf("NATIVE", "LV2", "JSFX", "VST2", "VST3")
+        _typeOptions.value = preferred.filter { p -> es.any { it.type.equals(p, true) } } +
+            distinct(es.map { it.type }).filterNot { candidate -> preferred.any { it.equals(candidate, true) } }
+        val f = _filters.value
+        val authors = _authorOptions.value
+        val types = _typeOptions.value
+        val tags = _tagOptions.value
+        _filters.value = f.copy(
+            author = f.author?.let { a -> authors.firstOrNull { it.equals(a, true) } },
+            type = f.type?.let { t -> types.firstOrNull { it.equals(t, true) } },
+            tags = f.tags.mapNotNull { t -> tags.firstOrNull { it.equals(t, true) } }.toSet()
+        )
+        recomputeVisible()
     }
-    
-    /**
-     * Toggle author expansion state.
-     */
-    fun toggleAuthor(authorName: String) {
-        _expandedAuthors.value = _expandedAuthors.value.toMutableSet().apply {
-            if (contains(authorName)) {
-                remove(authorName)
-            } else {
-                add(authorName)
-            }
-        }
+
+    private fun recomputeVisible() {
+        _visibleEntries.value = computeVisibleEntries(_entries.value, _filters.value, _favorites.value)
     }
-    
-    /**
-     * Toggle category expansion state.
-     */
-    fun toggleCategory(authorName: String, categoryName: String) {
-        val key = "$authorName|$categoryName"
-        _expandedCategories.value = _expandedCategories.value.toMutableSet().apply {
-            if (contains(key)) {
-                remove(key)
-            } else {
-                add(key)
-            }
-        }
+
+    fun setAuthorFilter(author: String?) { _filters.value = _filters.value.copy(author = author); recomputeVisible() }
+    fun toggleTagFilter(tag: String) {
+        val existing = _filters.value.tags.firstOrNull { it.equals(tag, true) }
+        _filters.value = _filters.value.copy(tags = if (existing == null) _filters.value.tags + tag else _filters.value.tags - existing)
+        recomputeVisible()
     }
+    fun setTypeFilter(type: String?) { _filters.value = _filters.value.copy(type = type); recomputeVisible() }
+    fun clearFilters() { _filters.value = PluginBrowserFilters(); recomputeVisible() }
 
     private suspend fun <T> withBlockingOperation(label: String, block: suspend () -> T): T {
         _blockingOperation.value = label
-        return try {
-            block()
-        } finally {
-            _blockingOperation.value = null
-        }
+        return try { block() } finally { _blockingOperation.value = null }
     }
 
     suspend fun addPluginToRack(pathId: Long, plugin: PluginInfo, position: Int = -1): Boolean {
         if (_blockingOperation.value != null) return false
         return withBlockingOperation("Adding plugin") {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                // Off the main thread because for VST plugins, RackManager.addPlugin
-                // chains through WineVstPlugin::activate() which can block for ~5s
-                // waiting on guest_ready (wine + FEX + plugin DLL load is slow).
-                // Running this on the main thread triggers Android's input-dispatch
-                // ANR watchdog and the system SIGKILLs the app.
-                android.util.Log.i("PluginBrowser", "[LIFECYCLE] addPluginToRack called: ${plugin.name} (${plugin.fullId})")
+            withContext(Dispatchers.IO) {
                 try {
                     val index = RackManager.addPlugin(pathId, plugin.fullId, position)
-                    android.util.Log.i("PluginBrowser", "[LIFECYCLE] addPluginToRack result: ${plugin.name} -> index=$index")
-                    if (index >= 0) {
-                        true
-                    } else {
-                        _addFailureMessage.value = "Could not add plugin. Plugin binaries (.so) are not included in this build—only metadata is available."
-                        false
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("PluginBrowser", "[LIFECYCLE] addPluginToRack failed: ${plugin.name}", e)
-                    _addFailureMessage.value = "Failed to add plugin: ${e.message}"
-                    false
-                }
+                    if (index >= 0) true else { _addFailureMessage.value = "Could not add plugin. Plugin binaries (.so) are not included in this build—only metadata is available."; false }
+                } catch (e: Exception) { _addFailureMessage.value = "Failed to add plugin: ${e.message}"; false }
             }
         }
     }
@@ -471,41 +381,21 @@ class PluginBrowserViewModel(application: Application) : AndroidViewModel(applic
     suspend fun replacePluginInRack(pathId: Long, position: Int, plugin: PluginInfo): Boolean {
         if (_blockingOperation.value != null) return false
         return withBlockingOperation("Replacing plugin") {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                // Same off-main-thread reason as addPluginToRack — VST replace
-                // triggers activate() which blocks on guest_ready.
-                android.util.Log.i("PluginBrowser", "[LIFECYCLE] replacePluginInRack called: pathId=$pathId, position=$position, ${plugin.name} (${plugin.fullId})")
+            withContext(Dispatchers.IO) {
                 try {
                     RackManager.removePlugin(pathId, position)
                     val index = RackManager.addPlugin(pathId, plugin.fullId, position)
-                    android.util.Log.i("PluginBrowser", "[LIFECYCLE] replacePluginInRack result: ${plugin.name} -> index=$index")
-                    if (index >= 0) {
-                        true
-                    } else {
-                        _addFailureMessage.value = "Could not add plugin. Plugin binaries (.so) are not included in this build—only metadata is available."
-                        false
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("PluginBrowser", "[LIFECYCLE] replacePluginInRack failed: ${plugin.name}", e)
-                    _addFailureMessage.value = "Failed to replace plugin: ${e.message}"
-                    false
-                }
+                    if (index >= 0) true else { _addFailureMessage.value = "Could not add plugin. Plugin binaries (.so) are not included in this build—only metadata is available."; false }
+                } catch (e: Exception) { _addFailureMessage.value = "Failed to replace plugin: ${e.message}"; false }
             }
         }
     }
 
-    fun clearAddFailureMessage() {
-        _addFailureMessage.value = null
-    }
-
+    fun clearAddFailureMessage() { _addFailureMessage.value = null }
     fun toggleFavorite(pluginId: String) {
         FavoritesManager.toggleFavorite(appContext, pluginId)
         _favorites.value = FavoritesManager.getFavorites(appContext)
-        // Regroup to add/remove from Favorites section
-        _groupedPlugins.value = groupPluginsByAuthorAndCategory(_plugins.value)
+        recomputeVisible()
     }
-
-    fun refresh() {
-        loadPlugins()
-    }
+    fun refresh() { viewModelScope.launch { refreshInternal() } }
 }

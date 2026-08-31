@@ -654,15 +654,15 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             }
         return out
     }
-    private fun writeMetadata(dir:File,m:RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("manufacturer",m.manufacturer);put("tags",m.tags.joinToString("\u001f"));m.source?.let { put("source", it) };put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir,META)),null)} }
-    private fun readOwnership(dir:File): WineInstallOwnership? = runCatching { Properties().apply { load(FileInputStream(File(dir,META))) }.let { p -> WineInstallOwnership(p.getProperty("ownership.vstUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.executableUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.prefixPaths","").split(File.pathSeparator).filter(String::isNotBlank)) } }.getOrNull()
+    private fun writeMetadata(dir: File, m: RepoManifest, ownership: WineInstallOwnership = WineInstallOwnership()){ Properties().apply{put("id",m.id);put("name",m.name);put("version",m.version);put("format",m.format);put("description",m.description);put("kind",m.kind);put("manufacturer",m.manufacturer);put("tags",m.tags.joinToString("\u001f"));m.source?.let { put("source", it) };put("ownership.vstUuids",ownership.vstUuids.joinToString(","));put("ownership.executableUuids",ownership.executableUuids.joinToString(","));put("ownership.prefixPaths",ownership.prefixPaths.joinToString(File.pathSeparator));store(FileOutputStream(File(dir, REPOSITORY_METADATA_FILE)),null)} }
+    private fun readOwnership(dir: File): WineInstallOwnership? = runCatching { Properties().apply { load(FileInputStream(File(dir, REPOSITORY_METADATA_FILE))) }.let { p -> WineInstallOwnership(p.getProperty("ownership.vstUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.executableUuids","").split(',').filter(String::isNotBlank),p.getProperty("ownership.prefixPaths","").split(File.pathSeparator).filter(String::isNotBlank)) } }.getOrNull()
     private fun mergeOwnership(a: WineInstallOwnership, b: WineInstallOwnership) = WineInstallOwnership(
         (a.vstUuids + b.vstUuids).distinct(),
         (a.executableUuids + b.executableUuids).distinct(),
         (a.prefixPaths + b.prefixPaths).distinct(),
     )
-    private fun readMetadata(dir:File): RepoManifest? = runCatching {
-        Properties().apply { load(FileInputStream(File(dir, META))) }.let { p ->
+    private fun readMetadata(dir: File): RepoManifest? = runCatching {
+        Properties().apply { load(FileInputStream(File(dir, REPOSITORY_METADATA_FILE))) }.let { p ->
             RepoManifest(1, p.getProperty("id",""), p.getProperty("name",""), p.getProperty("version",""), p.getProperty("format",""), p.getProperty("description",""), "", "", 1, "", p.getProperty("kind","archive"), emptyList(), sourceName = "Installed", source = p.getProperty("source"), manufacturer = p.getProperty("manufacturer","Unknown"), tags = p.getProperty("tags","").split("\u001f").filter(String::isNotBlank))
         }
     }.getOrNull()
@@ -712,7 +712,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private fun encode(s:RepositorySourceRecord)=Base64.encodeToString(listOf(s.id,s.name,s.url,s.enabled,s.custom,s.lastError?:"").joinToString("\u0001").toByteArray(),Base64.NO_WRAP)
     private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{RepositorySourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
     private data class Installed(val version:String,val manifest:RepoManifest)
-    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-31";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val META=".repository.properties";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
+    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-31";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private val SHA=Regex("[0-9a-f]{64}")}
     private fun sha256(b:ByteArray)=digest(b.inputStream())
     private fun sha256(f:File)=digest(f.inputStream())
     private fun digest(i:java.io.InputStream):String { val md=MessageDigest.getInstance("SHA-256"); i.use { val buf=ByteArray(8192); while(true){val n=it.read(buf);if(n<0)break;md.update(buf,0,n)} }; return md.digest().joinToString(""){"%02x".format(it)} }

@@ -94,6 +94,8 @@ struct PluginInfo {
     std::string id;
     std::string name;
     std::string format;  // "LV2", "CLAP", "VST3", etc.
+    /** Canonical filesystem origin of the installed plugin payload. */
+    std::string originPath;
     std::vector<PortInfo> ports;
     /** If non-empty, this plugin has modgui; path to bundle directory (no trailing slash). */
     std::string modguiBasePath;

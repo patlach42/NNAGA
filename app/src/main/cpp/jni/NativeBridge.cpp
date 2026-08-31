@@ -163,6 +163,7 @@ static struct {
     jfieldID piId = nullptr;
     jfieldID piName = nullptr;
     jfieldID piFormat = nullptr;
+    jfieldID piOriginPath = nullptr;
     jfieldID piPorts = nullptr;
     jfieldID piModguiBasePath = nullptr;
     jfieldID piModguiIconTemplate = nullptr;
@@ -210,6 +211,7 @@ static bool ensureJniCache(JNIEnv* env) {
     g_jni.piId = env->GetFieldID(g_jni.pluginInfoClass, "id", "Ljava/lang/String;");
     g_jni.piName = env->GetFieldID(g_jni.pluginInfoClass, "name", "Ljava/lang/String;");
     g_jni.piFormat = env->GetFieldID(g_jni.pluginInfoClass, "format", "Ljava/lang/String;");
+    g_jni.piOriginPath = env->GetFieldID(g_jni.pluginInfoClass, "originPath", "Ljava/lang/String;");
     g_jni.piPorts = env->GetFieldID(g_jni.pluginInfoClass, "ports", "Ljava/util/List;");
     g_jni.piModguiBasePath = env->GetFieldID(g_jni.pluginInfoClass, "modguiBasePath", "Ljava/lang/String;");
     g_jni.piModguiIconTemplate = env->GetFieldID(g_jni.pluginInfoClass, "modguiIconTemplate", "Ljava/lang/String;");
@@ -900,10 +902,10 @@ jobject createPluginInfoObject(JNIEnv* env, const PluginInfo& info) {
         env->SetObjectField(obj, field, s);
         env->DeleteLocalRef(s);
     };
-
     setString(g_jni.piId, info.id);
     setString(g_jni.piName, info.name);
     setString(g_jni.piFormat, info.format);
+    setString(g_jni.piOriginPath, info.originPath);
     setString(g_jni.piModguiBasePath, info.modguiBasePath);
     setString(g_jni.piModguiIconTemplate, info.modguiIconTemplate);
     setString(g_jni.piX11UiBinaryPath, info.x11UiBinaryPath);

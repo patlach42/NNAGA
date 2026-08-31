@@ -19,157 +19,464 @@
 
 package com.vibes.dsp.ui.browser
 
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Star
-import androidx.compose.material3.*
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.ui.components.NnagaButton
+import com.vibes.dsp.ui.components.NnagaFilterChip
 import com.vibes.dsp.ui.components.NnagaIconButton
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import com.vibes.dsp.ui.components.NnagaTextButton
 
+private object PluginBrowserDimensions {
+    val inlineSpacing = 4.dp
+    val itemSpacing = 8.dp
+    val contentPadding = 12.dp
+    val sectionSpacing = 16.dp
+    val sheetHeaderSpacing = 20.dp
+    val sheetBottomPadding = 32.dp
+    val badgeMinimum = 16.dp
+}
 
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
 @Composable
-internal fun PluginTree(
+internal fun PluginBrowserList(
     viewModel: PluginBrowserViewModel,
     onPluginClick: (PluginInfo) -> Unit,
-    compactItems: Boolean,
     pluginItemsEnabled: Boolean = true,
-    modifier: Modifier = Modifier.fillMaxSize()
+    modifier: Modifier = Modifier.fillMaxSize(),
 ) {
-    val groupedPlugins by viewModel.groupedPlugins.collectAsState()
-    val expandedAuthors by viewModel.expandedAuthors.collectAsState()
-    val expandedCategories by viewModel.expandedCategories.collectAsState()
+    val entries by viewModel.entries.collectAsState()
+    val visibleEntries by viewModel.visibleEntries.collectAsState()
+    val filters by viewModel.filters.collectAsState()
+    val authorOptions by viewModel.authorOptions.collectAsState()
+    val tagOptions by viewModel.tagOptions.collectAsState()
+    val typeOptions by viewModel.typeOptions.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val favorites by viewModel.favorites.collectAsState()
+    var showFilterSheet by rememberSaveable { mutableStateOf(false) }
+    val activeFilterCount =
+        (if (filters.author != null) 1 else 0) + filters.tags.size + (if (filters.type != null) 1 else 0)
 
-    Box(
-        modifier = modifier,
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
         when {
-            isLoading -> {
-                CircularProgressIndicator(
-                    color = MaterialTheme.colorScheme.primary,
-                    strokeWidth = 2.dp,
+            isLoading -> CircularProgressIndicator(
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 2.dp,
+            )
+
+            errorMessage != null -> PluginBrowserError(
+                message = errorMessage ?: "Unknown error",
+                onRetry = viewModel::refresh,
+            )
+
+            entries.isEmpty() -> PluginBrowserCatalogEmpty()
+
+            else -> Column(modifier = Modifier.fillMaxSize()) {
+                PluginBrowserToolbar(
+                    resultCount = visibleEntries.size,
+                    activeFilterCount = activeFilterCount,
+                    onOpenFilters = { showFilterSheet = true },
                 )
-            }
-            errorMessage != null -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text(
-                        text = errorMessage ?: "Unknown error",
-                        color = MaterialTheme.colorScheme.error
-                    )
-                    Spacer(modifier = Modifier.height(16.dp))
-                    NnagaButton(onClick = { viewModel.refresh() }) {
-                        Text("Retry")
-                    }
-                }
-            }
-            groupedPlugins.isEmpty() -> {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(16.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center
-                ) {
-                    Text("No plugins available")
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "LV2 plugins are loaded from the app's extracted assets (assets/lv2). This app ships with GxPlugins in assets—if you see nothing here, the native build may be using the LV2 stub (no lilv/serd/sord). Build the LV2 libraries and place them in app/src/main/cpp/libs/lv2/, then rebuild the app. See LV2_INTEGRATION.md.",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                }
-            }
-            else -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    groupedPlugins.forEach { authorGroup ->
-                        // Author header
-                        item(key = "author_${authorGroup.name}") {
-                            AuthorHeader(
-                                authorName = authorGroup.name,
-                                pluginCount = authorGroup.categories.sumOf { it.plugins.size },
-                                isExpanded = expandedAuthors.contains(authorGroup.name),
-                                onToggle = { viewModel.toggleAuthor(authorGroup.name) }
-                            )
+                if (visibleEntries.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(PluginBrowserDimensions.sectionSpacing),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Text("No plugins match these filters")
+                        Spacer(modifier = Modifier.height(PluginBrowserDimensions.itemSpacing))
+                        NnagaButton(onClick = viewModel::clearFilters) {
+                            Text("Clear filters")
                         }
-
-                        // Categories (only show if author is expanded)
-                        if (expandedAuthors.contains(authorGroup.name)) {
-                            authorGroup.categories.forEach { category ->
-                                val categoryKey = "${authorGroup.name}|${category.name}"
-                                val isCategoryExpanded = expandedCategories.contains(categoryKey)
-
-                                // Category header
-                                item(key = "category_${categoryKey}") {
-                                    CategoryHeader(
-                                        categoryName = category.name,
-                                        pluginCount = category.plugins.size,
-                                        isExpanded = isCategoryExpanded,
-                                        onToggle = {
-                                            viewModel.toggleCategory(authorGroup.name, category.name)
-                                        }
-                                    )
-                                }
-
-                                // Plugins in category (only show if category is expanded)
-                                if (isCategoryExpanded) {
-                                    items(
-                                        items = category.plugins,
-                                        key = { "${authorGroup.name}_${category.name}_${it.fullId}" }
-                                    ) { plugin ->
-                                        PluginItem(
-                                            plugin = plugin,
-                                            compact = compactItems,
-                                            enabled = pluginItemsEnabled,
-                                            isFavorite = favorites.contains(plugin.fullId),
-                                            onToggleFavorite = { viewModel.toggleFavorite(plugin.fullId) },
-                                            onClick = { onPluginClick(plugin) }
-                                        )
-                                    }
-                                }
-                            }
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(PluginBrowserDimensions.contentPadding),
+                        verticalArrangement = Arrangement.spacedBy(PluginBrowserDimensions.itemSpacing),
+                    ) {
+                        items(
+                            items = visibleEntries,
+                            key = { it.plugin.fullId },
+                        ) { entry ->
+                            PluginItem(
+                                entry = entry,
+                                enabled = pluginItemsEnabled,
+                                isFavorite = entry.plugin.fullId in favorites,
+                                onToggleFavorite = { viewModel.toggleFavorite(entry.plugin.fullId) },
+                                onClick = { onPluginClick(entry.plugin) },
+                            )
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showFilterSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showFilterSheet = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = MaterialTheme.shapes.small,
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = PluginBrowserDimensions.contentPadding)
+                    .padding(bottom = PluginBrowserDimensions.sheetBottomPadding),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "Filters",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                    )
+                    if (activeFilterCount > 0) {
+                        NnagaTextButton(onClick = viewModel::clearFilters) {
+                            Text("Clear All")
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(PluginBrowserDimensions.sheetHeaderSpacing))
+                if (authorOptions.isNotEmpty()) {
+                    PluginFilterSection(title = "Author") {
+                        PluginSingleChoiceFilters(
+                            facetName = "Author",
+                            options = authorOptions,
+                            selected = filters.author,
+                            onSelected = viewModel::setAuthorFilter,
+                        )
+                    }
+                }
+                if (tagOptions.isNotEmpty()) {
+                    PluginFilterSection(title = "Tags") {
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(PluginBrowserDimensions.itemSpacing),
+                            verticalArrangement = Arrangement.spacedBy(PluginBrowserDimensions.itemSpacing),
+                        ) {
+                            tagOptions.forEach { tag ->
+                                val selected = filters.tags.any { it.equals(tag, ignoreCase = true) }
+                                NnagaFilterChip(
+                                    text = tag,
+                                    selected = selected,
+                                    onClick = { viewModel.toggleTagFilter(tag) },
+                                    modifier = Modifier.semantics {
+                                        contentDescription = "Tag filter: $tag"
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+                if (typeOptions.isNotEmpty()) {
+                    PluginFilterSection(title = "Type") {
+                        PluginSingleChoiceFilters(
+                            facetName = "Type",
+                            options = typeOptions,
+                            selected = filters.type,
+                            onSelected = viewModel::setTypeFilter,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginBrowserToolbar(
+    resultCount: Int,
+    activeFilterCount: Int,
+    onOpenFilters: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = PluginBrowserDimensions.contentPadding, vertical = PluginBrowserDimensions.inlineSpacing),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = if (resultCount == 1) "1 plugin" else "$resultCount plugins",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box {
+            NnagaIconButton(onClick = onOpenFilters) {
+                Icon(
+                    imageVector = Icons.Default.FilterList,
+                    contentDescription = if (activeFilterCount == 0) {
+                        "Open plugin filters"
+                    } else {
+                        "Open plugin filters, $activeFilterCount selected"
+                    },
+                    tint = if (activeFilterCount > 0) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
+            if (activeFilterCount > 0) {
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .offset(
+                            x = -PluginBrowserDimensions.inlineSpacing,
+                            y = PluginBrowserDimensions.inlineSpacing,
+                        )
+                        .defaultMinSize(
+                            minWidth = PluginBrowserDimensions.badgeMinimum,
+                            minHeight = PluginBrowserDimensions.badgeMinimum,
+                        ),
+                    shape = MaterialTheme.shapes.extraSmall,
+                    color = MaterialTheme.colorScheme.error,
+                ) {
+                    Text(
+                        text = activeFilterCount.toString(),
+                        modifier = Modifier.padding(horizontal = PluginBrowserDimensions.inlineSpacing),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onError,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PluginBrowserError(message: String, onRetry: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(PluginBrowserDimensions.sectionSpacing),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(text = message, color = MaterialTheme.colorScheme.error)
+        Spacer(modifier = Modifier.height(PluginBrowserDimensions.sectionSpacing))
+        NnagaButton(onClick = onRetry) { Text("Retry") }
+    }
+}
+
+@Composable
+private fun PluginBrowserCatalogEmpty() {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(PluginBrowserDimensions.sectionSpacing),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text("No plugins available")
+        Spacer(modifier = Modifier.height(PluginBrowserDimensions.itemSpacing))
+        Text(
+            text = "LV2 plugins are loaded from the app's extracted assets (assets/lv2). This app ships with GxPlugins in assets—if you see nothing here, the native build may be using the LV2 stub (no lilv/serd/sord). Build the LV2 libraries and place them in app/src/main/cpp/libs/lv2/, then rebuild the app. See LV2_INTEGRATION.md.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PluginSingleChoiceFilters(
+    facetName: String,
+    options: List<String>,
+    selected: String?,
+    onSelected: (String?) -> Unit,
+) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(PluginBrowserDimensions.itemSpacing),
+        verticalArrangement = Arrangement.spacedBy(PluginBrowserDimensions.itemSpacing),
+    ) {
+        options.forEach { option ->
+            val isSelected = option.equals(selected, ignoreCase = true)
+            NnagaFilterChip(
+                text = option,
+                selected = isSelected,
+                onClick = { onSelected(option.takeUnless { isSelected }) },
+                modifier = Modifier.semantics {
+                    contentDescription = "$facetName filter: $option"
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun PluginFilterSection(
+    title: String,
+    content: @Composable () -> Unit,
+) {
+    Column(modifier = Modifier.padding(bottom = PluginBrowserDimensions.sectionSpacing)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = PluginBrowserDimensions.itemSpacing),
+        )
+        content()
+    }
+}
+
+@Composable
+internal fun PluginItem(
+    entry: PluginBrowserEntry,
+    isFavorite: Boolean = false,
+    enabled: Boolean = true,
+    onToggleFavorite: () -> Unit = {},
+    onClick: () -> Unit,
+) {
+    val plugin = entry.plugin
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable(enabled = enabled, onClick = onClick)
+            .testTag("browser_plugin_item"),
+        shape = MaterialTheme.shapes.small,
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = CardDefaults.outlinedCardBorder(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(PluginBrowserDimensions.itemSpacing),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(PluginBrowserDimensions.itemSpacing),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = plugin.name.ifEmpty { plugin.id },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (entry.author.isNotBlank()) {
+                    Text(
+                        text = entry.author,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(modifier = Modifier.height(PluginBrowserDimensions.inlineSpacing))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    PluginBadge(text = plugin.format, kind = PluginBadgeKind.Format)
+                    if (plugin.arch.isNotEmpty()) {
+                        PluginBadge(text = plugin.arch, kind = PluginBadgeKind.Architecture)
+                    }
+                    Text(
+                        text = plugin.guiTypes.joinToString(", ") { it.displayName },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            NnagaIconButton(onClick = onToggleFavorite) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
+                    contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+private enum class PluginBadgeKind { Format, Architecture }
+
+@Composable
+private fun PluginBadge(text: String, kind: PluginBadgeKind) {
+    val (background, foreground) = when (kind) {
+        PluginBadgeKind.Format -> when (text) {
+            "VST3" -> Color(0xFF1976D2) to Color.White
+            "VST2" -> Color(0xFFE64A19) to Color.White
+            "LV2" -> Color(0xFF388E3C) to Color.White
+            else -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        }
+        PluginBadgeKind.Architecture -> when (text) {
+            "x64" -> Color(0xFF7B1FA2) to Color.White
+            "x86" -> Color(0xFF00838F) to Color.White
+            "native" -> Color(0xFF546E7A) to Color.White
+            else -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+        }
+    }
+    Surface(shape = MaterialTheme.shapes.extraSmall, color = background) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = foreground,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }
 
@@ -188,18 +495,18 @@ internal fun BrowserBlockingOperationOverlay(label: String) {
                     }
                 }
             },
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.Center,
     ) {
         Surface(
             tonalElevation = 0.dp,
             shadowElevation = 0.dp,
             shape = MaterialTheme.shapes.small,
-            color = MaterialTheme.colorScheme.surface
+            color = MaterialTheme.colorScheme.surface,
         ) {
             Column(
                 modifier = Modifier.padding(horizontal = 28.dp, vertical = 22.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(PluginBrowserDimensions.contentPadding),
             ) {
                 CircularProgressIndicator(
                     color = MaterialTheme.colorScheme.primary,
@@ -208,289 +515,7 @@ internal fun BrowserBlockingOperationOverlay(label: String) {
                 Text(
                     text = "$label...",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun PluginItem(
-    plugin: PluginInfo,
-    compact: Boolean = false,
-    isFavorite: Boolean = false,
-    enabled: Boolean = true,
-    onToggleFavorite: () -> Unit = {},
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 12.dp)
-            .heightIn(min = 48.dp)
-            .clickable(
-                enabled = enabled,
-                onClick = onClick
-            )
-            .testTag("browser_plugin_item"),
-        shape = MaterialTheme.shapes.small,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = CardDefaults.outlinedCardBorder()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    horizontal = if (compact) 8.dp else 12.dp,
-                    vertical = if (compact) 8.dp else 12.dp,
-                ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)
-        ) {
-            // Thumbnail
-            if (!compact) {
-                PluginThumbnail(
-                    thumbnailPath = plugin.thumbnailPath,
-                    modifier = Modifier
-                        .size(80.dp)
-                )
-            }
-
-            // Plugin info
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = plugin.name.ifEmpty { plugin.id },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // Description (if available)
-                if (!compact && plugin.description.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = plugin.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    // Format badge: makes VST2 vs VST3 (or LV2) immediately
-                    // distinguishable when two plugins share the same display
-                    // name (e.g. AmpCraft.dll + AmpCraft.vst3 imported into
-                    // the same library).
-                    // Per-format badge colors so VST3 / VST2 / LV2 are tellable at a glance.
-                    val (badgeBg, badgeFg) = when (plugin.format) {
-                        "VST3" -> Color(0xFF1976D2) to Color.White  // blue
-                        "VST2" -> Color(0xFFE64A19) to Color.White  // deep orange
-                        "LV2"  -> Color(0xFF388E3C) to Color.White  // green
-                        else   -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-                    }
-                    Surface(
-                        shape = MaterialTheme.shapes.extraSmall,
-                        color = badgeBg,
-                    ) {
-                        Text(
-                            text = plugin.format,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = badgeFg,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                    // Architecture badge (x86 / x64 / native) — colors distinct from the format badge.
-                    if (plugin.arch.isNotEmpty()) {
-                        val (archBg, archFg) = when (plugin.arch) {
-                            "x64"    -> Color(0xFF7B1FA2) to Color.White  // purple
-                            "x86"    -> Color(0xFF00838F) to Color.White  // teal
-                            "native" -> Color(0xFF546E7A) to Color.White  // blue-grey
-                            else     -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-                        }
-                        Surface(
-                            shape = MaterialTheme.shapes.extraSmall,
-                            color = archBg,
-                        ) {
-                            Text(
-                                text = plugin.arch,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = archFg,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-                    }
-                    Text(
-                        text = plugin.guiTypes.joinToString(", ") { it.displayName },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
-            }
-
-            // Favorite star
-            NnagaIconButton(onClick = onToggleFavorite) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
-                    contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
-                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-
-@Composable
-fun AuthorHeader(
-    authorName: String,
-    pluginCount: Int,
-    isExpanded: Boolean,
-    onToggle: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onToggle),
-        shape = MaterialTheme.shapes.small,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = CardDefaults.outlinedCardBorder()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    text = authorName,
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
-            Text(
-                text = "$pluginCount plugins",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-    }
-}
-
-@Composable
-fun CategoryHeader(
-    categoryName: String,
-    pluginCount: Int,
-    isExpanded: Boolean,
-    onToggle: () -> Unit
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 12.dp)
-            .heightIn(min = 48.dp)
-            .clickable(onClick = onToggle),
-        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f),
-        shape = MaterialTheme.shapes.extraSmall
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Icon(
-                    imageVector = if (isExpanded) Icons.Default.KeyboardArrowDown else Icons.Default.KeyboardArrowRight,
-                    contentDescription = if (isExpanded) "Collapse" else "Expand",
-                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text(
-                    text = categoryName,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer
-                )
-            }
-            Text(
-                text = "$pluginCount",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
-            )
-        }
-    }
-}
-
-@Composable
-fun PluginThumbnail(
-    thumbnailPath: String,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    
-    val bitmap = produceState<androidx.compose.ui.graphics.ImageBitmap?>(initialValue = null, thumbnailPath) {
-        value = withContext(Dispatchers.IO) {
-            try {
-                if (thumbnailPath.isNotEmpty()) {
-                    context.assets.open("lv2/$thumbnailPath").use { inputStream ->
-                        BitmapFactory.decodeStream(inputStream)?.asImageBitmap()
-                    }
-                } else {
-                    null
-                }
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
-    
-    Box(
-        modifier = modifier,
-        contentAlignment = Alignment.Center
-    ) {
-        bitmap.value?.let { imageBitmap ->
-            Image(
-                bitmap = imageBitmap,
-                contentDescription = "Plugin thumbnail",
-                modifier = Modifier.fillMaxSize()
-            )
-        } ?: run {
-            // Placeholder when no thumbnail
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(4.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "🎸",
-                    style = MaterialTheme.typography.titleMedium
+                    color = MaterialTheme.colorScheme.onSurface,
                 )
             }
         }

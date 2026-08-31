@@ -68,6 +68,7 @@ data class PluginInfo(
     val id: String = "",
     val name: String = "",
     val format: String = "",
+    val originPath: String = "",
     val ports: List<PortInfo> = emptyList(),
     val modguiBasePath: String = "",
     val modguiIconTemplate: String = "",

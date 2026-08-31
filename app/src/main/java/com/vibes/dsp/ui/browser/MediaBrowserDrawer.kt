@@ -374,7 +374,7 @@ private fun PluginsBrowserTab(
     Box(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             TargetBanner(selectedTrackLabel, slot = 0)
-            PluginTree(
+            PluginBrowserList(
                 viewModel = viewModel,
                 onPluginClick = { plugin ->
                     selectedTrackId?.let { trackId ->
@@ -386,7 +386,6 @@ private fun PluginsBrowserTab(
                         )
                     }
                 },
-                compactItems = true,
                 pluginItemsEnabled = selectedTrackId != null,
                 modifier = Modifier.weight(1f),
             )
