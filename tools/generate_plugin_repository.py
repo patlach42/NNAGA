@@ -32,7 +32,7 @@ NATIVE_METADATA = (
 )
 OUTPUT = Path(os.environ.get("NNAGA_PLUGIN_REPOSITORY", "../nnaga-plugin-repository"))
 VERSION = "1.0.0"
-RELEASE = "2026-08-31"
+RELEASE = "2026-09-01"
 BINARY_RE = re.compile(r"(?:lv2:binary|guiext:binary|ui:binary)\s+<([^>]+)>")
 IDENTITY_ALIASES = {
     "GxVoodoFuzz": "GxVoodooFuzz",
