@@ -228,8 +228,22 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun refreshRackNow(force: Boolean = false) {
         if (!nativeReady) return
         runCatching {
-            val all = RackManager.getTracks().toList(); _tracks.value = all
-            if (_selectedPathId.value != MASTER_PATH_ID && all.none { it.id == _selectedPathId.value }) _selectedPathId.value = all.firstOrNull()?.id ?: MASTER_PATH_ID
+            val all = RackManager.getTracks().toList()
+            val previousSelectedPath = _selectedPathId.value
+            val selectedPathDisappeared = previousSelectedPath != MASTER_PATH_ID &&
+                all.none { it.id == previousSelectedPath }
+            _tracks.value = all
+            val freshTrackIds = all.mapTo(HashSet(all.size)) { it.id }
+            _clipSlots.update { current -> current.filterKeys { it in freshTrackIds } }
+            _waveformPeaks.update { current -> current.filterKeys { it in freshTrackIds } }
+            _midiNotes.update { current -> current.filterKeys { (pathId, _) -> pathId in freshTrackIds } }
+            if (selectedPathDisappeared) {
+                selectedPathRefreshGeneration.incrementAndGet()
+                _selectedPathPlugins.value = emptyList()
+                _selectedPathId.value = all.firstOrNull()?.id ?: MASTER_PATH_ID
+            } else if (_selectedPathId.value != MASTER_PATH_ID && all.none { it.id == _selectedPathId.value }) {
+                _selectedPathId.value = all.firstOrNull()?.id ?: MASTER_PATH_ID
+            }
             refreshSelectedPath(force)
             refreshTransport()
             if (_directUsbState.value != DirectUsbSessionState.Failed) _errorMessage.value = null
@@ -266,7 +280,17 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
     fun addTrack() { viewModelScope.launch(Dispatchers.IO) { val id = RackManager.addTrack(); if (id != 0L) { refreshRackNow(); selectPath(id) } else _errorMessage.value = "Failed to add track" } }
-    fun removeTrack(trackId: RackPathId) { viewModelScope.launch(Dispatchers.IO) { if (RackManager.removeTrack(trackId)) refreshRackNow() else _errorMessage.value = "Failed to remove track" } }
+    fun removeTrack(trackId: RackPathId) {
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                if (RackManager.removeTrack(trackId)) {
+                    refreshRackNow()
+                } else {
+                    _errorMessage.value = "Failed to remove track"
+                }
+            }
+        }
+    }
     fun addPlugin(pathId: RackPathId, pluginId: String, position: Int = -1) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { RackManager.addPlugin(pathId, pluginId, position) }

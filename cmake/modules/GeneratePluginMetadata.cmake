@@ -315,7 +315,6 @@ scan_external_assets("PowerAmpImpulses" "brummer10")
 scan_external_assets("FatFrog" "brummer10")
 scan_external_assets("Neuralrack" "brummer10")
 scan_external_assets("doubletracker" "Varcain")
-scan_external_assets("BOops" "Sven Jaehnichen")
 
 # --- Build descriptions list from plugin_descriptions.json ---
 set(ALL_DESCRIPTIONS "")

@@ -1,11 +1,7 @@
 package com.vibes.dsp.ui.live
 import com.vibes.dsp.ui.formatMusicalPosition
-import com.vibes.dsp.ui.components.MusicalPositionControl
 import java.util.Locale
 
-import com.vibes.dsp.ui.interpolatedElapsedSeconds
-import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
-import com.vibes.dsp.ui.rememberFrameClockNanos
 
 import android.graphics.Paint
 import android.app.Activity
@@ -53,20 +49,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -81,6 +71,34 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import com.vibes.dsp.R
+import com.vibes.dsp.engine.ClipSlotInfo
+import com.vibes.dsp.engine.ClipTempoMode
+import com.vibes.dsp.engine.DirectUsbAudioManager
+import com.vibes.dsp.engine.MidiNoteInfo
+import com.vibes.dsp.engine.MASTER_PATH_ID
+import com.vibes.dsp.engine.RackPathId
+import com.vibes.dsp.engine.RackTrackInfo
+import com.vibes.dsp.engine.TrackLaunchQuantization
+import com.vibes.dsp.ui.components.CompactHorizontalFader
+import com.vibes.dsp.ui.components.FontaudioGlyph
+import com.vibes.dsp.ui.components.FontaudioIcon
+import com.vibes.dsp.ui.components.MusicalPositionControl
+import com.vibes.dsp.ui.components.NnagaChoiceRow
+import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
+import com.vibes.dsp.ui.browser.MediaBrowserDrawerContent
+import com.vibes.dsp.ui.components.NnagaCheckbox
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaTextButton
+import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
+import com.vibes.dsp.ui.dashboard.rememberTopCutoutBounds
+import com.vibes.dsp.ui.interpolatedElapsedSeconds
+import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
+import com.vibes.dsp.ui.rememberFrameClockNanos
+import com.vibes.dsp.ui.rack.RackPlugin
+import com.vibes.dsp.ui.rack.PluginCard
+import com.vibes.dsp.ui.rack.RackViewModel
+import com.vibes.dsp.ui.theme.AppearancePreferences
 import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -129,28 +147,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.vibes.dsp.R
-import com.vibes.dsp.engine.ClipSlotInfo
-import com.vibes.dsp.engine.ClipTempoMode
-import com.vibes.dsp.engine.DirectUsbAudioManager
-import com.vibes.dsp.engine.MidiNoteInfo
-import com.vibes.dsp.engine.MASTER_PATH_ID
-import com.vibes.dsp.engine.RackPathId
-import com.vibes.dsp.engine.RackTrackInfo
-import com.vibes.dsp.engine.TrackLaunchQuantization
-import com.vibes.dsp.ui.components.CompactHorizontalFader
-import com.vibes.dsp.ui.components.NnagaChoiceRow
-import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
-import com.vibes.dsp.ui.browser.MediaBrowserDrawerContent
-import com.vibes.dsp.ui.components.NnagaCheckbox
-import com.vibes.dsp.ui.components.NnagaIconButton
-import com.vibes.dsp.ui.components.NnagaTextButton
-import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
-import com.vibes.dsp.ui.dashboard.rememberTopCutoutBounds
-import com.vibes.dsp.ui.rack.PluginCard
-import com.vibes.dsp.ui.rack.RackViewModel
-import com.vibes.dsp.ui.rack.RackPlugin
-import com.vibes.dsp.ui.theme.AppearancePreferences
 import kotlinx.coroutines.launch
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -1761,10 +1757,10 @@ private fun TransportBar(
                     modifier = Modifier.size(LiveDimensions.control),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (playing) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        FontaudioIcon(
+                            glyph = if (playing) FontaudioGlyph.PAUSE else FontaudioGlyph.PLAY,
                             contentDescription = if (playing) "Pause transport" else "Play transport",
-                            modifier = Modifier.size(LiveDimensions.icon),
+                            size = LiveDimensions.icon,
                         )
                     }
                 }
@@ -1781,20 +1777,20 @@ private fun TransportBar(
                     modifier = Modifier.size(LiveDimensions.control),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Default.Stop,
+                        FontaudioIcon(
+                            glyph = FontaudioGlyph.STOP,
                             contentDescription = "Stop transport",
-                            modifier = Modifier.size(LiveDimensions.icon),
+                            size = LiveDimensions.icon,
                         )
                     }
                 }
             }
             NnagaIconButton(onClick = onRestart, modifier = Modifier.size(LiveDimensions.hitTarget)) {
-                Icon(
-                    Icons.Default.SkipPrevious,
+                FontaudioIcon(
+                    glyph = FontaudioGlyph.PREV,
                     contentDescription = "Restart transport",
                     tint = LiveColors.textMuted,
-                    modifier = Modifier.size(LiveDimensions.icon),
+                    size = LiveDimensions.icon,
                 )
             }
             Text(
@@ -2028,11 +2024,11 @@ private fun TrackClipFooter(
                             }
                         },
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.Stop,
+                    FontaudioIcon(
+                        glyph = FontaudioGlyph.STOP,
                         contentDescription = null,
                         tint = accent,
-                        modifier = Modifier.size(LiveDimensions.icon),
+                        size = LiveDimensions.icon,
                     )
                 }
                 Box(
@@ -2317,23 +2313,42 @@ private fun ClipCard(
                             stateDescription = clipState
                         },
                 ) {
-                    Icon(
-                        imageVector = when {
-                            recordingReservation -> Icons.Default.Stop
-                            filled && playing -> Icons.Default.Replay
-                            filled -> Icons.Default.PlayArrow
-                            recordAction -> Icons.Default.FiberManualRecord
-                            else -> Icons.Default.Add
-                        },
-                        contentDescription = null,
-                        tint = when {
-                            recordingReservation || recordAction -> LiveColors.record
-                            playing -> accent
-                            filled -> LiveColors.textMuted
-                            else -> LiveColors.textDim
-                        },
-                        modifier = Modifier.size(16.dp).alpha(playIconAlpha),
-                    )
+                    when {
+                        recordingReservation -> FontaudioIcon(
+                            glyph = FontaudioGlyph.STOP,
+                            contentDescription = null,
+                            tint = LiveColors.record,
+                            size = LiveDimensions.icon,
+                            modifier = Modifier.alpha(playIconAlpha),
+                        )
+                        filled && playing -> FontaudioIcon(
+                            glyph = FontaudioGlyph.REPEAT,
+                            contentDescription = null,
+                            tint = accent,
+                            size = LiveDimensions.icon,
+                            modifier = Modifier.alpha(playIconAlpha),
+                        )
+                        filled -> FontaudioIcon(
+                            glyph = FontaudioGlyph.PLAY,
+                            contentDescription = null,
+                            tint = LiveColors.textMuted,
+                            size = LiveDimensions.icon,
+                            modifier = Modifier.alpha(playIconAlpha),
+                        )
+                        recordAction -> FontaudioIcon(
+                            glyph = FontaudioGlyph.RECORD,
+                            contentDescription = null,
+                            tint = LiveColors.record,
+                            size = LiveDimensions.icon,
+                            modifier = Modifier.alpha(playIconAlpha),
+                        )
+                        else -> Icon(
+                            Icons.Default.Add,
+                            contentDescription = null,
+                            tint = LiveColors.textDim,
+                            modifier = Modifier.size(LiveDimensions.icon).alpha(playIconAlpha),
+                        )
+                    }
                 }
             }
             Box(

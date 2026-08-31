@@ -16,208 +16,102 @@ class GeneratePluginRepositoryTest(unittest.TestCase):
     def test_generate_converges_repository_and_check_is_read_only(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            assets = root / "assets"
-            libs = root / "libs"
-            metadata = root / "plugin_metadata.json"
-            output = root / "output"
+            assets, libs = root / "assets", root / "libs"
+            metadata, output = root / "plugin_metadata.json", root / "output"
             bundle = assets / "Example.lv2"
-            boops = assets / "BOops.lv2"
             bundle.mkdir(parents=True)
             libs.mkdir()
-            boops.mkdir(parents=True)
             (bundle / "manifest.ttl").write_text(
                 """@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
 <http://example.test/Example> lv2:binary <example.so> .
 """,
                 encoding="utf-8",
             )
-            (boops / "manifest.ttl").write_text(
-                """@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
-@prefix ui: <http://lv2plug.in/ns/extensions/ui#> .
-<http://example.test/BOops> lv2:binary <BOops.so> ;
-    ui:binary <BOopsGUI.so> .
-""",
-                encoding="utf-8",
-            )
             (bundle / "README.txt").write_bytes(b"bundle metadata")
             (libs / "libexample.so").write_bytes(b"binary payload")
-            (boops / "README.txt").write_bytes(b"boops metadata")
-            (libs / "libBOops.so").write_bytes(b"boops binary payload")
-            (libs / "libBOopsGUI.so").write_bytes(b"boops GUI payload")
             metadata.write_text(
                 json.dumps(
                     {
-                        "authors": {
-                            "Example": "Example Audio",
-                            "B.Oops": "Sven Jaehnichen",
-                        },
-                        "categories": {
-                            "Example": "DelayPlugin",
-                            "B.Oops": "EnvelopePlugin",
-                        },
+                        "authors": {"Example": "Example Audio"},
+                        "categories": {"Example": "DelayPlugin"},
                         "descriptions": {
-                            "Example": "  Stereo delay for spacious guitar echoes  ",
-                            "B.Oops": (
-                                "Pattern-based creative effect with samples, sequencing, "
-                                "and extensive modulation for experimental sound design."
-                            ),
+                            "Example": "  Stereo delay for spacious guitar echoes  "
                         },
-                        "sources": {
-                            "Example": "https://example.com/plugins/example",
-                            "B.Oops": "https://github.com/sjaehn/BOops",
-                        },
+                        "sources": {"Example": "https://example.com/plugins/example"},
                     }
                 ),
                 encoding="utf-8",
             )
-            (output / "payload" / "lv2.boops").mkdir(parents=True)
-            (output / "payload" / "lv2.boops" / "1.0.0.zip").write_bytes(
-                b"stale BOops payload"
-            )
-            (output / "README.txt").parent.mkdir(parents=True, exist_ok=True)
-            (output / "README.txt").write_text("keep", encoding="utf-8")
             (output / "packages" / "lv2.stale").mkdir(parents=True)
-            (output / "packages" / "lv2.stale" / "manifest.toml").write_text(
-                "stale", encoding="utf-8"
-            )
+            (output / "packages" / "lv2.stale" / "manifest.toml").write_text("stale")
             (output / "payload" / "lv2.stale").mkdir(parents=True)
             (output / "payload" / "lv2.stale" / "old.zip").write_bytes(b"stale")
+            (output / "README.txt").parent.mkdir(parents=True, exist_ok=True)
+            (output / "README.txt").write_text("keep", encoding="utf-8")
 
             with patch.object(generator, "ASSETS", assets), patch.object(
                 generator, "LIBS", libs
             ), patch.object(generator, "METADATA", metadata), patch.object(
                 generator, "DESCRIPTION_SOURCE", metadata
-            ), patch.object(
-                generator, "OUTPUT", output
-            ):
+            ), patch.object(generator, "OUTPUT", output):
                 self.assertEqual(0, generator.generate())
-
                 package = "lv2.example"
                 manifest_path = output / "packages" / package / "manifest.toml"
                 payload_path = output / "payload" / package / "1.0.0.zip"
-                boops_package = "lv2.boops"
-                boops_manifest_path = (
-                    output / "packages" / boops_package / "manifest.toml"
-                )
-                boops_payload_path = output / "payload" / boops_package / "1.0.1.zip"
                 index_path = output / "index.toml"
                 self.assertTrue(manifest_path.is_file())
                 self.assertTrue(payload_path.is_file())
-                self.assertTrue(boops_manifest_path.is_file())
-                self.assertTrue(boops_payload_path.is_file())
                 self.assertTrue(index_path.is_file())
-                self.assertEqual(
-                    "keep", (output / "README.txt").read_text(encoding="utf-8")
-                )
+                self.assertEqual("keep", (output / "README.txt").read_text())
                 self.assertFalse((output / "packages" / "lv2.stale").exists())
-                self.assertFalse(
-                    (output / "payload" / boops_package / "1.0.0.zip").exists()
-                )
                 self.assertFalse((output / "payload" / "lv2.stale").exists())
-
-                manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
-                boops_manifest = tomllib.loads(
-                    boops_manifest_path.read_text(encoding="utf-8")
-                )
-                index = tomllib.loads(index_path.read_text(encoding="utf-8"))
+                manifest = tomllib.loads(manifest_path.read_text())
+                index = tomllib.loads(index_path.read_text())
                 payload = payload_path.read_bytes()
-                boops_payload = boops_payload_path.read_bytes()
                 self.assertEqual(2, index["schema"])
                 self.assertEqual("nnaga-plugin-repository", index["repository"])
                 self.assertEqual("2026-08-31", index["release"])
                 self.assertEqual(
-                    [
-                        {
-                            "manifest": "packages/lv2.boops/manifest.toml?v=2026-08-31",
-                            "id": "lv2.boops",
-                            "name": "B.Oops",
-                            "version": "1.0.1",
-                            "format": "lv2",
-                            "description": (
-                                "Pattern-based creative effect with samples, sequencing, "
-                                "and extensive modulation for experimental sound design."
-                            ),
-                            "manufacturer": "Sven Jaehnichen",
-                            "tags": ["Envelope", "Delay", "Sequencer", "Utility"],
-                            "source": "https://github.com/sjaehn/BOops",
-                        },
-                        {
-                            "manifest": "packages/lv2.example/manifest.toml?v=2026-08-31",
-                            "id": "lv2.example",
-                            "name": "Example",
-                            "version": "1.0.0",
-                            "format": "lv2",
-                            "description": "Stereo delay for spacious guitar echoes.",
-                            "manufacturer": "Example Audio",
-                            "tags": ["Delay"],
-                            "source": "https://example.com/plugins/example",
-                        },
-                    ],
+                    [{"manifest": "packages/lv2.example/manifest.toml?v=2026-08-31",
+                      "id": "lv2.example", "name": "Example", "version": "1.0.0",
+                      "format": "lv2", "description": "Stereo delay for spacious guitar echoes.",
+                      "manufacturer": "Example Audio", "tags": ["Delay"],
+                      "source": "https://example.com/plugins/example"}],
                     index["packages"],
                 )
                 self.assertEqual("lv2.example", manifest["id"])
                 self.assertEqual("1.0.0", manifest["version"])
-                self.assertEqual(
-                    "../../payload/lv2.example/1.0.0.zip",
-                    manifest["payload"]["url"],
-                )
-                self.assertEqual("1.0.1", boops_manifest["version"])
-                self.assertEqual(
-                    "../../payload/lv2.boops/1.0.1.zip",
-                    boops_manifest["payload"]["url"],
-                )
+                self.assertEqual("../../payload/lv2.example/1.0.0.zip",
+                                 manifest["payload"]["url"])
                 self.assertEqual("https://example.com/plugins/example", manifest["source"])
                 self.assertEqual("Example Audio", manifest["manufacturer"])
                 self.assertEqual(["Delay"], manifest["tags"])
-                self.assertEqual(
-                    "Stereo delay for spacious guitar echoes.", manifest["description"]
-                )
+                self.assertEqual("Stereo delay for spacious guitar echoes.",
+                                 manifest["description"])
                 self.assertNotIn("provides", manifest["description"].casefold())
                 self.assertNotIn("music production", manifest["description"].casefold())
                 self.assertEqual(len(payload), manifest["payload"]["size"])
                 with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-                    self.assertEqual(
-                        b"binary payload",
-                        archive.read("Example.lv2/example.so"),
-                    )
-                    self.assertEqual(
-                        b"bundle metadata",
-                        archive.read("Example.lv2/README.txt"),
-                    )
-                with zipfile.ZipFile(io.BytesIO(boops_payload)) as archive:
-                    self.assertEqual(
-                        b"boops binary payload",
-                        archive.read("BOops.lv2/BOops.so"),
-                    )
-                    self.assertEqual(
-                        b"boops GUI payload",
-                        archive.read("BOops.lv2/BOopsGUI.so"),
-                    )
-
+                    self.assertEqual(b"binary payload", archive.read("Example.lv2/example.so"))
+                    self.assertEqual(b"bundle metadata", archive.read("Example.lv2/README.txt"))
                 before_check = self._snapshot(output)
                 self.assertEqual(0, generator.generate(check=True))
                 self.assertEqual(before_check, self._snapshot(output))
-
                 stale_package_file = output / "packages" / package / "stale.txt"
                 stale_package_dir = output / "packages" / package / "stale-dir"
-                stale_package_file.write_text("stale", encoding="utf-8")
+                stale_package_file.write_text("stale")
                 stale_package_dir.mkdir()
-                (stale_package_dir / "nested.txt").write_text(
-                    "stale", encoding="utf-8"
-                )
-                stale_payload_file = output / "payload" / boops_package / "1.0.0.zip"
-                stale_payload_dir = output / "payload" / boops_package / "stale-dir"
+                (stale_package_dir / "nested.txt").write_text("stale")
+                stale_payload_file = output / "payload" / package / "stale.zip"
+                stale_payload_dir = output / "payload" / package / "stale-dir"
                 stale_payload_file.write_bytes(b"stale")
                 stale_payload_dir.mkdir()
-                (stale_payload_dir / "nested.txt").write_text(
-                    "stale", encoding="utf-8"
-                )
+                (stale_payload_dir / "nested.txt").write_text("stale")
                 before_reject = self._snapshot(output)
                 with self.assertRaises(SystemExit) as failure:
                     generator.generate(check=True)
-                self.assertIn("payload/lv2.boops", str(failure.exception))
+                self.assertIn(f"packages/{package}", str(failure.exception))
                 self.assertEqual(before_reject, self._snapshot(output))
-
                 self.assertEqual(0, generator.generate())
                 self.assertFalse(stale_package_file.exists())
                 self.assertFalse(stale_package_dir.exists())

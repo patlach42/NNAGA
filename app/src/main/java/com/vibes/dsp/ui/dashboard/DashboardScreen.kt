@@ -78,6 +78,8 @@ import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.ui.components.NnagaButton
 import com.vibes.dsp.ui.components.NnagaOutlinedButton
 import com.vibes.dsp.ui.components.NnagaTextButton
+import com.vibes.dsp.ui.components.FontaudioGlyph
+import com.vibes.dsp.ui.components.FontaudioIcon
 import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import com.vibes.dsp.engine.PluginRepositoryService
 import com.vibes.dsp.ui.dashboard.RepositoryPackageItem
@@ -519,14 +521,34 @@ private fun BrandHome(
                 },
                 modifier = Modifier.width(DashboardDimensions.brandActionWidth),
             ) {
-                Text("Save Project")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FontaudioIcon(
+                        glyph = FontaudioGlyph.SAVE,
+                        contentDescription = null,
+                        size = 18.dp,
+                    )
+                    Text("Save Project")
+                }
             }
             Spacer(modifier = Modifier.height(DashboardDimensions.brandActionSpacing))
             NnagaOutlinedButton(
                 onClick = onOpenProject,
                 modifier = Modifier.width(DashboardDimensions.brandActionWidth),
             ) {
-                Text("Open Project Folder")
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    FontaudioIcon(
+                        glyph = FontaudioGlyph.OPEN,
+                        contentDescription = null,
+                        size = 18.dp,
+                    )
+                    Text("Open Project Folder")
+                }
             }
             Text(
                 text = "Select the .nnaga project directory.",

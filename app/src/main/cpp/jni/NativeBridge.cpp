@@ -1104,14 +1104,15 @@ JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeRemoveTrack(JNIEnv*, jobject, jlong trackId) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
     std::lock_guard lock(g_ctx->rackControlMutex);
-    // Keep the UI manager alive until RackGraph has published the replacement
-    // snapshot.  On any rejected mutation (master/last/missing/dependency or
-    // publication failure), JNI-owned UI state must remain unchanged.
-    if (!g_ctx->audioEngine->getRackGraph().removeTrack(trackId)) return JNI_FALSE;
-    // The removed plugin chain remains owned by RackGraph's retired snapshot,
-    // so tearing down its UI manager is safe only after successful publication.
+    auto& graph = g_ctx->audioEngine->getRackGraph();
+    // Keep the target chain alive across publication and synchronous UI teardown.
+    [[maybe_unused]] const auto removedChain =
+        graph.getChain(static_cast<RackPathId>(trackId));
+    // Keep the UI manager unchanged on any rejected mutation.
+    if (!graph.removeTrack(trackId)) return JNI_FALSE;
     auto pathIt = g_ctx->pluginUIManagers.find(trackId);
     if (pathIt != g_ctx->pluginUIManagers.end()) {
+        pathIt->second->rebindChain(nullptr);
         g_ctx->pluginUIManagers.erase(pathIt);
     }
     return JNI_TRUE;

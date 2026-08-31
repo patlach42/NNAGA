@@ -36,6 +36,19 @@ Treat every directory under `3rd_party/` as an independent upstream boundary. Th
 
 For bundled LV2 plugin trees, keep the plugin's own metadata and notices together with the plugin. LV2 manifest/Turtle `doap:license` declarations are useful provenance, but they are not a substitute for shipping the referenced license text. Do not collapse all LV2 material into “GPL” merely because some plugins are GPL: inspect and preserve the license boundary for each plugin and nested component. `3rd_party/` may also contain copied third-party files inside a submodule; those files retain their upstream notices.
 
+
+### Fontaudio 1.1 icon catalog
+
+Bundled font asset is `app/src/main/res/font/fontaudio.ttf`, version 1.1, from upstream `https://raw.githubusercontent.com/fefanto/fontaudio/1.1/font/fontaudio.ttf`. Scope for the font file is SIL Open Font License 1.1.
+
+For this boundary, keep exactly these notice files in source releases and inventories:
+
+- `app/src/main/assets/licenses/fontaudio/NOTICE`
+- `app/src/main/assets/licenses/fontaudio/OFL-1.1.txt`
+- `app/src/main/assets/licenses/fontaudio/MIT.txt`
+
+Upstream SVG/JS icon files are CC BY 4.0 and are not bundled with this release.
+
 ### Wine, FEX, VST3, and their dependencies
 
 The VST host sources are separate submodules under `vsthost_lib/external/`. Preserve notices recursively rather than treating the whole directory as one license:

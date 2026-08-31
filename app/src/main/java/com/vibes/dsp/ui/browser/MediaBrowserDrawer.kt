@@ -19,15 +19,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
+import com.vibes.dsp.ui.components.FontaudioGlyph
+import com.vibes.dsp.ui.components.FontaudioIcon
+import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaTextButton
+
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
@@ -55,8 +58,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.RackPathId
-import com.vibes.dsp.ui.components.NnagaIconButton
-import com.vibes.dsp.ui.components.NnagaTextButton
 import kotlinx.coroutines.launch
 
 internal enum class MediaBrowserTab { Clips, Plugins }
@@ -307,15 +308,21 @@ private fun ClipTreeRow(
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            imageVector = when {
-                row.isDirectory -> Icons.Default.Folder
-                row.mimeType.contains("midi", ignoreCase = true) -> Icons.Default.MusicNote
-                else -> Icons.Default.AudioFile
-            },
-            contentDescription = null,
-            modifier = Modifier.size(22.dp),
-        )
+        if (row.isDirectory) {
+            Icon(imageVector = Icons.Default.Folder, contentDescription = null, modifier = Modifier.size(22.dp))
+        } else {
+            FontaudioIcon(
+                glyph = when {
+                    row.mimeType.contains("midi", ignoreCase = true) -> FontaudioGlyph.MIDI_PLUG
+                    row.name.endsWith(".mid", ignoreCase = true) ||
+                        row.name.endsWith(".midi", ignoreCase = true) -> FontaudioGlyph.KEYBOARD
+                    else -> FontaudioGlyph.WAVEFORM
+                },
+                contentDescription = null,
+                modifier = Modifier,
+                size = 22.dp,
+            )
+        }
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = row.name,

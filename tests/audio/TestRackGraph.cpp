@@ -3822,6 +3822,60 @@ TEST(RackGraphInputRoutingTest, RejectedRoutedSourceRemovalPreservesGraphAndChai
             << "right frame " << frame;
     }
 }
+TEST(RackGraphInputRoutingTest, RemovingEarlierActiveTrackKeepsSurvivorMediaAligned) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId deleted = graph.getTracks().front().id;
+    const RackPathId survivor = graph.addTrack();
+    ASSERT_NE(survivor, guitarrackcraft::kMasterPathId);
+
+    const auto survivorChain = graph.getChain(survivor);
+    ASSERT_NE(survivorChain, nullptr);
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        deleted, 0, makeRampClip(64, 10.0f, "deleted.wav")));
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        survivor, 0, makeRampClip(64, 100.0f, "survivor.wav")));
+    ASSERT_TRUE(graph.setClipLooping(deleted, 0, true));
+    ASSERT_TRUE(graph.setClipLooping(survivor, 0, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        deleted, 0, true, guitarrackcraft::LaunchQuantization::None));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        survivor, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    StereoBuffers beforeBuffers;
+    clearBuffers(beforeBuffers);
+    graph.process(beforeBuffers.inputs, 2, beforeBuffers.outputs, 1);
+    EXPECT_FLOAT_EQ(beforeBuffers.outputLeft[0], 110.0f);
+    EXPECT_FLOAT_EQ(beforeBuffers.outputRight[0], 110.0f);
+
+    ASSERT_TRUE(graph.removeTrack(deleted));
+
+    const auto tracks = graph.getTracks();
+    ASSERT_EQ(tracks.size(), 1u);
+    EXPECT_EQ(tracks.front().id, survivor);
+    EXPECT_TRUE(tracks.front().wavLoaded);
+    EXPECT_EQ(tracks.front().wavDisplayName, "survivor.wav");
+    EXPECT_EQ(tracks.front().activeSlot, 0);
+    EXPECT_TRUE(tracks.front().playing);
+    EXPECT_EQ(graph.getChain(survivor), survivorChain);
+    EXPECT_EQ(graph.getChain(deleted), nullptr);
+
+    const auto slots = graph.getTrackClipSlots(survivor);
+    const auto* survivorSlot = findClipSlot(slots, 0);
+    ASSERT_NE(survivorSlot, nullptr);
+    EXPECT_EQ(survivorSlot->trackId, survivor);
+    EXPECT_TRUE(survivorSlot->wavLoaded);
+    EXPECT_EQ(survivorSlot->displayName, "survivor.wav");
+    EXPECT_TRUE(survivorSlot->active);
+    EXPECT_TRUE(survivorSlot->playing);
+
+    StereoBuffers afterBuffers;
+    clearBuffers(afterBuffers);
+    graph.process(afterBuffers.inputs, 2, afterBuffers.outputs, 1);
+    EXPECT_FLOAT_EQ(afterBuffers.outputLeft[0], 101.0f);
+    EXPECT_FLOAT_EQ(afterBuffers.outputRight[0], 101.0f);
+}
 
 TEST(RackGraphSnapshotTest, TrackAndSlotSnapshotsDoNotMixCallbackGenerations) {
     RackGraph graph;

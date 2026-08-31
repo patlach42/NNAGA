@@ -1,0 +1,19 @@
+Fontaudio 1.1
+=============
+
+This application bundles the complete Fontaudio desktop font from the pinned
+upstream source:
+https://raw.githubusercontent.com/fefanto/fontaudio/1.1/font/fontaudio.ttf
+
+The bundled font file is Fontaudio 1.1, copyright (c) 2019 Michelangelo Nottoli,
+and is licensed under the SIL Open Font License 1.1. The complete license text
+is provided in OFL-1.1.txt.
+
+The Fontaudio project's non-font source/code is licensed under the MIT License;
+the complete upstream MIT text is provided in MIT.txt for attribution and
+license-boundary reference. This application does not bundle Fontaudio's SVG or
+JavaScript icon files. Those upstream icon files are separately identified by
+Fontaudio as CC BY 4.0 and are not covered by this bundled-font notice.
+
+Fontaudio project: https://github.com/fefanto/fontaudio
+Upstream license split: https://github.com/fefanto/fontaudio/tree/1.1#license

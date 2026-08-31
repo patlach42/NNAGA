@@ -942,7 +942,6 @@ bool LV2Plugin::initializePorts() {
     }
     lilv_node_free(minimumSizeNode);lilv_node_free(latencyDesignation);lilv_node_free(atomSupports);lilv_node_free(midiEventNode);lilv_node_free(controlClass);lilv_node_free(atomClass);lilv_node_free(inputClass);lilv_node_free(audioClass);
     if(!valid){atomPortBuffers_.clear();atomPorts_.clear();return false;}
-    // BOops can emit ~192 UI->DSP atoms in one synchronous edit burst.
     // Keep descriptor capacity independent of payload-byte storage.
     const size_t slots = std::max<size_t>(256, kUiQueueCapacity);
     pendingAtoms_.reset(slots, maxCapacity);

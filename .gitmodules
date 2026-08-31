@@ -179,6 +179,3 @@
 [submodule "3rd_party/ysfx"]
 	path = 3rd_party/ysfx
 	url = https://github.com/JoepVanlier/ysfx.git
-[submodule "3rd_party/BOops"]
-	path = 3rd_party/BOops
-	url = https://github.com/sjaehn/BOops.git

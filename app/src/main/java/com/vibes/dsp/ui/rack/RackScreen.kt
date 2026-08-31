@@ -19,52 +19,56 @@
 
 package com.vibes.dsp.ui.rack
 import com.vibes.dsp.ui.formatMusicalPosition
-import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
 import com.vibes.dsp.ui.interpolatedElapsedSeconds
+import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
 import com.vibes.dsp.ui.rememberFrameClockNanos
 
+import android.app.Activity
+import android.content.pm.ActivityInfo
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.util.Log
+
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.zIndex
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.Extension
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.FiberManualRecord
-import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DesktopWindows
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Extension
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Fullscreen
 import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.MusicNote
-import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.Repeat
-import androidx.compose.material.icons.filled.Replay
-import androidx.compose.material.icons.filled.SkipPrevious
-import androidx.compose.material.icons.filled.StopCircle
-
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -72,83 +76,82 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalLifecycleOwner
-import androidx.compose.ui.platform.LocalView
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.app.Activity
-import android.content.pm.ActivityInfo
-import android.provider.OpenableColumns
-import android.util.Log
-import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.layout
+import androidx.compose.ui.zIndex
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.vibes.dsp.engine.RackManager
-import com.vibes.dsp.engine.X11Bridge
-import com.vibes.dsp.engine.PluginInfo
-import com.vibes.dsp.engine.UiType
-import com.vibes.dsp.engine.JsfxBridge
-import com.vibes.dsp.engine.PluginUiPreferenceManager
-import com.vibes.dsp.engine.DirectUsbSessionState
+import com.vibes.dsp.BuildConfig
 import com.vibes.dsp.engine.DirectUsbAudioManager
+import com.vibes.dsp.engine.DirectUsbSessionState
+import com.vibes.dsp.engine.JsfxBridge
 import com.vibes.dsp.engine.MASTER_PATH_ID
+import com.vibes.dsp.engine.PluginInfo
+import com.vibes.dsp.engine.PluginUiPreferenceManager
+import com.vibes.dsp.engine.RackManager
 import com.vibes.dsp.engine.TrackLaunchQuantization
+import com.vibes.dsp.engine.UiType
+import com.vibes.dsp.engine.X11Bridge
 import com.vibes.dsp.ui.components.CompactHorizontalFader
-import com.vibes.dsp.ui.components.NnagaSelectorField
-import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
+import com.vibes.dsp.ui.components.FontaudioGlyph
+import com.vibes.dsp.ui.components.FontaudioIcon
 import com.vibes.dsp.ui.components.NnagaButton
 import com.vibes.dsp.ui.components.NnagaCheckbox
 import com.vibes.dsp.ui.components.NnagaIconButton
+import com.vibes.dsp.ui.components.NnagaSelectorField
+import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
 import com.vibes.dsp.ui.components.NnagaSwitch
 import com.vibes.dsp.ui.components.NnagaTextButton
 import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
-import com.vibes.dsp.ui.modgui.InlineModguiView
 import com.vibes.dsp.ui.jsfx.JsfxPluginUi
+import com.vibes.dsp.ui.modgui.InlineModguiView
 import com.vibes.dsp.ui.x11.PluginX11UiView
 import com.vibes.dsp.ui.x11.X11DisplayManager
-import com.vibes.dsp.BuildConfig
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import android.net.Uri
-import androidx.compose.runtime.key
-import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -156,29 +159,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.toMutableStateList
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.spring
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
-import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.ui.text.input.KeyboardType
-
-
 import kotlin.math.roundToInt
 import kotlin.math.roundToLong
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 private const val FALLBACK_JSFX_WIDTH = 640
 private const val FALLBACK_JSFX_HEIGHT = 360
 
@@ -558,12 +549,17 @@ fun RackScreen(
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         NnagaIconButton(onClick = { if (transport.playing) viewModel.transportPause() else viewModel.transportPlay() },
-        modifier = Modifier.size(48.dp)) { Icon(
-            if (transport.playing) Icons.Default.Pause else Icons.Default.PlayArrow,
-            if (transport.playing) "Pause global transport" else "Start global transport"
+        modifier = Modifier.size(48.dp)) { FontaudioIcon(
+            glyph = if (transport.playing) FontaudioGlyph.PAUSE else FontaudioGlyph.PLAY,
+            contentDescription = if (transport.playing) "Pause global transport" else "Start global transport",
+            size = 24.dp
         ) }
         NnagaIconButton(onClick = { viewModel.transportRestart() },
-        modifier = Modifier.size(48.dp)) { Icon(Icons.Default.SkipPrevious, "Restart global transport") }
+        modifier = Modifier.size(48.dp)) { FontaudioIcon(
+            glyph = FontaudioGlyph.PREV,
+            contentDescription = "Restart global transport",
+            size = 24.dp
+        ) }
         RackTransportPosition(
             musicalQuarterNotes = transport.musicalQuarterNotes,
             positionSec = transport.positionSec,
@@ -572,17 +568,10 @@ fun RackScreen(
             capturedAtMonotonicNanos = transport.capturedAtMonotonicNanos,
             modifier = Modifier.weight(1f),
         )
-        NnagaTextButton(
-            onClick = {
-                tempoInput = transport.beatsPerMinute.toString()
-                showTempoDialog = true
-            },
-        ) {
-            Text(
-                "${transport.beatsPerMinute.toInt()} BPM",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        NnagaTextButton(onClick = {
+            tempoInput = transport.beatsPerMinute.toString()
+            showTempoDialog = true
+        }) { Text("${transport.beatsPerMinute.toInt()} BPM", style = MaterialTheme.typography.bodySmall) }
     }
     }
     if (showTempoDialog) {
@@ -833,19 +822,17 @@ fun RackScreen(
                             },
                         contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            Icons.Default.Mic,
+                        FontaudioIcon(
+                            glyph = if (track.inputArmed) FontaudioGlyph.ARM_RECORDING else FontaudioGlyph.MICROPHONE,
                             contentDescription = null,
                             tint = if (track.inputArmed) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSurfaceVariant
+                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                            size = 24.dp
                         )
                     }
                     DropdownMenu(
                         expanded = inputMenuExpanded,
-                        onDismissRequest = {
-                            inputMenuExpanded = false
-                            inputChannelMenuExpanded = false
-                        }
+                        onDismissRequest = { inputMenuExpanded = false }
                     ) {
                         DropdownMenuItem(
                             text = { Text("Input source") },
@@ -949,12 +936,12 @@ fun RackScreen(
                                         if (selectedSlotPlaying) "Restart pending" else "Launch pending"
                                 }
                             },
-                        contentAlignment = Alignment.Center
                     ) {
-                        Icon(
-                            if (selectedSlotPlaying) Icons.Default.Replay else Icons.Default.PlayArrow,
+                        FontaudioIcon(
+                            glyph = if (selectedSlotPlaying) FontaudioGlyph.REPEAT else FontaudioGlyph.PLAY,
                             contentDescription = null,
-                            modifier = Modifier.alpha(playIconAlpha)
+                            modifier = Modifier.alpha(playIconAlpha),
+                            size = 24.dp
                         )
                     }
                     DropdownMenu(
@@ -1045,11 +1032,11 @@ fun RackScreen(
                                     },
                                 contentAlignment = Alignment.Center
                             ) {
-                                Icon(
-                                    if (recordingReservationActive) {
-                                        Icons.Default.Stop
+                                FontaudioIcon(
+                                    glyph = if (recordingReservationActive) {
+                                        FontaudioGlyph.STOP
                                     } else {
-                                        Icons.Default.FiberManualRecord
+                                        FontaudioGlyph.RECORD
                                     },
                                     contentDescription = null,
                                     tint = when {
@@ -1058,16 +1045,17 @@ fun RackScreen(
                                             MaterialTheme.colorScheme.error
                                         else -> MaterialTheme.colorScheme.onSurfaceVariant
                                     },
-                                    modifier = Modifier.alpha(recordIconAlpha)
+                                    modifier = Modifier.alpha(recordIconAlpha),
+                                    size = 24.dp
                                 )
+                        }
+                        DropdownMenu(
+                            expanded = recordMenuExpanded,
+                            onDismissRequest = {
+                                recordMenuExpanded = false
+                                loopLengthMenuExpanded = false
                             }
-                            DropdownMenu(
-                                expanded = recordMenuExpanded,
-                                onDismissRequest = {
-                                    recordMenuExpanded = false
-                                    loopLengthMenuExpanded = false
-                                }
-                            ) {
+                        ) {
                                 DropdownMenuItem(
                                     text = { Text("Selected slot length ($slotLoopLengthLabel)") },
                                     onClick = {
