@@ -412,6 +412,8 @@ class NativeEngine private constructor() {
      *  plugin cache. Used by the Manage VST UI (full flavor) so an imported
      *  VST appears in the browser without restarting the audio engine. */
     external fun nativeRefreshPluginRegistry(): Boolean
+    /** Validates a staged NNAGA Native plugin library before repository commit. */
+    external fun nativeValidateNativePlugin(path: String): Boolean
     external fun nativeGetRackPluginX11Display(pathId: Long, pluginIndex: Int): Int
     external fun nativeGetRackPluginEditorSize(pathId: Long, pluginIndex: Int): Long
     external fun nativeGetRackPluginInstanceId(pathId: Long, index: Int): Long

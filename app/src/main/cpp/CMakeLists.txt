@@ -93,6 +93,7 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/engine
     ${CMAKE_CURRENT_SOURCE_DIR}/jni
     ${CMAKE_CURRENT_SOURCE_DIR}/x11
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/nnaga-native-plugin-sdk/include
 )
 # Direct USB Audio Class backend is provided by the local standalone submodule.
 set(LOWLATENCY_AUDIO_ROOT
@@ -132,14 +133,18 @@ add_library(plugin_abstraction STATIC
     plugin/PluginUIGuard.cpp
     plugin/PluginUIManager.cpp
     plugin/RackStateCodec.cpp
+    plugin/native/NativePlugin.cpp
+    plugin/native/NativePluginFactory.cpp
     jsfx/JsfxPlugin.cpp
     jsfx/JsfxPluginFactory.cpp
 )
 target_include_directories(plugin_abstraction PRIVATE
-    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/ysfx/include")
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/ysfx/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/nnaga-native-plugin-sdk/include")
 target_link_libraries(plugin_abstraction PRIVATE
     lowlatencyaudio::lowlatencyaudio
-    ysfx)
+    ysfx
+    dl)
 
 # LV2 backend (conditional compilation)
 if(LV2_AVAILABLE)

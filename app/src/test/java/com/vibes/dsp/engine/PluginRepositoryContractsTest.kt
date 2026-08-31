@@ -1,6 +1,7 @@
 package com.vibes.dsp.engine
 
 import java.net.URI
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Test
@@ -251,6 +252,52 @@ class PluginRepositoryContractsTest {
     }
 
     @Test
+    fun nativeManifestAcceptsArchiveWithExactArm64LibraryEntry() {
+        validateRepositoryManifest(nativeManifest())
+    }
+
+    @Test
+    fun nativeManifestRejectsWrongKindArchitectureAndUnsafeLibraryEntries() {
+        val valid = nativeManifest()
+        listOf(
+            "file payload" to valid.copy(kind = "file"),
+            "wrong architecture" to valid.copy(arch = listOf("x86_64")),
+            "extra architecture" to valid.copy(arch = listOf("arm64-v8a", "x86_64")),
+            "path traversal" to valid.copy(entry = "arm64-v8a/../libnnaga_plugin_filter.so"),
+            "missing architecture directory" to valid.copy(entry = "libnnaga_plugin_filter.so"),
+            "wrong library prefix" to valid.copy(entry = "arm64-v8a/libfilter.so"),
+            "backslash path" to valid.copy(entry = "arm64-v8a\\libnnaga_plugin_filter.so"),
+        ).forEach { (case, manifest) ->
+            assertThrows(case, IllegalArgumentException::class.java) {
+                validateRepositoryManifest(manifest)
+            }
+        }
+    }
+
+    @Test
+    fun findsNativePluginBinariesRecursivelyInCanonicalOrderAndSkipsSymlinks() {
+        val root = Files.createTempDirectory("nnaga-native-finder").toFile()
+        try {
+            val nested = root.resolve("plugins").apply { mkdirs() }
+            val first = nested.resolve("libnnaga_plugin_a.so").apply { writeBytes(byteArrayOf(1)) }
+            val second = nested.resolve("libnnaga_plugin_z.so").apply { writeBytes(byteArrayOf(2)) }
+            root.resolve("plugins/not-a-native-library.so").writeBytes(byteArrayOf(3))
+            root.resolve("plugins/libnnaga_plugin_directory.so").mkdirs()
+            Files.createSymbolicLink(
+                root.resolve("libnnaga_plugin_link.so").toPath(),
+                first.toPath(),
+            )
+
+            assertEquals(
+                listOf(first.canonicalPath, second.canonicalPath),
+                findNativePluginBinaries(root).map { it.canonicalPath },
+            )
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
     fun parsesAndValidatesDependencyCompleteJsfxFiles() {
         val manifest = parseRepositoryManifest(
             """
@@ -368,6 +415,32 @@ class PluginRepositoryContractsTest {
         repositoryRoot = "https://plugins.example/repo/",
         manufacturer = "Acme Audio",
         tags = listOf("JSFX"),
+    )
+
+    private fun nativeManifest(
+        kind: String = "archive",
+        arch: List<String> = listOf("arm64-v8a"),
+        entry: String = "arm64-v8a/libnnaga_plugin_filter.so",
+    ) = PluginRepositoryService.RepoManifest(
+        schema = 1,
+        id = "native.nnaga-filter",
+        name = "NNAGA Filter",
+        version = "1.0.0",
+        format = "native",
+        description = "A deterministic native filter fixture",
+        payloadUrl = "payload/native.nnaga-filter.zip",
+        payloadSha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        payloadSize = 42,
+        entry = entry,
+        kind = kind,
+        files = emptyList(),
+        arch = arch,
+        sourceName = "Test source",
+        source = "https://github.com/patlach42/nnaga-native-plugin-sdk",
+        manifestUrl = "https://plugins.example/repo/native.nnaga-filter.toml",
+        repositoryRoot = "https://plugins.example/repo/",
+        manufacturer = "NNAGA",
+        tags = listOf("Filter"),
     )
 
     @Test

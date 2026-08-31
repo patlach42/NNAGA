@@ -99,6 +99,11 @@ object EngineInitHelper {
                 return false
             }
         }
+        val nativeDir = File(context.applicationContext.filesDir, "plugin-repositories/installed/native")
+        findNativePluginBinaries(nativeDir).forEach { library ->
+            runCatching { System.load(library.absolutePath) }
+                .onFailure { Log.w(TAG, "Native plugin preload skipped: ${library.name}", it) }
+        }
         val ok = engine.nativeInit()
         if (!ok) {
             Log.e(TAG, "Failed to initialize native engine")

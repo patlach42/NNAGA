@@ -44,6 +44,7 @@
 #include "../plugin/IPlugin.h"
 #include "../plugin/IPluginFactory.h"
 #include "../plugin/lv2/LV2PluginFactory.h"
+#include "../plugin/native/NativePluginFactory.h"
 
 #include "../jsfx/JsfxPluginFactory.h"
 // VST hosting (full flavor only — gated by CMake -DHAS_VST_HOST from
@@ -411,6 +412,16 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetPluginLibDir(JNIEnv* env, jobjec
 }
 
 JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeValidateNativePlugin(JNIEnv* env, jobject, jstring path) {
+    if (!path) return JNI_FALSE;
+    const char* rawPath = env->GetStringUTFChars(path, nullptr);
+    if (!rawPath) return JNI_FALSE;
+    const std::string nativePath(rawPath);
+    env->ReleaseStringUTFChars(path, rawPath);
+    return validateNativePluginPath(nativePath) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
 
     std::lock_guard<std::mutex> initLock(g_nativeInitMutex);
@@ -442,6 +453,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeInit(JNIEnv* env, jobject thiz) {
     // Register LV2 factory (pass path from nativeSetLv2Path for extracted Guitarix/assets)
     auto lv2Factory = std::make_unique<LV2PluginFactory>(g_ctx->lv2Path, g_ctx->nativeLibDir, g_ctx->filesDir, g_ctx->pluginLibDir);
     g_ctx->pluginRegistry->registerFactory(std::move(lv2Factory));
+
+    g_ctx->pluginRegistry->registerFactory(
+        std::make_unique<NativePluginFactory>(g_ctx->filesDir, g_ctx->nativeLibDir, g_ctx->pluginLibDir));
 
     if (!g_ctx->jsfxRoot.empty()) {
         const std::string dataRoot = std::filesystem::path(g_ctx->jsfxRoot).parent_path() / "Data";

@@ -218,6 +218,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/targets/fil4.cmake)
 
 # Dusk Audio 4K EQ 2 (DSP + host-generated controls)
 include(${CMAKE_CURRENT_SOURCE_DIR}/targets/dusk_4keq.cmake)
+include(${CMAKE_CURRENT_SOURCE_DIR}/targets/nnaga_native_filter.cmake)
 
 # ─── Phase 4: Metadata + modgui ──────────────────────────────────────────────
 include(${CMAKE_CURRENT_SOURCE_DIR}/targets/metadata.cmake)
@@ -246,6 +247,7 @@ add_custom_target(all_plugins
         metadata_done
         fil4_done
         dusk_4keq_done
+        nnaga_native_filter_done
     COMMENT "All plugins built"
 )
 

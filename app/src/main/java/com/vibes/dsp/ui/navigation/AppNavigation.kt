@@ -119,6 +119,9 @@ fun AppNavigation(
             nativeRefresh = {
                 runCatching { NativeEngine.getInstance().nativeRefreshPluginRegistry() }.getOrDefault(false)
             },
+            validateNativePlugin = { path ->
+                runCatching { NativeEngine.getInstance().nativeValidateNativePlugin(path) }.getOrDefault(false)
+            },
             removeWineOwnership = { ownership ->
                 RepositoryVstAdapter.removeOwnership(context, ownership)
             },

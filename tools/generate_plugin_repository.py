@@ -25,6 +25,7 @@ ASSETS = Path("app/src/main/assets/lv2")
 LIBS = Path("app/src/full/jniLibs/arm64-v8a")
 METADATA = Path("app/src/main/assets/plugin_metadata.json")
 DESCRIPTION_SOURCE = Path("plugin_descriptions.json")
+NATIVE_FILTER_METADATA = Path("3rd_party/nnaga-native-plugin-sdk/package/filter.json")
 OUTPUT = Path(os.environ.get("NNAGA_PLUGIN_REPOSITORY", "../nnaga-plugin-repository"))
 VERSION = "1.0.0"
 RELEASE = "2026-08-31"
@@ -335,6 +336,28 @@ def manifest(package: str, name: str, bundle_stem: str, archive: bytes) -> str:
 
 
 
+
+def native_filter_record() -> tuple[str, str, bytes, str]:
+    metadata = json.loads(NATIVE_FILTER_METADATA.read_text(encoding="utf-8"))
+    package = metadata["repository_id"]
+    library = metadata["library"]
+    binary = LIBS / library
+    if not binary.is_file():
+        raise SystemExit(f"missing native plugin binary: {binary}")
+    archive = archive_bytes("arm64-v8a", {library: binary.read_bytes()})
+    digest = hashlib.sha256(archive).hexdigest()
+    manifest_text = (
+        f'schema = 1\nid = {toml_string(package)}\nname = {toml_string(metadata["name"])}\n'
+        f'version = {toml_string(metadata["version"])}\nformat = "native"\n'
+        f'source = {toml_string(metadata["source"])}\narch = ["arm64-v8a"]\n'
+        f'manufacturer = {toml_string(metadata["manufacturer"])}\n'
+        f'tags = {json.dumps(metadata["tags"], ensure_ascii=False, separators=(",", ":"))}\n'
+        f'description = {toml_string(metadata["description"])}\nlicense = {toml_string(metadata["license"])}\n\n'
+        f'[payload]\nkind = "archive"\nurl = "../../payload/{package}/{metadata["version"]}.zip"\n'
+        f'sha256 = "{digest}"\nsize = {len(archive)}\n\n'
+        f'[install]\nentry = "arm64-v8a/{library}"\n'
+    )
+    return package, metadata["name"], archive, manifest_text
 def atomic_write(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -375,12 +398,16 @@ def generate(check: bool = False, output: Path | None = None) -> int:
         display_name = DISPLAY_NAMES.get(stem, stem)
         records.append((package, display_name, archive,
                         manifest(package, display_name, stem, archive)))
+    native_record = native_filter_record()
+    if native_record[0] in seen:
+        raise SystemExit(f"duplicate package id: {native_record[0]}")
+    records.append(native_record)
     if check:
         errors: list[str] = []
         expected_packages = {package for package, *_ in records}
         for kind in ("packages", "payload"):
             directory = OUTPUT / kind
-            actual = {p.name for p in directory.iterdir() if p.name.startswith("lv2.")} if directory.is_dir() else set()
+            actual = {p.name for p in directory.iterdir() if p.name.startswith(("lv2.", "native."))} if directory.is_dir() else set()
             extras = sorted(actual - expected_packages)
             missing_dirs = sorted(expected_packages - actual)
             errors.extend(f"{kind}/{name}" for name in extras + missing_dirs)
@@ -406,7 +433,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
             directory = OUTPUT / kind
             directory.mkdir(parents=True, exist_ok=True)
             for child in directory.iterdir():
-                if child.is_dir() and child.name.startswith("lv2.") and child.name not in expected_packages:
+                if child.is_dir() and child.name.startswith(("lv2.", "native.")) and child.name not in expected_packages:
                     shutil.rmtree(child)
         for package in expected_packages:
             for directory, keep in (
@@ -424,7 +451,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
             atomic_write(OUTPUT / "packages" / package / "manifest.toml", text.encode("utf-8"))
             atomic_write(OUTPUT / "payload" / package / f"{VERSION}.zip", archive)
         atomic_write(OUTPUT / "index.toml", index_text(records).encode("utf-8"))
-    unknown = [stem for package, stem, _, _ in records if metadata_for(stem, package)[0] == "Unknown"]
+    unknown = [stem for package, stem, _, _ in records if package.startswith("lv2.") and metadata_for(stem, package)[0] == "Unknown"]
     if unknown:
         print("Unknown plugin metadata:", flush=True)
         print("\n".join(sorted(unknown)), flush=True)

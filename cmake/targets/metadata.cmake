@@ -42,6 +42,7 @@ set(_all_plugin_deps
     modamptk_done
     fatfrog_done
     doubletracker_done
+    nnaga_native_filter_done
 )
 
 # ─── Plugin metadata JSON (stamp-based) ─────────────────────────────────────

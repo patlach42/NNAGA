@@ -60,6 +60,15 @@ data class RepoManifestFile(
 )
 private const val MAX_JSFX_FILE_SIZE = 512L * 1024 * 1024
 
+internal fun findNativePluginBinaries(root: File): List<File> =
+    if (!root.isDirectory) emptyList() else root.walkTopDown()
+        .filter {
+            it.isFile && !it.isHidden && !Files.isSymbolicLink(it.toPath()) &&
+                Regex("""libnnaga_plugin_[A-Za-z0-9_.-]+\.so""").matches(it.name)
+        }
+        .sortedBy { it.canonicalPath }
+        .toList()
+
 internal fun validateFacetMetadata(manifest: PluginRepositoryService.RepoManifest) {
     fun safe(value: String, max: Int) = value.isNotBlank() && value.length <= max && value.none { it.isISOControl() }
     require(safe(manifest.manufacturer, 128))
@@ -209,6 +218,7 @@ internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoMa
     require(validateRepositorySource(source) == source) { "Non-canonical source" }
     val expectedKinds = when (manifest.format) {
         "lv2" -> setOf("archive")
+        "native" -> setOf("archive")
         "wine_installer" -> setOf("installer")
         "wine_archive" -> setOf("archive")
         "wine_directory" -> setOf("directory")
@@ -252,6 +262,10 @@ internal fun validateRepositoryManifest(manifest: PluginRepositoryService.RepoMa
                 require(name.endsWith(".jsfx") || !name.contains('.'))
             }
         }
+    }
+    if (manifest.format == "native") {
+        require(manifest.arch == listOf("arm64-v8a"))
+        require(Regex("""arm64-v8a/libnnaga_plugin_[A-Za-z0-9_.-]+\.so""").matches(manifest.entry))
     }
 }
 internal data class RepositorySourceRecord(
@@ -361,7 +375,7 @@ private data class StagedRepositoryPayload(
     val file: File,
 )
 
-class PluginRepositoryService(private val context: Context, private val nativeRefresh: (() -> Boolean)? = null, private val http: OkHttpClient = OkHttpClient(), private val removeWineOwnership: ((WineInstallOwnership) -> Boolean)? = null) : RepositoryService {
+class PluginRepositoryService(private val context: Context, private val nativeRefresh: (() -> Boolean)? = null, private val http: OkHttpClient = OkHttpClient(), private val removeWineOwnership: ((WineInstallOwnership) -> Boolean)? = null, private val validateNativePlugin: ((String) -> Boolean)? = null) : RepositoryService {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val root = File(context.filesDir, "plugin-repositories")
     private val installedRoot = File(root, "installed")
@@ -518,7 +532,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
                         validateEntry(stage, m.entry)
                     }
                 }
-                writeMetadata(stage, m); if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE); Files.move(stage.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); moved = true; if (m.format == "lv2") preloadLv2Binaries(target, System::load); require(nativeRefresh?.invoke() != false); if (backup.exists()) backup.deleteRecursively(); dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively); setPackageState(id, null, 1f, null); publishCurrent()
+                writeMetadata(stage, m); if (target.exists()) Files.move(target.toPath(), backup.toPath(), StandardCopyOption.ATOMIC_MOVE); Files.move(stage.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); moved = true; if (m.format == "lv2") preloadLv2Binaries(target, System::load); if (m.format == "native") { val library = File(target, m.entry).canonicalFile; require(findNativePluginBinaries(target).singleOrNull()?.canonicalFile == library) { "Native archive must contain exactly one plugin library" }; require(validateNativePlugin?.invoke(library.absolutePath) != false) { "Invalid native plugin ABI" }; System.load(library.absolutePath) }; require(nativeRefresh?.invoke() != false); if (backup.exists()) backup.deleteRecursively(); dir.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith(".") && it != target }.forEach(File::deleteRecursively); setPackageState(id, null, 1f, null); publishCurrent()
             } catch (e: Exception) { if (moved) target.deleteRecursively(); if (backup.exists() && !target.exists()) Files.move(backup.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE); nativeRefresh?.invoke(); setPackageState(id, null, null, e.message ?: "Install failed"); throw e } finally { tmp.delete(); stage.deleteRecursively(); backup.deleteRecursively() }
         }
     }

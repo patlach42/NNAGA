@@ -291,7 +291,7 @@ class PluginBrowserViewModel(application: Application) : AndroidViewModel(applic
         val arch = when {
             plugin.format == "VST2" || plugin.format == "VST3" ->
                 metadata.archByName[normalizedPluginName]?.let { if (it) "x64" else "x86" } ?: ""
-            plugin.format == "LV2" -> "native"
+            plugin.format == "LV2" || plugin.format == "NATIVE" -> "native"
             else -> ""
         }
 
@@ -323,7 +323,8 @@ class PluginBrowserViewModel(application: Application) : AndroidViewModel(applic
                         allPlugins.map { applyMetadata(it) }
                     } else {
                         allPlugins.filter { plugin ->
-                            availablePluginNamesLower.contains(plugin.name.lowercase())
+                            plugin.format == "NATIVE" ||
+                                availablePluginNamesLower.contains(plugin.name.lowercase())
                         }.map { applyMetadata(it) }
                     }
                     allPlugins.size to filtered
