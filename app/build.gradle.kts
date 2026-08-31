@@ -17,13 +17,74 @@
  * along with NNAGA. If not, see <https://www.gnu.org/licenses/>.
  */
 
+import com.android.build.api.artifact.SingleArtifact
+import org.gradle.api.tasks.Sync
+
+import java.net.InetAddress
 import java.text.SimpleDateFormat
 import java.util.Date
-import java.net.InetAddress
+import java.util.Properties
+
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+val versionPropertiesFile = rootProject.file("version.properties")
+val requiredVersionPropertyKeys = setOf("VERSION_NAME", "VERSION_CODE")
+val semVerPattern = Regex(
+    "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)" +
+        "(?:-(?:(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))" +
+        "(?:\\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?" +
+        "(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+)
+
+if (!versionPropertiesFile.isFile) {
+    error("Missing application version file: ${versionPropertiesFile.absolutePath}")
+}
+
+val versionAssignmentPattern = Regex("^([A-Z_]+)=(.*)$")
+val seenVersionPropertyKeys = mutableSetOf<String>()
+versionPropertiesFile.readLines().forEachIndexed { index, line ->
+    val trimmed = line.trim()
+    if (trimmed.isEmpty() || trimmed.startsWith("#") || trimmed.startsWith("!")) {
+        return@forEachIndexed
+    }
+    val key = versionAssignmentPattern.matchEntire(line)?.groupValues?.get(1)
+        ?: error("Invalid version.properties assignment at line ${index + 1}")
+    require(key in requiredVersionPropertyKeys) {
+        "Unknown version.properties key at line ${index + 1}: $key"
+    }
+    require(seenVersionPropertyKeys.add(key)) {
+        "Duplicate version.properties key at line ${index + 1}: $key"
+    }
+}
+require(seenVersionPropertyKeys == requiredVersionPropertyKeys) {
+    "version.properties must contain exactly: ${requiredVersionPropertyKeys.sorted().joinToString()}"
+}
+
+val versionProperties = Properties().also { properties ->
+    versionPropertiesFile.inputStream().use(properties::load)
+}
+require(versionProperties.stringPropertyNames() == requiredVersionPropertyKeys) {
+    "version.properties must contain exactly: ${requiredVersionPropertyKeys.sorted().joinToString()}"
+}
+val applicationVersionName = versionProperties.getProperty("VERSION_NAME")
+    ?.takeIf { it.isNotBlank() }
+    ?: error("Missing or blank VERSION_NAME in version.properties")
+require(semVerPattern.matches(applicationVersionName)) {
+    "VERSION_NAME must be a complete SemVer 2.0.0 version without a leading v"
+}
+val applicationVersionCodeText = versionProperties.getProperty("VERSION_CODE")
+    ?.takeIf { it.isNotBlank() }
+    ?: error("Missing or blank VERSION_CODE in version.properties")
+require(applicationVersionCodeText.matches(Regex("^[1-9][0-9]*$"))) {
+    "VERSION_CODE must be canonical ASCII decimal"
+}
+val applicationVersionCode = applicationVersionCodeText.toLongOrNull()
+    ?: error("VERSION_CODE is outside the supported range")
+require(applicationVersionCode in 1..2_100_000_000) {
+    "VERSION_CODE must be between 1 and 2100000000"
 }
 
 android {
@@ -34,8 +95,8 @@ android {
         applicationId = "com.vibes.dsp"
         minSdk = 26
         targetSdk = 35
-        versionCode = 100  // 0.1
-        versionName = "0.1-main"
+        versionCode = applicationVersionCode.toInt()
+        versionName = applicationVersionName
 
         val buildDate = SimpleDateFormat("yyyy-MM-dd").format(Date())
         val buildTime = SimpleDateFormat("HH:mm").format(Date())
@@ -304,6 +365,74 @@ android {
     sourceSets {
         getByName("main") {
             assets.srcDirs("src/main/assets")
+        }
+    }
+}
+
+fun versionedArtifactName(sourceName: String, extension: String): String {
+    val suffix = sourceName.removePrefix("app-")
+    require(
+        suffix != sourceName &&
+            suffix.length > extension.length + 1 &&
+            suffix.endsWith(".$extension")
+    ) {
+        "Unexpected Android $extension artifact basename: $sourceName"
+    }
+    return "nnaga-$applicationVersionName-$suffix"
+}
+
+androidComponents {
+    onVariants(selector().all()) { variant ->
+        val taskSuffix = variant.name.replaceFirstChar { it.uppercase() }
+        val assembleTaskName = "assemble$taskSuffix"
+        val bundleTaskName = "bundle$taskSuffix"
+        val packageVersionedApk = tasks.register<Sync>("package${taskSuffix}VersionedApk") {
+            group = "build"
+            description = "Copies $taskSuffix APKs to the canonical versioned output directory."
+            from(variant.artifacts.get(SingleArtifact.APK)) {
+                include("*.apk")
+                rename { sourceName -> versionedArtifactName(sourceName, "apk") }
+            }
+            into(layout.buildDirectory.dir("outputs/versioned/apk/${variant.name}"))
+            doFirst {
+                val sourceApks = source.files.filter { it.isFile && it.extension == "apk" }
+                require(sourceApks.isNotEmpty()) {
+                    "No APK artifacts were produced for ${variant.name}"
+                }
+                sourceApks.forEach { versionedArtifactName(it.name, "apk") }
+            }
+            onlyIf("the APK producer completed successfully") {
+                project.tasks.findByName(assembleTaskName)?.state?.let {
+                    it.executed && it.failure == null
+                } == true
+            }
+        }
+        val packageVersionedBundle = tasks.register<Sync>("package${taskSuffix}VersionedBundle") {
+            group = "build"
+            description = "Copies the $taskSuffix bundle to the canonical versioned output directory."
+            from(variant.artifacts.get(SingleArtifact.BUNDLE)) {
+                include("*.aab")
+                rename { sourceName -> versionedArtifactName(sourceName, "aab") }
+            }
+            into(layout.buildDirectory.dir("outputs/versioned/bundle/${variant.name}"))
+            doFirst {
+                val sourceBundles = source.files.filter { it.isFile && it.extension == "aab" }
+                require(sourceBundles.size == 1) {
+                    "Expected exactly one AAB artifact for ${variant.name}, found ${sourceBundles.size}"
+                }
+                versionedArtifactName(sourceBundles.single().name, "aab")
+            }
+            onlyIf("the bundle producer completed successfully") {
+                project.tasks.findByName(bundleTaskName)?.state?.let {
+                    it.executed && it.failure == null
+                } == true
+            }
+        }
+        tasks.matching { it.name == assembleTaskName }.configureEach {
+            finalizedBy(packageVersionedApk)
+        }
+        tasks.matching { it.name == bundleTaskName }.configureEach {
+            finalizedBy(packageVersionedBundle)
         }
     }
 }

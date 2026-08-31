@@ -49,6 +49,36 @@ export PATH=$PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools:$ANDROID_HOME
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+VERSION_PROPERTIES="$PROJECT_ROOT/version.properties"
+if [ ! -f "$VERSION_PROPERTIES" ]; then
+    echo "ERROR: version.properties not found at $VERSION_PROPERTIES" >&2
+    exit 1
+fi
+
+VERSION_NAME_LINE_COUNT=0
+while IFS= read -r line; do
+    case "$line" in
+        VERSION_NAME=*)
+            VERSION_NAME_VALUE="${line#VERSION_NAME=}"
+            if [ -n "$VERSION_NAME_VALUE" ]; then
+                VERSION_NAME="$VERSION_NAME_VALUE"
+                VERSION_NAME_LINE_COUNT=$((VERSION_NAME_LINE_COUNT + 1))
+            fi
+            ;;
+    esac
+done < "$VERSION_PROPERTIES"
+
+if [ "${VERSION_NAME_LINE_COUNT:-0}" -ne 1 ] || [ -z "${VERSION_NAME:-}" ]; then
+    echo "ERROR: expected exactly one nonblank VERSION_NAME in $VERSION_PROPERTIES" >&2
+    exit 1
+fi
+
+VERSIONED_DEBUG_APK="app/build/outputs/versioned/apk/fullDebug/nnaga-${VERSION_NAME}-full-debug.apk"
+VERSIONED_FULL_RELEASE_APK="app/build/outputs/versioned/apk/fullRelease/nnaga-${VERSION_NAME}-full-release.apk"
+VERSIONED_FULL_RELEASE_AAB="app/build/outputs/versioned/bundle/fullRelease/nnaga-${VERSION_NAME}-full-release.aab"
+VERSIONED_PLAYSTORE_AAB="app/build/outputs/versioned/bundle/playstoreRelease/nnaga-${VERSION_NAME}-playstore-release.aab"
+VERSIONED_PLAYSTORE_APKS="build/nnaga-${VERSION_NAME}-playstore-local.apks"
+
 check_device() {
     local count
     count=$(adb devices | grep -v "List of devices" | grep "device$" | wc -l)
@@ -108,13 +138,18 @@ debug)
 
     if [ "$(check_device)" -eq 0 ]; then
         echo "No device connected."
-        echo "APK: app/build/outputs/apk/full/debug/app-full-debug.apk"
+        echo "APK: $VERSIONED_DEBUG_APK"
         exit 1
     fi
 
-    echo "Installing..."
-    ./gradlew installFullDebug
-    echo ""
+    if [ -f "$VERSIONED_DEBUG_APK" ]; then
+        echo "APK: $VERSIONED_DEBUG_APK ($(du -sh "$VERSIONED_DEBUG_APK" | cut -f1))"
+        echo "Installing..."
+        adb install -r "$VERSIONED_DEBUG_APK"
+    else
+        echo "No built debug APK found: $VERSIONED_DEBUG_APK" >&2
+        exit 1
+    fi
 
     echo "Starting app..."
     adb shell am start -n com.vibes.dsp/.MainActivity
@@ -138,12 +173,12 @@ release)
     ./gradlew bundleFullRelease assembleFullRelease
     echo ""
 
-    AAB=app/build/outputs/bundle/fullRelease/app-full-release.aab
+    AAB=$VERSIONED_FULL_RELEASE_AAB
     if [ -f "$AAB" ]; then
         echo "AAB: $AAB ($(du -sh "$AAB" | cut -f1))"
     fi
 
-    APK=app/build/outputs/apk/full/release/app-full-release.apk
+    APK=$VERSIONED_FULL_RELEASE_APK
     if [ -f "$APK" ]; then
         echo "APK: $APK ($(du -sh "$APK" | cut -f1))"
     fi
@@ -195,9 +230,9 @@ playstore)
     ./gradlew bundlePlaystoreRelease
     echo ""
 
-    AAB=$(find app/build/outputs/bundle/playstoreRelease -name '*.aab' 2>/dev/null | head -1)
-    if [ -z "$AAB" ]; then
-        echo "ERROR: AAB not found"
+    AAB="$VERSIONED_PLAYSTORE_AAB"
+    if [ ! -f "$AAB" ]; then
+        echo "ERROR: AAB not found: $AAB"
         exit 1
     fi
     require_release_credentials
@@ -209,17 +244,16 @@ playstore)
         echo "No device connected."
         echo ""
         echo "To install manually:"
-        echo "  java -jar bundletool.jar build-apks \\"
-        echo '    --bundle="$AAB" --output=out.apks --local-testing \'
-        echo '    --ks="$RELEASE_STORE_FILE" --ks-pass=pass:"$RELEASE_STORE_PASSWORD" \'
-        echo '    --ks-key-alias="$RELEASE_KEY_ALIAS" --key-pass=pass:"$RELEASE_KEY_PASSWORD"'
-        echo "  java -jar bundletool.jar install-apks --apks=out.apks"
+        echo "  java -jar \"$BUNDLETOOL\" build-apks \\"
+        echo "    --bundle=\"$AAB\" --output=\"$VERSIONED_PLAYSTORE_APKS\" --local-testing \\"
+        echo "    --ks=\"$RELEASE_STORE_FILE\" --ks-pass=pass:\"$RELEASE_STORE_PASSWORD\" \\"
+        echo "    --ks-key-alias=\"$RELEASE_KEY_ALIAS\" --key-pass=pass:\"$RELEASE_KEY_PASSWORD\""
+        echo "  java -jar \"$BUNDLETOOL\" install-apks --apks=\"$VERSIONED_PLAYSTORE_APKS\""
         exit 1
     fi
 
     # Generate split APKs with --local-testing for PAD simulation
-    APKS="$PROJECT_ROOT/build/playstore-local.apks"
-    mkdir -p "$(dirname "$APKS")"
+    APKS="$VERSIONED_PLAYSTORE_APKS"
     rm -f "$APKS"
 
     echo "Generating split APKs (local-testing PAD simulation)..."

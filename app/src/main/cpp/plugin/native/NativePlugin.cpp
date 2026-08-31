@@ -96,6 +96,7 @@ NativePlugin::NativePlugin(std::shared_ptr<NativePluginLibrary> library, const N
     info_.id = descriptor_->id;
     info_.name = descriptor_->name;
     info_.format = "NATIVE";
+    info_.originPath = library_->path;
     info_.ports = {audioPort(0, "Input L", true), audioPort(1, "Input R", true),
                    audioPort(2, "Output L", false), audioPort(3, "Output R", false)};
     parameterCount_ = descriptor_->parameter_count;
@@ -115,6 +116,7 @@ NativePlugin::NativePlugin(std::shared_ptr<NativePluginLibrary> library, const N
         port.minValue = 0.0f;
         port.maxValue = 1.0f;
         port.unit = parameter.unit ? parameter.unit : "";
+        port.stepCount = static_cast<int32_t>(parameter.scale_point_count == 0 ? 0 : parameter.scale_point_count - 1);
         for (uint32_t s = 0; s < parameter.scale_point_count; ++s)
             port.scalePoints.push_back({parameter.scale_points[s].label, parameter.scale_points[s].normalized_value});
         info_.ports.push_back(std::move(port));

@@ -29,14 +29,6 @@ name: Build & Deploy
 on:
   workflow_dispatch:
     inputs:
-      version_name:
-        description: "Version name (e.g. 1.0.0, 1.0.0-beta.1)"
-        required: true
-        type: string
-      version_code:
-        description: "Version code (integer, must be higher than previous release)"
-        required: true
-        type: string
       create_github_release:
         description: "Create a GitHub Release"
         required: true
@@ -47,6 +39,7 @@ on:
         required: true
         type: boolean
         default: false
+
 
 concurrency:
   group: build-deploy
@@ -69,7 +62,77 @@ env:
     ocaml ocamlbuild ocaml-findlib libnum-ocaml-dev faust libboost-dev ccache
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      name: ${{ steps.version.outputs.name }}
+      code: ${{ steps.version.outputs.code }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 1
+      - name: Validate committed version
+        id: version
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import re
+          import os
+          import sys
+
+          path = pathlib.Path("version.properties")
+          if not path.is_file():
+              raise SystemExit("version.properties is missing")
+
+          values = {}
+          for number, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+              line = raw.strip()
+              if not line or line.startswith("#") or line.startswith("!"):
+                  continue
+              match = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", raw)
+              if not match:
+                  raise SystemExit(f"malformed version.properties line {number}")
+              key, value = match.groups()
+              if key not in {"VERSION_NAME", "VERSION_CODE"}:
+                  raise SystemExit(f"unknown key {key!r} on line {number}")
+              if key in values:
+                  raise SystemExit(f"duplicate key {key!r} on line {number}")
+              if not value:
+                  raise SystemExit(f"blank value for {key}")
+              values[key] = value
+
+          if set(values) != {"VERSION_NAME", "VERSION_CODE"}:
+              raise SystemExit("version.properties must contain exactly VERSION_NAME and VERSION_CODE")
+
+          semver = re.compile(
+              r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
+              r"(?:(?P<prerelease>-(?:(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))"
+              r"(?:\.(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?"
+              r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+          )
+          match = semver.fullmatch(values["VERSION_NAME"])
+          if not match:
+              raise SystemExit("VERSION_NAME is not valid SemVer")
+
+          code = values["VERSION_CODE"]
+          if not re.fullmatch(r"[1-9][0-9]*", code):
+              raise SystemExit("VERSION_CODE must be canonical positive ASCII decimal")
+          if not 1 <= int(code) <= 2100000000:
+              raise SystemExit("VERSION_CODE must be in range 1..2100000000")
+
+          output = os.environ["GITHUB_OUTPUT"]
+          with open(output, "a", encoding="utf-8") as stream:
+              stream.write(f"name={values['VERSION_NAME']}\n")
+              stream.write(f"code={code}\n")
+              stream.write(f"prerelease={'true' if match.group('prerelease') else 'false'}\n")
+          PY
+
   keys:
+    needs: version
     if: ${{ inputs.create_github_release }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -383,7 +446,7 @@ jobs:
 
   full-release:
     if: ${{ inputs.create_github_release }}
-    needs: [keys, wine, fex, dxvk, mesa, x11, llvm-android]
+    needs: [version, keys, wine, fex, dxvk, mesa, x11, llvm-android]
     runs-on: ubuntu-latest
     timeout-minutes: 180
     permissions:
@@ -665,13 +728,6 @@ jobs:
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
 
-      # ── 10. Patch version ────────────────────────────────────────────────
-      - name: Patch versionCode and versionName
-        run: |
-          sed -i \
-            -e 's/versionCode = [0-9]*/versionCode = ${{ inputs.version_code }}/' \
-            -e 's/versionName = ".*"/versionName = "${{ inputs.version_name }}"/' \
-            app/build.gradle.kts
 
       # ── 11. Build the VST ("full" flavor) release APK ────────────────────
       #     assembleFullRelease only — no playstore bundle/AAB is produced.
@@ -706,23 +762,21 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
 
       # ── 12. Upload APK artifact ──────────────────────────────────────────
-      - name: Find built APK
+      - name: Prepare built APK and checksum
         id: artifacts
         run: |
-          APK=$(find app/build/outputs/apk/full/release -name '*.apk' | head -1)
-          if [ -z "$APK" ]; then
-            echo "::error::No full/release APK found"
-            exit 1
-          fi
+          APK="app/build/outputs/versioned/apk/fullRelease/nnaga-${{ needs.version.outputs.name }}-full-release.apk"
+          test -f "$APK" || { echo "::error::Missing canonical full release APK: $APK"; exit 1; }
+          APK_DIR=$(dirname "$APK")
+          APK_NAME=$(basename "$APK")
+          (cd "$APK_DIR" && sha256sum "$APK_NAME" > "$APK_NAME.sha256")
           echo "apk=$APK" >> "$GITHUB_OUTPUT"
-          CHECKSUM="${APK}.sha256"
-          sha256sum "$APK" > "$CHECKSUM"
-          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+          echo "checksum=$APK_DIR/$APK_NAME.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload NNAGA full APK and checksum artifact
         uses: actions/upload-artifact@v4
         with:
-          name: nnaga-full-${{ inputs.version_name }}-apk
+          name: nnaga-${{ needs.version.outputs.name }}-full-release-apk
           path: |
             ${{ steps.artifacts.outputs.apk }}
             ${{ steps.artifacts.outputs.checksum }}
@@ -732,12 +786,12 @@ jobs:
         if: inputs.create_github_release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ inputs.version_name }}
-          name: NNAGA v${{ inputs.version_name }}
+          tag_name: v${{ needs.version.outputs.name }}
+          name: NNAGA v${{ needs.version.outputs.name }}
           files: |
             ${{ steps.artifacts.outputs.apk }}
             ${{ steps.artifacts.outputs.checksum }}
-          prerelease: ${{ contains(inputs.version_name, 'beta') || contains(inputs.version_name, 'alpha') || contains(inputs.version_name, 'rc') }}
+          prerelease: ${{ needs.version.outputs.prerelease }}
           generate_release_notes: true
 
       # ── 14. Cleanup ──────────────────────────────────────────────────────
@@ -746,6 +800,7 @@ jobs:
         run: rm -f "$RUNNER_TEMP/upload.keystore"
 
   playstore-release:
+    needs: version
     if: ${{ inputs.upload_to_play_store }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
@@ -954,14 +1009,6 @@ jobs:
         env:
           KEYSTORE_B64: ${{ secrets.KEYSTORE_BASE64 }}
 
-      # ── 10. Patch version ────────────────────────────────────────────────
-      - name: Patch versionCode and versionName
-        run: |
-          sed -i \
-            -e 's/versionCode = [0-9]*/versionCode = ${{ inputs.version_code }}/' \
-            -e 's/versionName = ".*"/versionName = "${{ inputs.version_name }}"/' \
-            app/build.gradle.kts
-
       # ── 11. Build the Play Store AAB (playstore flavor, no VST) ─────────────────
       - name: Restore Gradle cache
         id: gradle-cache
@@ -994,24 +1041,24 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
 
       # ── 12. Upload workflow artifact (AAB only) ──────────────────────────
-      - name: Find built AAB
+      - name: Prepare built AAB
         id: artifacts
         run: |
-          AAB=$(find app/build/outputs/bundle/playstoreRelease -name '*.aab' | head -1)
+          AAB="app/build/outputs/versioned/bundle/playstoreRelease/nnaga-${{ needs.version.outputs.name }}-playstore-release.aab"
+          test -f "$AAB" || { echo "::error::Missing canonical Play Store AAB: $AAB"; exit 1; }
           echo "aab=$AAB" >> "$GITHUB_OUTPUT"
 
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: guitarrackcraft-${{ inputs.version_name }}-aab
-          path: ${{ steps.artifacts.outputs.aab }}
-
+          name: nnaga-${{ needs.version.outputs.name }}-playstore-release-aab
+          path: app/build/outputs/versioned/bundle/playstoreRelease/nnaga-${{ needs.version.outputs.name }}-playstore-release.aab
 
       # ── 14. Verify AAB signature ─────────────────────────────────────────
       - name: Verify AAB is signed
         if: inputs.upload_to_play_store
         run: |
-          AAB="${{ steps.artifacts.outputs.aab }}"
+          AAB="app/build/outputs/versioned/bundle/playstoreRelease/nnaga-${{ needs.version.outputs.name }}-playstore-release.aab"
           echo "Checking JAR signature on $AAB"
           jarsigner -verify -verbose -certs "$AAB" | head -20
           jarsigner -verify "$AAB"
@@ -1024,7 +1071,7 @@ jobs:
         with:
           serviceAccountJsonPlainText: ${{ secrets.PLAY_STORE_KEY }}
           packageName: com.vibes.dsp
-          releaseFiles: ${{ steps.artifacts.outputs.aab }}
+          releaseFiles: app/build/outputs/versioned/bundle/playstoreRelease/nnaga-${{ needs.version.outputs.name }}-playstore-release.aab
           track: internal
           status: draft
 

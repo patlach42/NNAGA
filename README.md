@@ -63,8 +63,18 @@ RELEASE_KEY_PASSWORD=...
 
 Do not commit the keystore or its passwords. Every Android variant uses this signing configuration, and packaging fails when any `RELEASE_*` property is missing or the keystore path is not a file.
 
-## Distribution flavors
+NNAGA reads version metadata from root `version.properties` (`VERSION_NAME` and `VERSION_CODE`), and release tags use `v<VERSION_NAME>`.
 
+Canonical Android artifacts are versioned under:
+
+- `app/build/outputs/versioned/apk/<variant>/nnaga-<version>-<variant>.apk`
+- `app/build/outputs/versioned/bundle/<variant>/nnaga-<version>-<variant>.aab`
+
+Variants include `fullDebug`, `fullRelease`, and `playstoreRelease`.
+
+For full release and Play Store publishing flow, checksum rules, and release checklists, follow [`docs/RELEASING.md`](docs/RELEASING.md).
+
+## Distribution flavors
 | Flavor | Target SDK | VST host | Asset packs | Intended distribution |
 | --- | ---: | --- | --- | --- |
 | `full` | 28 | Included | Disabled | Sideloaded builds, including the optional Wine/FEX stack |

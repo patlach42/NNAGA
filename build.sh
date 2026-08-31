@@ -35,6 +35,7 @@ if [ "$FLAVOR" = "clean" ]; then
     rm -rf "$PROJECT_ROOT/build/x11_ui"
     rm -rf "$PROJECT_ROOT/build/mesa"
     rm -rf "$PROJECT_ROOT/build/fftw3"
+    rm -rf "$PROJECT_ROOT/build/shared"
     rm -rf "$PROJECT_ROOT/build/fftw3-codelets"
     rm -rf "$PROJECT_ROOT/build/neuralrack"
     rm -rf "$PROJECT_ROOT/build/impulseloader"
@@ -46,6 +47,10 @@ if [ "$FLAVOR" = "clean" ]; then
     rm -rf "$PROJECT_ROOT/build/modamptk"
     rm -rf "$PROJECT_ROOT/build/fatfrog"
     rm -rf "$PROJECT_ROOT/build/doubletracker"
+    rm -rf "$PROJECT_ROOT/build/dusk_4keq_source"
+    rm -rf "$PROJECT_ROOT/build/dusk_4keq_host"
+    rm -rf "$PROJECT_ROOT/build/dusk_4keq_android"
+    rm -rf "$PROJECT_ROOT/build/dusk_4keq"
     rm -rf "$PROJECT_ROOT/build/lv2_wrapper"
 
     echo "Restoring 3rd_party to pristine state..."
@@ -236,6 +241,14 @@ FULL_JNILIBS="$PROJECT_ROOT/app/src/full/jniLibs/arm64-v8a"
 GX_PACK="$PROJECT_ROOT/gxplugins_pack/src/main/assets/plugins/arm64-v8a"
 NEURAL_PACK="$PROJECT_ROOT/neural_pack/src/main/assets/plugins/arm64-v8a"
 BRUMMER_PACK="$PROJECT_ROOT/brummer_pack/src/main/assets/plugins/arm64-v8a"
+
+# Shuffle is repository-only. Remove artifacts from prior baseline builds
+# before partitioning so neither full nor PAD discovers it pre-install.
+rm -f "$MAIN_JNILIBS/libnnaga_plugin_shuffle.so" \
+      "$FULL_JNILIBS/libnnaga_plugin_shuffle.so" \
+      "$GX_PACK/libnnaga_plugin_shuffle.so" \
+      "$NEURAL_PACK/libnnaga_plugin_shuffle.so" \
+      "$BRUMMER_PACK/libnnaga_plugin_shuffle.so"
 
 # ─── Rename SONAME-versioned X11/Mesa libs to standard .so extension ─────────
 # Android APK packaging only extracts lib*.so from nativeLibDir. Files like

@@ -2,9 +2,9 @@
 
 This guide describes how to make NNAGA release builds comparable. It does **not** promise byte-for-byte reproducibility: the Android build embeds the current date, time, and host name in `BuildConfig`, and signed Android packages can also differ in signing metadata.
 
-## 1. Pin the source tree
+## 1. Pin the source tree and application version
 
-Build from an immutable commit (preferably the release tag) rather than a moving branch. Record the exact commit, tag, and submodule state in the build log:
+Build from an immutable commit (preferably release tag) rather than a moving branch. Record commit, tag, and submodule state in build log.
 
 ```sh
 git fetch --tags --prune
@@ -15,11 +15,17 @@ git describe --tags --always --dirty
 git submodule status --recursive
 ```
 
-Replace `v<version>` with the tag being built; do not invent or assume a tag name. If the release process supplies a commit instead of a tag, use `git checkout --detach <commit>` and record that commit. A dirty tree should not be used for a comparison build; stop and resolve it if `git describe` ends in `-dirty`.
+NNAGA version is authoritative from root `version.properties`:
 
-`build.sh` also runs `git submodule update --init --recursive`. Run it after the checkout even when submodules appear present, and retain the `git submodule status --recursive` output as provenance. Submodule commits are part of the source being compared.
+```sh
+VERSION_NAME=$(awk -F= '$1=="VERSION_NAME"{print $2}' version.properties)
+VERSION_CODE=$(awk -F= '$1=="VERSION_CODE"{print $2}' version.properties)
+printf 'VERSION_NAME=%s\nVERSION_CODE=%s\n' "$VERSION_NAME" "$VERSION_CODE"
+```
 
-## 2. Record the toolchain and environment
+In a release path, keep Git tag equal to `v${VERSION_NAME}`. If `git checkout` used commit mode, record the commit and verify any release tag used later matches `v<version>` from file. A dirty tree must not be used for reproducibility comparison.
+
+`build.sh` also runs `git submodule update --init --recursive`. Run it after the checkout even when submodules appear present, and retain the `git submodule status --recursive` output as provenance. Submodule commits are part of source compared.
 
 The repository pins the Gradle wrapper to Gradle 8.9 (`gradle/wrapper/gradle-wrapper.properties`), Android Gradle Plugin to 8.7.3, Kotlin to 1.9.20, Java source/target to 17, and CMake to 3.22.1. The CI release workflow additionally selects Android NDK `26.1.10909125` for the VST host and `27.2.12479018` for native builds. Record the actual tools used, not only the requested versions:
 
@@ -88,21 +94,23 @@ In CI, `CI` causes `build.sh` to default `BUILD_VST` to `0`; the full-release wo
 
 ## 5. Capture artifact hashes and provenance
 
-After a build, locate the expected output and record its SHA-256 with the source and toolchain records:
+After a build, use canonical versioned outputs and record SHA-256 with source/toolchain records:
 
 ```sh
-APK=$(find app/build/outputs/apk/full/release -type f -name '*.apk' -print -quit)
-test -n "$APK" && test -f "$APK"
+VERSION_NAME=$(awk -F= '$1=="VERSION_NAME"{print $2; exit}' version.properties)
+
+APK=app/build/outputs/versioned/apk/fullRelease/nnaga-${VERSION_NAME}-full-release.apk
+test -n "$VERSION_NAME" && test -f "$APK"
 printf '%s  %s\n' "$(sha256sum "$APK" | cut -d' ' -f1)" "$APK"
 
-AAB=$(find app/build/outputs/bundle/playstoreRelease -type f -name '*.aab' -print -quit)
-test -n "$AAB" && test -f "$AAB"
+AAB=app/build/outputs/versioned/bundle/playstoreRelease/nnaga-${VERSION_NAME}-playstore-release.aab
+test -n "$VERSION_NAME" && test -f "$AAB"
 printf '%s  %s\n' "$(sha256sum "$AAB" | cut -d' ' -f1)" "$AAB"
 ```
 
-Run only the command relevant to the selected variant. Keep the complete checksum line, variant/task name, commit, recursive submodule status, tool versions, signing certificate identity, and relevant build environment together. The CI full-release path writes an adjacent `.sha256` file for its APK and uploads it with the APK. The Play Store path uploads the AAB; generate and retain an analogous local checksum when comparing it.
+Run only the command relevant to the selected variant. Keep checksum line, variant/task name, commit, recursive submodule status, tool versions, signing certificate identity, and build environment together. The CI full-release path writes an adjacent `.sha256` file for `nnaga-<version>-full-release.apk` and uploads it with the APK. The Play Store path uploads the versioned AAB; generate and retain analogous local checksum when comparing it.
 
-To identify the signing certificate without exposing private key material:
+To identify signing certificate without exposing private key material:
 
 ```sh
 apksigner verify --verbose --print-certs "$APK"
@@ -110,7 +118,7 @@ apksigner verify --verbose --print-certs "$APK"
 
 ## 6. Compare cautiously
 
-First compare the SHA-256 values. Equal hashes are strong evidence that the files are identical; unequal hashes do not by themselves identify a source, toolchain, or security problem. Signed APK/AAB bytes may differ because signing adds or updates signing-block metadata, and ZIP metadata/order/compression can vary. NNAGA additionally writes `BUILD_DATE`, `BUILD_TIME`, and `BUILD_HOST` from the current clock and machine name, so two otherwise equivalent builds can legitimately have different bytes.
+First compare the SHA-256 values. Equal hashes are strong evidence that files are identical; unequal hashes do not by themselves identify a source, toolchain, or security problem. Signed APK/AAB bytes may differ because signing adds or updates signing-block metadata, and ZIP metadata/order/compression can vary. NNAGA additionally writes `BUILD_DATE`, `BUILD_TIME`, and `BUILD_HOST` from the current clock and machine name, so two otherwise equivalent builds can legitimately have different bytes.
 
 When hashes differ, compare observable contents and provenance instead of claiming reproducibility:
 
@@ -128,11 +136,11 @@ if command -v bundletool >/dev/null 2>&1; then
   bundletool dump manifest --bundle="$AAB" > aab.manifest.xml
 fi
 
-# Compare entry lists, then inspect the same selected entries in both outputs.
+# Compare entry lists, then inspect same selected entries in both outputs.
 diff -u first/apk.entries second/apk.entries || true
 unzip -l "$APK"
 ```
 
-Use the same commands and selected paths for both outputs. Also compare package/application ID, version code/name, ABI set, requested permissions, asset/plugin lists, native library names, and the signer certificate fingerprint. For an AAB, compare its manifest and module/asset-pack contents with a bundle-aware Android tool such as `bundletool` when it is available; do not treat a generated universal APK as the same artifact as the original AAB.
+Use the same commands and selected paths for both outputs. Also compare package/application ID, version code/name, ABI set, requested permissions, asset/plugin lists, native library names, and signer certificate fingerprint. For an AAB, compare its manifest and module/asset-pack contents with a bundle-aware Android tool such as `bundletool` when it is available; do not treat a generated universal APK as the same artifact as the original AAB.
 
-If byte identity is required for a particular release, investigate the first differing entries and control the clock, host-derived values, dependency/toolchain inputs, signing configuration, ZIP normalization, and build environment as a separate engineering effort. This guide intentionally reports differences and comparable properties rather than asserting that signed outputs will be byte-identical.
+If byte identity is required for a particular release, investigate the first differing entries and control the clock, host-derived values, dependency/toolchain inputs, signing configuration, ZIP normalization, and build environment as a separate engineering effort. This guide intentionally reports differences and comparable properties rather than claiming signed outputs are byte-identical.

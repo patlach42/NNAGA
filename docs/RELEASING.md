@@ -1,63 +1,118 @@
 # NNAGA release operator guide
 
-This guide describes the manual `Build & Deploy` workflow in `.github/workflows/build-deploy.yml`. The workflow is an experimental release path for this fork; operators should review the build logs and downloaded files before publishing them.
+This guide describes the manual **Build & Deploy** workflow in
+`.github/workflows/build-deploy.yml`. The checked-out `version.properties` file
+is the sole source of the Android application version. The workflow does not
+accept version overrides and does not patch source files.
 
-## Dispatch inputs
+## Version contract
 
-Open **Actions → Build & Deploy → Run workflow** and provide:
+At the repository root, `version.properties` contains exactly one assignment
+for each of these keys:
 
-| Input | Required | Workflow behavior |
-| --- | --- | --- |
-| `version_name` | Yes | String patched into `app/build.gradle.kts` as `versionName`. The workflow description gives `1.0.0` and `1.0.0-beta.1` as examples. |
-| `version_code` | Yes | String patched as `versionCode`; the workflow description requires an integer higher than the previous release. |
-| `create_github_release` | Yes (default `true`) | Runs the full/VST build and GitHub Release path when true. |
-| `upload_to_play_store` | Yes (default `false`) | Runs the separate Play Store AAB path when true. |
+```properties
+VERSION_NAME=0.1.0
+VERSION_CODE=100
+```
 
-The two booleans are independent. A dispatch can run either path or both. A Play-Store-only dispatch does not run the full/VST build.
+Set `VERSION_NAME` to a complete SemVer 2.0.0 value, without a leading `v`.
+Use compatibility-oriented increments:
+
+- **MAJOR**: an incompatible public/API change.
+- **MINOR**: backward-compatible functionality.
+- **PATCH**: backward-compatible bug or security fixes.
+
+The `-prerelease` suffix is optional. It consists of dot-separated
+ASCII alphanumeric/hyphen identifiers (for example, `1.2.0-rc.1`); numeric
+identifiers must not have leading zeroes. A prerelease has lower precedence
+than the corresponding normal version, and identifiers are compared left to
+right using SemVer rules. The `+build` suffix is also optional, consists of
+dot-separated ASCII alphanumeric/hyphen identifiers (for example,
+`1.2.0+build.7`), and is ignored when comparing SemVer precedence. Build
+metadata alone therefore does not make a release a prerelease.
+
+`VERSION_CODE` is independent of SemVer and is the Android/Google Play
+ordering integer. Every published prerelease or release MUST use a previously
+unused `VERSION_CODE` larger than every code already published for
+`com.vibes.dsp`, including versions that contain `+build` metadata. Before a
+Play upload, confirm the next code is unused in Play Console.
+
+Git tags use the `v<version>` convention: for `VERSION_NAME=1.2.0`, the tag is
+`v1.2.0` and the GitHub Release display name is `NNAGA v1.2.0`.
+
+## Ordered release checklist
+
+1. **Choose and record the identity.** Update both `VERSION_NAME` and
+   `VERSION_CODE` in root `version.properties`. Do not edit
+   `app/build.gradle.kts`, pass version inputs, or use environment overrides.
+2. **Prepare the changelog.** Move the entries under `[Unreleased]` in
+   `CHANGELOG.md` under a heading `## [<version>] - YYYY-MM-DD`, using the
+   exact `VERSION_NAME`, and recreate an empty `[Unreleased]` section.
+3. **Commit the source.** Commit `version.properties`, the changelog update,
+   and any release changes. Record the immutable commit/ref to dispatch; do
+   not dispatch a worktree state that has not been committed.
+4. **Dispatch the exact ref.** In **Actions → Build & Deploy → Run workflow**,
+   select that commit (or an exact ref resolving to it). Set either or both of
+   the independent booleans:
+
+   | Input | Default | Effect |
+   | --- | --- | --- |
+   | `create_github_release` | `true` | Build and publish the full/VST APK and GitHub Release. |
+   | `upload_to_play_store` | `false` | Build and upload the Play Store AAB as an internal draft. |
+
+   A Play-Store-only dispatch does not run the full/VST path; selecting both
+   paths does not merge their publication boundaries.
+5. **Verify the preflight.** Confirm the initial `version` job accepts the
+   committed properties, exports the expected name/code, and reports
+   `prerelease=true` only when `VERSION_NAME` has a `-prerelease` component.
+   A `+build` component alone must report `prerelease=false`.
+6. **Verify exact build outputs.** For a full release, inspect
+   `app/build/outputs/versioned/apk/fullRelease/nnaga-<version>-full-release.apk`.
+   For Play Store, inspect
+   `app/build/outputs/versioned/bundle/playstoreRelease/nnaga-<version>-playstore-release.aab`.
+   Confirm the embedded manifest `versionName` and `versionCode` equal the
+   two committed properties. These versioned paths are the supported
+   distributables; do not search AGP output directories with a glob or use
+   legacy artifact names.
+7. **Verify the full publication.** The full APK and its checksum sidecar are
+   published as workflow artifact `nnaga-<version>-full-release-apk`. Confirm
+   the GitHub Release is tagged `v<version>`, displayed as `NNAGA v<version>`,
+   and has the pre-release state reported by preflight. After downloading the
+   APK and sidecar together, run:
+
+   ```sh
+   VERSION_NAME=1.2.0   # use the committed value
+   sha256sum -c "nnaga-${VERSION_NAME}-full-release.apk.sha256"
+   ```
+
+   The sidecar must contain the hash for the exact basename
+   `nnaga-<version>-full-release.apk`.
+8. **Verify the Play publication, when selected.** Confirm the exact AAB is
+   published as workflow artifact `nnaga-<version>-playstore-release-aab` and
+   that the upload action consumed that file for package `com.vibes.dsp` on
+   the `internal` track with status `draft`. Store review, promotion, and
+   production rollout remain operator actions.
+9. **Handle failures safely.** A failure before any GitHub Release/tag or Play
+   artifact publication may be fixed and rerun with the same version values.
+   Once a release/tag or Play artifact has been published, do not replace it:
+   choose the next appropriate SemVer and always increment `VERSION_CODE`.
 
 ## Secrets
 
-Configure these as repository or environment Actions secrets before dispatching a path that builds a signed artifact:
+Configure these as repository or environment Actions secrets before dispatching
+a path that builds a signed artifact:
 
-- `KEYSTORE_BASE64`: base64-encoded Android upload keystore. The workflow decodes it into a temporary runner file and removes that file in cleanup.
+- `KEYSTORE_BASE64`: base64-encoded Android upload keystore. The workflow
+  decodes it into a temporary runner file and removes that file in cleanup.
 - `KEYSTORE_PASSWORD`: keystore password.
 - `KEY_ALIAS`: signing-key alias.
 - `KEY_PASSWORD`: signing-key password.
 
-The Play Store path additionally requires `PLAY_STORE_KEY`, the Google Play service-account JSON consumed by the upload action. It uploads package `com.vibes.dsp` to the `internal` track with status `draft`.
+The Play Store path additionally requires `PLAY_STORE_KEY`, the Google Play
+service-account JSON consumed by the upload action. It uploads package
+`com.vibes.dsp` to the `internal` track with status `draft`.
 
-Do not paste secret values into inputs, logs, issue comments, or release notes. The workflow passes signing values to Gradle and does not intentionally print their contents.
-
-## Full GitHub Release output
-
-When `create_github_release` is true, the workflow runs `assembleFullRelease` after staging the VST host components. It discovers the first `*.apk` under:
-
-```text
-app/build/outputs/apk/full/release
-```
-
-After discovery it writes a SHA-256 manifest beside that APK (`<apk-path>.sha256`, containing the `sha256sum` output). Both files are uploaded as the workflow artifact named:
-
-```text
-nnaga-full-<version_name>-apk
-```
-
-The same APK and `.sha256` sidecar are attached to the GitHub Release. The release tag requested by the workflow is `v<version_name>` and its display name is `NNAGA v<version_name>`. Names containing `beta`, `alpha`, or `rc` are marked prerelease by the workflow.
-
-Verify the checksum after downloading both files, for example:
-
-```sh
-sha256sum -c NNAGA-full-release.apk.sha256
-```
-
-Use the actual downloaded APK filename in place of the example. The checksum proves the downloaded file matches the sidecar; it does not independently establish provenance or security of the build.
-
-## Version and tag constraints
-
-The workflow does not perform semantic-version or numeric validation. Operators must supply a valid `version_name` for the resulting GitHub tag `v<version_name>` and a numeric, monotonically increasing `version_code` accepted by Android/Google Play. Avoid tag-invalid or shell-sensitive characters in `version_name`; use the documented forms such as `1.0.0` or `1.0.0-beta.1`.
-
-The workflow passes `tag_name` to `softprops/action-gh-release`; it does not contain an explicit `git tag` or `git push` command. Do not assume that running the workflow creates or updates a source tag independently of the GitHub Release action. Check the resulting repository state and release page.
-
-## Play Store boundary
-
-The Play Store path runs `bundlePlaystoreRelease`, uploads an AAB (not the full APK), and targets the internal draft track. It is intentionally separate from the GitHub Release path and does not produce the VST/full APK or its checksum sidecar. Store submission, review, promotion, and production rollout remain operator actions outside this workflow.
+Do not paste secret values into inputs, logs, issue comments, or release notes.
+The workflow passes signing values to Gradle and does not intentionally print
+their contents. Full/VST and Play Store publication remain independent, so
+only provide the secrets required by the selected path.

@@ -384,6 +384,39 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Read VERSION_NAME
+        id: version
+        run: |
+          VERSION_NAME="$(python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("version.properties")
+          if not p.exists():
+              raise SystemExit(f"missing {p}")
+
+          values = []
+          for line in p.read_text(encoding="utf-8").splitlines():
+              line = line.strip()
+              if not line or line.startswith("#"):
+                  continue
+              if "=" not in line:
+                  continue
+              key, value = line.split("=", 1)
+              key = key.strip()
+              if key != "VERSION_NAME":
+                  continue
+              values.append(value.strip())
+          if len(values) != 1:
+              raise SystemExit(f"expected one VERSION_NAME, found {len(values)}")
+          print(values[0])
+          PY
+          )"
+          if [ -z "${VERSION_NAME}" ]; then
+            echo "::error::Cannot read VERSION_NAME from version.properties"
+            exit 1
+          fi
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: System dependencies
         run: |
           sudo apt-get update -qq
@@ -568,8 +601,8 @@ jobs:
       - name: Upload full debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: gxrc-full-vst-${{ github.sha }}
-          path: app/build/outputs/apk/full/debug/*.apk
+          name: nnaga-${{ steps.version.outputs.version_name }}-full-debug-${{ github.sha }}
+          path: app/build/outputs/versioned/apk/fullDebug/nnaga-${{ steps.version.outputs.version_name }}-full-debug.apk
           if-no-files-found: error
           retention-days: 90
           # The APK is already a compressed zip, so re-deflating it in the artifact
