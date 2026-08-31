@@ -142,6 +142,7 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
 
     LV2PluginUI* uiPtr = ui.get();
     std::string binaryPath = info.x11UiBinaryPath;
+    std::string bundlePath = info.x11UiBundlePath;
     std::string uiUri = info.x11UiUri;
     std::string pluginId = info.id;
     std::string nativeLib = nativeLibDir;
@@ -149,11 +150,11 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
 
     bool ok = false;
     display->postTaskAndWait([
-        &ok, uiPtr, &binaryPath, &uiUri, &pluginId, displayNumber, parentWindowId,
+        &ok, uiPtr, &binaryPath, &bundlePath, &uiUri, &pluginId, displayNumber, parentWindowId,
         plugin, &paramCb, &nativeLib, &x11Lib]() {
         LOGI("createPluginUI: running instantiate on pluginUI thread");
         ok = uiPtr->instantiate(
-            binaryPath, uiUri, pluginId, displayNumber, parentWindowId,
+            binaryPath, bundlePath, uiUri, pluginId, displayNumber, parentWindowId,
             plugin, paramCb, nativeLib, x11Lib
         );
         LOGI("createPluginUI: instantiate returned ok=%d on pluginUI thread", ok ? 1 : 0);

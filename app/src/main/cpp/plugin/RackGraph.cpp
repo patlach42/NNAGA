@@ -20,6 +20,7 @@ void copyScaled(float* l,float* r,const float* inL,const float* inR,uint32_t n,f
 void mixScaled(float* l,float* r,const float* inL,const float* inR,uint32_t n,float gain) noexcept { for(uint32_t i=0;i<n;++i){l[i]+=inL[i]*gain;r[i]+=inR[i]*gain;} }
 }
 
+
 RackGraph::RackGraph() : master_(std::make_shared<PluginChain>()) {
     auto first=std::make_shared<TrackNode>(); first->id=nextTrackId_++; first->chain=std::make_shared<PluginChain>(); first->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f); first->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f); tracks_.push_back(first); clips_.push_back(nullptr); recordingClips_.push_back(nullptr); midiClips_.push_back(nullptr); wavSlots_.push_back({}); midiSlots_.push_back({});
     activeOwner_=buildSnapshotLocked(tracks_, clips_, recordingClips_); activeSnapshot_.store(activeOwner_.get(),std::memory_order_release); reclaimerThread_=std::thread(&RackGraph::reclaimerLoop,this);
@@ -163,7 +164,7 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
              recordingPhase == RecordingPhase::Pending ||
              recordingPhase == RecordingPhase::Recording)
                 ? static_cast<int32_t>(node.recordingSlot)
-                : -1});
+                : -1, node.name, node.colorArgb});
     }
     return result;
 }
@@ -287,6 +288,8 @@ bool RackGraph::unloadTrackMidiSlot(RackPathId id,uint32_t slot){
 }
 bool RackGraph::renameTrackClip(RackPathId id,int32_t slot,const std::string& displayName){if(slot<0||displayName.empty()||displayName.find_first_not_of(" \t\n\r") == std::string::npos)return false;std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;const size_t i=static_cast<size_t>(it-tracks_.begin());const size_t s=static_cast<size_t>(slot);if(i>=wavSlots_.size()||i>=midiSlots_.size()||(s>=wavSlots_[i].size()||!wavSlots_[i][s])&&(s>=midiSlots_[i].size()||!midiSlots_[i][s]))return false;if(i>=clipLabelOverrides_.size())clipLabelOverrides_.resize(i+1);if(s>=clipLabelOverrides_[i].size())clipLabelOverrides_[i].resize(s+1);clipLabelOverrides_[i][s]=displayName;return true;}
 bool RackGraph::setTrackVolume(RackPathId id,float value){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->volume.store(std::clamp(value,0.f,1.f));return true;}
+bool RackGraph::setTrackName(RackPathId id,const std::string& name){if(name.empty()||!isValidTrackName(name))return false;std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->name=name;return true;}
+bool RackGraph::setTrackColor(RackPathId id,uint32_t argb){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->colorArgb=argb|0xff000000u;return true;}
 bool RackGraph::setTrackInputArmed(RackPathId id,bool armed){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->inputArmed.store(armed);return true;}
 bool RackGraph::setTrackInputArmLocked(RackPathId id,bool locked){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->inputArmLocked.store(locked);return true;}
 bool RackGraph::setTrackInputArmedExclusive(RackPathId id){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;for(auto& node:tracks_)if(node.get()==it->get())node->inputArmed.store(true,std::memory_order_release);else if(!node->inputArmLocked.load(std::memory_order_acquire))node->inputArmed.store(false,std::memory_order_release);return true;}
@@ -877,7 +880,7 @@ bool RackGraph::materializeProjectMedia(const std::string& directory, std::strin
     return true;
 }
 std::vector<std::tuple<RackPathId,uint32_t,std::string,bool>> RackGraph::getProjectClipMediaRefs() const{std::lock_guard lock(controlMutex_);std::vector<std::tuple<RackPathId,uint32_t,std::string,bool>> out;for(size_t i=0;i<tracks_.size();++i){for(size_t j=0;j<(i<wavAssetIds_.size()?wavAssetIds_[i].size():0);++j)if(!wavAssetIds_[i][j].empty())out.emplace_back(tracks_[i]->id,j,wavAssetIds_[i][j],false);for(size_t j=0;j<(i<midiAssetIds_.size()?midiAssetIds_[i].size():0);++j)if(!midiAssetIds_[i][j].empty())out.emplace_back(tracks_[i]->id,j,midiAssetIds_[i][j],true);}return out;}
-RackGraph::State RackGraph::saveState(){std::lock_guard lock(controlMutex_);State s; s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); for(size_t i=0;i<tracks_.size();++i){auto& n=tracks_[i];State::Track t; t.id=n->id; t.volume=n->volume.load(); t.inputArmed=n->inputArmed.load(); t.inputArmLocked=n->inputArmLocked.load(); t.inputSource=n->inputSource; t.selectedSlot=n->selectedSlot.load(); t.defaultLoopLengthBars=n->defaultLoopLengthBars.load(); t.chain=n->chain->saveChainState(); const size_t count=std::max({i<wavSlots_.size()?wavSlots_[i].size():0,i<midiSlots_.size()?midiSlots_[i].size():0,i< n->clipRuntime.size()?n->clipRuntime.size():0}); for(size_t j=0;j<count;++j){State::ClipSlot c;c.slot=static_cast<uint32_t>(j);c.wav=i<wavSlots_.size()&&j<wavSlots_[i].size()&&wavSlots_[i][j];c.midi=i<midiSlots_.size()&&j<midiSlots_[i].size()&&midiSlots_[i][j];c.assetId=i<wavAssetIds_.size()&&j<wavAssetIds_[i].size()?wavAssetIds_[i][j]:std::string();c.midiAssetId=i<midiAssetIds_.size()&&j<midiAssetIds_[i].size()?midiAssetIds_[i][j]:std::string();c.displayName=i<clipLabelOverrides_.size()&&j<clipLabelOverrides_[i].size()?clipLabelOverrides_[i][j]:std::string();if(j<n->clipRuntime.size()&&n->clipRuntime[j]){auto&r=*n->clipRuntime[j];c.sourceBpm=r.sourceBpm.load();c.tempoMode=r.tempoMode.load();c.looping=r.looping.load();c.loopLengthBars=r.loopLengthBars.load();c.loopStartQuarterNotes=r.loopStartQuarterNotes.load();c.loopLengthQuarterNotes=r.loopLengthQuarterNotes.load();c.launchQuantization=LaunchQuantization(r.desiredQuantization.load());}if(j<n->slotConfig.size()&&n->slotConfig[j]){c.defaultLoopLengthBars=n->slotConfig[j]->defaultLoopLengthBars.load();c.enterOnPunch=n->slotConfig[j]->enterOnPunch.load();c.launchQuantization=LaunchQuantization(n->slotConfig[j]->punchQuantization.load());}if(c.wav||c.midi||!c.assetId.empty()||!c.midiAssetId.empty())t.clipSlots.push_back(std::move(c));}s.tracks.push_back(std::move(t));}s.master=master_->saveChainState();return s;}
+RackGraph::State RackGraph::saveState(){std::lock_guard lock(controlMutex_);State s; s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); for(size_t i=0;i<tracks_.size();++i){auto& n=tracks_[i];State::Track t; t.id=n->id; t.volume=n->volume.load(); t.inputArmed=n->inputArmed.load(); t.inputArmLocked=n->inputArmLocked.load(); t.inputSource=n->inputSource; t.selectedSlot=n->selectedSlot.load(); t.defaultLoopLengthBars=n->defaultLoopLengthBars.load(); t.name=n->name; t.colorArgb=n->colorArgb; t.chain=n->chain->saveChainState(); const size_t count=std::max({i<wavSlots_.size()?wavSlots_[i].size():0,i<midiSlots_.size()?midiSlots_[i].size():0,i< n->clipRuntime.size()?n->clipRuntime.size():0}); for(size_t j=0;j<count;++j){State::ClipSlot c;c.slot=static_cast<uint32_t>(j);c.wav=i<wavSlots_.size()&&j<wavSlots_[i].size()&&wavSlots_[i][j];c.midi=i<midiSlots_.size()&&j<midiSlots_[i].size()&&midiSlots_[i][j];c.assetId=i<wavAssetIds_.size()&&j<wavAssetIds_[i].size()?wavAssetIds_[i][j]:std::string();c.midiAssetId=i<midiAssetIds_.size()&&j<midiAssetIds_[i].size()?midiAssetIds_[i][j]:std::string();c.displayName=i<clipLabelOverrides_.size()&&j<clipLabelOverrides_[i].size()?clipLabelOverrides_[i][j]:std::string();if(j<n->clipRuntime.size()&&n->clipRuntime[j]){auto&r=*n->clipRuntime[j];c.sourceBpm=r.sourceBpm.load();c.tempoMode=r.tempoMode.load();c.looping=r.looping.load();c.loopLengthBars=r.loopLengthBars.load();c.loopStartQuarterNotes=r.loopStartQuarterNotes.load();c.loopLengthQuarterNotes=r.loopLengthQuarterNotes.load();c.launchQuantization=LaunchQuantization(r.desiredQuantization.load());}if(j<n->slotConfig.size()&&n->slotConfig[j]){c.defaultLoopLengthBars=n->slotConfig[j]->defaultLoopLengthBars.load();c.enterOnPunch=n->slotConfig[j]->enterOnPunch.load();c.launchQuantization=LaunchQuantization(n->slotConfig[j]->punchQuantization.load());}if(c.wav||c.midi||!c.assetId.empty()||!c.midiAssetId.empty())t.clipSlots.push_back(std::move(c));}s.tracks.push_back(std::move(t));}s.master=master_->saveChainState();return s;}
 bool RackGraph::exportDeviceChain(
         RackPathId pathId,
         PluginChain::ChainState& chain,
@@ -1011,7 +1014,6 @@ bool RackGraph::createParallelWetReturn(
         if (!wetChain) return false;
         auto dryChain = std::make_shared<PluginChain>();
         if (sampleRate > 0.0f) dryChain->setSampleRate(sampleRate, bufferSize_);
-
         // Clone the source node so the existing graph remains untouched until
         // the complete replacement snapshot has passed validation.
         auto drySource = std::make_shared<TrackNode>();
@@ -1019,6 +1021,8 @@ bool RackGraph::createParallelWetReturn(
         drySource->volume.store(source->volume.load(std::memory_order_relaxed));
         drySource->inputArmed.store(source->inputArmed.load(std::memory_order_relaxed));
         drySource->inputArmLocked.store(source->inputArmLocked.load(std::memory_order_relaxed));
+        drySource->name = source->name;
+        drySource->colorArgb = source->colorArgb;
         drySource->inputSource = source->inputSource;
         drySource->chain = std::move(dryChain);
         drySource->slotConfig = source->slotConfig;
@@ -1185,6 +1189,8 @@ bool RackGraph::restoreState(
         node->volume.store(saved.volume);
         node->inputArmed.store(saved.inputArmed);
         node->inputArmLocked.store(saved.inputArmLocked);
+        node->name = saved.name;
+        node->colorArgb = saved.colorArgb == 0 ? 0 : saved.colorArgb | 0xff000000u;
         node->inputSource = saved.inputSource;
         node->chain = std::make_shared<PluginChain>();
         if (!restoreChain(saved.chain, node->chain)) return false;
@@ -1400,7 +1406,7 @@ void RackGraph::process(
     const double beatPosition = audioMusicalQuarterNotes_;
     const int64_t bar = static_cast<int64_t>(std::floor(beatPosition / 4.0));
     const AudioProcessContext context{audioSamplePosition_, audioTransportFrame_, 0, rate, bpm,
-        audioPlaying_, false, beatPosition, bar, beatPosition - static_cast<double>(bar) * 4.0, beatPosition};
+        audioPlaying_, false, beatPosition, bar, beatPosition - static_cast<double>(bar) * 4.0, beatPosition, 4.0f, 4};
     for (const uint32_t topoIndex : snapshot->topoOrder) {
         const auto& view = snapshot->tracks[topoIndex];
         auto& node = *view.node;

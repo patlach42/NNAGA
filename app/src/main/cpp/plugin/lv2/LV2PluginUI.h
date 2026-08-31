@@ -57,6 +57,7 @@ public:
     /**
      * Instantiate the UI.
      * @param uiBinaryPath  Absolute path to UI .so file (e.g. in files dir)
+     * @param uiBundlePath  Filesystem directory of the LV2 UI bundle; used as descriptor bundle_path
      * @param uiUri         URI of the UI (from TTL)
      * @param pluginUri     URI of the DSP plugin
      * @param displayNumber X11 display number (e.g. 10 for :10)
@@ -69,6 +70,7 @@ public:
      */
     bool instantiate(
         const std::string& uiBinaryPath,
+        const std::string& uiBundlePath,
         const std::string& uiUri,
         const std::string& pluginUri,
         int displayNumber,

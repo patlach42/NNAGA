@@ -1,0 +1,27 @@
+@prefix atom: <http://lv2plug.in/ns/ext/atom#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+@prefix midi: <http://lv2plug.in/ns/ext/midi#> .
+@prefix rsz: <http://lv2plug.in/ns/ext/resize-port#> .
+
+<https://guitarrackcraft.test/lv2/host-contract>
+    a lv2:Plugin ;
+    doap:name "Host Contract" ;
+    lv2:binary <lv2_host_contract.so> ;
+    lv2:port [
+        a atom:AtomPort, lv2:InputPort ;
+        lv2:index 0 ;
+        lv2:symbol "in" ;
+        lv2:name "Input" ;
+        atom:bufferType atom:Sequence ;
+        atom:supports midi:MidiEvent ;
+        rsz:minimumSize 524288
+    ], [
+        a atom:AtomPort, lv2:OutputPort ;
+        lv2:index 1 ;
+        lv2:symbol "out" ;
+        lv2:name "Output" ;
+        atom:bufferType atom:Sequence ;
+        atom:supports midi:MidiEvent ;
+        rsz:minimumSize 524288
+    ] .

@@ -11,6 +11,24 @@ set_target_properties(lv2_tiny_gain PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bundles/tiny_gain.lv2"
 )
 
+add_library(lv2_host_contract SHARED
+    lv2_host_contract.c
+)
+target_include_directories(lv2_host_contract PRIVATE ${LV2_TEST_INCLUDE_DIR})
+set_target_properties(lv2_host_contract PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "lv2_host_contract"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_host_contract.lv2"
+)
+
+configure_file(lv2_host_contract_manifest.ttl
+    "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_host_contract.lv2/manifest.ttl"
+    COPYONLY)
+configure_file(lv2_host_contract.ttl
+    "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_host_contract.lv2/lv2_host_contract.ttl"
+    COPYONLY)
+
+
 configure_file(manifest.ttl "${CMAKE_CURRENT_BINARY_DIR}/bundles/tiny_gain.lv2/manifest.ttl" COPYONLY)
 configure_file(tiny_gain.ttl "${CMAKE_CURRENT_BINARY_DIR}/bundles/tiny_gain.lv2/tiny_gain.ttl" COPYONLY)
 
@@ -19,7 +37,7 @@ add_executable(lv2_process_tests
     ${LV2_TEST_APP_CPP_DIR}/plugin/lv2/LV2Plugin.cpp
     ${LV2_TEST_APP_CPP_DIR}/plugin/lv2/LV2Utils.cpp
 )
-add_dependencies(lv2_process_tests lv2_tiny_gain)
+add_dependencies(lv2_process_tests lv2_tiny_gain lv2_host_contract)
 target_compile_definitions(lv2_process_tests PRIVATE
     HAVE_LV2=1
     LV2_FIXTURE_DIR="${CMAKE_CURRENT_BINARY_DIR}/bundles"

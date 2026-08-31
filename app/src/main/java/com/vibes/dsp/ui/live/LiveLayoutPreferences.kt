@@ -57,16 +57,18 @@ object LiveLayoutPreferences {
     }
 
 
-    fun getTrackColor(context: Context, trackId: Long, fallbackArgb: Int): Int {
-        val fallback = opaqueArgb(fallbackArgb)
-        val stored = preferences(context).getInt(TRACK_COLOR_PREFIX + trackId, fallback)
-        return opaqueArgb(stored)
+    /**
+     * Reads the former UI-owned track color only for one-way migration into the rack model.
+     */
+    fun getLegacyTrackColorForMigration(context: Context, trackId: Long): Int? {
+        val key = TRACK_COLOR_PREFIX + trackId
+        val prefs = preferences(context)
+        if (!prefs.contains(key)) return null
+        return opaqueArgb(prefs.getInt(key, 0))
     }
 
-    fun setTrackColor(context: Context, trackId: Long, argb: Int) {
-        preferences(context).edit()
-            .putInt(TRACK_COLOR_PREFIX + trackId, opaqueArgb(argb))
-            .apply()
+    fun removeLegacyTrackColorAfterMigration(context: Context, trackId: Long) {
+        preferences(context).edit().remove(TRACK_COLOR_PREFIX + trackId).apply()
     }
 
     private fun opaqueArgb(argb: Int): Int = argb or 0xFF000000.toInt()

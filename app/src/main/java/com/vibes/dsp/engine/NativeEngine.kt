@@ -286,6 +286,8 @@ data class RackTrackInfo(
     val sampleRate: Double = 0.0,
     val capturedAtMonotonicNanos: Long = 0L,
     val recordingSlot: Int = -1,
+    val name: String = "",
+    val colorArgb: Int = 0,
 )
 
 data class TransportInfo(
@@ -656,6 +658,8 @@ class NativeEngine private constructor() {
     external fun nativeRemoveTrack(trackId: Long): Boolean
     external fun nativeGetTracks(): Array<RackTrackInfo>
     external fun nativeSetTrackVolume(trackId: Long, volume: Float): Boolean
+    external fun nativeSetTrackName(trackId: Long, name: String): Boolean
+    external fun nativeSetTrackColor(trackId: Long, argb: Int): Boolean
     external fun nativeSetTrackInputArmed(trackId: Long, armed: Boolean): Boolean
     external fun nativeSetTrackInputArmLocked(trackId: Long, locked: Boolean): Boolean
     external fun nativeArmTrackExclusively(trackId: Long): Boolean
@@ -781,6 +785,8 @@ class NativeEngine private constructor() {
     fun addTrack(): Long = nativeAddTrack()
     fun removeTrack(trackId: Long): Boolean = nativeRemoveTrack(trackId)
     fun getTracks(): Array<RackTrackInfo> = nativeGetTracks()
+    fun setTrackName(trackId: Long, name: String): Boolean = nativeSetTrackName(trackId, name)
+    fun setTrackColor(trackId: Long, argb: Int): Boolean = nativeSetTrackColor(trackId, argb)
     fun setTrackVolume(trackId: Long, volume: Float): Boolean = nativeSetTrackVolume(trackId, volume.coerceIn(0f, 1f))
     fun setTrackInputArmed(trackId: Long, armed: Boolean): Boolean = nativeSetTrackInputArmed(trackId, armed)
     fun setTrackInputArmLocked(trackId: Long, locked: Boolean): Boolean =

@@ -27,7 +27,8 @@ METADATA = Path("app/src/main/assets/plugin_metadata.json")
 DESCRIPTION_SOURCE = Path("plugin_descriptions.json")
 OUTPUT = Path(os.environ.get("NNAGA_PLUGIN_REPOSITORY", "../nnaga-plugin-repository"))
 VERSION = "1.0.0"
-RELEASE = "2026-08-28"
+PACKAGE_VERSION_OVERRIDES = {"lv2.boops": "1.0.1"}
+RELEASE = "2026-08-31"
 BINARY_RE = re.compile(r"(?:lv2:binary|guiext:binary|ui:binary)\s+<([^>]+)>")
 IDENTITY_ALIASES = {
     "GxVoodoFuzz": "GxVoodooFuzz",
@@ -44,15 +45,18 @@ IDENTITY_ALIASES = {
 }
 DISPLAY_NAMES = {
     "four_k_eq_2": "4K EQ 2",
+    "BOops": "B.Oops",
 }
 LICENSES = {
     "fil4": "GPL-2.0-only",
     "4keq2": "GPL-3.0-or-later",
+    "boops": "GPL-3.0-or-later",
 }
 EXTRA_TAGS = {
     "fil4": ["Filter"],
     "4keq2": ["Filter"],
     "doubletracker": ["Delay", "Stereo", "Utility"],
+    "boops": ["Delay", "Sequencer", "Utility"],
 }
 DEFAULT_LV2_SOURCE = "https://github.com/djshaji/GxPlugins.lv2.Android"
 LV2_SOURCES = {
@@ -69,8 +73,16 @@ LV2_SOURCES = {
     "lv2.neuralrack": "https://github.com/brummer10/NeuralRack",
     "lv2.xdarkterror": "https://github.com/brummer10/XDarkTerror.lv2",
     "lv2.xtinyterror": "https://github.com/brummer10/XTinyTerror.lv2",
+    "lv2.boops": "https://github.com/sjaehn/BOops",
+}
+MANUFACTURERS = {
+    "lv2.boops": "Sven Jaehnichen",
+    "lv2.fil4": "x42",
+    "lv2.fourkeq2": "Dusk Audio",
 }
 LV2_TAG_OVERRIDES = {
+    "lv2.fil4": ["EQ", "Filter"],
+    "lv2.fourkeq2": ["EQ", "Filter"],
     "lv2.gxfz1s": ["Distortion", "Saturation"],
     "lv2.gxsloopyblue": ["Distortion", "Saturation"],
     "lv2.gxtimray": ["Distortion", "Saturation"],
@@ -115,6 +127,12 @@ def license_for(name: str) -> str:
 
 def package_id(stem: str) -> str:
     return "lv2." + re.sub(r"[^a-z0-9]", "", stem.lower())
+
+
+def package_version(package: str) -> str:
+    return PACKAGE_VERSION_OVERRIDES.get(package, VERSION)
+
+
 _FALLBACK_DESCRIPTIONS = {
     "GxBoobTube": "Tube boost with gentle overdrive and compression.",
     "GxKnightFuzz": "Dark, high-harmonic fuzz distortion.",
@@ -270,7 +288,7 @@ def metadata_for(name: str, package: str) -> tuple[str, list[str], str, str]:
         aliases[key] = target
     key = canonical_name(name)
     key = canonical_name(aliases.get(key, name))
-    manufacturer = authors.get(key, "") or "Unknown"
+    manufacturer = MANUFACTURERS.get(package, authors.get(key, "")).strip() or "Unknown"
     raw_category = categories.get(key, "")
     category = raw_category[:-6] if raw_category.endswith("Plugin") else raw_category
     description = normalize_description(descriptions.get(key, ""))
@@ -311,14 +329,15 @@ def toml_string(value: str) -> str:
 
 def manifest(package: str, name: str, bundle_stem: str, archive: bytes) -> str:
     digest = hashlib.sha256(archive).hexdigest()
+    version = package_version(package)
     manufacturer, tags, description, source = metadata_for(name, package)
     tags_text = "[" + ",".join(toml_string(tag) for tag in tags) + "]"
     license_name = license_for(name)
-    return (f'schema = 1\nid = "{package}"\nname = {toml_string(name)}\nversion = "{VERSION}"\n'
+    return (f'schema = 1\nid = "{package}"\nname = {toml_string(name)}\nversion = "{version}"\n'
             f'format = "lv2"\nsource = {toml_string(source)}\narch = ["arm64-v8a"]\n'
             f'manufacturer = {toml_string(manufacturer)}\ntags = {tags_text}\n'
             f'description = {toml_string(description)}\nlicense = {toml_string(license_name)}\n\n'
-            f'[payload]\nkind = "archive"\nurl = "../../payload/{package}/{VERSION}.zip"\n'
+            f'[payload]\nkind = "archive"\nurl = "../../payload/{package}/{version}.zip"\n'
             f'sha256 = "{digest}"\nsize = {len(archive)}\n\n'
             f'[install]\nentry = {toml_string(bundle_stem + ".lv2/manifest.ttl")}\n')
 
@@ -375,7 +394,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
             errors.extend(f"{kind}/{name}" for name in extras + missing_dirs)
         for package, stem, archive, text in records:
             mp = OUTPUT / "packages" / package / "manifest.toml"
-            zp = OUTPUT / "payload" / package / f"{VERSION}.zip"
+            zp = OUTPUT / "payload" / package / f"{package_version(package)}.zip"
             for directory, expected in ((mp.parent, {mp.name}), (zp.parent, {zp.name})):
                 if directory.is_dir():
                     errors.extend(str(path) for path in sorted(directory.iterdir()) if path.name not in expected)
@@ -400,7 +419,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
         for package in expected_packages:
             for directory, keep in (
                 (OUTPUT / "packages" / package, "manifest.toml"),
-                (OUTPUT / "payload" / package, f"{VERSION}.zip"),
+                (OUTPUT / "payload" / package, f"{package_version(package)}.zip"),
             ):
                 if directory.is_dir():
                     for child in directory.iterdir():
@@ -411,7 +430,7 @@ def generate(check: bool = False, output: Path | None = None) -> int:
                                 child.unlink()
         for package, stem, archive, text in records:
             atomic_write(OUTPUT / "packages" / package / "manifest.toml", text.encode("utf-8"))
-            atomic_write(OUTPUT / "payload" / package / f"{VERSION}.zip", archive)
+            atomic_write(OUTPUT / "payload" / package / f"{package_version(package)}.zip", archive)
         atomic_write(OUTPUT / "index.toml", index_text(records).encode("utf-8"))
     unknown = [stem for package, stem, _, _ in records if metadata_for(stem, package)[0] == "Unknown"]
     if unknown:

@@ -5,6 +5,7 @@
 #include "utils/WavIO.h"
 #include "utils/BoundedSPSCQueue.h"
 #include <liblowlatencyaudio/ThreadUtils.h>
+#include "utils/VariablePayloadSPSCQueue.h"
 
 #if defined(__linux__)
 #include <sched.h>
@@ -526,6 +527,147 @@ TEST(PluginChainContentionTest,
     EXPECT_FALSE(invalidOutput.load(std::memory_order_acquire));
     EXPECT_EQ(callbackAllocations.load(std::memory_order_acquire), 0u);
 }
+
+
+
+TEST(VariablePayloadSPSCQueueTest, MaxPayloadFifoWrapFullAndReuse) {
+    constexpr std::size_t payloadSize = 524288;
+    guitarrackcraft::VariablePayloadSPSCQueue queue(4, payloadSize);
+
+    const auto pattern = [](uint8_t seed, std::size_t index) {
+        return static_cast<uint8_t>(seed + index * 37u);
+    };
+    const auto push = [&](uint8_t seed) {
+        EXPECT_TRUE(queue.tryEmplace(payloadSize,
+                                     [&, seed](uint8_t* data, std::size_t size) {
+                                         ASSERT_EQ(size, payloadSize);
+                                         for (std::size_t i = 0; i < size; ++i)
+                                             data[i] = pattern(seed, i);
+                                     }));
+    };
+    const auto pop = [&](uint8_t seed) {
+        EXPECT_TRUE(queue.consume([&, seed](const uint8_t* data, std::size_t size) {
+            ASSERT_EQ(size, payloadSize);
+            bool matches = true;
+            for (std::size_t i = 0; i < size; ++i)
+                matches = matches && data[i] == pattern(seed, i);
+            EXPECT_TRUE(matches);
+        }));
+    };
+
+    push(10);
+    push(20);
+    push(30);
+    push(40);
+    EXPECT_FALSE(queue.tryEmplace(payloadSize,
+                                  [](uint8_t* data, std::size_t size) {
+                                      if (size > 0) data[0] = 0;
+                                  }));
+
+    pop(10);
+    pop(20);
+    push(50);
+    push(60);
+    pop(30);
+    pop(40);
+    pop(50);
+    pop(60);
+    EXPECT_FALSE(queue.consume([](const uint8_t*, std::size_t) {}));
+
+    push(70);
+    pop(70);
+    EXPECT_FALSE(queue.consume([](const uint8_t*, std::size_t) {}));
+}
+TEST(VariablePayloadSPSCQueueTest,
+     LargeDescriptorRingPreservesVariablePayloadFifoAndRejectsByteStorageOverflow) {
+    constexpr std::size_t kCapacity = 256;
+    constexpr std::size_t kByteCapacity = 4u * 1024u * 1024u;
+    constexpr std::size_t kRecordCount = 192;
+    guitarrackcraft::VariablePayloadSPSCQueue queue(kCapacity, kByteCapacity);
+
+    const auto makeBatch = [](uint8_t batch) {
+        std::vector<std::vector<uint8_t>> payloads;
+        payloads.reserve(kRecordCount);
+        for (std::size_t index = 0; index < kRecordCount; ++index) {
+            const std::size_t size = 3u + ((index * 13u + batch * 7u) % 67u);
+            std::vector<uint8_t> payload(size);
+            for (std::size_t byte = 0; byte < size; ++byte) {
+                payload[byte] = static_cast<uint8_t>(
+                    batch * 97u + index * 31u + byte * 17u + (index ^ byte));
+            }
+            payloads.push_back(payload);
+        }
+        return payloads;
+    };
+    const auto enqueue = [&](const std::vector<std::vector<uint8_t>>& payloads) {
+        for (const auto& payload : payloads) {
+            ASSERT_TRUE(queue.tryEmplace(
+                payload.size(), [&](uint8_t* data, std::size_t size) {
+                    ASSERT_EQ(size, payload.size());
+                    for (std::size_t byte = 0; byte < size; ++byte)
+                        data[byte] = payload[byte];
+                }));
+        }
+    };
+    const auto drain = [&](const std::vector<std::vector<uint8_t>>& payloads) {
+        for (const auto& payload : payloads) {
+            ASSERT_TRUE(queue.consume([&](const uint8_t* data, std::size_t size) {
+                ASSERT_EQ(size, payload.size());
+                for (std::size_t byte = 0; byte < size; ++byte)
+                    EXPECT_EQ(data[byte], payload[byte]);
+            }));
+        }
+        EXPECT_FALSE(queue.consume([](const uint8_t*, std::size_t) {}));
+    };
+
+    const auto firstBatch = makeBatch(1);
+    enqueue(firstBatch);
+
+    bool writerCalled = false;
+    EXPECT_FALSE(queue.tryEmplace(
+        kByteCapacity, [&](uint8_t*, std::size_t) { writerCalled = true; }));
+    EXPECT_FALSE(writerCalled);
+    drain(firstBatch);
+    const auto reusedBatch = makeBatch(2);
+    enqueue(reusedBatch);
+    drain(reusedBatch);
+
+    constexpr std::size_t kFullStorageRecordSize = kByteCapacity / 4u;
+    std::vector<std::vector<uint8_t>> fullStorage;
+    fullStorage.reserve(4);
+    for (std::size_t index = 0; index < 4; ++index) {
+        fullStorage.emplace_back(kFullStorageRecordSize);
+        auto& payload = fullStorage.back();
+        for (std::size_t byte = 0; byte < payload.size(); ++byte) {
+            payload[byte] = static_cast<uint8_t>(
+                0xa1u + index * 37u + byte * 19u);
+        }
+    }
+    guitarrackcraft::VariablePayloadSPSCQueue storageQueue(kCapacity, kByteCapacity);
+    for (const auto& payload : fullStorage) {
+        ASSERT_TRUE(storageQueue.tryEmplace(
+            payload.size(), [&](uint8_t* data, std::size_t size) {
+                ASSERT_EQ(size, payload.size());
+                for (std::size_t byte = 0; byte < size; ++byte)
+                    data[byte] = payload[byte];
+            }));
+    }
+    writerCalled = false;
+    EXPECT_FALSE(storageQueue.tryEmplace(
+        kFullStorageRecordSize,
+        [&](uint8_t*, std::size_t) { writerCalled = true; }));
+    EXPECT_FALSE(writerCalled);
+    for (const auto& payload : fullStorage) {
+        ASSERT_TRUE(storageQueue.consume(
+            [&](const uint8_t* data, std::size_t size) {
+                ASSERT_EQ(size, payload.size());
+                for (std::size_t byte = 0; byte < size; ++byte)
+                    EXPECT_EQ(data[byte], payload[byte]);
+            }));
+    }
+    EXPECT_FALSE(storageQueue.consume([](const uint8_t*, std::size_t) {}));
+}
+
 
 
 

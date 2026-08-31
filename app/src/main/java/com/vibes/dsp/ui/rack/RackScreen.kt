@@ -61,7 +61,7 @@ import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.Replay
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.StopCircle
-import androidx.compose.material.icons.filled.SwapHoriz
+
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
@@ -270,10 +270,8 @@ private fun rememberScrollableDragDropState(
 @Composable
 fun RackScreen(
     isVisible: Boolean = true,
-    onNavigateToBrowser: (Long) -> Unit,
     onNavigateToSettings: () -> Unit = {},
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit = { _, _, _, _, _ -> },
-    onReplacePlugin: (Long, Int) -> Unit = { _, _ -> },
     viewModel: RackViewModel = viewModel()
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -500,17 +498,6 @@ fun RackScreen(
                                 onDismissRequest = { showOverflowMenu = false }
                             ) {
                                 DropdownMenuItem(
-                                    text = { Text("Add plugin") },
-                                    onClick = {
-                                        showOverflowMenu = false
-                                        onNavigateToBrowser(selectedPathId)
-                                    },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Add, contentDescription = null)
-                                    },
-                                    modifier = Modifier.testTag("rack_add_plugin")
-                                )
-                                DropdownMenuItem(
                                     text = { Text("Add track") },
                                     onClick = {
                                         showOverflowMenu = false
@@ -691,7 +678,7 @@ fun RackScreen(
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Text("Track ${index + 1}", modifier = Modifier.padding(horizontal = 16.dp))
+                            Text(track.name.ifBlank { "Track ${index + 1}" }, modifier = Modifier.padding(horizontal = 16.dp))
                         }
                     }
                     DropdownMenu(
@@ -1236,7 +1223,7 @@ fun RackScreen(
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Text("Track ${index + 1}", modifier = Modifier.padding(horizontal = 16.dp))
+                            Text(track.name.ifBlank { "Track ${index + 1}" }, modifier = Modifier.padding(horizontal = 16.dp))
                         }
                     }
                     DropdownMenu(
@@ -1492,7 +1479,6 @@ fun RackScreen(
                                 pathId = selectedPathId,
                                 viewModel = viewModel,
                                 onRemove = { viewModel.removePlugin(selectedPathId, nativeIndex) },
-                                onReplace = { onReplacePlugin(selectedPathId, nativeIndex) },
                                 expanded = isCardExpanded,
                                 onExpandedChange = { isCardExpanded = it },
                                 isFullscreen = isThisPluginFullscreen,
@@ -2037,17 +2023,15 @@ fun PluginCard(
                                 )
                                 Divider()
                             }
+                            DropdownMenuItem(
+                                text = { Text("Replace") },
+                                onClick = {
+                                    showContextMenu = false
+                                    onReplace()
+                                },
+                            )
+                            Divider()
                             if (compact) {
-                                DropdownMenuItem(
-                                    text = { Text("Replace") },
-                                    onClick = {
-                                        showContextMenu = false
-                                        onReplace()
-                                    },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.SwapHoriz, contentDescription = null, modifier = Modifier.size(chromeIconSize))
-                                    }
-                                )
                                 DropdownMenuItem(
                                     text = { Text("Remove") },
                                     onClick = {
@@ -2136,12 +2120,6 @@ fun PluginCard(
                         )
                     }
                     if (!compact) {
-                        PluginChromeButton(
-                            compact = false,
-                            onClick = onReplace,
-                            icon = Icons.Default.SwapHoriz,
-                            contentDescription = "Replace"
-                        )
                         PluginChromeButton(
                             compact = false,
                             onClick = onRemove,

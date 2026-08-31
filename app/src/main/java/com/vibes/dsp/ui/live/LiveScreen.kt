@@ -1,14 +1,15 @@
 package com.vibes.dsp.ui.live
 import com.vibes.dsp.ui.formatMusicalPosition
 import com.vibes.dsp.ui.components.MusicalPositionControl
-import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
+import java.util.Locale
+
 import com.vibes.dsp.ui.interpolatedElapsedSeconds
+import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
 import com.vibes.dsp.ui.rememberFrameClockNanos
 
 import android.graphics.Paint
 import android.app.Activity
 import android.content.pm.ActivityInfo
-import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -58,8 +59,6 @@ import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Remove
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay
@@ -97,7 +96,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -186,10 +184,60 @@ private object LiveDimensions {
     val pluginMinWidth = 216.dp
     val pluginMaxWidth = 288.dp
     val icon = 18.dp
-    val indicatorIcon = 12.dp
     val gap = 8.dp
     val smallGap = 4.dp
     val hairline = 1.dp
+    val trackStroke = 3.dp
+}
+
+private const val TRACK_NAME_MAX_CODE_POINTS = 48
+private val TRACK_ABBREVIATION_EXCLUSIONS =
+    "AEIOUАЕЁИОУЫЭЮЯЪЬ".toSet()
+
+private enum class TrackDialog {
+    Menu,
+    Rename,
+    Color,
+}
+
+private fun defaultTrackName(index: Int): String = "Track ${index + 1}"
+
+private fun inputSourceLabel(track: RackTrackInfo, tracks: List<RackTrackInfo>): String =
+    when (track.inputSourceKind) {
+        2 -> "Hardware ${track.inputSourceFirstChannel + 1} (mono)"
+        0 -> "Hardware ${track.inputSourceFirstChannel + 1}/${track.inputSourceFirstChannel + 2} (stereo)"
+        1 -> {
+            val tapLabel = if (track.inputTap == 1) "Post-fader" else "Pre-fader"
+            val sourceTrackIndex = tracks.indexOfFirst { it.id == track.inputSourceTrackId }
+            val sourceTrackLabel = if (sourceTrackIndex >= 0) {
+                trackDisplayName(tracks[sourceTrackIndex], sourceTrackIndex)
+            } else {
+                "Track ${track.inputSourceTrackId}"
+            }
+            "$sourceTrackLabel $tapLabel"
+        }
+
+        else -> "Unknown source"
+    }
+
+private fun trackDisplayName(track: RackTrackInfo, index: Int): String =
+    track.name.ifEmpty { defaultTrackName(index) }
+
+
+private fun resolvedTrackColorArgb(track: RackTrackInfo, index: Int): Int =
+    track.colorArgb.takeIf { it != 0 }
+        ?: AppearancePreferences.palettes[index % AppearancePreferences.palettes.size].argb
+
+internal fun mixerTrackAbbreviation(name: String, index: Int): String {
+    val consonants = name.uppercase(Locale.ROOT)
+        .filter { it.isLetter() && it !in TRACK_ABBREVIATION_EXCLUSIONS }
+        .take(3)
+    return consonants.ifEmpty { "T${index + 1}" }
+}
+
+private fun truncateToCodePoints(value: String, maximum: Int): String {
+    if (value.codePointCount(0, value.length) <= maximum) return value
+    return value.substring(0, value.offsetByCodePoints(0, maximum))
 }
 
 private fun emptyClipSlot(track: RackTrackInfo, slot: Int) = ClipSlotInfo(
@@ -230,7 +278,6 @@ internal fun resolveLiveFullscreenPlugin(
 @OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 fun LiveScreen(
     viewModel: RackViewModel,
-    onNavigateToBrowser: (Long, Int) -> Unit,
     onNavigateToDashboard: () -> Unit = {},
     onNavigateToTone3000: (String?, String?, String?, Int, String?) -> Unit = { _, _, _, _, _ -> },
 ) {
@@ -261,10 +308,11 @@ fun LiveScreen(
     var tempoInput by rememberSaveable { mutableStateOf("") }
     var selectedTrackId by rememberSaveable { mutableLongStateOf(0L) }
     var selectedSlot by rememberSaveable { mutableIntStateOf(0) }
-    var importTarget by remember { mutableStateOf<Pair<Long, Int>?>(null) }
     var deviceChainPathId by remember { mutableStateOf<RackPathId?>(null) }
     var inputMenuTrack by remember { mutableStateOf<RackTrackInfo?>(null) }
-    var trackColorOverrides by remember { mutableStateOf<Map<Long, Int>>(emptyMap()) }
+    var trackMenuTargetId by rememberSaveable { mutableStateOf<Long?>(null) }
+    var trackDialog by remember { mutableStateOf<TrackDialog?>(null) }
+    var trackNameInput by rememberSaveable { mutableStateOf("") }
     var showQuantizationMenu by remember { mutableStateOf(false) }
     var editTiles by rememberSaveable { mutableStateOf(false) }
     var tileOrder by rememberSaveable { mutableStateOf(LiveLayoutPreferences.getTileOrder(context)) }
@@ -274,6 +322,9 @@ fun LiveScreen(
     val hideTransportWithoutLauncher = remember {
         LiveLayoutPreferences.getHideTransportWithoutLauncher(context)
     }
+    val armExclusiveOnTrackSelection = remember {
+        LiveLayoutPreferences.getArmExclusiveOnTrackSelection(context)
+    }
     var tileHeights by remember {
         mutableStateOf(tileOrder.associateWith { id -> LiveLayoutPreferences.getTileHeight(context, id) })
     }
@@ -281,6 +332,26 @@ fun LiveScreen(
     var fullscreenPluginPathId by rememberSaveable { mutableStateOf<Long?>(null) }
     var fullscreenPluginWidth by rememberSaveable { mutableStateOf<Int?>(null) }
     var fullscreenPluginHeight by rememberSaveable { mutableStateOf<Int?>(null) }
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val drawerScope = rememberCoroutineScope()
+    var drawerReady by rememberSaveable { mutableStateOf(false) }
+    var drawerRequestedTab by rememberSaveable { mutableStateOf(com.vibes.dsp.ui.browser.MediaBrowserTab.Clips) }
+    var drawerPluginPathId by remember { mutableStateOf<RackPathId?>(null) }
+    var drawerPluginLabel by remember { mutableStateOf<String?>(null) }
+    var drawerReplaceIndex by remember { mutableStateOf<Int?>(null) }
+    fun openMediaBrowser(
+        tab: com.vibes.dsp.ui.browser.MediaBrowserTab,
+        pluginPathId: RackPathId? = null,
+        pluginLabel: String? = null,
+        replaceIndex: Int? = null,
+    ) {
+        drawerRequestedTab = tab
+        drawerPluginPathId = pluginPathId
+        drawerPluginLabel = pluginLabel
+        drawerReplaceIndex = replaceIndex
+        drawerReady = true
+        drawerScope.launch { drawerState.open() }
+    }
     val fullscreenRequest = fullscreenPluginInstanceId?.let { instanceId ->
         fullscreenPluginPathId?.let { pathId ->
             fullscreenPluginWidth?.let { width ->
@@ -316,7 +387,7 @@ fun LiveScreen(
     val mixerScrollState = rememberScrollState()
     val contentScrollState = rememberScrollState()
     fun armTrackExclusivelyIfEnabled(trackId: Long) {
-        if (LiveLayoutPreferences.getArmExclusiveOnTrackSelection(context)) {
+        if (armExclusiveOnTrackSelection) {
             viewModel.armTrackExclusively(trackId)
         }
     }
@@ -348,14 +419,6 @@ fun LiveScreen(
         LiveLayoutPreferences.setTileHeight(context, id, resizedHeight)
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        importTarget?.let { (trackId, slot) ->
-            if (uri != null) {
-                viewModel.loadTrackClipMedia(trackId, slot, uri)
-            }
-        }
-        importTarget = null
-    }
     val saveDeviceChainLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/octet-stream"),
     ) { uri ->
@@ -376,7 +439,17 @@ fun LiveScreen(
         viewModel.refreshRack()
     }
     LaunchedEffect(tracks) {
-        tracks.forEach { viewModel.refreshTrackClipSlots(it.id) }
+        tracks.forEach { track ->
+            viewModel.refreshTrackClipSlots(track.id)
+            if (track.colorArgb == 0) {
+                LiveLayoutPreferences.getLegacyTrackColorForMigration(context, track.id)
+                    ?.let { legacyColor ->
+                        viewModel.setTrackColor(track.id, legacyColor) {
+                            LiveLayoutPreferences.removeLegacyTrackColorAfterMigration(context, track.id)
+                        }
+                    }
+            }
+        }
     }
     LaunchedEffect(errorMessage) {
         val message = errorMessage ?: return@LaunchedEffect
@@ -431,7 +504,13 @@ fun LiveScreen(
                             viewModel.removePlugin(fullscreenRequest.pathId, plugin.index)
                         },
                         onReplace = {
-                            onNavigateToBrowser(fullscreenRequest.pathId, plugin.index)
+                            exitFullscreen()
+                            openMediaBrowser(
+                                com.vibes.dsp.ui.browser.MediaBrowserTab.Plugins,
+                                pluginPathId = fullscreenRequest.pathId,
+                                pluginLabel = "Device",
+                                replaceIndex = plugin.index,
+                            )
                         },
                         isFullscreen = true,
                         isAnyPluginFullscreen = true,
@@ -479,6 +558,181 @@ fun LiveScreen(
         if (selectedClip?.wavLoaded == true && !selectedClipRecording) {
             viewModel.loadTrackWaveform(selectedTrack.id)
         }
+    }
+    val trackMenuTarget = trackMenuTargetId?.let { targetId ->
+        tracks.firstOrNull { it.id == targetId }
+    }
+    val trackMenuTargetIndex = trackMenuTarget?.let(tracks::indexOf) ?: -1
+    fun dismissTrackDialog() {
+        trackDialog = null
+        trackMenuTargetId = null
+        trackNameInput = ""
+    }
+
+    if (trackDialog == TrackDialog.Menu && trackMenuTarget != null) {
+        AlertDialog(
+            onDismissRequest = ::dismissTrackDialog,
+            title = { Text(trackDisplayName(trackMenuTarget, trackMenuTargetIndex)) },
+            text = {
+                Column {
+                    NnagaSelectorMenuItem(
+                        text = "Rename track",
+                        selected = false,
+                        onClick = {
+                            trackNameInput = truncateToCodePoints(
+                                trackDisplayName(trackMenuTarget, trackMenuTargetIndex),
+                                TRACK_NAME_MAX_CODE_POINTS,
+                            )
+                            trackDialog = TrackDialog.Rename
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    NnagaSelectorMenuItem(
+                        text = "Choose color",
+                        selected = false,
+                        onClick = { trackDialog = TrackDialog.Color },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    NnagaSelectorMenuItem(
+                        text = "Input source · ${inputSourceLabel(trackMenuTarget, tracks)}",
+                        selected = false,
+                        onClick = {
+                            val target = trackMenuTarget
+                            dismissTrackDialog()
+                            inputMenuTrack = target
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    NnagaSelectorMenuItem(
+                        text = if (trackMenuTarget.inputArmed) "Disarm track" else "Arm track",
+                        selected = trackMenuTarget.inputArmed,
+                        onClick = {
+                            val targetId = trackMenuTarget.id
+                            val inputArmed = trackMenuTarget.inputArmed
+                            dismissTrackDialog()
+                            viewModel.setTrackInputArmed(targetId, !inputArmed)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (armExclusiveOnTrackSelection) {
+                        NnagaSelectorMenuItem(
+                            text = if (trackMenuTarget.inputArmLocked) "Unlock arm" else "Lock arm",
+                            selected = trackMenuTarget.inputArmLocked,
+                            onClick = {
+                                val targetId = trackMenuTarget.id
+                                val inputArmLocked = trackMenuTarget.inputArmLocked
+                                dismissTrackDialog()
+                                viewModel.setTrackInputArmLocked(targetId, !inputArmLocked)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    NnagaSelectorMenuItem(
+                        text = "Delete track",
+                        selected = false,
+                        onClick = {
+                            trackMenuTargetId?.let { targetId ->
+                                dismissTrackDialog()
+                                viewModel.removeTrack(targetId)
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            },
+            confirmButton = {},
+        )
+    }
+    if (trackDialog == TrackDialog.Rename && trackMenuTarget != null) {
+        val normalizedName = trackNameInput.trim()
+        val validName = normalizedName.isNotBlank()
+        val nameLength = trackNameInput.codePointCount(0, trackNameInput.length)
+        AlertDialog(
+            onDismissRequest = ::dismissTrackDialog,
+            title = { Text("Rename track") },
+            text = {
+                OutlinedTextField(
+                    value = trackNameInput,
+                    onValueChange = {
+                        trackNameInput = truncateToCodePoints(it, TRACK_NAME_MAX_CODE_POINTS)
+                    },
+                    label = { Text("Track name") },
+                    supportingText = {
+                        Text(
+                            if (validName) {
+                                "$nameLength/$TRACK_NAME_MAX_CODE_POINTS"
+                            } else {
+                                "Enter a track name"
+                            },
+                        )
+                    },
+                    isError = !validName,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = MaterialTheme.shapes.small,
+                    colors = nnagaOutlinedTextFieldColors(),
+                )
+            },
+            confirmButton = {
+                NnagaTextButton(
+                    onClick = {
+                        viewModel.setTrackName(trackMenuTarget.id, normalizedName)
+                        dismissTrackDialog()
+                    },
+                    enabled = validName,
+                ) { Text("Rename") }
+            },
+            dismissButton = {
+                NnagaTextButton(onClick = ::dismissTrackDialog) { Text("Cancel") }
+            },
+        )
+    }
+    if (trackDialog == TrackDialog.Color && trackMenuTarget != null) {
+        val selectedColor = resolvedTrackColorArgb(trackMenuTarget, trackMenuTargetIndex)
+        AlertDialog(
+            onDismissRequest = ::dismissTrackDialog,
+            title = { Text("${trackDisplayName(trackMenuTarget, trackMenuTargetIndex)} color") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(LiveDimensions.smallGap)) {
+                    AppearancePreferences.palettes.chunked(5).forEach { palettes ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(LiveDimensions.smallGap)) {
+                            palettes.forEach { palette ->
+                                val isSelected = palette.argb == selectedColor
+                                Box(
+                                    modifier = Modifier
+                                        .size(LiveDimensions.hitTarget)
+                                        .clickable(role = Role.RadioButton) {
+                                            viewModel.setTrackColor(trackMenuTarget.id, palette.argb)
+                                            dismissTrackDialog()
+                                        }
+                                        .semantics {
+                                            contentDescription = palette.label
+                                            this.selected = isSelected
+                                            stateDescription = if (isSelected) "Selected" else "Not selected"
+                                        },
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Box(
+                                        Modifier
+                                            .size(LiveDimensions.control)
+                                            .background(Color(palette.argb), CircleShape)
+                                            .border(
+                                                LiveDimensions.hairline,
+                                                if (isSelected) LiveColors.text else LiveColors.divider,
+                                                CircleShape,
+                                            ),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                NnagaTextButton(onClick = ::dismissTrackDialog) { Text("Cancel") }
+            },
+        )
     }
 
     inputMenuTrack?.let { menuTrack ->
@@ -755,9 +1009,6 @@ fun LiveScreen(
         )
     }
 
-    val drawerState = rememberDrawerState(DrawerValue.Closed)
-    val drawerScope = rememberCoroutineScope()
-    var drawerReady by rememberSaveable { mutableStateOf(false) }
     val drawerTrack = selectedTrack
     BackHandler(enabled = drawerState.isOpen) { drawerScope.launch { drawerState.close() } }
     BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -766,15 +1017,23 @@ fun LiveScreen(
             drawerState = drawerState,
             gesturesEnabled = drawerReady,
             drawerContent = {
-                if (drawerReady) Surface(Modifier.requiredWidth(drawerWidth).fillMaxHeight()) {
-                    MediaBrowserDrawerContent(
-                        selectedTrackId = drawerTrack?.id,
-                        selectedTrackLabel = drawerTrack?.let { "Track ${tracks.indexOf(it) + 1}" },
-                        selectedSlot = selectedSlot,
-                        onClose = { drawerScope.launch { drawerState.close() } },
-                        onLoadClip = viewModel::loadTrackClipMedia,
-                        onPluginAdded = { viewModel.selectPath(it) },
-                    )
+                if (drawerReady) {
+                    Surface(Modifier.requiredWidth(drawerWidth).fillMaxHeight()) {
+                        MediaBrowserDrawerContent(
+                            selectedTrackId = drawerTrack?.id,
+                            selectedTrackLabel = drawerTrack?.let { track ->
+                                trackDisplayName(track, tracks.indexOf(track))
+                            },
+                            selectedSlot = selectedSlot,
+                            requestedTab = drawerRequestedTab,
+                            pluginTargetPathId = drawerPluginPathId,
+                            pluginTargetLabel = drawerPluginLabel,
+                            replaceIndex = drawerReplaceIndex,
+                            onClose = { drawerScope.launch { drawerState.close() } },
+                            onLoadClip = viewModel::loadTrackClipMedia,
+                            onPluginAdded = { viewModel.selectPath(it) },
+                        )
+                    }
                 }
             },
         ) {
@@ -797,8 +1056,7 @@ fun LiveScreen(
                 onDashboard = onNavigateToDashboard,
                 onToggleEdit = { editTiles = !editTiles },
                 onMediaBrowser = {
-                    drawerReady = true
-                    drawerScope.launch { drawerState.open() }
+                    openMediaBrowser(com.vibes.dsp.ui.browser.MediaBrowserTab.Clips)
                 },
             )
             if (!hideTransportWithoutLauncher || "launcher" in visibleTiles) {
@@ -819,9 +1077,6 @@ fun LiveScreen(
                     },
                     launchQuantization = launchQuantization,
                     onLaunchQuantizationClick = { showQuantizationMenu = true },
-                    onDeleteSelectedTrack = selectedTrack?.let { track ->
-                        { viewModel.removeTrack(track.id) }
-                    },
                 )
             }
             val displayedTiles = tileOrder.filter { it in visibleTiles }
@@ -868,18 +1123,6 @@ fun LiveScreen(
                                     selectedTrack = selectedTrack,
                                     selectedSlot = selectedSlot,
                                     bpm = transport.beatsPerMinute,
-                                    trackColors = tracks.mapIndexed { index, track ->
-                                        track.id to (
-                                            trackColorOverrides[track.id]
-                                                ?: LiveLayoutPreferences.getTrackColor(
-                                                    context,
-                                                    track.id,
-                                                    AppearancePreferences.palettes[
-                                                        index % AppearancePreferences.palettes.size
-                                                    ].argb,
-                                                )
-                                            )
-                                    }.toMap(),
                                     horizontalScrollState = launcherHorizontalScrollState,
                                     verticalScrollState = launcherVerticalScrollState,
                                     modifier = Modifier.fillMaxSize(),
@@ -899,8 +1142,12 @@ fun LiveScreen(
                                         viewModel.selectTrackClipSlot(track.id, slot)
                                     },
                                     onLoad = { track, slot ->
-                                        importTarget = track.id to slot
-                                        picker.launch(arrayOf("audio/*", "audio/midi", "audio/x-midi", "application/x-midi"))
+                                        selectedTrackId = track.id
+                                        armTrackExclusivelyIfEnabled(track.id)
+                                        selectedSlot = slot
+                                        viewModel.selectPath(track.id)
+                                        viewModel.selectTrackClipSlot(track.id, slot)
+                                        openMediaBrowser(com.vibes.dsp.ui.browser.MediaBrowserTab.Clips)
                                     },
                                     onLaunch = { track, slot ->
                                         selectedTrackId = track.id
@@ -937,9 +1184,9 @@ fun LiveScreen(
                                     onStop = { track ->
                                         viewModel.stopTrackClipTransport(track.id, launchQuantization)
                                     },
-                                    onTrackColor = { track, argb ->
-                                        LiveLayoutPreferences.setTrackColor(context, track.id, argb)
-                                        trackColorOverrides = trackColorOverrides + (track.id to argb)
+                                    onTrackLongPress = { track ->
+                                        trackMenuTargetId = track.id
+                                        trackDialog = TrackDialog.Menu
                                     },
                                 )
                             }
@@ -953,13 +1200,6 @@ fun LiveScreen(
                                 },
                                 notes = notesByClip[selectedTrack?.id to selectedSlot].orEmpty(),
                                 bpm = transport.beatsPerMinute,
-                                onTrackInput = { inputMenuTrack = it },
-                                onTrackArm = { track ->
-                                    viewModel.setTrackInputArmed(track.id, !track.inputArmed)
-                                },
-                                onTrackArmLock = { track ->
-                                    viewModel.setTrackInputArmLocked(track.id, !track.inputArmLocked)
-                                },
                                 onOpenClipSettings = { track, clip -> openClipSettings(track.id, clip) },
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -972,7 +1212,21 @@ fun LiveScreen(
                                 cpuLoad = cpuLoad,
                                 xRunCount = xRunCount,
                                 guidance = deviceChainGuidance,
-                                onBrowser = { path -> onNavigateToBrowser(path, -1) },
+                                onAddPlugin = { path ->
+                                    openMediaBrowser(
+                                        com.vibes.dsp.ui.browser.MediaBrowserTab.Plugins,
+                                        pluginPathId = path,
+                                        pluginLabel = if (path == MASTER_PATH_ID) "Master" else "Device",
+                                    )
+                                },
+                                onReplacePlugin = { path, index ->
+                                    openMediaBrowser(
+                                        com.vibes.dsp.ui.browser.MediaBrowserTab.Plugins,
+                                        pluginPathId = path,
+                                        pluginLabel = if (path == MASTER_PATH_ID) "Master" else "Device",
+                                        replaceIndex = index,
+                                    )
+                                },
                                 onSaveChain = { path ->
                                     deviceChainPathId = path
                                     saveDeviceChainLauncher.launch("device-chain-$path.nnchain")
@@ -1001,6 +1255,10 @@ fun LiveScreen(
                                     selectedSlot = track.selectedSlot
                                     viewModel.selectPath(track.id)
                                     viewModel.selectTrackClipSlot(track.id, selectedSlot)
+                                },
+                                onTrackLongPress = { track ->
+                                    trackMenuTargetId = track.id
+                                    trackDialog = TrackDialog.Menu
                                 },
                                 onVolume = { track, gain -> viewModel.setTrackVolume(track.id, gain) },
                                 onAdd = viewModel::addTrack,
@@ -1279,7 +1537,8 @@ private fun DevicesTile(
     cpuLoad: Float,
     xRunCount: Int,
     guidance: String?,
-    onBrowser: (Long) -> Unit,
+    onAddPlugin: (RackPathId) -> Unit,
+    onReplacePlugin: (RackPathId, Int) -> Unit,
     onSaveChain: (Long) -> Unit,
     onLoadChain: (Long) -> Unit,
     onOpenFullscreen: (RackPlugin, Int, Int) -> Unit,
@@ -1341,7 +1600,7 @@ private fun DevicesTile(
                 modifier = Modifier.padding(horizontal = LiveDimensions.smallGap),
             )
             NnagaTextButton(
-                onClick = { onBrowser(pathId) },
+                onClick = { onAddPlugin(pathId) },
             ) {
                 Icon(
                     Icons.Default.Add,
@@ -1395,7 +1654,7 @@ private fun DevicesTile(
                                         pathId = pathId,
                                         viewModel = viewModel,
                                         onRemove = { viewModel.removePlugin(pathId, plugin.index) },
-                                        onReplace = { onBrowser(pathId) },
+                                        onReplace = { onReplacePlugin(pathId, plugin.index) },
                                         expanded = expanded,
                                         onExpandedChange = { expanded = it },
                                         onOpenFullscreen = { _, _, width, height ->
@@ -1434,7 +1693,7 @@ private fun DevicesTile(
                                     pathId = pathId,
                                     viewModel = viewModel,
                                     onRemove = { viewModel.removePlugin(pathId, plugin.index) },
-                                    onReplace = { onBrowser(pathId) },
+                                    onReplace = { onReplacePlugin(pathId, plugin.index) },
                                     expanded = expanded,
                                     onExpandedChange = { expanded = it },
                                     onOpenFullscreen = { _, _, width, height ->
@@ -1472,7 +1731,6 @@ private fun TransportBar(
     onBpm: () -> Unit,
     launchQuantization: TrackLaunchQuantization,
     onLaunchQuantizationClick: () -> Unit,
-    onDeleteSelectedTrack: (() -> Unit)?,
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val nowMonotonicNanos = rememberFrameClockNanos(playing)
@@ -1576,15 +1834,6 @@ private fun TransportBar(
                             onLaunchQuantizationClick()
                         },
                     )
-                    onDeleteSelectedTrack?.let { onDelete ->
-                        DropdownMenuItem(
-                            text = { Text("Delete track") },
-                            onClick = {
-                                showMenu = false
-                                onDelete()
-                            },
-                        )
-                    }
                 }
             }
         }
@@ -1637,7 +1886,6 @@ private fun Launcher(
     slotsByTrack: Map<Long, List<ClipSlotInfo>>,
     selectedTrack: RackTrackInfo?,
     selectedSlot: Int,
-    trackColors: Map<Long, Int>,
     bpm: Double,
     horizontalScrollState: androidx.compose.foundation.ScrollState,
     verticalScrollState: androidx.compose.foundation.ScrollState,
@@ -1650,7 +1898,7 @@ private fun Launcher(
     onCancelRecording: (RackTrackInfo) -> Unit,
     onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     onOpenSlotSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
-    onTrackColor: (RackTrackInfo, Int) -> Unit,
+    onTrackLongPress: (RackTrackInfo) -> Unit,
     onStop: (RackTrackInfo) -> Unit,
 ) {
     CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
@@ -1663,14 +1911,12 @@ private fun Launcher(
                         .padding(end = LiveDimensions.hairline),
                 ) {
                     TrackHeader(
-                        index = index,
+                        name = trackDisplayName(track, index),
                         selected = track.id == selectedTrack?.id,
-                        trackColor = trackColors[track.id]
-                            ?: AppearancePreferences.palettes[
-                                index % AppearancePreferences.palettes.size
-                            ].argb,
+                        trackColor = resolvedTrackColorArgb(track, index),
+                        armed = track.inputArmed,
                         onSelect = { onSelectTrack(track) },
-                        onColorSelected = { onTrackColor(track, it) },
+                        onLongPress = { onTrackLongPress(track) },
                     )
                 }
             }
@@ -1869,13 +2115,13 @@ private fun TrackSlots(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TrackHeader(
-    index: Int,
+    name: String,
     selected: Boolean,
     trackColor: Int,
+    armed: Boolean,
     onSelect: () -> Unit,
-    onColorSelected: (Int) -> Unit,
+    onLongPress: () -> Unit,
 ) {
-    var showPalette by remember { mutableStateOf(false) }
     val color = Color(trackColor)
     Row(
         Modifier.fillMaxWidth().height(LiveDimensions.trackHeader)
@@ -1883,63 +2129,30 @@ private fun TrackHeader(
             .combinedClickable(
                 role = Role.Button,
                 onClick = onSelect,
-                onLongClick = { showPalette = true },
+                onLongClick = onLongPress,
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.width(3.dp).fillMaxHeight().background(color))
+        Box(Modifier.width(LiveDimensions.trackStroke).fillMaxHeight().background(color))
         Text(
-            "TRACK ${index + 1}",
+            name,
             color = if (selected) color else LiveColors.textMuted,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
             style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = LiveDimensions.gap).weight(1f),
         )
-    }
-    if (showPalette) {
-        AlertDialog(
-            onDismissRequest = { showPalette = false },
-            title = { Text("Track ${index + 1} color") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(LiveDimensions.smallGap)) {
-                    AppearancePreferences.palettes.chunked(5).forEach { palettes ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(LiveDimensions.smallGap)) {
-                            palettes.forEach { palette ->
-                                val isSelected = palette.argb == trackColor
-                                Box(
-                                    modifier = Modifier
-                                        .size(LiveDimensions.hitTarget)
-                                        .clickable(role = Role.RadioButton) {
-                                            onColorSelected(palette.argb)
-                                            showPalette = false
-                                        }
-                                        .semantics {
-                                            contentDescription = palette.label
-                                            this.selected = isSelected
-                                            stateDescription = if (isSelected) "Selected" else "Not selected"
-                                        },
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    Box(
-                                        Modifier
-                                            .size(LiveDimensions.control)
-                                            .background(Color(palette.argb), CircleShape)
-                                            .border(
-                                                LiveDimensions.hairline,
-                                                if (isSelected) LiveColors.text else LiveColors.divider,
-                                                CircleShape,
-                                            ),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            confirmButton = {
-                NnagaTextButton(onClick = { showPalette = false }) { Text("Cancel") }
-            },
-        )
+        if (armed) {
+            Spacer(Modifier.width(LiveDimensions.smallGap))
+            Box(
+                modifier = Modifier
+                    .padding(end = LiveDimensions.smallGap)
+                    .size(6.dp)
+                    .background(LiveColors.record, CircleShape)
+                    .semantics { contentDescription = "Track armed" },
+            )
+        }
     }
 }
 
@@ -2137,124 +2350,22 @@ private fun ClipInspector(
     clip: ClipSlotInfo?,
     peaks: List<Float>,
     notes: List<MidiNoteInfo>,
-    onTrackInput: (RackTrackInfo) -> Unit,
-    onTrackArm: (RackTrackInfo) -> Unit,
-    onTrackArmLock: (RackTrackInfo) -> Unit,
     onOpenClipSettings: (RackTrackInfo, ClipSlotInfo) -> Unit,
     bpm: Double,
     modifier: Modifier,
 ) {
     val nowMonotonicNanos = rememberFrameClockNanos(clip?.playing == true)
     Surface(color = LiveColors.panel, modifier = modifier.fillMaxWidth()) {
-        Column {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(LiveDimensions.hitTarget + LiveDimensions.gap),
-            ) {
-                TrackInspectorControls(
-                    track = track,
-                    onInputClick = { track?.let(onTrackInput) },
-                    onArmClick = { track?.let(onTrackArm) },
-                    onArmLockClick = { track?.let(onTrackArmLock) },
-                )
-            }
-            Box(Modifier.fillMaxWidth().weight(1f)) {
-                if (clip?.midiLoaded == true) {
-                    PianoRoll(clip, notes, bpm, nowMonotonicNanos, track, onOpenClipSettings)
-                } else {
-                    Waveform(clip, peaks, bpm, nowMonotonicNanos, track, onOpenClipSettings)
-                }
+        Box(Modifier.fillMaxSize()) {
+            if (clip?.midiLoaded == true) {
+                PianoRoll(clip, notes, bpm, nowMonotonicNanos, track, onOpenClipSettings)
+            } else {
+                Waveform(clip, peaks, bpm, nowMonotonicNanos, track, onOpenClipSettings)
             }
         }
     }
 }
 
-@Composable
-@OptIn(ExperimentalFoundationApi::class)
-private fun TrackInspectorControls(
-    track: RackTrackInfo?,
-    onInputClick: () -> Unit,
-    onArmClick: () -> Unit,
-    onArmLockClick: () -> Unit,
-) {
-    if (track == null) {
-        InspectorMessage("Select a track")
-        return
-    }
-    var showArmLockMenu by remember { mutableStateOf(false) }
-    Row(
-        modifier = Modifier.fillMaxSize().padding(horizontal = LiveDimensions.smallGap),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(LiveDimensions.smallGap),
-    ) {
-        Box {
-            Box(
-                modifier = Modifier
-                    .size(LiveDimensions.hitTarget)
-                    .combinedClickable(
-                        role = Role.Button,
-                        onClick = onArmClick,
-                        onLongClickLabel = if (track.inputArmLocked) "Unlock arm" else "Lock arm",
-                        onLongClick = { showArmLockMenu = true },
-                    )
-                    .semantics {
-                        contentDescription =
-                            if (track.inputArmed) "Disarm track input" else "Arm track input"
-                        stateDescription = when {
-                            track.inputArmed && track.inputArmLocked -> "Armed, arm locked"
-                            track.inputArmed -> "Armed, arm unlocked"
-                            track.inputArmLocked -> "Disarmed, arm locked"
-                            else -> "Disarmed, arm unlocked"
-                        }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.Mic,
-                    contentDescription = null,
-                    tint = if (track.inputArmed) LiveColors.record else LiveColors.textDim,
-                    modifier = Modifier.size(LiveDimensions.icon),
-                )
-                if (track.inputArmLocked) {
-                    Icon(
-                        Icons.Default.Lock,
-                        contentDescription = null,
-                        tint = LiveColors.text,
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(LiveDimensions.smallGap)
-                            .size(LiveDimensions.indicatorIcon),
-                    )
-                }
-            }
-            DropdownMenu(
-                expanded = showArmLockMenu,
-                onDismissRequest = { showArmLockMenu = false },
-            ) {
-                DropdownMenuItem(
-                    text = { Text(if (track.inputArmLocked) "Unlock arm" else "Lock arm") },
-                    onClick = {
-                        showArmLockMenu = false
-                        onArmLockClick()
-                    },
-                )
-            }
-        }
-        NnagaTextButton(
-            onClick = onInputClick,
-        ) {
-            Text(
-                when (track.inputSourceKind) {
-                    1 -> "TRK ${track.inputSourceTrackId} ${if (track.inputTap == 0) "PRE" else "POST"}"
-                    2 -> "Hardware ${track.inputSourceFirstChannel + 1} (mono)"
-                    else -> "Hardware ${track.inputSourceFirstChannel + 1}/${track.inputSourceFirstChannel + 2} (stereo)"
-                },
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-    }
-}
 
 
 @Composable
@@ -2565,6 +2676,7 @@ private fun Mixer(
     tracks: List<RackTrackInfo>,
     selected: RackPathId?,
     onSelect: (RackTrackInfo) -> Unit,
+    onTrackLongPress: (RackTrackInfo) -> Unit,
     onSelectMaster: () -> Unit,
     onVolume: (RackTrackInfo, Float) -> Unit,
     onAdd: () -> Unit,
@@ -2580,9 +2692,12 @@ private fun Mixer(
                 tracks.forEachIndexed { index, track ->
                     MixerChannel(
                         track = track,
-                        index = index,
+                        name = trackDisplayName(track, index),
+                        abbreviation = mixerTrackAbbreviation(track.name, index),
+                        trackColor = resolvedTrackColorArgb(track, index),
                         selected = track.id == selected,
                         onSelect = { onSelect(track) },
+                        onLongPress = { onTrackLongPress(track) },
                         onVolume = { onVolume(track, it) },
                     )
                 }
@@ -2603,12 +2718,16 @@ private fun Mixer(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MixerChannel(
     track: RackTrackInfo,
-    index: Int,
+    name: String,
+    abbreviation: String,
+    trackColor: Int,
     selected: Boolean,
     onSelect: () -> Unit,
+    onLongPress: () -> Unit,
     onVolume: (Float) -> Unit,
 ) {
     val accent = MaterialTheme.colorScheme.primary
@@ -2629,24 +2748,40 @@ private fun MixerChannel(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(
+            modifier = Modifier.fillMaxWidth().combinedClickable(
+                role = Role.Button,
+                onClick = onSelect,
+                onLongClick = onLongPress,
+            ),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(LiveDimensions.smallGap),
+            horizontalArrangement = Arrangement.spacedBy(
+                LiveDimensions.smallGap,
+                Alignment.CenterHorizontally,
+            ),
         ) {
             Box(
-                modifier = Modifier.width(2.dp).height(16.dp)
-                    .background(if (track.activeSlot >= 0) accent else LiveColors.divider),
+                modifier = Modifier.width(LiveDimensions.trackStroke).height(16.dp)
+                    .background(Color(trackColor)),
             )
             Text(
-                text = "T${index + 1}",
+                text = abbreviation,
                 color = if (selected || track.activeSlot >= 0) accent else LiveColors.text,
                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                 style = MaterialTheme.typography.labelMedium,
             )
+            if (track.inputArmed) {
+            Box(
+                modifier = Modifier
+                    .size(6.dp)
+                    .background(LiveColors.record, CircleShape)
+                    .semantics { contentDescription = "Track armed" },
+            )
+            }
         }
         VerticalFader(
             value = track.volume,
             onValueChange = onVolume,
-            label = "Track ${index + 1} volume",
+            label = "$name volume",
             modifier = Modifier.fillMaxWidth().weight(1f),
         )
         Text(

@@ -16,7 +16,50 @@
 #include <vector>
 
 #include "PluginRegistry.h"
+
 namespace guitarrackcraft {
+inline bool isValidTrackName(const std::string& name) noexcept {
+    if (name.size() > 288) return false;
+    size_t i = 0;
+    size_t codePoints = 0;
+    while (i < name.size()) {
+        const uint8_t first = static_cast<uint8_t>(name[i]);
+        if (first <= 0x7f) {
+            if (first == 0) return false;
+            ++i;
+        } else if (first >= 0xc2 && first <= 0xdf) {
+            if (i + 1 >= name.size()) return false;
+            const uint8_t second = static_cast<uint8_t>(name[i + 1]);
+            if (second < 0x80 || second > 0xbf) return false;
+            i += 2;
+        } else if (first >= 0xe0 && first <= 0xef) {
+            if (i + 2 >= name.size()) return false;
+            const uint8_t second = static_cast<uint8_t>(name[i + 1]);
+            const uint8_t third = static_cast<uint8_t>(name[i + 2]);
+            if (third < 0x80 || third > 0xbf) return false;
+            if (first == 0xe0 && second < 0xa0) return false;
+            if (second < 0x80 || second > 0xbf) return false;
+            if (first == 0xed && second >= 0xa0) {
+                if (second > 0xaf || i + 5 >= name.size() ||
+                    static_cast<uint8_t>(name[i + 3]) != 0xed ||
+                    static_cast<uint8_t>(name[i + 4]) < 0xb0 ||
+                    static_cast<uint8_t>(name[i + 4]) > 0xbf ||
+                    static_cast<uint8_t>(name[i + 5]) < 0x80 ||
+                    static_cast<uint8_t>(name[i + 5]) > 0xbf) return false;
+                i += 6;
+            } else if (first == 0xed && second >= 0xb0) {
+                return false;
+            } else {
+                i += 3;
+            }
+        } else {
+            return false;
+        }
+        if (++codePoints > 48) return false;
+    }
+    return true;
+}
+
 
 using RackPathId = uint64_t;
 constexpr RackPathId kMasterPathId = 0;
@@ -100,6 +143,8 @@ struct TrackSnapshot {
     double sampleRate{};
     uint64_t capturedAtMonotonicNanos{};
     int32_t recordingSlot{-1};
+    std::string name;
+    uint32_t colorArgb{0};
 };
 enum class RecordingPhase : uint8_t { Idle, Armed, Pending, Recording, Cancelling, Completing, Complete };
 struct TransportSnapshot { bool playing; double positionSec; double beatsPerMinute; uint64_t samplePosition; uint64_t transportFrame; double musicalQuarterNotes{0.0}; double sampleRate{0.0}; uint64_t capturedAtMonotonicNanos{0}; };
@@ -133,6 +178,8 @@ public:
             PluginChain::ChainState chain;
             uint32_t selectedSlot = 0;
             double defaultLoopLengthBars = 1.0;
+            std::string name;
+            uint32_t colorArgb = 0;
             std::vector<ClipSlot> clipSlots;
         };
         std::vector<Track> tracks;
@@ -148,7 +195,7 @@ public:
     std::vector<std::tuple<RackPathId, uint32_t, std::string, bool>> getProjectClipMediaRefs() const;
     RackGraph(); ~RackGraph();
     RackPathId addTrack(); bool removeTrack(RackPathId); std::vector<TrackSnapshot> getTracks() const; std::vector<TrackClipSlotInfo> getTrackClipSlots(RackPathId) const; std::vector<MidiNoteInfo> getTrackClipMidiNotes(RackPathId,uint32_t) const;
-    bool setTrackVolume(RackPathId, float); bool setTrackInputArmed(RackPathId, bool); bool setTrackInputArmLocked(RackPathId, bool); void setAvailableInputChannelCount(int32_t) noexcept;
+    bool setTrackVolume(RackPathId, float); bool setTrackName(RackPathId, const std::string&); bool setTrackColor(RackPathId, uint32_t); bool setTrackInputArmed(RackPathId, bool); bool setTrackInputArmLocked(RackPathId, bool); void setAvailableInputChannelCount(int32_t) noexcept;
     bool setTrackInputSource(RackPathId, const TrackInputSource&);
     bool setTrackInputHardwarePair(RackPathId, int32_t);
     bool setTrackInputHardwareMono(RackPathId, int32_t);
@@ -211,6 +258,8 @@ public:
         std::atomic<float> volume{1.0f};
         std::atomic<bool> inputArmed{false};
         std::atomic<bool> inputArmLocked{false};
+        std::string name;
+        uint32_t colorArgb{0};
         std::vector<std::shared_ptr<SlotConfig>> slotConfig;
         std::vector<std::shared_ptr<ClipRuntime>> clipRuntime;
         std::atomic<int32_t> activeSlot{-1};

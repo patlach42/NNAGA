@@ -59,20 +59,24 @@ import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.ui.components.NnagaTextButton
 import kotlinx.coroutines.launch
 
-private const val CLIPS_TAB = 0
-private const val PLUGINS_TAB = 1
+internal enum class MediaBrowserTab { Clips, Plugins }
 
 @Composable
 internal fun MediaBrowserDrawerContent(
     selectedTrackId: RackPathId?,
     selectedTrackLabel: String?,
     selectedSlot: Int,
+    requestedTab: MediaBrowserTab = MediaBrowserTab.Clips,
+    pluginTargetPathId: RackPathId? = null,
+    pluginTargetLabel: String? = null,
+    replaceIndex: Int? = null,
     onClose: () -> Unit,
     onLoadClip: (RackPathId, Int, Uri) -> Unit,
     onPluginAdded: (RackPathId) -> Unit,
 ) {
-    var selectedTab by rememberSaveable { mutableIntStateOf(CLIPS_TAB) }
+    var selectedTab by rememberSaveable { mutableIntStateOf(requestedTab.ordinal) }
     val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(requestedTab) { selectedTab = requestedTab.ordinal }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -86,11 +90,8 @@ internal fun MediaBrowserDrawerContent(
             ) {
                 Text("Browser", style = MaterialTheme.typography.titleMedium)
                 Row {
-                    if (selectedTab == CLIPS_TAB) {
-                        ClipsRefreshButton()
-                    } else {
-                        PluginsRefreshButton()
-                    }
+                    if (selectedTab == MediaBrowserTab.Clips.ordinal) ClipsRefreshButton()
+                    else PluginsRefreshButton()
                     NnagaIconButton(onClick = onClose) {
                         Icon(Icons.Default.Close, contentDescription = "Close")
                     }
@@ -99,18 +100,18 @@ internal fun MediaBrowserDrawerContent(
             Row(modifier = Modifier.fillMaxWidth()) {
                 BrowserTab(
                     label = "Clips",
-                    selected = selectedTab == CLIPS_TAB,
-                    onClick = { selectedTab = CLIPS_TAB },
+                    selected = selectedTab == MediaBrowserTab.Clips.ordinal,
+                    onClick = { selectedTab = MediaBrowserTab.Clips.ordinal },
                     modifier = Modifier.weight(1f),
                 )
                 BrowserTab(
                     label = "Plugins",
-                    selected = selectedTab == PLUGINS_TAB,
-                    onClick = { selectedTab = PLUGINS_TAB },
+                    selected = selectedTab == MediaBrowserTab.Plugins.ordinal,
+                    onClick = { selectedTab = MediaBrowserTab.Plugins.ordinal },
                     modifier = Modifier.weight(1f),
                 )
             }
-            if (selectedTab == CLIPS_TAB) {
+            if (selectedTab == MediaBrowserTab.Clips.ordinal) {
                 ClipsBrowserTab(
                     selectedTrackId = selectedTrackId,
                     selectedTrackLabel = selectedTrackLabel,
@@ -120,9 +121,9 @@ internal fun MediaBrowserDrawerContent(
                 )
             } else {
                 PluginsBrowserTab(
-                    selectedTrackId = selectedTrackId,
-                    selectedTrackLabel = selectedTrackLabel,
-                    selectedSlot = selectedSlot,
+                    selectedTrackId = pluginTargetPathId ?: selectedTrackId,
+                    selectedTrackLabel = pluginTargetLabel ?: selectedTrackLabel,
+                    replaceIndex = replaceIndex,
                     onPluginAdded = onPluginAdded,
                     snackbarHostState = snackbarHostState,
                     modifier = Modifier.weight(1f),
@@ -299,11 +300,8 @@ private fun ClipTreeRow(
             .clickable(
                 enabled = isEnabled,
                 onClick = {
-                    if (row.isDirectory) {
-                        onToggleDirectory(row.uri)
-                    } else {
-                        onMediaClick(row.uri, row.name)
-                    }
+                    if (row.isDirectory) onToggleDirectory(row.uri)
+                    else onMediaClick(row.uri, row.name)
                 },
             )
             .padding(vertical = 8.dp),
@@ -336,18 +334,18 @@ private fun ClipTreeRow(
         }
     }
 }
-
 private data class PendingPlugin(
     val plugin: PluginInfo,
-    val trackId: RackPathId,
+    val pathId: RackPathId,
     val trackLabel: String,
+    val replaceIndex: Int?,
 )
 
 @Composable
 private fun PluginsBrowserTab(
     selectedTrackId: RackPathId?,
     selectedTrackLabel: String?,
-    selectedSlot: Int,
+    replaceIndex: Int?,
     onPluginAdded: (RackPathId) -> Unit,
     snackbarHostState: SnackbarHostState,
     modifier: Modifier,
@@ -368,12 +366,17 @@ private fun PluginsBrowserTab(
 
     Box(modifier = modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            TargetBanner(selectedTrackLabel, slot = selectedSlot)
+            TargetBanner(selectedTrackLabel, slot = 0)
             PluginTree(
                 viewModel = viewModel,
                 onPluginClick = { plugin ->
                     selectedTrackId?.let { trackId ->
-                        pendingPlugin = PendingPlugin(plugin, trackId, selectedTrackLabel ?: "Track")
+                        pendingPlugin = PendingPlugin(
+                            plugin = plugin,
+                            pathId = trackId,
+                            trackLabel = selectedTrackLabel ?: "Track",
+                            replaceIndex = replaceIndex,
+                        )
                     }
                 },
                 compactItems = true,
@@ -387,20 +390,29 @@ private fun PluginsBrowserTab(
     pendingPlugin?.let { request ->
         AlertDialog(
             onDismissRequest = { if (blockingOperation == null) pendingPlugin = null },
-            title = { Text("Add plugin?") },
-            text = { Text("Add ${request.plugin.name} to ${request.trackLabel}?") },
+            title = { Text(if (request.replaceIndex == null) "Add plugin?" else "Replace plugin?") },
+            text = {
+                Text(
+                    if (request.replaceIndex == null) {
+                        "Add ${request.plugin.name} to ${request.trackLabel}?"
+                    } else {
+                        "Replace plugin in ${request.trackLabel}?"
+                    },
+                )
+            },
             confirmButton = {
                 NnagaTextButton(
                     enabled = blockingOperation == null,
                     onClick = {
                         pendingPlugin = null
                         scope.launch {
-                            if (viewModel.addPluginToRack(request.trackId, request.plugin)) {
-                                onPluginAdded(request.trackId)
-                            }
+                            val success = request.replaceIndex?.let {
+                                viewModel.replacePluginInRack(request.pathId, it, request.plugin)
+                            } ?: viewModel.addPluginToRack(request.pathId, request.plugin)
+                            if (success) onPluginAdded(request.pathId)
                         }
                     },
-                ) { Text("Add") }
+                ) { Text(if (request.replaceIndex == null) "Add" else "Replace") }
             },
             dismissButton = {
                 NnagaTextButton(

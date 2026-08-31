@@ -27,21 +27,15 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Star
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
-import androidx.compose.runtime.remember
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -52,104 +46,12 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import androidx.activity.compose.BackHandler
-import androidx.lifecycle.viewmodel.compose.viewModel
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.ui.components.NnagaButton
 import com.vibes.dsp.ui.components.NnagaIconButton
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun PluginBrowserScreen(
-    pathId: Long,
-    replaceIndex: Int = -1,
-    onNavigateBack: () -> Unit,
-    viewModel: PluginBrowserViewModel = viewModel()
-) {
-    val addFailureMessage by viewModel.addFailureMessage.collectAsState()
-    val blockingOperation by viewModel.blockingOperation.collectAsState()
-
-    // Scope for kicking off add/replace plugin operations off the main thread.
-    // VST activate (wine fork + guest_ready wait) blocks for several seconds.
-    val addPluginScope = rememberCoroutineScope()
-
-    val snackbarHostState = remember { SnackbarHostState() }
-
-    // Reload plugins every time the screen is displayed (e.g. engine may have
-    // been initialized after permission grant, or user returned to this screen)
-    LaunchedEffect(Unit) {
-        viewModel.refresh()
-    }
-
-    // Show Snackbar when add-to-rack fails (plugin binary missing, etc.)
-    LaunchedEffect(addFailureMessage) {
-        addFailureMessage?.let { msg ->
-            snackbarHostState.showSnackbar(
-                message = msg,
-                duration = SnackbarDuration.Long
-            )
-            viewModel.clearAddFailureMessage()
-        }
-    }
-
-    BackHandler(enabled = blockingOperation != null) { }
-
-    Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
-            snackbarHost = { SnackbarHost(snackbarHostState) },
-            topBar = {
-                TopAppBar(
-                    title = { Text("Plugin Browser") },
-                    navigationIcon = {
-                        NnagaIconButton(onClick = onNavigateBack) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                        }
-                    },
-                    actions = {
-                        NnagaIconButton(onClick = { viewModel.refresh() }) {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh")
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                    ),
-                )
-            }
-        ) { padding ->
-            PluginTree(
-                viewModel = viewModel,
-                onPluginClick = { plugin ->
-                    if (blockingOperation == null) {
-                        // VST activate can take ~5s (wine fork + FEX startup);
-                        // doing it on the main thread triggers Android's
-                        // input-dispatch ANR watchdog. Launch on the screen's
-                        // coroutine scope; the view model dispatches to IO.
-                        addPluginScope.launch {
-                            val success = if (replaceIndex >= 0) {
-                                viewModel.replacePluginInRack(pathId, replaceIndex, plugin)
-                            } else {
-                                viewModel.addPluginToRack(pathId, plugin)
-                            }
-                            if (success) onNavigateBack()
-                        }
-                    }
-                },
-                compactItems = false,
-                pluginItemsEnabled = true,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-            )
-        }
-        blockingOperation?.let { label ->
-            BrowserBlockingOperationOverlay(label = label)
-        }
-    }
-}
 
 @Composable
 internal fun PluginTree(

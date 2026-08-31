@@ -22,6 +22,7 @@
 
 #include "../IPlugin.h"
 #include "../../utils/BoundedSPSCQueue.h"
+#include "../../utils/VariablePayloadSPSCQueue.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -40,6 +41,7 @@
 #include <lv2/time/time.h>
 #include <lv2/midi/midi.h>
 #include <lv2/buf-size/buf-size.h>
+#include <lv2/resize-port/resize-port.h>
 #include <lv2/state/state.h>
 #include <thread>
 #include <condition_variable>
@@ -142,10 +144,8 @@ private:
     std::vector<float*> audioOutputPorts_;
 
     static constexpr size_t kMaxLv2BufferFrames = 8192;
-
     void connectPorts();
-    void initializePorts();
-
+    bool initializePorts();
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
     // Worker extension
     const LV2_Worker_Interface* workerInterface_ = nullptr;
@@ -180,6 +180,7 @@ private:
         bool isInput;
         bool supportsMidi;
         size_t bufferIdx;
+        size_t capacity;
     };
     std::vector<std::vector<uint8_t>> atomPortBuffers_;
     std::vector<AtomPortInfo> atomPorts_;
@@ -196,20 +197,19 @@ private:
     LV2_URID time_frame_ = 0;
     LV2_URID time_speed_ = 0;
     LV2_URID time_beatsPerMinute_ = 0;
+    LV2_URID time_beatsPerBar_ = 0;
+    LV2_URID time_beatUnit_ = 0;
     LV2_URID time_bar_ = 0;
     LV2_URID time_barBeat_ = 0;
     LV2_URID atom_Long_ = 0;
+    LV2_URID atom_Float_ = 0;
+    LV2_URID atom_Int_ = 0;
     LV2_URID atom_Double_ = 0;
     LV2_URID midi_MidiEvent_ = 0;
     LV2_URID atom_Sequence_ = 0;
     LV2_URID atom_Chunk_ = 0;
 
     static constexpr size_t kUiQueueCapacity = 64;
-    static constexpr size_t kUiPayloadSize = 8192;
-    struct AtomMessage {
-        uint32_t size;
-        uint8_t data[kUiPayloadSize];
-    };
     struct FilePathMessage {
         LV2_URID propertyUrid;
         uint32_t propertySize;
@@ -217,14 +217,9 @@ private:
         char property[512];
         char path[4096];
     };
-    struct OutputMessage {
-        uint32_t portIndex;
-        uint32_t size;
-        uint8_t data[kUiPayloadSize];
-    };
-    BoundedSPSCQueue<AtomMessage, kUiQueueCapacity> pendingAtoms_;
+    VariablePayloadSPSCQueue pendingAtoms_;
     BoundedSPSCQueue<FilePathMessage, 8> pendingFilePaths_;
-    BoundedSPSCQueue<OutputMessage, kUiQueueCapacity> pendingOutputAtoms_;
+    VariablePayloadSPSCQueue pendingOutputAtoms_;
     std::atomic<uint32_t> pendingAtomDrops_{0};
     std::atomic<uint32_t> timeEventDrops_{0};
     std::atomic<uint32_t> filePathDrops_{0};

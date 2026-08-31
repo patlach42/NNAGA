@@ -40,7 +40,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.vibes.dsp.ui.browser.PluginBrowserScreen
 import com.vibes.dsp.ui.live.LiveScreen
 import com.vibes.dsp.ui.modgui.ModguiScreen
 import com.vibes.dsp.ui.rack.RackViewModel
@@ -61,9 +60,6 @@ private const val PENDING_REPOSITORY_PACKAGE_ID = "pendingRepositoryPackageId"
 
 sealed class Screen(val route: String) {
     object Live : Screen("live")
-    object Browser : Screen("browser?pathId={pathId}&replaceIndex={replaceIndex}") {
-        fun route(pathId: Long, replaceIndex: Int = -1) = "browser?pathId=$pathId&replaceIndex=$replaceIndex"
-    }
     object Modgui : Screen("modgui/{pluginIndex}?pathId={pathId}&w={w}&h={h}") {
         fun route(pathId: Long, pluginIndex: Int, w: Int = 0, h: Int = 0) = "modgui/$pluginIndex?pathId=$pathId&w=$w&h=$h"
     }
@@ -163,9 +159,6 @@ fun AppNavigation(
         composable(Screen.Live.route) {
             LiveScreen(
                 viewModel = rackViewModel,
-                onNavigateToBrowser = { pathId, replaceIndex ->
-                    navController.navigate(Screen.Browser.route(pathId, replaceIndex))
-                },
                 onNavigateToDashboard = {
                     navController.navigate(Screen.Dashboard.route())
                 },
@@ -289,24 +282,6 @@ fun AppNavigation(
                     pluginIndex = pluginIndex,
                     contentWidth = contentWidth,
                     contentHeight = contentHeight,
-                    onNavigateBack = { navController.popBackStack() }
-                )
-            }
-            composable(
-                route = Screen.Browser.route,
-                arguments = listOf(
-                    navArgument("pathId") { type = NavType.LongType },
-                    navArgument("replaceIndex") {
-                        type = NavType.IntType
-                        defaultValue = -1
-                    }
-                )
-            ) { entry ->
-                val pathId = entry.arguments?.getLong("pathId") ?: 0L
-                val replaceIndex = entry.arguments?.getInt("replaceIndex") ?: -1
-                PluginBrowserScreen(
-                    pathId = pathId,
-                    replaceIndex = replaceIndex,
                     onNavigateBack = { navController.popBackStack() }
                 )
             }

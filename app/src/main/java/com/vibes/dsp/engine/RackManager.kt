@@ -74,6 +74,8 @@ object RackManager {
     fun removeTrack(trackId: RackPathId): Boolean = native.removeTrack(trackId)
     fun getTracks(): Array<RackTrackInfo> = native.getTracks()
     fun setTrackVolume(trackId: RackPathId, volume: Float): Boolean = native.setTrackVolume(trackId, volume)
+    fun setTrackName(trackId: RackPathId, name: String): Boolean = native.setTrackName(trackId, name)
+    fun setTrackColor(trackId: RackPathId, argb: Int): Boolean = native.setTrackColor(trackId, argb)
     fun setTrackInputArmed(trackId: RackPathId, armed: Boolean): Boolean = native.setTrackInputArmed(trackId, armed)
     fun setTrackInputArmLocked(trackId: RackPathId, locked: Boolean): Boolean =
         native.setTrackInputArmLocked(trackId, locked)

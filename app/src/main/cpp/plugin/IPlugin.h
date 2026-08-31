@@ -103,6 +103,8 @@ struct PluginInfo {
     bool hasX11Ui = false;
     /** Absolute path to the X11 UI shared library (.so). */
     std::string x11UiBinaryPath;
+    /** Filesystem directory of the LV2 UI bundle (for descriptor bundle_path). */
+    std::string x11UiBundlePath;
     /** LV2 URI of the X11 UI (from the TTL). */
     std::string x11UiUri;
     /** Zero until asynchronous parameter metadata is available. */
@@ -122,6 +124,8 @@ struct AudioProcessContext {
     int64_t bar = 0;
     double barBeat = 0.0;
     double musicalQuarterNotes = 0.0;
+    float beatsPerBar = 4.0f;
+    int32_t beatUnit = 4;
 };
 /** A raw MIDI short message scheduled within the current audio block. */
 struct MidiEvent {

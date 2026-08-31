@@ -146,9 +146,13 @@ void LV2Plugin::buildFeatures() {
     time_frame_ = uridMap.map(LV2_TIME__frame);
     time_speed_ = uridMap.map(LV2_TIME__speed);
     time_beatsPerMinute_ = uridMap.map(LV2_TIME__beatsPerMinute);
+    time_beatsPerBar_ = uridMap.map(LV2_TIME__beatsPerBar);
+    time_beatUnit_ = uridMap.map(LV2_TIME__beatUnit);
     time_bar_ = uridMap.map(LV2_TIME__bar);
     time_barBeat_ = uridMap.map(LV2_TIME__barBeat);
+    atom_Float_ = uridMap.map(LV2_ATOM__Float);
     atom_Long_ = uridMap.map(LV2_ATOM__Long);
+    atom_Int_ = uridMap.map(LV2_ATOM__Int);
     atom_Double_ = uridMap.map(LV2_ATOM__Double);
     atom_Sequence_ = uridMap.map(LV2_ATOM__Sequence);
     midi_MidiEvent_ = uridMap.map(LV2_MIDI__MidiEvent);
@@ -224,8 +228,12 @@ LV2Plugin::LV2Plugin(const LilvPlugin* plugin,
         LOGE("Failed to instantiate LV2 plugin");
         return;
     }
-
-    initializePorts();
+    if (!initializePorts()) {
+        LOGE("Failed to initialize LV2 ports");
+        lilv_instance_free(instance_);
+        instance_ = nullptr;
+        return;
+    }
     connectPorts();
 
     // Query state:interface extension
@@ -307,8 +315,12 @@ void LV2Plugin::activate(float sampleRate, uint32_t bufferSize) {
         LOGE("Failed to re-instantiate LV2 plugin");
         return;
     }
-
-    initializePorts();
+    if (!initializePorts()) {
+        LOGE("Failed to initialize LV2 ports");
+        lilv_instance_free(instance_);
+        instance_ = nullptr;
+        return;
+    }
     connectPorts();
 
     // Re-query state:interface after re-instantiation
@@ -386,89 +398,73 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
     // thread ever races a plugin read of a float port.
     for (size_t i = 0; i < controlPorts_.size() && i < pendingControlPorts_.size(); ++i) {
         if (controlPorts_[i] && pendingControlPorts_[i] &&
-            i < controlPortInputs_.size() && controlPortInputs_[i]) {
+            i < controlPortInputs_.size() && controlPortInputs_[i])
             *controlPorts_[i] = pendingControlPorts_[i]->load(std::memory_order_acquire);
-        }
     }
     for (size_t i = 0; i < audioInputPorts_.size() && i < 2; ++i) {
-        if (inputs[i] && audioInputPorts_[i]) std::memcpy(audioInputPorts_[i], inputs[i], maxCopy * sizeof(float));
+        if (inputs[i] && audioInputPorts_[i])
+            std::memcpy(audioInputPorts_[i], inputs[i], maxCopy * sizeof(float));
     }
     for (auto& ap : atomPorts_) {
         auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(atomPortBuffers_[ap.bufferIdx].data());
         seq->atom.type = ap.isInput ? atom_Sequence_ : atom_Chunk_;
         seq->atom.size = ap.isInput ? sizeof(LV2_Atom_Sequence_Body)
-                                    : kAtomBufferSize - sizeof(LV2_Atom);
+                                    : static_cast<uint32_t>(ap.capacity - sizeof(LV2_Atom));
     }
-    // Append preallocated short MIDI events to MIDI-capable atom sequences.
     if (inputEvents && inputCount > 0) {
         for (auto& ap : atomPorts_) {
             if (!ap.isInput || !ap.supportsMidi) continue;
-            auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(
-                atomPortBuffers_[ap.bufferIdx].data());
+            auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(atomPortBuffers_[ap.bufferIdx].data());
             uint32_t used = seq->atom.size;
+            const size_t bodyCapacity =
+                ap.capacity - sizeof(LV2_Atom) - sizeof(LV2_Atom_Sequence_Body);
             for (uint32_t i = 0; i < inputCount; ++i) {
                 const MidiEvent& midi = inputEvents[i];
                 if (midi.frameOffset >= maxCopy) continue;
-                constexpr uint32_t kMidiBytes = 3;
+                const uint32_t kMidiBytes = (midi.status & 0xE0u) == 0xC0u ? 2u : 3u;
                 const uint32_t eventBytes = sizeof(LV2_Atom_Event) + kMidiBytes;
                 const uint32_t padded = (eventBytes + 7u) & ~uint32_t(7u);
-                if (used > kAtomBufferSize - sizeof(LV2_Atom_Sequence_Body) ||
-                    padded > kAtomBufferSize - sizeof(LV2_Atom_Sequence_Body) - used) {
-                    break;
-                }
+                if (used < sizeof(LV2_Atom_Sequence_Body) ||
+                    padded > bodyCapacity - (used - sizeof(LV2_Atom_Sequence_Body))) break;
                 auto* event = reinterpret_cast<LV2_Atom_Event*>(
                     reinterpret_cast<uint8_t*>(&seq->body) + used);
                 event->time.frames = midi.frameOffset;
                 event->body.type = midi_MidiEvent_;
                 event->body.size = kMidiBytes;
                 uint8_t* data = reinterpret_cast<uint8_t*>(event) + sizeof(LV2_Atom_Event);
-                data[0] = midi.status;
-                data[1] = midi.data1;
-                data[2] = midi.data2;
-                if (padded > eventBytes) {
-                    std::memset(data + kMidiBytes, 0, padded - eventBytes);
-                }
+                data[0] = midi.status; data[1] = midi.data1;
+                if (kMidiBytes == 3) data[2] = midi.data2;
+                if (padded > eventBytes) std::memset(data + kMidiBytes, 0, padded - eventBytes);
                 used += padded;
             }
             seq->atom.size = used;
         }
     }
-    // UI atom mailbox: bounded copy, dropped when full or malformed.
-    while (pendingAtoms_.consume([&](const AtomMessage& atomMsg) {
-        if (atomMsg.size < sizeof(LV2_Atom) ||
-            atomMsg.size > kUiPayloadSize) return;
-        auto* src = reinterpret_cast<const LV2_Atom*>(atomMsg.data);
-        const uint32_t payload = atomMsg.size - sizeof(LV2_Atom);
-        if (src->size > payload) return;
-        const uint64_t eventBytes =
-            sizeof(LV2_Atom_Event) + static_cast<uint64_t>(src->size);
-        const uint64_t padded = (eventBytes + 7u) & ~uint64_t(7u);
+    while (pendingAtoms_.consume([&](const uint8_t* atomData, size_t atomSize) {
+        if (atomSize < sizeof(LV2_Atom)) return;
+        const auto* src = reinterpret_cast<const LV2_Atom*>(atomData);
+        if (src->size > atomSize - sizeof(LV2_Atom)) return;
+        const uint64_t padded = (sizeof(LV2_Atom_Event) + static_cast<uint64_t>(src->size) + 7u) & ~uint64_t(7u);
         for (auto& ap : atomPorts_) {
             if (!ap.isInput) continue;
-            auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(
-                atomPortBuffers_[ap.bufferIdx].data());
-            if (seq->atom.size > kAtomBufferSize - sizeof(LV2_Atom) ||
-                static_cast<uint64_t>(seq->atom.size) + padded >
-                    kAtomBufferSize - sizeof(LV2_Atom_Sequence_Body)) {
-                break;
-            }
-            auto* evt = reinterpret_cast<LV2_Atom_Event*>(
-                reinterpret_cast<uint8_t*>(&seq->body) + seq->atom.size);
-            evt->time.frames = 0;
-            evt->body = *src;
-            std::memcpy(
-                reinterpret_cast<uint8_t*>(evt) + sizeof(LV2_Atom_Event),
-                atomMsg.data + sizeof(LV2_Atom), src->size);
-            seq->atom.size += padded;
+            auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(atomPortBuffers_[ap.bufferIdx].data());
+            const size_t used = seq->atom.size - sizeof(LV2_Atom_Sequence_Body);
+            const size_t capacity =
+                ap.capacity - sizeof(LV2_Atom) - sizeof(LV2_Atom_Sequence_Body);
+            if (seq->atom.size < sizeof(LV2_Atom_Sequence_Body) || padded > capacity - used) break;
+            auto* evt = reinterpret_cast<LV2_Atom_Event*>(reinterpret_cast<uint8_t*>(&seq->body) + seq->atom.size);
+            evt->time.frames = 0; evt->body = *src;
+            std::memcpy(reinterpret_cast<uint8_t*>(evt) + sizeof(LV2_Atom_Event),
+                        atomData + sizeof(LV2_Atom), src->size);
+            seq->atom.size += static_cast<uint32_t>(padded);
             break;
         }
     })) {}
-    // File path mailbox is fixed-size and pre-mapped on the control side.
     pendingFilePaths_.consume([&](const FilePathMessage& fileMsg) {
         for (auto& ap : atomPorts_) {
             if (!ap.isInput) continue;
             auto* buf = atomPortBuffers_[ap.bufferIdx].data();
-            lv2_atom_forge_set_buffer(&forge_, buf, kAtomBufferSize);
+            lv2_atom_forge_set_buffer(&forge_, buf, ap.capacity);
             LV2_Atom_Forge_Frame sf, of;
             lv2_atom_forge_sequence_head(&forge_, &sf, 0);
             lv2_atom_forge_frame_time(&forge_, 0);
@@ -488,34 +484,46 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
         auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(buf);
         const uint32_t oldSize = seq->atom.size;
         constexpr uint32_t kTimeEventReserve = 512;
-        if (oldSize > kAtomBufferSize - sizeof(LV2_Atom) ||
-            kAtomBufferSize - sizeof(LV2_Atom) - oldSize < kTimeEventReserve) {
+        if (oldSize < sizeof(LV2_Atom_Sequence_Body) ||
+            oldSize > ap.capacity - sizeof(LV2_Atom) ||
+            ap.capacity - sizeof(LV2_Atom) - oldSize < kTimeEventReserve) {
             timeEventDrops_.fetch_add(1, std::memory_order_relaxed);
             break;
         }
+
         auto* append = reinterpret_cast<uint8_t*>(&seq->body) + oldSize;
-        const uint32_t remaining = kAtomBufferSize - sizeof(LV2_Atom) - oldSize;
-        lv2_atom_forge_set_buffer(&forge_, append, remaining);
+        auto* event = reinterpret_cast<LV2_Atom_Event*>(append);
+        const uint32_t remaining = static_cast<uint32_t>(ap.capacity - sizeof(LV2_Atom) - oldSize);
+        const uint32_t eventBodyOffset = static_cast<uint32_t>(
+            reinterpret_cast<const uint8_t*>(&event->body) - reinterpret_cast<const uint8_t*>(append));
+        if (remaining <= eventBodyOffset) {
+            seq->atom.size = oldSize;
+            timeEventDrops_.fetch_add(1, std::memory_order_relaxed);
+            break;
+        }
+        event->time.frames = 0;
+        lv2_atom_forge_set_buffer(&forge_,
+                                  append + eventBodyOffset,
+                                  remaining - eventBodyOffset);
         LV2_Atom_Forge_Frame of;
-        lv2_atom_forge_frame_time(&forge_, 0);
         lv2_atom_forge_object(&forge_, &of, 0, time_Position_);
-        lv2_atom_forge_key(&forge_, time_frame_);
-        lv2_atom_forge_long(
-            &forge_, static_cast<int64_t>(context.transportFrame));
-        lv2_atom_forge_key(&forge_, time_speed_);
-        lv2_atom_forge_double(&forge_, context.playing ? 1.0 : 0.0);
-        lv2_atom_forge_key(&forge_, time_beatsPerMinute_);
-        lv2_atom_forge_double(&forge_, context.beatsPerMinute);
-        lv2_atom_forge_key(&forge_, time_bar_);
-        lv2_atom_forge_long(&forge_, context.bar);
-        lv2_atom_forge_key(&forge_, time_barBeat_);
-        lv2_atom_forge_double(&forge_, context.barBeat);
+        lv2_atom_forge_key(&forge_, time_frame_); lv2_atom_forge_long(&forge_, static_cast<int64_t>(context.transportFrame));
+        lv2_atom_forge_key(&forge_, time_speed_); lv2_atom_forge_float(&forge_, context.playing ? 1.0f : 0.0f);
+        lv2_atom_forge_key(&forge_, time_beatsPerMinute_); lv2_atom_forge_float(&forge_, static_cast<float>(context.beatsPerMinute));
+        lv2_atom_forge_key(&forge_, time_beatsPerBar_); lv2_atom_forge_float(&forge_, context.beatsPerBar);
+        lv2_atom_forge_key(&forge_, time_beatUnit_); lv2_atom_forge_int(&forge_, context.beatUnit);
+        lv2_atom_forge_key(&forge_, time_bar_); lv2_atom_forge_long(&forge_, context.bar);
+        lv2_atom_forge_key(&forge_, time_barBeat_); lv2_atom_forge_float(&forge_, static_cast<float>(context.barBeat));
         lv2_atom_forge_pop(&forge_, &of);
-        if (forge_.offset > remaining) {
+
+        const uint32_t eventBytes = eventBodyOffset + static_cast<uint32_t>(forge_.offset);
+        const uint32_t padded = (eventBytes + 7u) & ~uint32_t(7u);
+        if (forge_.offset > remaining - eventBodyOffset || padded > remaining) {
             seq->atom.size = oldSize;
             timeEventDrops_.fetch_add(1, std::memory_order_relaxed);
         } else {
-            seq->atom.size = oldSize + static_cast<uint32_t>(forge_.offset);
+            if (padded > eventBytes) std::memset(append + eventBytes, 0, padded - eventBytes);
+            seq->atom.size = oldSize + padded;
         }
         break;
     }
@@ -558,39 +566,41 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
         const auto* base = atomPortBuffers_[ap.bufferIdx].data();
         const auto* atom = reinterpret_cast<const LV2_Atom*>(base);
         const uint32_t total = atom->size;
-        if (atom->type != atom_Sequence_ ||
-            total < sizeof(LV2_Atom_Sequence_Body) ||
-            total > kAtomBufferSize - sizeof(LV2_Atom)) continue;
+        if (atom->type != atom_Sequence_ || total < sizeof(LV2_Atom_Sequence_Body) ||
+            total > ap.capacity - sizeof(LV2_Atom)) continue;
         const uint8_t* pos = base + sizeof(LV2_Atom) + sizeof(LV2_Atom_Sequence_Body);
         const uint8_t* end = base + sizeof(LV2_Atom) + total;
+        bool validSequence = true;
         while (pos + sizeof(LV2_Atom_Event) <= end) {
             const auto* ev = reinterpret_cast<const LV2_Atom_Event*>(pos);
-            const uint64_t eventBytes =
-                sizeof(LV2_Atom_Event) + static_cast<uint64_t>(ev->body.size);
+            const uint64_t eventBytes = sizeof(LV2_Atom_Event) + static_cast<uint64_t>(ev->body.size);
             const uint64_t padded = (eventBytes + 7u) & ~uint64_t(7u);
-            if (padded < sizeof(LV2_Atom_Event) ||
-                padded > static_cast<uint64_t>(end - pos)) break;
-            const uint64_t bodyBytes = sizeof(LV2_Atom) + ev->body.size;
-            if (bodyBytes <= kUiPayloadSize) {
-                if (!pendingOutputAtoms_.tryEmplace([&](OutputMessage& msg) {
-                    msg.portIndex = ap.portIndex;
-                    msg.size = static_cast<uint32_t>(bodyBytes);
-                    std::memcpy(msg.data, &ev->body, bodyBytes);
-                })) {
-                    outputAtomDrops_.fetch_add(1, std::memory_order_relaxed);
-                }
+            if (padded < sizeof(LV2_Atom_Event) || padded > static_cast<uint64_t>(end - pos)) {
+                validSequence = false;
+                break;
             }
             if (ev->body.type == midi_MidiEvent_ && ev->body.size >= 2 && ev->body.size <= 3 &&
                 outputEvents && midiOutputCount < outputCapacity) {
                 const auto* data = reinterpret_cast<const uint8_t*>(&ev->body) + sizeof(LV2_Atom);
-                const uint8_t status = data[0];
-                if ((status & 0x80u) != 0) {
+                if ((data[0] & 0x80u) != 0)
                     outputEvents[midiOutputCount++] = MidiEvent{
-                        static_cast<uint32_t>(ev->time.frames), status, data[1],
+                        static_cast<uint32_t>(ev->time.frames), data[0], data[1],
                         static_cast<uint8_t>(ev->body.size == 3 ? data[2] : 0)};
-                }
             }
             pos += padded;
+        }
+        // Queue one complete validated sequence per output atom port. The UI
+        // thread splits it into OutputAtomEvent records after draining.
+        const size_t sequenceBytes = sizeof(LV2_Atom) + static_cast<size_t>(total);
+        const size_t queuedSize = sizeof(uint64_t) + sequenceBytes;
+        if (validSequence && queuedSize <= pendingOutputAtoms_.payloadSize()) {
+            if (!pendingOutputAtoms_.tryEmplace(queuedSize, [&](uint8_t* dst, size_t) {
+                std::memcpy(dst, &ap.portIndex, sizeof(uint32_t));
+                std::memset(dst + sizeof(uint32_t), 0, sizeof(uint32_t));
+                std::memcpy(dst + sizeof(uint64_t), base, sequenceBytes);
+            })) outputAtomDrops_.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            outputAtomDrops_.fetch_add(1, std::memory_order_relaxed);
         }
     }
     for (size_t i = 0; i < audioOutputPorts_.size() && i < 2; ++i) {
@@ -728,6 +738,21 @@ PluginInfo LV2Plugin::getInfo() const {
                     info.hasX11Ui = true;
                     info.x11UiBinaryPath = binaryPath;
                     info.x11UiUri = lilv_node_as_string(lilv_ui_get_uri(ui));
+                    const LilvNode* x11BundleUri = lilv_ui_get_bundle_uri(ui);
+                    if (!x11BundleUri) {
+                        x11BundleUri = lilv_plugin_get_bundle_uri(plugin_);
+                    }
+                    if (x11BundleUri) {
+                        char* parsedX11BundlePath = lilv_file_uri_parse(lilv_node_as_string(x11BundleUri), nullptr);
+                        if (parsedX11BundlePath) {
+                            info.x11UiBundlePath = parsedX11BundlePath;
+                            if (!info.x11UiBundlePath.empty() &&
+                                info.x11UiBundlePath.back() != '/') {
+                                info.x11UiBundlePath.push_back('/');
+                            }
+                            lilv_free(parsedX11BundlePath);
+                        }
+                    }
                     break;
                 }
             }
@@ -773,42 +798,51 @@ uint32_t LV2Plugin::getNumOutputPorts() const {
 
 void LV2Plugin::setFilePath(
         const std::string& propertyUri, const std::string& path) {
-    const LV2_URID propertyUrid =
-        getGlobalUridMap().map(propertyUri.c_str());
+    const LV2_URID propertyUrid = getGlobalUridMap().map(propertyUri.c_str());
     const uint32_t propertySize = static_cast<uint32_t>(
         std::min(propertyUri.size(), sizeof(FilePathMessage::property) - 1));
     const uint32_t pathSize = static_cast<uint32_t>(
         std::min(path.size() + 1, sizeof(FilePathMessage::path)));
     if (!pendingFilePaths_.tryEmplace([&](FilePathMessage& msg) {
-            msg.propertyUrid = propertyUrid;
-            msg.propertySize = propertySize;
-            msg.pathSize = pathSize;
-            std::memcpy(msg.property, propertyUri.data(), propertySize);
-            msg.property[propertySize] = '\0';
+            msg.propertyUrid = propertyUrid; msg.propertySize = propertySize; msg.pathSize = pathSize;
+            std::memcpy(msg.property, propertyUri.data(), propertySize); msg.property[propertySize] = '\0';
             std::memcpy(msg.path, path.data(), pathSize ? pathSize - 1 : 0);
             msg.path[pathSize ? pathSize - 1 : 0] = '\0';
-        })) {
-        filePathDrops_.fetch_add(1, std::memory_order_relaxed);
-    }
+        })) filePathDrops_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void LV2Plugin::injectAtom(const void* data, uint32_t size) {
-    if (!data || size == 0 || size > kUiPayloadSize) return;
-    if (!pendingAtoms_.tryEmplace([&](AtomMessage& msg) {
-            msg.size = size;
-            std::memcpy(msg.data, data, size);
-        })) {
+    if (!data || size == 0 || size > pendingAtoms_.payloadSize()) return;
+    if (!pendingAtoms_.tryEmplace(size, [&](uint8_t* dst, size_t) { std::memcpy(dst, data, size); }))
         pendingAtomDrops_.fetch_add(1, std::memory_order_relaxed);
-    }
 }
 
 std::vector<OutputAtomEvent> LV2Plugin::drainOutputAtoms() {
     std::vector<OutputAtomEvent> result;
-    while (pendingOutputAtoms_.consume([&](const OutputMessage& msg) {
-        std::vector<uint8_t> data(msg.size);
-        std::memcpy(data.data(), msg.data, msg.size);
-        result.push_back(OutputAtomEvent{
-            msg.portIndex, std::move(data)});
+    while (pendingOutputAtoms_.consume([&](const uint8_t* src, size_t size) {
+        if (size < sizeof(uint64_t) + sizeof(LV2_Atom)) return;
+        uint32_t portIndex;
+        std::memcpy(&portIndex, src, sizeof(portIndex));
+        const auto* atom = reinterpret_cast<const LV2_Atom*>(src + sizeof(uint64_t));
+        const size_t available = size - sizeof(uint64_t);
+        if (atom->type != atom_Sequence_ ||
+            atom->size < sizeof(LV2_Atom_Sequence_Body) ||
+            atom->size > available - sizeof(LV2_Atom)) return;
+        const uint8_t* pos = reinterpret_cast<const uint8_t*>(atom) +
+                             sizeof(LV2_Atom) + sizeof(LV2_Atom_Sequence_Body);
+        const uint8_t* end = reinterpret_cast<const uint8_t*>(atom) +
+                            sizeof(LV2_Atom) + atom->size;
+        while (pos + sizeof(LV2_Atom_Event) <= end) {
+            const auto* ev = reinterpret_cast<const LV2_Atom_Event*>(pos);
+            const uint64_t eventBytes = sizeof(LV2_Atom_Event) + static_cast<uint64_t>(ev->body.size);
+            const uint64_t padded = (eventBytes + 7u) & ~uint64_t(7u);
+            if (padded < sizeof(LV2_Atom_Event) || padded > static_cast<uint64_t>(end - pos)) break;
+            const size_t atomBytes = sizeof(LV2_Atom) + ev->body.size;
+            std::vector<uint8_t> data(atomBytes);
+            std::memcpy(data.data(), &ev->body, atomBytes);
+            result.push_back(OutputAtomEvent{portIndex, std::move(data)});
+            pos += padded;
+        }
     })) {}
     return result;
 }
@@ -866,111 +900,61 @@ void LV2Plugin::connectPorts() {
     lilv_node_free(inputClass);
 }
 
-void LV2Plugin::initializePorts() {
-    if (!plugin_) {
-        return;
-    }
-
-    controlPorts_.clear();
-    pendingControlPorts_.clear();
-    controlPortInputs_.clear();
-    controlPortIndices_.clear();
-    latencyControlPosition_ = -1;
-    audioInputBuffers_.clear();
-    audioOutputBuffers_.clear();
-    audioInputPorts_.clear();
-    audioOutputPorts_.clear();
-    atomPortBuffers_.clear();
-    atomPorts_.clear();
-
-    uint32_t numPorts = lilv_plugin_get_num_ports(plugin_);
-    LilvNode* audioClass = lilv_new_uri(world_, LILV_URI_AUDIO_PORT);
-    LilvNode* controlClass = lilv_new_uri(world_, LILV_URI_CONTROL_PORT);
-    LilvNode* latencyDesignation = lilv_new_uri(world_, LV2_CORE__latency);
-    const LilvPort* designatedLatencyPort =
-        lilv_plugin_get_port_by_designation(plugin_, controlClass, latencyDesignation);
-    LilvNode* atomClass = lilv_new_uri(world_, LILV_URI_ATOM_PORT);
-    LilvNode* inputClass = lilv_new_uri(world_, LILV_URI_INPUT_PORT);
-    LilvNode* atomSupports = lilv_new_uri(world_, LV2_ATOM__supports);
-    LilvNode* midiEventNode = lilv_new_uri(world_, LV2_MIDI__MidiEvent);
-
-    for (uint32_t i = 0; i < numPorts; ++i) {
-        const LilvPort* port = lilv_plugin_get_port_by_index(plugin_, i);
-        if (!port) continue;
-        bool isAudio = lilv_port_is_a(plugin_, port, audioClass);
-        bool isControl = lilv_port_is_a(plugin_, port, controlClass);
-        bool isAtom = lilv_port_is_a(plugin_, port, atomClass);
-        bool isInput = lilv_port_is_a(plugin_, port, inputClass);
-        if (isControl) {
-            float defaultVal = 0.0f;
-            LilvNode* defNode = nullptr;
-            LilvNode* minNode = nullptr;
-            LilvNode* maxNode = nullptr;
-            lilv_port_get_range(plugin_, port, &defNode, &minNode, &maxNode);
-            if (defNode) {
-                defaultVal = static_cast<float>(lilv_node_as_float(defNode));
-                lilv_node_free(defNode);
+bool LV2Plugin::initializePorts() {
+    if (!plugin_ || !world_) return false;
+    controlPorts_.clear(); pendingControlPorts_.clear(); controlPortInputs_.clear(); controlPortIndices_.clear();
+    latencyControlPosition_ = -1; audioInputBuffers_.clear(); audioOutputBuffers_.clear();
+    audioInputPorts_.clear(); audioOutputPorts_.clear(); atomPortBuffers_.clear(); atomPorts_.clear();
+    const uint32_t numPorts = lilv_plugin_get_num_ports(plugin_);
+    LilvNode *audioClass=lilv_new_uri(world_,LILV_URI_AUDIO_PORT), *controlClass=lilv_new_uri(world_,LILV_URI_CONTROL_PORT);
+    LilvNode *latencyDesignation=lilv_new_uri(world_,LV2_CORE__latency), *atomClass=lilv_new_uri(world_,LILV_URI_ATOM_PORT);
+    LilvNode *inputClass=lilv_new_uri(world_,LILV_URI_INPUT_PORT), *atomSupports=lilv_new_uri(world_,LV2_ATOM__supports);
+    LilvNode *midiEventNode=lilv_new_uri(world_,LV2_MIDI__MidiEvent), *minimumSizeNode=lilv_new_uri(world_,LV2_RESIZE_PORT__minimumSize);
+    const LilvPort* designated=lilv_plugin_get_port_by_designation(plugin_,controlClass,latencyDesignation);
+    size_t maxCapacity=kAtomBufferSize; bool valid=true;
+    for (uint32_t i=0;i<numPorts;++i) {
+        const LilvPort* port=lilv_plugin_get_port_by_index(plugin_,i); if(!port) continue;
+        const bool audio=lilv_port_is_a(plugin_,port,audioClass), control=lilv_port_is_a(plugin_,port,controlClass);
+        const bool atom=lilv_port_is_a(plugin_,port,atomClass), input=lilv_port_is_a(plugin_,port,inputClass);
+        if(control) {
+            float value=0.0f; LilvNode *d=nullptr,*mn=nullptr,*mx=nullptr; lilv_port_get_range(plugin_,port,&d,&mn,&mx);
+            if(d){value=static_cast<float>(lilv_node_as_float(d));lilv_node_free(d);} if(mn)lilv_node_free(mn);if(mx)lilv_node_free(mx);
+            const size_t p=controlPorts_.size(); controlPorts_.push_back(std::unique_ptr<float>(new float(value)));
+            pendingControlPorts_.push_back(std::unique_ptr<std::atomic<float>>(new std::atomic<float>(value)));
+            controlPortInputs_.push_back(input); controlPortIndices_.push_back(i); if(!input&&port==designated)latencyControlPosition_=static_cast<int32_t>(p);
+        } else if(audio) {
+            if(input){audioInputBuffers_.emplace_back(kMaxLv2BufferFrames,0.0f);audioInputPorts_.push_back(audioInputBuffers_.back().data());}
+            else{audioOutputBuffers_.emplace_back(kMaxLv2BufferFrames,0.0f);audioOutputPorts_.push_back(audioOutputBuffers_.back().data());}
+        } else if(atom) {
+            size_t cap = kAtomBufferSize;
+            LilvNode* minimumSize = lilv_port_get(plugin_, port, minimumSizeNode);
+            if (minimumSize && lilv_node_is_int(minimumSize)) {
+                const long minimum = lilv_node_as_int(minimumSize);
+                if (minimum > 0) cap = static_cast<size_t>(minimum);
             }
-            if (minNode) lilv_node_free(minNode);
-            if (maxNode) lilv_node_free(maxNode);
-            const size_t position = controlPorts_.size();
-            controlPorts_.push_back(std::unique_ptr<float>(new float(defaultVal)));
-            pendingControlPorts_.push_back(
-                std::unique_ptr<std::atomic<float>>(new std::atomic<float>(defaultVal)));
-            controlPortInputs_.push_back(isInput);
-            controlPortIndices_.push_back(i);
-            // lv2:latency is a port designation; symbols are not normative.
-            if (!isInput && port == designatedLatencyPort)
-                latencyControlPosition_ = static_cast<int32_t>(position);
-        } else if (isAudio) {
-            if (isInput) { audioInputBuffers_.emplace_back(kMaxLv2BufferFrames, 0.0f); audioInputPorts_.push_back(audioInputBuffers_.back().data()); }
-            else { audioOutputBuffers_.emplace_back(kMaxLv2BufferFrames, 0.0f); audioOutputPorts_.push_back(audioOutputBuffers_.back().data()); }
-        } else if (isAtom) {
-            bool supportsMidi = false;
-            LilvNodes* supported = lilv_port_get_value(plugin_, port, atomSupports);
-            if (supported) {
-                LILV_FOREACH(nodes, si, supported) {
-                    if (lilv_node_equals(lilv_nodes_get(supported, si), midiEventNode)) { supportsMidi = true; break; }
-                }
-                lilv_nodes_free(supported);
-            }
-            size_t bufIdx = atomPortBuffers_.size();
-            atomPortBuffers_.emplace_back(kAtomBufferSize, 0);
-            atomPorts_.push_back({i, isInput, supportsMidi, bufIdx});
+            if (minimumSize) lilv_node_free(minimumSize);
+            cap = std::max(cap, kAtomBufferSize);
+            if (cap > 1024u * 1024u) { valid = false; break; }
+            bool midi=false; LilvNodes* supported=lilv_port_get_value(plugin_,port,atomSupports);
+            if(supported){LILV_FOREACH(nodes,si,supported)if(lilv_node_equals(lilv_nodes_get(supported,si),midiEventNode))midi=true;lilv_nodes_free(supported);}
+            const size_t idx=atomPortBuffers_.size(); atomPortBuffers_.emplace_back(cap,0); atomPorts_.push_back({i,input,midi,idx,cap}); maxCapacity=std::max(maxCapacity,cap);
         }
     }
-    lilv_node_free(latencyDesignation);
-    lilv_node_free(atomSupports);
-    lilv_node_free(midiEventNode);
-    lilv_node_free(controlClass);
-    lilv_node_free(atomClass);
-    lilv_node_free(inputClass);
-
-    LOGI("initializePorts: control=%zu audioIn=%zu audioOut=%zu atom=%zu",
-         controlPorts_.size(), audioInputPorts_.size(), audioOutputPorts_.size(),
-         atomPorts_.size());
+    lilv_node_free(minimumSizeNode);lilv_node_free(latencyDesignation);lilv_node_free(atomSupports);lilv_node_free(midiEventNode);lilv_node_free(controlClass);lilv_node_free(atomClass);lilv_node_free(inputClass);lilv_node_free(audioClass);
+    if(!valid){atomPortBuffers_.clear();atomPorts_.clear();return false;}
+    // BOops can emit ~192 UI->DSP atoms in one synchronous edit burst.
+    // Keep descriptor capacity independent of payload-byte storage.
+    const size_t slots = std::max<size_t>(256, kUiQueueCapacity);
+    pendingAtoms_.reset(slots, maxCapacity);
+    pendingOutputAtoms_.reset(slots, maxCapacity + sizeof(uint64_t));
+    LOGI("initializePorts: control=%zu audioIn=%zu audioOut=%zu atom=%zu",controlPorts_.size(),audioInputPorts_.size(),audioOutputPorts_.size(),atomPorts_.size()); return true;
 }
 
 // ---------- State path mapping ----------
-
-char* LV2Plugin::mapAbstractPathCallback(LV2_State_Map_Path_Handle handle, const char* absolutePath) {
-    auto* self = static_cast<LV2Plugin*>(handle);
-    std::string abs(absolutePath ? absolutePath : "");
-    std::string result;
-
-    // Strip filesDir prefix to produce a relative (abstract) path
-    if (!self->filesDir_.empty() && abs.size() > self->filesDir_.size() + 1 &&
-        abs.compare(0, self->filesDir_.size(), self->filesDir_) == 0 &&
-        abs[self->filesDir_.size()] == '/') {
-        result = abs.substr(self->filesDir_.size() + 1);
-    } else {
-        // Not under filesDir — keep absolute
-        result = abs;
-    }
-
-    char* ret = static_cast<char*>(malloc(result.size() + 1));
-    if (ret) memcpy(ret, result.c_str(), result.size() + 1);
-    return ret;
+char* LV2Plugin::mapAbstractPathCallback(LV2_State_Map_Path_Handle handle,const char* absolutePath) {
+    auto*self=static_cast<LV2Plugin*>(handle); std::string abs(absolutePath?absolutePath:""),result;
+    if(!self->filesDir_.empty()&&abs.size()>self->filesDir_.size()+1&&abs.compare(0,self->filesDir_.size(),self->filesDir_)==0&&abs[self->filesDir_.size()]=='/') result=abs.substr(self->filesDir_.size()+1); else result=abs;
+    char*ret=static_cast<char*>(malloc(result.size()+1));if(ret)memcpy(ret,result.c_str(),result.size()+1);return ret;
 }
 
 char* LV2Plugin::mapAbsolutePathCallback(LV2_State_Map_Path_Handle handle, const char* abstractPath) {
@@ -1269,8 +1253,8 @@ void LV2Plugin::connectPorts() {
     // Stub
 }
 
-void LV2Plugin::initializePorts() {
-    // Stub
+bool LV2Plugin::initializePorts() {
+    return false;
 }
 
 #endif // HAVE_LV2 == 1

@@ -214,6 +214,9 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/targets/fatfrog.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/targets/doubletracker.cmake)
 # x42 fil4 (DSP + modgui)
 include(${CMAKE_CURRENT_SOURCE_DIR}/targets/fil4.cmake)
+# BOops (complete DSP + X11/Cairo/Pugl/BWidgets UI)
+include(${CMAKE_CURRENT_SOURCE_DIR}/targets/boops.cmake)
+
 
 # Dusk Audio 4K EQ 2 (DSP + host-generated controls)
 include(${CMAKE_CURRENT_SOURCE_DIR}/targets/dusk_4keq.cmake)
@@ -242,6 +245,7 @@ add_custom_target(all_plugins
         modamptk_done
         fatfrog_done
         doubletracker_done
+        boops_done
         metadata_done
         fil4_done
         dusk_4keq_done

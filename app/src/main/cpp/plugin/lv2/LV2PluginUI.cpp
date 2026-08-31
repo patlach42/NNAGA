@@ -297,6 +297,7 @@ static bool copyFile(const std::string& src, const std::string& dest) {
 
 bool LV2PluginUI::instantiate(
     const std::string& uiBinaryPath,
+    const std::string& uiBundlePath,
     const std::string& uiUri,
     const std::string& pluginUri,
     int displayNumber,
@@ -593,12 +594,16 @@ bool LV2PluginUI::instantiate(
 
     /* --- Instantiate --------------------------------------------- */
     LV2UI_Widget widget = nullptr;
-
-    /* bundle_path: directory containing the UI binary */
-    std::string bundlePath = uiBinaryPath;
-    auto bundleSlash = bundlePath.rfind('/');
-    if (bundleSlash != std::string::npos) {
-        bundlePath = bundlePath.substr(0, bundleSlash + 1);
+    /* bundle_path is the true LV2 bundle directory, independent of any
+       rewritten/copy path used solely to dlopen the UI binary. */
+    std::string bundlePath = uiBundlePath;
+    if (bundlePath.empty()) {
+        bundlePath = uiBinaryPath;
+        auto bundleSlash = bundlePath.rfind('/');
+        if (bundleSlash != std::string::npos)
+            bundlePath.resize(bundleSlash + 1);
+    } else if (bundlePath.back() != '/') {
+        bundlePath.push_back('/');
     }
 
     LOGI("instantiate: [7] calling plugin instantiate() uri=%s DISPLAY=%s parent=0x%lx bundlePath=%s",

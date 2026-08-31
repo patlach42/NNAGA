@@ -1118,6 +1118,50 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRemoveTrack(JNIEnv*, jobject, jlong
 }
 
 JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackName(
+    JNIEnv* env, jobject, jlong trackId, jstring value) {
+    if (!g_ctx || !g_ctx->audioEngine || !value) return JNI_FALSE;
+    const jsize length = env->GetStringLength(value);
+    const jchar* utf16 = env->GetStringChars(value, nullptr);
+    if (!utf16) return JNI_FALSE;
+    size_t codePoints = 0;
+    bool validUtf16 = length > 0;
+    for (jsize i = 0; validUtf16 && i < length; ++i) {
+        const jchar c = utf16[i];
+        if (c == 0) {
+            validUtf16 = false;
+        } else if (c >= 0xd800 && c <= 0xdbff) {
+            if (i + 1 >= length || utf16[i + 1] < 0xdc00 || utf16[i + 1] > 0xdfff) {
+                validUtf16 = false;
+            } else {
+                ++i;
+            }
+        } else if (c >= 0xdc00 && c <= 0xdfff) {
+            validUtf16 = false;
+        }
+        if (validUtf16 && (c < 0xdc00 || c > 0xdfff)) ++codePoints;
+    }
+    env->ReleaseStringChars(value, utf16);
+    if (!validUtf16 || codePoints > 48) return JNI_FALSE;
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    if (!chars) return JNI_FALSE;
+    const jsize utf8Length = env->GetStringUTFLength(value);
+    const std::string name(chars, static_cast<size_t>(utf8Length));
+    env->ReleaseStringUTFChars(value, chars);
+    if (name.size() > 288 || !isValidTrackName(name)) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().setTrackName(
+        static_cast<RackPathId>(trackId), name) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackColor(
+    JNIEnv*, jobject, jlong trackId, jint argb) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().setTrackColor(
+        static_cast<RackPathId>(trackId), static_cast<uint32_t>(argb)) ? JNI_TRUE : JNI_FALSE;
+}
+JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackVolume(
     JNIEnv*, jobject, jlong trackId, jfloat volume) {
     if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
@@ -1487,7 +1531,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
     if (!clazz) return nullptr;
     jmethodID ctor = env->GetMethodID(
-        clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIIJIZZIDIDDJI)V");
+        clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIIJIZZIDIDDJILjava/lang/String;I)V");
     if (!ctor) {
         env->DeleteLocalRef(clazz);
         return nullptr;
@@ -1496,6 +1540,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     for (size_t index = 0; result && index < tracks.size(); ++index) {
         const auto& track = tracks[index];
         jstring name = env->NewStringUTF(track.wavDisplayName.c_str());
+        jstring trackName = env->NewStringUTF(track.name.c_str());
         jobject item = env->NewObject(
             clazz, ctor, static_cast<jlong>(track.id), track.volume,
             track.inputArmed ? JNI_TRUE : JNI_FALSE,
@@ -1517,9 +1562,11 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
             static_cast<jint>(track.activeSlot),
             track.musicalQuarterNotes, track.sampleRate,
             static_cast<jlong>(track.capturedAtMonotonicNanos),
-            static_cast<jint>(track.recordingSlot));
+            static_cast<jint>(track.recordingSlot), trackName,
+            static_cast<jint>(track.colorArgb));
         if (item) env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         if (name) env->DeleteLocalRef(name);
+        if (trackName) env->DeleteLocalRef(trackName);
         if (item) env->DeleteLocalRef(item);
     }
     env->DeleteLocalRef(clazz);

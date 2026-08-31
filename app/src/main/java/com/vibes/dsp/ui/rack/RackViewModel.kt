@@ -320,6 +320,42 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+    fun setTrackName(trackId: RackPathId, value: String) {
+        val name = value.trim()
+        if (name.isBlank() || name.codePointCount(0, name.length) > 48) {
+            _errorMessage.value = "Track name must be 1-48 characters"
+            return
+        }
+        _tracks.value = _tracks.value.map { track ->
+            if (track.id == trackId) track.copy(name = name) else track
+        }
+        viewModelScope.launch {
+            rackControlMutex.withLock {
+                val ok = withContext(Dispatchers.IO) { RackManager.setTrackName(trackId, name) }
+                if (!ok) {
+                    _errorMessage.value = "Failed to rename track"
+                    refreshRackNow()
+                }
+            }
+        }
+    }
+    fun setTrackColor(trackId: RackPathId, argb: Int, onPersisted: (() -> Unit)? = null) {
+        val opaque = argb or 0xff000000.toInt()
+        _tracks.value = _tracks.value.map { track ->
+            if (track.id == trackId) track.copy(colorArgb = opaque) else track
+        }
+        viewModelScope.launch {
+            rackControlMutex.withLock {
+                val ok = withContext(Dispatchers.IO) { RackManager.setTrackColor(trackId, opaque) }
+                if (!ok) {
+                    _errorMessage.value = "Failed to set track color"
+                    refreshRackNow()
+                } else {
+                    onPersisted?.invoke()
+                }
+            }
+        }
+    }
     fun setTrackInputArmed(trackId: RackPathId, armed: Boolean) {
         _tracks.value = _tracks.value.map { track ->
             if (track.id == trackId) track.copy(inputArmed = armed) else track
