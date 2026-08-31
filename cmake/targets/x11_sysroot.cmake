@@ -201,6 +201,7 @@ fi
 ")
 ExternalProject_Add(cairo
     SOURCE_DIR "${_x11_dir}/cairo" BINARY_DIR "${X11_BUILD_DIR}/cairo" INSTALL_DIR "${X11_SYSROOT}"
+    PATCH_COMMAND patch -d <SOURCE_DIR> -p1 -i "${PROJECT_ROOT}/cmake/patches/cairo_android_no_fontconfig.patch"
     CONFIGURE_COMMAND bash "${_cairo_configure_script}" <BINARY_DIR> <SOURCE_DIR> <INSTALL_DIR>
     BUILD_COMMAND ninja -C <BINARY_DIR> -j${NJOBS}
     INSTALL_COMMAND ninja -C <BINARY_DIR> install
@@ -232,8 +233,6 @@ file(WRITE "${CMAKE_BINARY_DIR}/scripts/WriteZlibPC.cmake" "include(\"${PROJECT_
 
 # ─── 9. Mesa ────────────────────────────────────────────────────────────────
 ExternalProject_Add(mesa
-    SOURCE_DIR "${THIRD_PARTY}/mesa" BINARY_DIR "${MESA_BUILD_DIR}" INSTALL_DIR "${X11_SYSROOT}"
-    PATCH_COMMAND bash -c "sed -i 's/#if defined(__ANDROID__)/#if defined(__ANDROID__) \\&\\& !defined(MESA_FORCE_LINUX)/' <SOURCE_DIR>/src/util/detect_os.h 2>/dev/null || true"
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env "PKG_CONFIG_PATH=${_x11_pkg}" "PKG_CONFIG_LIBDIR=${X11_SYSROOT}/lib/pkgconfig" "PKG_CONFIG_SYSROOT_DIR=" meson setup <BINARY_DIR> <SOURCE_DIR> --cross-file "${MESA_BUILD_DIR}/mesa_cross.txt" --prefix=<INSTALL_DIR> --default-library=shared -Dplatforms=x11 -Dgallium-drivers=softpipe -Dvulkan-drivers= -Dglx=xlib -Degl=disabled -Dgbm=disabled -Dllvm=disabled -Dshared-glapi=enabled -Dgles1=disabled -Dgles2=disabled -Dosmesa=false -Dvalgrind=disabled -Dlibunwind=disabled -Dlmsensors=disabled -Dbuild-tests=false -Dxmlconfig=disabled -Dxlib-lease=disabled
     BUILD_COMMAND ninja -C <BINARY_DIR> -j${NJOBS}
     INSTALL_COMMAND ninja -C <BINARY_DIR> install
