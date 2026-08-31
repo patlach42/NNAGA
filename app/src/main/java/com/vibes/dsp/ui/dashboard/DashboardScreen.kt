@@ -60,6 +60,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.layout.ContentScale
@@ -73,6 +74,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.vibes.dsp.BuildConfig
 import com.vibes.dsp.R
 import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.ui.components.NnagaButton
@@ -559,6 +561,14 @@ private fun BrandHome(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+        Text(
+            text = "NNAGA v${BuildConfig.VERSION_DISPLAY_NAME}",
+            modifier = Modifier
+                .align(Alignment.TopStart)
+                .padding(12.dp),
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+        )
         NnagaIconButton(
             onClick = { showAbout = true },
             modifier = Modifier

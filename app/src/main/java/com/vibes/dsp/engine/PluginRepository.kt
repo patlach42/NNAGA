@@ -716,4 +716,5 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private fun sha256(b:ByteArray)=digest(b.inputStream())
     private fun sha256(f:File)=digest(f.inputStream())
     private fun digest(i:java.io.InputStream):String { val md=MessageDigest.getInstance("SHA-256"); i.use { val buf=ByteArray(8192); while(true){val n=it.read(buf);if(n<0)break;md.update(buf,0,n)} }; return md.digest().joinToString(""){"%02x".format(it)} }
+    }
 }

@@ -13,7 +13,18 @@ for each of these keys:
 ```properties
 VERSION_NAME=0.1.0
 VERSION_CODE=100
+VERSION_BUILD=0
 ```
+
+`VERSION_BUILD` is an explicit display-only build counter and must be a
+canonical ASCII nonnegative decimal integer (no leading zeroes). `0` adds no
+suffix. Positive values use spreadsheet-style lowercase base-26 letters: `1`
+through `26` map to `a` through `z`, `27` maps to `aa`, `28` to `ab`, and so on
+indefinitely. When producing a subsequent build without changing
+`VERSION_NAME`, increment the counter explicitly. When `VERSION_NAME` is
+incremented, reset `VERSION_BUILD` to `0`. The workflow validates this value
+but never mutates it automatically. It does not affect SemVer, Android
+`versionName`, package metadata, tags, or canonical artifact filenames.
 
 Set `VERSION_NAME` to a complete SemVer 2.0.0 value, without a leading `v`.
 Use compatibility-oriented increments:
@@ -42,8 +53,10 @@ Git tags use the `v<version>` convention: for `VERSION_NAME=1.2.0`, the tag is
 
 ## Ordered release checklist
 
-1. **Choose and record the identity.** Update both `VERSION_NAME` and
-   `VERSION_CODE` in root `version.properties`. Do not edit
+1. **Choose and record the identity.** Update `VERSION_NAME`, `VERSION_CODE`,
+   and `VERSION_BUILD` in root `version.properties`. Increment
+   `VERSION_BUILD` explicitly for a subsequent build of the same SemVer, or
+   reset it to `0` when incrementing `VERSION_NAME`. Do not edit
    `app/build.gradle.kts`, pass version inputs, or use environment overrides.
 2. **Prepare the changelog.** Move the entries under `[Unreleased]` in
    `CHANGELOG.md` under a heading `## [<version>] - YYYY-MM-DD`, using the
@@ -52,8 +65,8 @@ Git tags use the `v<version>` convention: for `VERSION_NAME=1.2.0`, the tag is
    and any release changes. Record the immutable commit/ref to dispatch; do
    not dispatch a worktree state that has not been committed.
 4. **Dispatch the exact ref.** In **Actions → Build & Deploy → Run workflow**,
-   select that commit (or an exact ref resolving to it). Set either or both of
-   the independent booleans:
+   select that commit (or an exact ref resolving to it). Set either or both
+   of the independent booleans:
 
    | Input | Default | Effect |
    | --- | --- | --- |
@@ -63,7 +76,7 @@ Git tags use the `v<version>` convention: for `VERSION_NAME=1.2.0`, the tag is
    A Play-Store-only dispatch does not run the full/VST path; selecting both
    paths does not merge their publication boundaries.
 5. **Verify the preflight.** Confirm the initial `version` job accepts the
-   committed properties, exports the expected name/code, and reports
+   committed three-key properties, exports the expected name/code, and reports
    `prerelease=true` only when `VERSION_NAME` has a `-prerelease` component.
    A `+build` component alone must report `prerelease=false`.
 6. **Verify exact build outputs.** For a full release, inspect

@@ -97,7 +97,7 @@ jobs:
               if not match:
                   raise SystemExit(f"malformed version.properties line {number}")
               key, value = match.groups()
-              if key not in {"VERSION_NAME", "VERSION_CODE"}:
+              if key not in {"VERSION_NAME", "VERSION_CODE", "VERSION_BUILD"}:
                   raise SystemExit(f"unknown key {key!r} on line {number}")
               if key in values:
                   raise SystemExit(f"duplicate key {key!r} on line {number}")
@@ -105,8 +105,10 @@ jobs:
                   raise SystemExit(f"blank value for {key}")
               values[key] = value
 
-          if set(values) != {"VERSION_NAME", "VERSION_CODE"}:
-              raise SystemExit("version.properties must contain exactly VERSION_NAME and VERSION_CODE")
+          if set(values) != {"VERSION_NAME", "VERSION_CODE", "VERSION_BUILD"}:
+              raise SystemExit(
+                  "version.properties must contain exactly VERSION_NAME, VERSION_CODE, and VERSION_BUILD"
+              )
 
           semver = re.compile(
               r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
@@ -123,6 +125,11 @@ jobs:
               raise SystemExit("VERSION_CODE must be canonical positive ASCII decimal")
           if not 1 <= int(code) <= 2100000000:
               raise SystemExit("VERSION_CODE must be in range 1..2100000000")
+
+          build = values["VERSION_BUILD"]
+          if not re.fullmatch(r"(?:0|[1-9][0-9]*)", build):
+              raise SystemExit("VERSION_BUILD must be canonical nonnegative ASCII decimal")
+
 
           output = os.environ["GITHUB_OUTPUT"]
           with open(output, "a", encoding="utf-8") as stream:

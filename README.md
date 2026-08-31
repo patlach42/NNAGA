@@ -63,7 +63,15 @@ RELEASE_KEY_PASSWORD=...
 
 Do not commit the keystore or its passwords. Every Android variant uses this signing configuration, and packaging fails when any `RELEASE_*` property is missing or the keystore path is not a file.
 
-NNAGA reads version metadata from root `version.properties` (`VERSION_NAME` and `VERSION_CODE`), and release tags use `v<VERSION_NAME>`.
+NNAGA reads version metadata from root `version.properties`
+(`VERSION_NAME`, `VERSION_CODE`, and the explicit `VERSION_BUILD` counter).
+`VERSION_NAME` is strict SemVer and release tags use `v<VERSION_NAME>`.
+`VERSION_BUILD` is display-only: `0` has no suffix. Positive values use
+spreadsheet-style lowercase base-26 letters: `1` through `26` map to `a`
+through `z`, `27` maps to `aa`, `28` to `ab`, and so on indefinitely.
+Increment it manually for subsequent builds of the same SemVer and reset it to
+`0` when `VERSION_NAME` changes; the build system never mutates it. Canonical
+artifact names remain based only on SemVer `VERSION_NAME`.
 
 Canonical Android artifacts are versioned under:
 
@@ -72,7 +80,8 @@ Canonical Android artifacts are versioned under:
 
 Variants include `fullDebug`, `fullRelease`, and `playstoreRelease`.
 
-For full release and Play Store publishing flow, checksum rules, and release checklists, follow [`docs/RELEASING.md`](docs/RELEASING.md).
+For full release and Play Store publishing flow, checksum rules, and release
+checklists, follow [`docs/RELEASING.md`](docs/RELEASING.md).
 
 ## Distribution flavors
 | Flavor | Target SDK | VST host | Asset packs | Intended distribution |

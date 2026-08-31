@@ -20,8 +20,19 @@ NNAGA version is authoritative from root `version.properties`:
 ```sh
 VERSION_NAME=$(awk -F= '$1=="VERSION_NAME"{print $2}' version.properties)
 VERSION_CODE=$(awk -F= '$1=="VERSION_CODE"{print $2}' version.properties)
-printf 'VERSION_NAME=%s\nVERSION_CODE=%s\n' "$VERSION_NAME" "$VERSION_CODE"
+VERSION_BUILD=$(awk -F= '$1=="VERSION_BUILD"{print $2}' version.properties)
+printf 'VERSION_NAME=%s\nVERSION_CODE=%s\nVERSION_BUILD=%s\n' \
+  "$VERSION_NAME" "$VERSION_CODE" "$VERSION_BUILD"
 ```
+
+`VERSION_BUILD` is explicit display metadata: `0` has no display suffix.
+Positive values use spreadsheet-style lowercase base-26 letters: `1` through
+`26` map to `a` through `z`, `27` maps to `aa`, `28` to `ab`, and so on
+indefinitely. Increment it manually for subsequent builds of the same
+`VERSION_NAME`, and reset it to `0` whenever `VERSION_NAME` changes. The build
+system does not mutate this file automatically. It does not change SemVer,
+Android package metadata, or the SemVer-only names of canonical APK/AAB
+outputs.
 
 In a release path, keep Git tag equal to `v${VERSION_NAME}`. If `git checkout` used commit mode, record the commit and verify any release tag used later matches `v<version>` from file. A dirty tree must not be used for reproducibility comparison.
 

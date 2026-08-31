@@ -20,6 +20,7 @@
 import com.android.build.api.artifact.SingleArtifact
 import org.gradle.api.tasks.Sync
 
+import java.math.BigInteger
 import java.net.InetAddress
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -31,7 +32,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 val versionPropertiesFile = rootProject.file("version.properties")
-val requiredVersionPropertyKeys = setOf("VERSION_NAME", "VERSION_CODE")
+val requiredVersionPropertyKeys = setOf("VERSION_NAME", "VERSION_CODE", "VERSION_BUILD")
 val semVerPattern = Regex(
     "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)" +
         "(?:-(?:(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))" +
@@ -87,6 +88,28 @@ require(applicationVersionCode in 1..2_100_000_000) {
     "VERSION_CODE must be between 1 and 2100000000"
 }
 
+val applicationVersionBuildText = versionProperties.getProperty("VERSION_BUILD")
+    ?.takeIf { it.isNotBlank() }
+    ?: error("Missing or blank VERSION_BUILD in version.properties")
+require(applicationVersionBuildText.matches(Regex("^(0|[1-9][0-9]*)$"))) {
+    "VERSION_BUILD must be canonical ASCII decimal"
+}
+val applicationVersionBuild = try {
+    BigInteger(applicationVersionBuildText)
+} catch (_: NumberFormatException) {
+    error("VERSION_BUILD could not be parsed as canonical ASCII decimal")
+}
+val applicationVersionBuildSuffix = buildString {
+    var remaining = applicationVersionBuild
+    val alphabetSize = BigInteger.valueOf(26L)
+    while (remaining.signum() > 0) {
+        remaining = remaining.subtract(BigInteger.ONE)
+        insert(0, ('a'.code + remaining.mod(alphabetSize).toInt()).toChar())
+        remaining = remaining.divide(alphabetSize)
+    }
+}
+val applicationVersionDisplayName = applicationVersionName + applicationVersionBuildSuffix
+
 android {
     namespace = "com.vibes.dsp"
     compileSdk = 35
@@ -106,6 +129,7 @@ android {
         buildConfigField("String", "BUILD_DATE", "\"$buildDate\"")
         buildConfigField("String", "BUILD_TIME", "\"$buildTime\"")
         buildConfigField("String", "BUILD_HOST", "\"$buildHost\"")
+        buildConfigField("String", "VERSION_DISPLAY_NAME", "\"$applicationVersionDisplayName\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
