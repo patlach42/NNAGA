@@ -25,7 +25,10 @@ ASSETS = Path("app/src/main/assets/lv2")
 LIBS = Path("app/src/full/jniLibs/arm64-v8a")
 METADATA = Path("app/src/main/assets/plugin_metadata.json")
 DESCRIPTION_SOURCE = Path("plugin_descriptions.json")
-NATIVE_FILTER_METADATA = Path("3rd_party/nnaga-native-plugin-sdk/package/filter.json")
+NATIVE_METADATA = (
+    Path("3rd_party/nnaga-native-plugin-sdk/package/filter.json"),
+    Path("3rd_party/nnaga-native-plugin-sdk/package/shuffle.json"),
+)
 OUTPUT = Path(os.environ.get("NNAGA_PLUGIN_REPOSITORY", "../nnaga-plugin-repository"))
 VERSION = "1.0.0"
 RELEASE = "2026-08-31"
@@ -337,8 +340,8 @@ def manifest(package: str, name: str, bundle_stem: str, archive: bytes) -> str:
 
 
 
-def native_filter_record() -> tuple[str, str, bytes, str]:
-    metadata = json.loads(NATIVE_FILTER_METADATA.read_text(encoding="utf-8"))
+def native_record(metadata_path: Path) -> tuple[str, str, bytes, str]:
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     package = metadata["repository_id"]
     library = metadata["library"]
     binary = LIBS / library
@@ -398,10 +401,10 @@ def generate(check: bool = False, output: Path | None = None) -> int:
         display_name = DISPLAY_NAMES.get(stem, stem)
         records.append((package, display_name, archive,
                         manifest(package, display_name, stem, archive)))
-    native_record = native_filter_record()
-    if native_record[0] in seen:
-        raise SystemExit(f"duplicate package id: {native_record[0]}")
-    records.append(native_record)
+    for native_record_value in (native_record(path) for path in NATIVE_METADATA):
+        if native_record_value[0] in seen:
+            raise SystemExit(f"duplicate package id: {native_record_value[0]}")
+        records.append(native_record_value)
     if check:
         errors: list[str] = []
         expected_packages = {package for package, *_ in records}
