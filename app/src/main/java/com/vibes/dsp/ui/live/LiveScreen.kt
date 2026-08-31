@@ -53,6 +53,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
@@ -71,6 +72,10 @@ import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -91,6 +96,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -136,6 +143,7 @@ import com.vibes.dsp.engine.TrackLaunchQuantization
 import com.vibes.dsp.ui.components.CompactHorizontalFader
 import com.vibes.dsp.ui.components.NnagaChoiceRow
 import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
+import com.vibes.dsp.ui.browser.MediaBrowserDrawerContent
 import com.vibes.dsp.ui.components.NnagaCheckbox
 import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.ui.components.NnagaTextButton
@@ -145,6 +153,7 @@ import com.vibes.dsp.ui.rack.PluginCard
 import com.vibes.dsp.ui.rack.RackViewModel
 import com.vibes.dsp.ui.rack.RackPlugin
 import com.vibes.dsp.ui.theme.AppearancePreferences
+import kotlinx.coroutines.launch
 import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.roundToInt
@@ -218,7 +227,7 @@ internal fun resolveLiveFullscreenPlugin(
 }
 
 @Composable
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalMaterial3Api::class)
 fun LiveScreen(
     viewModel: RackViewModel,
     onNavigateToBrowser: (Long, Int) -> Unit,
@@ -746,6 +755,29 @@ fun LiveScreen(
         )
     }
 
+    val drawerState = rememberDrawerState(DrawerValue.Closed)
+    val drawerScope = rememberCoroutineScope()
+    var drawerReady by rememberSaveable { mutableStateOf(false) }
+    val drawerTrack = selectedTrack
+    BackHandler(enabled = drawerState.isOpen) { drawerScope.launch { drawerState.close() } }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val drawerWidth = minOf(maxWidth * 0.88f, 360.dp)
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            gesturesEnabled = drawerReady,
+            drawerContent = {
+                if (drawerReady) Surface(Modifier.requiredWidth(drawerWidth).fillMaxHeight()) {
+                    MediaBrowserDrawerContent(
+                        selectedTrackId = drawerTrack?.id,
+                        selectedTrackLabel = drawerTrack?.let { "Track ${tracks.indexOf(it) + 1}" },
+                        selectedSlot = selectedSlot,
+                        onClose = { drawerScope.launch { drawerState.close() } },
+                        onLoadClip = viewModel::loadTrackClipMedia,
+                        onPluginAdded = { viewModel.selectPath(it) },
+                    )
+                }
+            },
+        ) {
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         containerColor = Color.Black,
@@ -764,6 +796,10 @@ fun LiveScreen(
                 onToggleTile = ::toggleTile,
                 onDashboard = onNavigateToDashboard,
                 onToggleEdit = { editTiles = !editTiles },
+                onMediaBrowser = {
+                    drawerReady = true
+                    drawerScope.launch { drawerState.open() }
+                },
             )
             if (!hideTransportWithoutLauncher || "launcher" in visibleTiles) {
                 TransportBar(
@@ -984,6 +1020,8 @@ fun LiveScreen(
             }
         }
     }
+    }
+}
 }
 
 @Composable
@@ -994,6 +1032,7 @@ private fun CameraToolbar(
     onToggleTile: (String) -> Unit,
     onDashboard: () -> Unit,
     onToggleEdit: () -> Unit,
+    onMediaBrowser: () -> Unit,
 ) {
     val density = LocalDensity.current
     val cutout = rememberTopCutoutBounds()
@@ -1004,7 +1043,7 @@ private fun CameraToolbar(
         val rightWidth = maxWidth - with(density) { cutout.right.toDp() }
         val cutoutBottom = with(density) { cutout.bottom.toDp() }
         val canUseSideZones = cutout.present &&
-            leftWidth >= LiveDimensions.hitTarget * 2 &&
+            leftWidth >= LiveDimensions.hitTarget * 3 &&
             rightWidth >= LiveDimensions.hitTarget * 3 + LiveDimensions.smallGap * 2
 
         if (canUseSideZones) {
@@ -1015,6 +1054,7 @@ private fun CameraToolbar(
                     modifier = Modifier.align(Alignment.TopStart).width(leftWidth),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
+                    MediaBrowserToolbarButton(onMediaBrowser)
                     CameraToolbarButton("mixer", "Mixer tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("devices", "Devices tile", visibleTiles, onToggleTile)
                 }
@@ -1034,6 +1074,7 @@ private fun CameraToolbar(
                     modifier = Modifier.fillMaxWidth().height(LiveDimensions.toolbar),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
+                    MediaBrowserToolbarButton(onMediaBrowser)
                     CameraToolbarButton("mixer", "Mixer tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("devices", "Devices tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("launcher", "Clip launcher tile", visibleTiles, onToggleTile)
@@ -1044,6 +1085,25 @@ private fun CameraToolbar(
         }
     }
 }
+@Composable
+private fun MediaBrowserToolbarButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier.size(LiveDimensions.hitTarget).clickable(role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(
+            color = Color.Transparent,
+            contentColor = LiveColors.textMuted,
+            shape = RoundedCornerShape(2.dp),
+            modifier = Modifier.size(LiveDimensions.control),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.FolderOpen, "Media browser", modifier = Modifier.size(LiveDimensions.icon))
+            }
+        }
+    }
+}
+
 
 @Composable
 private fun CameraToolbarButton(

@@ -69,13 +69,7 @@ fun PluginBrowserScreen(
     onNavigateBack: () -> Unit,
     viewModel: PluginBrowserViewModel = viewModel()
 ) {
-    val groupedPlugins by viewModel.groupedPlugins.collectAsState()
-    val expandedAuthors by viewModel.expandedAuthors.collectAsState()
-    val expandedCategories by viewModel.expandedCategories.collectAsState()
-    val isLoading by viewModel.isLoading.collectAsState()
-    val errorMessage by viewModel.errorMessage.collectAsState()
     val addFailureMessage by viewModel.addFailureMessage.collectAsState()
-    val favorites by viewModel.favorites.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
 
     // Scope for kicking off add/replace plugin operations off the main thread.
@@ -126,124 +120,30 @@ fun PluginBrowserScreen(
                 )
             }
         ) { padding ->
-            Box(
+            PluginTree(
+                viewModel = viewModel,
+                onPluginClick = { plugin ->
+                    if (blockingOperation == null) {
+                        // VST activate can take ~5s (wine fork + FEX startup);
+                        // doing it on the main thread triggers Android's
+                        // input-dispatch ANR watchdog. Launch on the screen's
+                        // coroutine scope; the view model dispatches to IO.
+                        addPluginScope.launch {
+                            val success = if (replaceIndex >= 0) {
+                                viewModel.replacePluginInRack(pathId, replaceIndex, plugin)
+                            } else {
+                                viewModel.addPluginToRack(pathId, plugin)
+                            }
+                            if (success) onNavigateBack()
+                        }
+                    }
+                },
+                compactItems = false,
+                pluginItemsEnabled = true,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding)
-            ) {
-                when {
-                    isLoading -> {
-                        CircularProgressIndicator(
-                            modifier = Modifier.align(Alignment.Center),
-                            color = MaterialTheme.colorScheme.primary,
-                            strokeWidth = 2.dp,
-                        )
-                    }
-                    errorMessage != null -> {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                text = errorMessage ?: "Unknown error",
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Spacer(modifier = Modifier.height(16.dp))
-                            NnagaButton(onClick = { viewModel.refresh() }) {
-                                Text("Retry")
-                            }
-                        }
-                    }
-                    groupedPlugins.isEmpty() -> {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Center
-                        ) {
-                            Text("No plugins available")
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text(
-                                text = "LV2 plugins are loaded from the app's extracted assets (assets/lv2). This app ships with GxPlugins in assets—if you see nothing here, the native build may be using the LV2 stub (no lilv/serd/sord). Build the LV2 libraries and place them in app/src/main/cpp/libs/lv2/, then rebuild the app. See LV2_INTEGRATION.md.",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                        }
-                    }
-                    else -> {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            groupedPlugins.forEach { authorGroup ->
-                                // Author header
-                                item(key = "author_${authorGroup.name}") {
-                                    AuthorHeader(
-                                        authorName = authorGroup.name,
-                                        pluginCount = authorGroup.categories.sumOf { it.plugins.size },
-                                        isExpanded = expandedAuthors.contains(authorGroup.name),
-                                        onToggle = { viewModel.toggleAuthor(authorGroup.name) }
-                                    )
-                                }
-
-                                // Categories (only show if author is expanded)
-                                if (expandedAuthors.contains(authorGroup.name)) {
-                                    authorGroup.categories.forEach { category ->
-                                        val categoryKey = "${authorGroup.name}|${category.name}"
-                                        val isCategoryExpanded = expandedCategories.contains(categoryKey)
-
-                                        // Category header
-                                        item(key = "category_${categoryKey}") {
-                                            CategoryHeader(
-                                                categoryName = category.name,
-                                                pluginCount = category.plugins.size,
-                                                isExpanded = isCategoryExpanded,
-                                                onToggle = {
-                                                    viewModel.toggleCategory(authorGroup.name, category.name)
-                                                }
-                                            )
-                                        }
-
-                                        // Plugins in category (only show if category is expanded)
-                                        if (isCategoryExpanded) {
-                                            items(
-                                                items = category.plugins,
-                                                key = { "${authorGroup.name}_${category.name}_${it.fullId}" }
-                                            ) { plugin ->
-                                                PluginItem(
-                                                    plugin = plugin,
-                                                    isFavorite = favorites.contains(plugin.fullId),
-                                                    onToggleFavorite = { viewModel.toggleFavorite(plugin.fullId) },
-                                                    onClick = {
-                                                        if (blockingOperation == null) {
-                                                            // VST activate can take ~5s (wine fork + FEX startup);
-                                                            // doing it on the main thread triggers Android's
-                                                            // input-dispatch ANR watchdog. Launch on the screen's
-                                                            // coroutine scope; the view model dispatches to IO.
-                                                            addPluginScope.launch {
-                                                                val success = if (replaceIndex >= 0) {
-                                                                    viewModel.replacePluginInRack(pathId, replaceIndex, plugin)
-                                                                } else {
-                                                                    viewModel.addPluginToRack(pathId, plugin)
-                                                                }
-                                                                if (success) onNavigateBack()
-                                                            }
-                                                        }
-                                                    }
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            )
         }
         blockingOperation?.let { label ->
             BrowserBlockingOperationOverlay(label = label)
@@ -252,7 +152,127 @@ fun PluginBrowserScreen(
 }
 
 @Composable
-private fun BrowserBlockingOperationOverlay(label: String) {
+internal fun PluginTree(
+    viewModel: PluginBrowserViewModel,
+    onPluginClick: (PluginInfo) -> Unit,
+    compactItems: Boolean,
+    pluginItemsEnabled: Boolean = true,
+    modifier: Modifier = Modifier.fillMaxSize()
+) {
+    val groupedPlugins by viewModel.groupedPlugins.collectAsState()
+    val expandedAuthors by viewModel.expandedAuthors.collectAsState()
+    val expandedCategories by viewModel.expandedCategories.collectAsState()
+    val isLoading by viewModel.isLoading.collectAsState()
+    val errorMessage by viewModel.errorMessage.collectAsState()
+    val favorites by viewModel.favorites.collectAsState()
+
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center
+    ) {
+        when {
+            isLoading -> {
+                CircularProgressIndicator(
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 2.dp,
+                )
+            }
+            errorMessage != null -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = errorMessage ?: "Unknown error",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    NnagaButton(onClick = { viewModel.refresh() }) {
+                        Text("Retry")
+                    }
+                }
+            }
+            groupedPlugins.isEmpty() -> {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text("No plugins available")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "LV2 plugins are loaded from the app's extracted assets (assets/lv2). This app ships with GxPlugins in assets—if you see nothing here, the native build may be using the LV2 stub (no lilv/serd/sord). Build the LV2 libraries and place them in app/src/main/cpp/libs/lv2/, then rebuild the app. See LV2_INTEGRATION.md.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+            else -> {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    groupedPlugins.forEach { authorGroup ->
+                        // Author header
+                        item(key = "author_${authorGroup.name}") {
+                            AuthorHeader(
+                                authorName = authorGroup.name,
+                                pluginCount = authorGroup.categories.sumOf { it.plugins.size },
+                                isExpanded = expandedAuthors.contains(authorGroup.name),
+                                onToggle = { viewModel.toggleAuthor(authorGroup.name) }
+                            )
+                        }
+
+                        // Categories (only show if author is expanded)
+                        if (expandedAuthors.contains(authorGroup.name)) {
+                            authorGroup.categories.forEach { category ->
+                                val categoryKey = "${authorGroup.name}|${category.name}"
+                                val isCategoryExpanded = expandedCategories.contains(categoryKey)
+
+                                // Category header
+                                item(key = "category_${categoryKey}") {
+                                    CategoryHeader(
+                                        categoryName = category.name,
+                                        pluginCount = category.plugins.size,
+                                        isExpanded = isCategoryExpanded,
+                                        onToggle = {
+                                            viewModel.toggleCategory(authorGroup.name, category.name)
+                                        }
+                                    )
+                                }
+
+                                // Plugins in category (only show if category is expanded)
+                                if (isCategoryExpanded) {
+                                    items(
+                                        items = category.plugins,
+                                        key = { "${authorGroup.name}_${category.name}_${it.fullId}" }
+                                    ) { plugin ->
+                                        PluginItem(
+                                            plugin = plugin,
+                                            compact = compactItems,
+                                            enabled = pluginItemsEnabled,
+                                            isFavorite = favorites.contains(plugin.fullId),
+                                            onToggleFavorite = { viewModel.toggleFavorite(plugin.fullId) },
+                                            onClick = { onPluginClick(plugin) }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun BrowserBlockingOperationOverlay(label: String) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -292,6 +312,139 @@ private fun BrowserBlockingOperationOverlay(label: String) {
         }
     }
 }
+
+@Composable
+fun PluginItem(
+    plugin: PluginInfo,
+    compact: Boolean = false,
+    isFavorite: Boolean = false,
+    enabled: Boolean = true,
+    onToggleFavorite: () -> Unit = {},
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 12.dp)
+            .heightIn(min = 48.dp)
+            .clickable(
+                enabled = enabled,
+                onClick = onClick
+            )
+            .testTag("browser_plugin_item"),
+        shape = MaterialTheme.shapes.small,
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant,
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        border = CardDefaults.outlinedCardBorder()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(
+                    horizontal = if (compact) 8.dp else 12.dp,
+                    vertical = if (compact) 8.dp else 12.dp,
+                ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 8.dp else 12.dp)
+        ) {
+            // Thumbnail
+            if (!compact) {
+                PluginThumbnail(
+                    thumbnailPath = plugin.thumbnailPath,
+                    modifier = Modifier
+                        .size(80.dp)
+                )
+            }
+
+            // Plugin info
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = plugin.name.ifEmpty { plugin.id },
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+
+                // Description (if available)
+                if (!compact && plugin.description.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = plugin.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    // Format badge: makes VST2 vs VST3 (or LV2) immediately
+                    // distinguishable when two plugins share the same display
+                    // name (e.g. AmpCraft.dll + AmpCraft.vst3 imported into
+                    // the same library).
+                    // Per-format badge colors so VST3 / VST2 / LV2 are tellable at a glance.
+                    val (badgeBg, badgeFg) = when (plugin.format) {
+                        "VST3" -> Color(0xFF1976D2) to Color.White  // blue
+                        "VST2" -> Color(0xFFE64A19) to Color.White  // deep orange
+                        "LV2"  -> Color(0xFF388E3C) to Color.White  // green
+                        else   -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+                    }
+                    Surface(
+                        shape = MaterialTheme.shapes.extraSmall,
+                        color = badgeBg,
+                    ) {
+                        Text(
+                            text = plugin.format,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = badgeFg,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                    // Architecture badge (x86 / x64 / native) — colors distinct from the format badge.
+                    if (plugin.arch.isNotEmpty()) {
+                        val (archBg, archFg) = when (plugin.arch) {
+                            "x64"    -> Color(0xFF7B1FA2) to Color.White  // purple
+                            "x86"    -> Color(0xFF00838F) to Color.White  // teal
+                            "native" -> Color(0xFF546E7A) to Color.White  // blue-grey
+                            else     -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
+                        }
+                        Surface(
+                            shape = MaterialTheme.shapes.extraSmall,
+                            color = archBg,
+                        ) {
+                            Text(
+                                text = plugin.arch,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = archFg,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            )
+                        }
+                    }
+                    Text(
+                        text = plugin.guiTypes.joinToString(", ") { it.displayName },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+            }
+
+            // Favorite star
+            NnagaIconButton(onClick = onToggleFavorite) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
+                    contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
 
 @Composable
 fun AuthorHeader(
@@ -436,127 +589,6 @@ fun PluginThumbnail(
                 Text(
                     text = "🎸",
                     style = MaterialTheme.typography.titleMedium
-                )
-            }
-        }
-    }
-}
-
-@Composable
-fun PluginItem(
-    plugin: PluginInfo,
-    isFavorite: Boolean = false,
-    onToggleFavorite: () -> Unit = {},
-    onClick: () -> Unit
-) {
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 12.dp)
-            .clickable(onClick = onClick)
-            .testTag("browser_plugin_item"),
-        shape = MaterialTheme.shapes.small,
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        border = CardDefaults.outlinedCardBorder()
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            // Thumbnail
-            PluginThumbnail(
-                thumbnailPath = plugin.thumbnailPath,
-                modifier = Modifier
-                    .size(80.dp)
-            )
-
-            // Plugin info
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = plugin.name.ifEmpty { plugin.id },
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold
-                )
-
-                // Description (if available)
-                if (plugin.description.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = plugin.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(4.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    // Format badge: makes VST2 vs VST3 (or LV2) immediately
-                    // distinguishable when two plugins share the same display
-                    // name (e.g. AmpCraft.dll + AmpCraft.vst3 imported into
-                    // the same library).
-                    // Per-format badge colors so VST3 / VST2 / LV2 are tellable at a glance.
-                    val (badgeBg, badgeFg) = when (plugin.format) {
-                        "VST3" -> Color(0xFF1976D2) to Color.White  // blue
-                        "VST2" -> Color(0xFFE64A19) to Color.White  // deep orange
-                        "LV2"  -> Color(0xFF388E3C) to Color.White  // green
-                        else   -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-                    }
-                    Surface(
-                        shape = MaterialTheme.shapes.extraSmall,
-                        color = badgeBg,
-                    ) {
-                        Text(
-                            text = plugin.format,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = badgeFg,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                    }
-                    // Architecture badge (x86 / x64 / native) — colors distinct from the format badge.
-                    if (plugin.arch.isNotEmpty()) {
-                        val (archBg, archFg) = when (plugin.arch) {
-                            "x64"    -> Color(0xFF7B1FA2) to Color.White  // purple
-                            "x86"    -> Color(0xFF00838F) to Color.White  // teal
-                            "native" -> Color(0xFF546E7A) to Color.White  // blue-grey
-                            else     -> MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
-                        }
-                        Surface(
-                            shape = MaterialTheme.shapes.extraSmall,
-                            color = archBg,
-                        ) {
-                            Text(
-                                text = plugin.arch,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = archFg,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                            )
-                        }
-                    }
-                    Text(
-                        text = plugin.guiTypes.joinToString(", ") { it.displayName },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                }
-            }
-
-            // Favorite star
-            NnagaIconButton(onClick = onToggleFavorite) {
-                Icon(
-                    imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.Star,
-                    contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
-                    tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
