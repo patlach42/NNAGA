@@ -145,7 +145,7 @@ android {
                 arguments += "-DGRC_AUDIO_PGO_MODE=$audioPgoMode"
                 project.findProperty("grcAudioPgoProfile")?.toString()
                     ?.takeIf { it.isNotBlank() }
-                    ?.let { arguments += "-DGRC_AUDIO_PGO_PROFILE=${project.file(it).absolutePath}" }
+                    ?.let { arguments += "-DGRC_AUDIO_PGO_PROFILE=${rootProject.file(it).absolutePath}" }
             }
         }
 
@@ -512,7 +512,7 @@ dependencies {
 
     // VST hosting (wine + FEX, ~1 GB) — only in the `full` flavor, never in
     // `playstore`. See plan: prepare-plan-for-integrating-toasty-knuth.md.
-    "fullImplementation"(project(":vsthost_lib"))
+    "fullApi"(project(":vsthost_lib"))
 
     // Core Android
     implementation("androidx.core:core-ktx:1.12.0")

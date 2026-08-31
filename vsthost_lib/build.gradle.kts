@@ -72,6 +72,7 @@ android {
 
     prefab {
         create("vsthost") {
+            libraryName = "vsthost"
             headers = "src/main/cpp"
         }
     }
