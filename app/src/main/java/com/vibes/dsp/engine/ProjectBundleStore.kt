@@ -162,7 +162,9 @@ class ProjectBundleStore(private val context: Context) {
     private fun readBytes(uri: Uri, max: Long): ByteArray { val out = java.io.ByteArrayOutputStream(); resolver.openInputStream(uri)?.use { copyBounded(it, out, max) } ?: error("Unable to read project file"); return out.toByteArray() }
     private fun deleteTree(uri: Uri) { runCatching { DocumentsContract.deleteDocument(resolver, treeDocumentUri(uri)) } }
     private fun treeDocumentUri(uri: Uri): Uri {
-        return if (DocumentsContract.isTreeUri(uri)) {
+        return if (DocumentsContract.isDocumentUri(context, uri)) {
+            uri
+        } else if (DocumentsContract.isTreeUri(uri)) {
             val treeDocumentId = DocumentsContract.getTreeDocumentId(uri)
             require(treeDocumentId != null) { "Invalid project directory" }
             DocumentsContract.buildDocumentUriUsingTree(uri, treeDocumentId)
