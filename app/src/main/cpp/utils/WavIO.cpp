@@ -19,10 +19,14 @@
 
 #include "WavIO.h"
 #include <android/log.h>
+#include <array>
+#include <cerrno>
 #include <algorithm>
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <fcntl.h>
+#include <unistd.h>
 
 #define LOG_TAG "WavIO"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -202,6 +206,69 @@ bool writeWavFile(const std::string& path,
 
     file.write(reinterpret_cast<const char*>(intSamples.data()), dataSize);
     return file.good();
+}
+
+bool writeStereoWavFile(const std::string& path,
+                        const std::vector<float>& left,
+                        const std::vector<float>& right,
+                        uint32_t sampleRate) {
+    if (sampleRate == 0 || left.empty() || left.size() != right.size() ||
+        left.size() > (kMaxWavSamples / 2U) ||
+        left.size() > (std::numeric_limits<uint32_t>::max() / 4U)) {
+        return false;
+    }
+
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd < 0) {
+        LOGE("Cannot create file: %s", path.c_str());
+        return false;
+    }
+    const auto writeAll = [&](const void* source, size_t bytes) {
+        const auto* cursor = static_cast<const uint8_t*>(source);
+        while (bytes > 0) {
+            const ssize_t written = ::write(fd, cursor, bytes);
+            if (written < 0 && errno == EINTR) continue;
+            if (written <= 0) return false;
+            cursor += static_cast<size_t>(written);
+            bytes -= static_cast<size_t>(written);
+        }
+        return true;
+    };
+
+    constexpr uint16_t kChannels = 2;
+    constexpr uint16_t kBitsPerSample = 16;
+    const uint32_t dataSize = static_cast<uint32_t>(left.size() * 4U);
+    WavHeader header{};
+    std::memcpy(header.riff, "RIFF", 4);
+    header.fileSize = 36U + dataSize;
+    std::memcpy(header.wave, "WAVE", 4);
+    std::memcpy(header.fmt, "fmt ", 4);
+    header.fmtSize = 16;
+    header.audioFormat = 1;
+    header.numChannels = kChannels;
+    header.sampleRate = sampleRate;
+    header.bitsPerSample = kBitsPerSample;
+    header.blockAlign = kChannels * (kBitsPerSample / 8U);
+    header.byteRate = sampleRate * header.blockAlign;
+    std::memcpy(header.data, "data", 4);
+    header.dataSize = dataSize;
+
+    bool ok = writeAll(&header, sizeof(header));
+    std::array<int16_t, 2048> chunk{};
+    for (size_t offset = 0; ok && offset < left.size();) {
+        const size_t frames = std::min<size_t>(chunk.size() / 2U, left.size() - offset);
+        for (size_t frame = 0; frame < frames; ++frame) {
+            const float leftSample = std::clamp(left[offset + frame], -1.0f, 1.0f);
+            const float rightSample = std::clamp(right[offset + frame], -1.0f, 1.0f);
+            chunk[frame * 2U] = static_cast<int16_t>(leftSample * 32767.0f);
+            chunk[frame * 2U + 1U] = static_cast<int16_t>(rightSample * 32767.0f);
+        }
+        ok = writeAll(chunk.data(), frames * 2U * sizeof(int16_t));
+        offset += frames;
+    }
+    if (ok) ok = ::fsync(fd) == 0;
+    const int closeResult = ::close(fd);
+    return ok && closeResult == 0;
 }
 
 } // namespace guitarrackcraft

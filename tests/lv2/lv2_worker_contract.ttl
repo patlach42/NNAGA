@@ -1,0 +1,26 @@
+@prefix atom: <http://lv2plug.in/ns/ext/atom#> .
+@prefix doap: <http://usefulinc.com/ns/doap#> .
+@prefix lv2: <http://lv2plug.in/ns/lv2core#> .
+@prefix worker: <http://lv2plug.in/ns/ext/worker#> .
+
+<https://guitarrackcraft.test/lv2/worker-contract>
+    a lv2:Plugin ;
+    doap:name "Worker Contract" ;
+    lv2:binary <lv2_worker_contract.so> ;
+    lv2:requiredFeature worker:schedule ;
+    lv2:extensionData worker:interface ;
+    lv2:port [
+        a lv2:ControlPort, lv2:InputPort ;
+        lv2:index 0 ;
+        lv2:symbol "mode" ;
+        lv2:name "Mode" ;
+        lv2:default 0.0 ;
+        lv2:minimum 0.0 ;
+        lv2:maximum 4.0
+    ], [
+        a atom:AtomPort, lv2:OutputPort ;
+        lv2:index 1 ;
+        lv2:symbol "events" ;
+        lv2:name "Events" ;
+        atom:bufferType atom:Sequence
+    ] .

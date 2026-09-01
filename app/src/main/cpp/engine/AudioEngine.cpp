@@ -155,26 +155,6 @@ void AudioEngine::directUsbThermalPolicyLoop() {
     int32_t configuredRenderTid = initialRenderTid;
     int32_t configuredEventTid = initialEventTid;
 
-    const auto updateHintThreads = [&]() noexcept {
-        if (!performanceHint.active()) return;
-        const int32_t renderTid =
-            directUsbRenderTid_.load(std::memory_order_acquire);
-        const int32_t eventTid =
-            directUsbOutput_ ? directUsbOutput_->eventThreadTid() : 0;
-        if (renderTid <= 0 ||
-            (renderTid == configuredRenderTid &&
-             eventTid == configuredEventTid)) {
-            return;
-        }
-        const int32_t threadIds[] = {renderTid, eventTid};
-        const size_t threadCount =
-            eventTid > 0 && eventTid != renderTid ? 2U : 1U;
-        if (performanceHint.setThreads(threadIds, threadCount)) {
-            LOGI("ADPF session audioThreads=%zu", threadCount);
-        }
-        configuredRenderTid = renderTid;
-        configuredEventTid = eventTid;
-    };
 
     directUsbPerformanceHintActive_.store(
         performanceHint.active(), std::memory_order_release);
@@ -194,7 +174,6 @@ void AudioEngine::directUsbThermalPolicyLoop() {
         }
         lock.unlock();
         if (!directUsbSession_.load(std::memory_order_acquire)) continue;
-        updateHintThreads();
         const float headroom = monitor.sample(5);
         if (!directUsbThermalSafetyEnabled_.load(std::memory_order_acquire)) {
             if (safetyActive && directUsbOutput_) {
@@ -285,6 +264,7 @@ bool AudioEngine::startDirectUsbSession(
     directUsbState_.store(DirectUsbState::Starting, std::memory_order_release);
     directUsbSessionId_.fetch_add(1, std::memory_order_acq_rel);
     directUsbFailureCode_.store(0, std::memory_order_release);
+    directUsbFailureRequest_.store(0, std::memory_order_relaxed);
 
     // start() negotiates the device and prepares duplex capture/storage, but
     // deliberately leaves OUT unarmed until the render thread has primed it.
@@ -331,6 +311,10 @@ bool AudioEngine::startDirectUsbSession(
     const int32_t primeFrames = std::max(0, directUsbOutput_->startupPrimeFrames());
     const int32_t startupBlocks =
         (primeFrames + renderFrames - 1) / renderFrames;
+    const int32_t captureTransferFrames =
+        std::max(1, directUsbOutput_->captureTransferFrames());
+    directCaptureTransferFrames_.store(
+        static_cast<uint32_t>(captureTransferFrames), std::memory_order_release);
     directUsbPrimeFrames_.store(static_cast<uint32_t>(primeFrames), std::memory_order_release);
     directUsbSteadyTargetFrames_.store(
         static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())),
@@ -361,12 +345,7 @@ bool AudioEngine::startDirectUsbSession(
         }
         directUsbOutputLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
         directUsbOutputRight_.assign(static_cast<size_t>(renderFrames), 0.0f);
-        directUsbStartupLeft_.assign(
-            static_cast<size_t>(startupBlocks) * renderFrames, 0.0f);
-        directUsbStartupRight_.assign(
-            static_cast<size_t>(startupBlocks) * renderFrames, 0.0f);
     } catch (const std::bad_alloc&) {
-        LOGE("Direct USB startup buffer allocation failed");
         directUsbOutput_->requestStop();
         directUsbFailureCode_.store(
             usbFailureCode(monotrypt::usb::StartError::Unknown),
@@ -391,8 +370,55 @@ bool AudioEngine::startDirectUsbSession(
     rackGraph_.pauseAndResetTransport();
     cleanupStarted_.store(false, std::memory_order_release);
     directUsbRenderUrgentAudio_.store(false, std::memory_order_relaxed);
+    directUsbPlaybackQuantumDrops_.store(0, std::memory_order_relaxed);
+    for (int32_t block = 0; block < startupBlocks; ++block) {
+        if (!directUsbOutput_->submitWholeQuantum(
+                directUsbOutputLeft_.data(), directUsbOutputRight_.data(), renderFrames)) {
+            directUsbOutput_->requestStop();
+            directUsbOutput_->stop();
+            directUsbFailureCode_.store(
+                usbFailureCode(monotrypt::usb::StartError::IsoPumpSubmitFailed),
+                std::memory_order_release);
+            directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
+            cleanupEngineState();
+            return false;
+        }
+    }
+    const int32_t captureCapacityFrames =
+        std::max(renderFrames, directUsbOutput_->captureCapacityFrames());
+    const int32_t desiredCaptureTarget = renderFrames * 2;
+    const int32_t captureTargetFrames = std::min(
+        desiredCaptureTarget,
+        std::max(0, captureCapacityFrames - renderFrames - captureTransferFrames));
+    const int32_t capturePrimeFrames = renderFrames + captureTargetFrames;
+    const auto capturePrimeDeadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+    if (!directUsbOutput_->waitForCaptureUntil(
+            capturePrimeFrames, capturePrimeDeadline)) {
+        directUsbOutput_->requestStop();
+        directUsbOutput_->stop();
+        directUsbFailureCode_.store(
+            usbFailureCode(
+                monotrypt::usb::StartError::TransportStoppedUnexpectedly),
+            std::memory_order_release);
+        directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
+        cleanupEngineState();
+        return false;
+    }
+    if (!directUsbOutput_->startPlayback()) {
+        directUsbOutput_->requestStop();
+        directUsbOutput_->stop();
+        directUsbFailureCode_.store(
+            usbFailureCode(monotrypt::usb::StartError::IsoPumpSubmitFailed),
+            std::memory_order_release);
+        directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
+        cleanupEngineState();
+        return false;
+    }
+    directUsbOutput_->resetRealtimeCounters();
     directUsbSession_.store(true, std::memory_order_release);
-    isRunning_.store(false, std::memory_order_release);
+    isRunning_.store(true, std::memory_order_release);
+    directUsbState_.store(DirectUsbState::Running, std::memory_order_release);
     try {
         directUsbThermalPolicyThread_ =
             std::thread(&AudioEngine::directUsbThermalPolicyLoop, this);
@@ -453,7 +479,10 @@ void AudioEngine::cleanupWorkerLoop() {
 }
 
 void AudioEngine::requestDirectUsbCleanup(int32_t failureCode) noexcept {
-    if (failureCode != 0) directUsbFailureCode_.store(failureCode, std::memory_order_release);
+    if (failureCode != 0) {
+        directUsbFailureRequest_.store(failureCode, std::memory_order_release);
+        directUsbFailureCode_.store(failureCode, std::memory_order_release);
+    }
     cleanupRequested_.store(true, std::memory_order_release);
     lifecycleCv_.notify_one();
 }
@@ -472,7 +501,6 @@ bool AudioEngine::waitForDirectUsbCleanup() {
     });
     return true;
 }
-
 void AudioEngine::finishDirectUsbCleanup() {
     std::lock_guard<std::mutex> guard(lifecycleMutex_);
     if (cleanupInProgress_) return;
@@ -537,6 +565,8 @@ AudioEngine::DirectUsbRuntimeStats AudioEngine::getDirectUsbRuntimeStats() const
         directUsbPerformanceHintActive_.load(std::memory_order_acquire);
     out.thermalSafetyEnabled = directUsbThermalSafetyEnabled_.load(std::memory_order_acquire);
     out.thermalSafetyActive = directUsbThermalSafetyActive_.load(std::memory_order_acquire);
+    out.playbackQuantumDrops =
+        directUsbPlaybackQuantumDrops_.load(std::memory_order_relaxed);
     return out;
 }
 
@@ -696,260 +726,164 @@ void AudioEngine::processRackBlock(const float* const* liveInputs,
                                    int32_t inputChannelCount,
                                    float* const* outputs,
                                    uint32_t numFrames) noexcept {
+    realtimeCallbackCount_.fetch_add(1, std::memory_order_relaxed);
+    realtimeCallbackFrames_.fetch_add(numFrames, std::memory_order_relaxed);
     rackGraph_.process(liveInputs, inputChannelCount, outputs, numFrames);
 }
+AudioEngine::RealtimeStatsSnapshot AudioEngine::getRealtimeStatsSnapshot() const noexcept {
+    RealtimeStatsSnapshot out;
+    if (androidOboeSession_.load(std::memory_order_acquire) && androidOboeBackend_) {
+        out.callbackCount = androidOboeBackend_->callbackCount();
+        out.callbackFrames = androidOboeBackend_->callbackFrames();
+        out.frameCapacityViolations = androidOboeBackend_->capacityViolationCount();
+        out.inputOverflowFrames = androidOboeBackend_->inputOverflowCount();
+        out.inputUnderflowFrames = androidOboeBackend_->inputUnderflowCount();
+        out.audioApi = androidOboeBackend_->actualAudioApi();
+        out.sampleRateHz = androidOboeBackend_->actualSampleRate();
+        out.framesPerBurst = androidOboeBackend_->actualFramesPerBurst();
+        out.bufferSize = androidOboeBackend_->actualBufferSize();
+        out.performanceMode = androidOboeBackend_->actualPerformanceMode();
+        out.sharingMode = androidOboeBackend_->actualSharingMode();
+        out.callbackFramesPerBurst = androidOboeBackend_->actualFramesPerDataCallback();
+        out.activatedCapacity = androidOboeBackend_->preparedCapacity();
+        out.deviceId = androidOboeBackend_->actualDeviceId();
+        out.inputChannels = androidOboeBackend_->inputChannelCount();
+        out.lastCallbackNanoseconds = androidOboeBackend_->lastCallbackNanoseconds();
+        out.peakCallbackNanoseconds = androidOboeBackend_->peakCallbackNanoseconds();
+        out.callbackDeadlineBudgetNanoseconds =
+            androidOboeBackend_->callbackDeadlineBudgetNanoseconds();
+        out.callbackDeadlineMisses = androidOboeBackend_->callbackDeadlineMisses();
+    } else {
+        out.callbackCount = realtimeCallbackCount_.load(std::memory_order_relaxed);
+        out.callbackFrames = realtimeCallbackFrames_.load(std::memory_order_relaxed);
+        out.sampleRateHz = static_cast<int32_t>(publishedSampleRate_.load(std::memory_order_relaxed));
+        out.callbackFramesPerBurst = static_cast<int32_t>(publishedCallbackFrameCount_.load(std::memory_order_relaxed));
+        out.activatedCapacity = out.callbackFramesPerBurst;
+        out.lastCallbackNanoseconds =
+            directUsbLastCycleNs_.load(std::memory_order_relaxed);
+        out.peakCallbackNanoseconds =
+            directUsbPeakCycleNs_.load(std::memory_order_relaxed);
+        out.callbackDeadlineBudgetNanoseconds =
+            directUsbDeadlineBudgetNs_.load(std::memory_order_relaxed);
+        out.callbackDeadlineMisses =
+            directUsbDeadlineMisses_.load(std::memory_order_relaxed);
+    }
+    const auto pluginStats = rackGraph_.getRealtimeCounters();
+    out.vstInputStarvations = pluginStats.inputStarvations;
+    out.vstOutputUnderrunFrames = pluginStats.outputUnderrunFrames;
+    out.vstGuestDeadlineMisses = pluginStats.guestDeadlineMisses;
+    out.midiEventDrops = rackGraph_.getMidiEventDrops();
+    out.planPublishDeferrals = rackGraph_.getPlanPublishDeferrals();
+    out.xRunCount = static_cast<uint64_t>(std::max(0, getXRunCount()));
+    return out;
+}
+
 
 void AudioEngine::directUsbRenderLoop() {
-    directUsbRenderTid_.store(
-        static_cast<int32_t>(getTid()), std::memory_order_release);
+    directUsbRenderTid_.store(static_cast<int32_t>(getTid()), std::memory_order_release);
     directUsbRenderUrgentAudio_.store(
-        setCurrentThreadUrgentAudio("UsbAudioRender"),
-        std::memory_order_release);
+        setCurrentThreadUrgentAudio("UsbAudioRender"), std::memory_order_release);
     const int32_t frames = static_cast<int32_t>(callbackFrameCount_);
-    const int32_t startupBlocks = directUsbStartupBlocks_;
     const auto period = std::chrono::duration<double>(
         static_cast<double>(frames) / static_cast<double>(sampleRate_));
-    const int writeTimeoutMs = std::max(
-        2, static_cast<int>(std::ceil(period.count() * 2000.0)));
-    const int captureTimeoutMs = std::min(
-        1000, std::max(20, static_cast<int>(std::ceil(period.count() * 4000.0))));
-    int captureMissStreak = 0;
-    int failureCode = 0;
+    const auto quantumPeriod =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
+    const uint32_t captureTransferFrames = std::max<uint32_t>(
+        1, directCaptureTransferFrames_.load(std::memory_order_acquire));
+    const uint32_t captureDeadlineFrames =
+        ((static_cast<uint32_t>(frames) + captureTransferFrames - 1U) /
+         captureTransferFrames) * captureTransferFrames;
+    const auto captureWaitPeriod =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(
+                static_cast<double>(captureDeadlineFrames) /
+                static_cast<double>(sampleRate_)));
+    const uint32_t captureCapacityFrames = std::max<uint32_t>(
+        static_cast<uint32_t>(frames),
+        static_cast<uint32_t>(std::max(0, directUsbOutput_->captureCapacityFrames())));
+    const uint32_t captureHeadroomFrames = std::min(
+        captureTransferFrames,
+        captureCapacityFrames - static_cast<uint32_t>(frames));
+    const uint32_t desiredCaptureTarget =
+        static_cast<uint32_t>(frames) * 2U;
+    const uint32_t captureTargetFrames = std::min<uint32_t>(
+        desiredCaptureTarget,
+        captureCapacityFrames - static_cast<uint32_t>(frames) -
+            captureHeadroomFrames);
+    const uint32_t captureRequiredFrames =
+        static_cast<uint32_t>(frames) + captureTargetFrames;
+    const float peakDecay = meterDecayForBlock(frames, sampleRate_);
     const float* const* renderInputPtrs = directUsbInputPlanes_.data();
     float* const renderOutputPtrs[2] = {
         directUsbOutputLeft_.data(), directUsbOutputRight_.data()};
-    const float peakDecay = meterDecayForBlock(frames, sampleRate_);
-    const uint64_t effectiveQuantum =
-        directUsbEffectiveQuantum_.load(std::memory_order_relaxed);
-    const double publishedSampleRate =
-        publishedSampleRate_.load(std::memory_order_relaxed);
+    int32_t failureCode = 0;
 
-
-    const auto canContinue = [this]() noexcept {
-        return directUsbSession_.load(std::memory_order_acquire) &&
-            directUsbOutput_ && directUsbOutput_->isStreaming();
-    };
-    const auto waitForCapture = [this, &canContinue, &captureMissStreak,
-                                 &failureCode, captureTimeoutMs](int32_t required) noexcept {
-        if (directUsbOutput_ &&
-            directUsbOutput_->waitForCaptureFrames(required, captureTimeoutMs)) {
-            captureMissStreak = 0;
-            return true;
-        }
-        if (canContinue()) {
+    while (directUsbSession_.load(std::memory_order_acquire)) {
+        const auto began = std::chrono::steady_clock::now();
+        const auto deadline = began + captureWaitPeriod;
+        directUsbDeadlineBudgetNs_.store(
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                quantumPeriod).count()), std::memory_order_relaxed);
+        const bool captureTargetReady = directUsbOutput_ &&
+            directUsbOutput_->waitForCaptureUntil(
+                static_cast<int>(captureRequiredFrames), deadline);
+        if (!captureTargetReady) {
             directUsbCaptureWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
-            if (++captureMissStreak >= 3) {
+            const int available =
+                directUsbOutput_ ? directUsbOutput_->captureAvailableFrames() : 0;
+            if (available < frames) {
+                directUsbDeadlineMisses_.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (!directUsbOutput_ || !directUsbOutput_->driverStreaming()) {
                 failureCode = usbFailureCode(
                     monotrypt::usb::StartError::TransportStoppedUnexpectedly);
+                break;
             }
         }
-        return false;
-    };
-    const auto renderBlock = [this, frames, period, renderInputPtrs,
-                              &renderOutputPtrs, peakDecay, effectiveQuantum,
-                              publishedSampleRate]() noexcept {
         directUsbOutput_->readInputChannels(
             directUsbInputPlanes_.data(), directUsbInputChannelCount_, frames);
-        const auto began = std::chrono::steady_clock::now();
+
+        const auto dspBegan = std::chrono::steady_clock::now();
         processRackBlock(renderInputPtrs, directUsbInputChannelCount_,
                          renderOutputPtrs, frames);
-        const auto elapsed = std::chrono::steady_clock::now() - began;
         const uint64_t dspNs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count());
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - dspBegan).count());
         directUsbLastDspNs_.store(dspNs, std::memory_order_relaxed);
-        const auto transport = directUsbOutput_->transportStats();
-        const uint64_t queuedOutFrames = directUsbOutput_->queuedOutFrames();
-        const int captureTransferFrames = directUsbOutput_->captureTransferFrames();
-        const auto captures = directUsbOutput_->captureStats();
-        const uint64_t playbackXruns = directUsbOutput_->xrunCount();
-        const uint64_t captureXruns = captures.overruns + captures.underruns;
-        directCaptureRingFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
-            transport.captureRingFrames, std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
-        directPlaybackRingFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
-            transport.ringFrames, std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
-        directQueuedOutFrames_.store(static_cast<uint32_t>(std::min<uint64_t>(
-            queuedOutFrames, std::numeric_limits<uint32_t>::max())), std::memory_order_relaxed);
-        directCaptureTransferFrames_.store(static_cast<uint32_t>(
-            std::max(0, captureTransferFrames)), std::memory_order_relaxed);
-        directCaptureOverruns_.store(captures.overruns, std::memory_order_relaxed);
-        directCaptureUnderruns_.store(captures.underruns, std::memory_order_relaxed);
-        directPlaybackXruns_.store(playbackXruns, std::memory_order_relaxed);
-        const uint64_t latencyFrames = std::max<uint64_t>(
-            effectiveQuantum,
-            std::max<uint64_t>(transport.captureRingFrames,
-                               static_cast<uint64_t>(std::max(0, captureTransferFrames))))
-            + transport.ringFrames + queuedOutFrames;
-        publishedLatencyMs_.store(
-            static_cast<double>(latencyFrames) / publishedSampleRate * 1000.0,
-            std::memory_order_relaxed);
-        const uint64_t totalXruns = playbackXruns + captureXruns;
-        publishedXRunCount_.store(static_cast<int32_t>(std::min<uint64_t>(
-            totalXruns, static_cast<uint64_t>(std::numeric_limits<int32_t>::max()))),
-            std::memory_order_relaxed);
         uint64_t peak = directUsbPeakDspNs_.load(std::memory_order_relaxed);
-        while (peak < dspNs &&
-               !directUsbPeakDspNs_.compare_exchange_weak(
+        while (peak < dspNs && !directUsbPeakDspNs_.compare_exchange_weak(
                    peak, dspNs, std::memory_order_relaxed)) {}
-        cpuLoad_.store(std::min(
-            1.0f,
-            static_cast<float>(std::chrono::duration<double>(elapsed).count() / period.count())
-        ), std::memory_order_relaxed);
+        cpuLoad_.store(std::min(1.0f, static_cast<float>(
+            (dspNs * 1e-9) / period.count())), std::memory_order_relaxed);
 
-        float inputPeak;
-        float outputPeak;
-        measureStereoPeaks(
-            renderInputPtrs[0], renderOutputPtrs[0], renderOutputPtrs[1],
-            frames, inputPeak, outputPeak);
+        float inputPeak = 0.0f;
+        float outputPeak = 0.0f;
+        measureStereoPeaks(renderInputPtrs[0], renderOutputPtrs[0],
+                           renderOutputPtrs[1], frames, inputPeak, outputPeak);
         inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * peakDecay);
         outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * peakDecay);
         inputPeakLevel_.store(inputPeakHold_, std::memory_order_relaxed);
         outputPeakLevel_.store(outputPeakHold_, std::memory_order_relaxed);
         if (inputPeak >= kClippingThreshold) inputClipping_.store(true, std::memory_order_relaxed);
         if (outputPeak >= kClippingThreshold) outputClipping_.store(true, std::memory_order_relaxed);
-    };
-    const auto submitBlock = [this, frames, writeTimeoutMs, &canContinue](
-                                 const float* left, const float* right) noexcept {
-        int32_t submittedFrames = 0;
-        int misses = 0;
-        constexpr int kMaxMisses = 8;
-        while (submittedFrames < frames && canContinue()) {
-            const int32_t remainingFrames = frames - submittedFrames;
-            if (!directUsbOutput_->waitForWritableFrames(
-                    remainingFrames, writeTimeoutMs)) {
-                directUsbWriteWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
-                if (++misses >= kMaxMisses) return false;
-                continue;
-            }
-            const int written = directUsbOutput_->writeStereo(
-                left + submittedFrames, right + submittedFrames, remainingFrames);
-            if (written <= 0) {
-                directUsbWriteWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
-                if (++misses >= kMaxMisses) return false;
-                continue;
-            }
-            submittedFrames += written;
-            misses = 0;
-        }
-        return submittedFrames == frames;
-    };
-    bool outputPrimed = false;
-    while (directUsbSession_.load(std::memory_order_acquire)) {
-        if (!outputPrimed) {
-            bool startupOk = true;
-            for (int32_t block = 0; block < startupBlocks; ++block) {
-                if (!waitForCapture(frames)) {
-                    if (failureCode != 0 || !canContinue()) {
-                        startupOk = false;
-                        break;
-                    }
-                    --block;
-                    continue;
-                }
-                renderBlock();
-                std::memcpy(directUsbStartupLeft_.data() +
-                                static_cast<size_t>(block) * frames,
-                            directUsbOutputLeft_.data(),
-                            static_cast<size_t>(frames) * sizeof(float));
-                std::memcpy(directUsbStartupRight_.data() +
-                                static_cast<size_t>(block) * frames,
-                            directUsbOutputRight_.data(),
-                            static_cast<size_t>(frames) * sizeof(float));
-            }
-            for (int32_t block = 0; block < startupBlocks; ++block) {
-                if (!submitBlock(directUsbStartupLeft_.data() +
-                                     static_cast<size_t>(block) * frames,
-                                 directUsbStartupRight_.data() +
-                                     static_cast<size_t>(block) * frames)) {
-                    if (directUsbSession_.load(std::memory_order_acquire)) {
-                        failureCode = usbFailureCode(
-                            monotrypt::usb::StartError::TransportStoppedUnexpectedly);
-                    }
-                    startupOk = false;
-                    break;
-                }
-            }
-            if (!startupOk) break;
-            if (!directUsbOutput_->startPlayback()) {
-                const int32_t driverFailure = directUsbOutput_->lastErrorCode();
-                failureCode =
-                    driverFailure != usbFailureCode(monotrypt::usb::StartError::Ok)
-                        ? driverFailure
-                        : usbFailureCode(
-                              monotrypt::usb::StartError::IsoPumpSubmitFailed);
-                const std::string detail = directUsbOutput_->lastErrorDetail();
-                LOGE("Direct USB playback arm failed: %s", detail.c_str());
+
+        const bool submitted = directUsbOutput_->submitWholeQuantum(
+            directUsbOutputLeft_.data(), directUsbOutputRight_.data(), frames);
+        if (!submitted) {
+            directUsbWriteWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
+            if (!directUsbOutput_->driverStreaming()) {
+                failureCode = usbFailureCode(
+                    monotrypt::usb::StartError::TransportStoppedUnexpectedly);
                 break;
             }
-            outputPrimed = true;
-            isRunning_.store(true, std::memory_order_release);
-            directUsbState_.store(DirectUsbState::Running, std::memory_order_release);
-            continue;
         }
-        const auto cycleBegan = std::chrono::steady_clock::now();
-        const auto transportBeforeWait = directUsbOutput_->transportStats();
-        const uint64_t queuedUsbFrames = directUsbOutput_->queuedOutFrames();
-        const uint64_t playbackFrames =
-            transportBeforeWait.ringFrames >
-                    std::numeric_limits<uint64_t>::max() - queuedUsbFrames
-                ? std::numeric_limits<uint64_t>::max()
-                : transportBeforeWait.ringFrames + queuedUsbFrames;
-        const uint32_t cycleSampleRate = static_cast<uint32_t>(
-            std::max(0.0f, publishedSampleRate_.load(std::memory_order_relaxed)));
-        const uint64_t cycleDeadlineBudgetNs =
-            monotrypt::usb::playbackRunwayNanoseconds(
-                playbackFrames, cycleSampleRate);
-        directUsbDeadlineBudgetNs_.store(
-            cycleDeadlineBudgetNs, std::memory_order_relaxed);
-        if (!waitForCapture(frames)) {
-            const uint64_t elapsedNs = static_cast<uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - cycleBegan).count());
-            if (cycleDeadlineBudgetNs != 0 &&
-                elapsedNs > cycleDeadlineBudgetNs) {
-                directUsbDeadlineMisses_.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (failureCode != 0 || !canContinue()) break;
-            continue;
-        }
-        renderBlock();
-        // A full playback ring can make submitBlock wait safely for capacity.
-        // Deadline risk ends once the next block is rendered; do not classify
-        // intentional producer backpressure as an audio deadline miss.
-        const uint64_t renderReadyNs = static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - cycleBegan).count());
-        const bool submitted = submitBlock(
-            directUsbOutputLeft_.data(), directUsbOutputRight_.data());
         const uint64_t cycleNs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - cycleBegan).count());
-        if (auto* performanceHint = static_cast<PerformanceHintSession*>(
-                directUsbPerformanceHintSession_.load(
-                    std::memory_order_acquire))) {
-            performanceHint->reportActualWorkDuration(cycleNs);
-        }
-        if (submitted) {
-            if (directUsbState_.load(std::memory_order_acquire) == DirectUsbState::Running) {
-                uint64_t peak = directUsbPeakCycleNs_.load(std::memory_order_relaxed);
-                while (peak < cycleNs && !directUsbPeakCycleNs_.compare_exchange_weak(
-                    peak, cycleNs, std::memory_order_relaxed)) {}
-                directUsbLastCycleNs_.store(cycleNs, std::memory_order_release);
-                if (cycleDeadlineBudgetNs != 0 &&
-                    renderReadyNs > cycleDeadlineBudgetNs) {
-                    directUsbDeadlineMisses_.fetch_add(1, std::memory_order_relaxed);
-                }
-            }
-            continue;
-        }
-        if (cycleDeadlineBudgetNs != 0 &&
-            renderReadyNs > cycleDeadlineBudgetNs) {
-            directUsbDeadlineMisses_.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (directUsbSession_.load(std::memory_order_acquire)) {
-            failureCode = usbFailureCode(
-                monotrypt::usb::StartError::TransportStoppedUnexpectedly);
-        }
-        break;
+                std::chrono::steady_clock::now() - began).count());
+        directUsbLastCycleNs_.store(cycleNs, std::memory_order_relaxed);
+        peak = directUsbPeakCycleNs_.load(std::memory_order_relaxed);
+        while (peak < cycleNs && !directUsbPeakCycleNs_.compare_exchange_weak(
+                   peak, cycleNs, std::memory_order_relaxed)) {}
     }
     directUsbRenderTid_.store(0, std::memory_order_release);
     const bool sessionWasActive =
@@ -958,6 +892,8 @@ void AudioEngine::directUsbRenderLoop() {
         failureCode = usbFailureCode(
             monotrypt::usb::StartError::TransportStoppedUnexpectedly);
     }
+    directUsbPlaybackQuantumDrops_.store(
+        directUsbOutput_->playbackQuantumDrops(), std::memory_order_relaxed);
     isRunning_.store(false, std::memory_order_release);
     requestDirectUsbCleanup(failureCode);
 }

@@ -107,7 +107,7 @@ public:
     std::vector<UIEntry> uiEntries_;
     mutable std::mutex uiMutex_;
     int64_t pathId_ = 0;
-    uint64_t chainGeneration_ = 0;
+    std::atomic<uint64_t> chainGeneration_{0};
     std::atomic<bool> paused_{false};
 };
 

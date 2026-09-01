@@ -55,4 +55,9 @@ bool writeWavFile(const std::string& path,
                   uint32_t sampleRate,
                   uint32_t numChannels);
 
+bool writeStereoWavFile(const std::string& path,
+                        const std::vector<float>& left,
+                        const std::vector<float>& right,
+                        uint32_t sampleRate);
+
 } // namespace guitarrackcraft

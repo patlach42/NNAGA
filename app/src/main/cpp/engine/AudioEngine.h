@@ -61,6 +61,7 @@ public:
         uint64_t deadlineMisses = 0;
         uint64_t captureWaitTimeouts = 0;
         uint64_t writeWaitTimeouts = 0;
+        uint64_t playbackQuantumDrops = 0;
         uint64_t captureOverruns = 0;
         uint64_t captureUnderruns = 0;
         uint64_t playbackXruns = 0;
@@ -69,6 +70,34 @@ public:
         bool thermalSafetyActive = false;
     };
     DirectUsbRuntimeStats getDirectUsbRuntimeStats() const noexcept;
+    struct RealtimeStatsSnapshot {
+        uint64_t callbackCount = 0;
+        uint64_t callbackFrames = 0;
+        uint64_t frameCapacityViolations = 0;
+        uint64_t inputUnderflowFrames = 0;
+        uint64_t inputOverflowFrames = 0;
+        uint64_t midiEventDrops = 0;
+        uint64_t planPublishDeferrals = 0;
+        uint64_t vstInputStarvations = 0;
+        uint64_t vstOutputUnderrunFrames = 0;
+        uint64_t vstGuestDeadlineMisses = 0;
+        uint64_t xRunCount = 0;
+        int32_t audioApi = 0;
+        int32_t sampleRateHz = 0;
+        int32_t framesPerBurst = 0;
+        int32_t bufferSize = 0;
+        int32_t performanceMode = 0;
+        int32_t sharingMode = 0;
+        int32_t callbackFramesPerBurst = 0;
+        int32_t activatedCapacity = 0;
+        int32_t deviceId = 0;
+        int32_t inputChannels = 0;
+        uint64_t lastCallbackNanoseconds = 0;
+        uint64_t peakCallbackNanoseconds = 0;
+        uint64_t callbackDeadlineBudgetNanoseconds = 0;
+        uint64_t callbackDeadlineMisses = 0;
+    };
+    RealtimeStatsSnapshot getRealtimeStatsSnapshot() const noexcept;
     AudioEngine();
     ~AudioEngine();
 
@@ -213,6 +242,7 @@ private:
     bool cleanupInProgress_ = false;
     std::atomic<DirectUsbState> directUsbState_{DirectUsbState::Stopped};
     std::atomic<uint64_t> directUsbSessionId_{0};
+    std::atomic<int32_t> directUsbFailureRequest_{0};
     std::atomic<int32_t> directUsbFailureCode_{0};
     std::atomic<uint32_t> directUsbEffectiveQuantum_{0};
     std::atomic<int32_t> directUsbPeriodMultiplier_{0};
@@ -238,6 +268,7 @@ private:
     std::vector<float> directUsbStartupLeft_;
     std::vector<float> directUsbStartupRight_;
     int32_t directUsbStartupBlocks_ = 0;
+    std::atomic<uint64_t> directUsbPlaybackQuantumDrops_{0};
     std::atomic<uint64_t> directUsbWriteWaitTimeouts_{0};
     std::vector<float> directUsbOutputRight_;
 
@@ -248,6 +279,8 @@ private:
     mutable std::atomic<bool> isRunning_;
     std::atomic<bool> androidOboeSession_{false};
 
+    std::atomic<uint64_t> realtimeCallbackCount_{0};
+    std::atomic<uint64_t> realtimeCallbackFrames_{0};
     
     // Temporary buffers for plugin chain
     const float* inputPtrs_[2];

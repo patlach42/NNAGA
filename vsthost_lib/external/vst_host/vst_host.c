@@ -21,8 +21,6 @@
  * actual .exe path comes via Z:\ drive mapping for Linux file paths.
  */
 
-#include <winsock2.h>
-#include <afunix.h>
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -253,29 +251,8 @@ static int g_pluginCount = 0;
  * whose params we publish to Android over the shared-memory ring.
  * Subsequent commits will extend the param ring to route per-plugin. */
 static volatile VstpocShared* g_shm = NULL;
-static SOCKET g_wake_socket = INVALID_SOCKET;
-static void connect_wake_socket(const char* shm_path) {
-    WSADATA w; if (WSAStartup(MAKEWORD(2,2), &w) != 0) return;
-    SOCKET s = socket(AF_UNIX, SOCK_STREAM, 0); if (s == INVALID_SOCKET) return;
-    struct sockaddr_un a; memset(&a, 0, sizeof(a)); a.sun_family = AF_UNIX;
-    _snprintf(a.sun_path, sizeof(a.sun_path), "%s.wake", shm_path);
-    if (connect(s, (struct sockaddr*)&a, sizeof(a)) != 0) { closesocket(s); return; }
-    DWORD timeout_ms = 10;
-    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
-    g_wake_socket = s;
-}
 static void wait_wake_or_sleep(void) {
-    if (g_wake_socket == INVALID_SOCKET) { Sleep(1); return; }
-    char b[32];
-    int n = recv(g_wake_socket, b, sizeof(b), 0);
-    if (n == SOCKET_ERROR) {
-        const int err = WSAGetLastError();
-        if (err == WSAETIMEDOUT || err == WSAEWOULDBLOCK) return;
-    } else if (n > 0) {
-        return;
-    }
-    closesocket(g_wake_socket);
-    g_wake_socket = INVALID_SOCKET;
+    if (g_shm) __atomic_exchange_n(&g_shm->wake_requested, 0u, __ATOMIC_ACQ_REL);
     Sleep(1);
 }
 
@@ -330,7 +307,7 @@ static int g_transport_pending = 0;
 static int read_transport(const VstpocShared* shm) {
     if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V7_SIZE) { g_transport.valid = 0; return 0; }
+        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V8_SIZE) { g_transport.valid = 0; return 0; }
     uint64_t tail = __atomic_load_n(&shm->transport_queue_tail, __ATOMIC_RELAXED);
     uint64_t head = __atomic_load_n(&shm->transport_queue_head, __ATOMIC_ACQUIRE);
     if (tail == head) return 0;
@@ -848,13 +825,12 @@ static VstpocShared* map_shared(const char* path) {
     }
     if (s->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         s->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        s->shared_layout_size < VSTPOC_SHARED_LAYOUT_V7_SIZE ||
-        (s->shared_feature_bits & (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET)) !=
-            (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_WAKE_SOCKET)) {
+        s->shared_layout_size < VSTPOC_SHARED_LAYOUT_V8_SIZE ||
+        (s->shared_feature_bits & VSTPOC_FEATURE_PLANAR_AUDIO) == 0) {
         LOG("incompatible shared layout/features: magic=%llx version=%u size=%u features=%llx expected=%u\n",
             (unsigned long long)s->shared_layout_magic,
             (unsigned)s->shared_layout_version, (unsigned)s->shared_layout_size,
-            (unsigned long long)s->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V7_SIZE);
+            (unsigned long long)s->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V8_SIZE);
         UnmapViewOfFile(s);
         return NULL;
     }
@@ -1512,7 +1488,6 @@ int main(int argc, char** argv) {
 
     VstpocShared* shm = map_shared(shm_path);
     if (!shm) return 3;
-    connect_wake_socket(shm_path);
     /* Make sure status starts pending — map_shared zeroes the region but be
      * explicit so a stale reader sees the expected sentinel. */
     write_status(shm, 0, NULL);
@@ -1675,7 +1650,12 @@ int main(int argc, char** argv) {
 
 
     LOG("entering process loop\n");
+    int audio_configured = 0;
+    LARGE_INTEGER performance_frequency;
+    QueryPerformanceFrequency(&performance_frequency);
+    __atomic_store_n(&shm->guest_state, VSTPOC_GUEST_STATE_STARTING, __ATOMIC_RELEASE);
     while (!shm->stop_flag) {
+        __atomic_add_fetch(&shm->guest_heartbeat, 1u, __ATOMIC_RELAXED);
         /* Pump messages on every iteration. JUCE plugins post async work
          * from the editor thread to the main thread (where their
          * MessageManager lives) and stall waiting for it. */
@@ -1697,12 +1677,17 @@ int main(int argc, char** argv) {
             continue;
         }
         const int blockFrames = (int)g_transport.block_frames;
-        if (blockFrames < 1 || blockFrames > (int)VSTPOC_MAX_BLOCK_FRAMES) {
-            write_status(shm, 2, "invalid VST2 block size");
-            goto teardown;
-        }
-        if (!configure_vst2_for_rate(g_transport.sample_rate, blockFrames)) {
-            write_status(shm, 2, "invalid VST2 sample rate");
+        if (!audio_configured) {
+            if (!configure_vst2_for_rate(g_transport.sample_rate, blockFrames)) {
+                write_status(shm, 2, "invalid VST2 sample rate");
+                goto teardown;
+            }
+            audio_configured = 1;
+            __atomic_store_n(
+                &shm->guest_state, VSTPOC_GUEST_STATE_RUNNING, __ATOMIC_RELEASE);
+        } else if (g_transport.sample_rate != g_configured_rate ||
+                   blockFrames != g_configured_block) {
+            write_status(shm, 2, "VST2 rate/quantum change requires restart");
             goto teardown;
         }
         publish_latency((VstpocShared*)shm);
@@ -1721,15 +1706,27 @@ int main(int argc, char** argv) {
          * availability makes vst_host run at the mic rate naturally. */
         if (__atomic_load_n(&shm->mic_active, __ATOMIC_RELAXED)) {
             uint64_t inh = 0, int_ = 0, avail = 0;
-            int waited_ms = 0;
+            const uint64_t budget_ns =
+                __atomic_load_n(&shm->block_deadline_ns, __ATOMIC_ACQUIRE);
+            const ULONGLONG timeout_ms =
+                (ULONGLONG)((budget_ns + 999999u) / 1000000u);
+            const ULONGLONG deadline =
+                GetTickCount64() + (timeout_ms > 0 ? timeout_ms : 1u);
+            int timed_out = 0;
             for (;;) {
                 if (shm->stop_flag) goto teardown;
                 inh   = __atomic_load_n(&shm->audio_in_head, __ATOMIC_ACQUIRE);
                 int_  = __atomic_load_n(&shm->audio_in_tail, __ATOMIC_RELAXED);
                 avail = inh - int_;
                 if (avail >= (uint64_t)blockFrames) break;
+                if (GetTickCount64() >= deadline) { timed_out = 1; break; }
                 wait_wake_or_sleep();
-                if (++waited_ms > 100) waited_ms = 0; /* retain pending context; never process silence */
+            }
+            if (timed_out) {
+                __atomic_store_n(&shm->guest_state, VSTPOC_GUEST_STATE_STARVED, __ATOMIC_RELEASE);
+                __atomic_add_fetch(&shm->starvation_count, 1u, __ATOMIC_RELAXED);
+                __atomic_add_fetch(&shm->deadline_miss_count, 1u, __ATOMIC_RELAXED);
+                continue;
             }
             if (avail >= (uint64_t)blockFrames) {
                 /* FIFO pairing: never skip input frames or transport records. */
@@ -1746,7 +1743,11 @@ int main(int argc, char** argv) {
         } else {
             for (int i = 0; i < blockFrames; i++) { in_l[i] = 0; in_r[i] = 0; }
         }
+        __atomic_store_n(
+            &shm->guest_state, VSTPOC_GUEST_STATE_RUNNING, __ATOMIC_RELEASE);
 
+        LARGE_INTEGER dsp_started;
+        QueryPerformanceCounter(&dsp_started);
         /* Chained DSP: feed input through each plugin in sequence,
          * ping-ponging between (in_l/r) and (out_l/r) as scratch
          * buffers. With N plugins, the chain looks like:
@@ -1784,24 +1785,47 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        LARGE_INTEGER dsp_finished;
+        QueryPerformanceCounter(&dsp_finished);
+        if (performance_frequency.QuadPart > 0) {
+            const uint64_t dsp_ns = (uint64_t)(
+                (double)(dsp_finished.QuadPart - dsp_started.QuadPart) *
+                1000000000.0 / (double)performance_frequency.QuadPart);
+            const uint64_t budget_ns =
+                __atomic_load_n(&shm->block_deadline_ns, __ATOMIC_RELAXED);
+            if (budget_ns > 0 && dsp_ns > budget_ns) {
+                __atomic_add_fetch(
+                    &shm->deadline_miss_count, 1u, __ATOMIC_RELAXED);
+            }
+        }
         publish_midi_output();
         g_transport_pending = 0;
-
-        /* push output, dropping samples if ring full */
+        /* Commit one complete output block. Newest whole blocks are dropped
+         * when either ring is full; producer never touches consumer cursors. */
         uint64_t ah = __atomic_load_n(&shm->audio_head, __ATOMIC_RELAXED);
         uint64_t at = __atomic_load_n(&shm->audio_tail, __ATOMIC_ACQUIRE);
-        uint64_t space = VSTPOC_AUDIO_RING_FRAMES - (ah - at);
-        uint64_t push = space < (uint64_t)blockFrames ? space : (uint64_t)blockFrames;
-        for (uint64_t i = 0; i < push; i++) {
-            uint64_t idx = (ah + i) & (VSTPOC_AUDIO_RING_FRAMES - 1);
-            shm->audio[0][idx] = out_l[i];
-            shm->audio[1][idx] = out_r[i];
+        uint64_t bh = __atomic_load_n(&shm->output_block_head, __ATOMIC_RELAXED);
+        uint64_t bt = __atomic_load_n(&shm->output_block_tail, __ATOMIC_ACQUIRE);
+        uint64_t slot = ah & (VSTPOC_AUDIO_RING_FRAMES - 1u);
+        if (ah - at + (uint64_t)blockFrames <= VSTPOC_AUDIO_RING_FRAMES &&
+            bh - bt < VSTPOC_OUTPUT_BLOCK_CAPACITY) {
+            for (uint64_t i = 0; i < (uint64_t)blockFrames; i++) {
+                const uint64_t index =
+                    (slot + i) & (VSTPOC_AUDIO_RING_FRAMES - 1u);
+                shm->audio[0][index] = out_l[i];
+                shm->audio[1][index] = out_r[i];
+            }
+            VstpocOutputBlock* d =
+                (VstpocOutputBlock*)&shm->output_blocks[bh & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
+            d->frame_count = (uint32_t)blockFrames;
+            d->ring_offset = (uint32_t)slot;
+            __atomic_store_n(&d->sequence, bh + 1u, __ATOMIC_RELEASE);
+            __atomic_store_n(&shm->audio_head, ah + (uint64_t)blockFrames, __ATOMIC_RELEASE);
+            __atomic_store_n(&shm->output_block_head, bh + 1u, __ATOMIC_RELEASE);
+            __atomic_add_fetch(&shm->guest_frames_produced, (uint64_t)blockFrames, __ATOMIC_RELAXED);
+        } else {
+            __atomic_add_fetch(&shm->output_drop_count, 1u, __ATOMIC_RELAXED);
         }
-        __atomic_store_n(&shm->audio_head, ah + push, __ATOMIC_RELEASE);
-        __atomic_add_fetch(&shm->guest_frames_produced, push, __ATOMIC_RELAXED);
-
-        /* throttle: don't melt the CPU if the host isn't consuming */
-        if (space < (uint64_t)blockFrames) Sleep(1);
     }
 
 teardown:

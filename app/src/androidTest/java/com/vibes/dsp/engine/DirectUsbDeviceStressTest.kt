@@ -2,8 +2,8 @@
  * Hardware-gated direct USB duplex stress/diagnostic instrumentation.
  *
  * This source set is never included in ordinary unit-test suites. The test
- * only proceeds when UsbManager reports an app-authorized USB Audio device;
- * otherwise it logs an exact SKIP line and uses JUnit Assume to skip cleanly.
+ * only proceeds when UsbManager reports a USB Audio device; probeFormats requests
+ * permission and denied access fails the test rather than being skipped.
  */
 package com.vibes.dsp.engine
 
@@ -46,23 +46,19 @@ class DirectUsbDeviceStressTest {
         val selectedBuffers = argumentCsv(args, "direct_usb_buffers", defaultBuffers, allowedBuffers)
         val selectedMultipliers = argumentCsv(args, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
         val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 2, 8)
-        val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 30_000L)
+        val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 600_000L)
         val warmupMs = minOf(1_000L, (durationMs / 3L).coerceAtLeast(250L))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val usb = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val audioDevices = usb.deviceList.values.filter(::isUsbAudio)
-        val authorized = audioDevices.filter(usb::hasPermission)
-        if (authorized.isEmpty()) {
-            Log.i(tag, "SKIP reason=no-authorized-usb-audio-device discovered=${audioDevices.size}")
+        if (audioDevices.isEmpty()) {
+            Log.i(tag, "SKIP reason=no-usb-audio-device discovered=0")
         }
-        assumeTrue("SKIP reason=no-authorized-usb-audio-device", authorized.isNotEmpty())
+        assumeTrue("SKIP reason=no-usb-audio-device", audioDevices.isNotEmpty())
 
         val option = DirectUsbAudioManager.getAudioDevices(context)
-            .firstOrNull { candidate -> authorized.any { it.deviceId == candidate.id } }
-        if (option == null) {
-            Log.i(tag, "SKIP reason=authorized-device-not-exposed-by-manager")
-        }
-        assumeTrue("SKIP reason=authorized-device-not-exposed-by-manager", option != null)
+            .firstOrNull { candidate -> audioDevices.any { it.deviceId == candidate.id } }
+        assertTrue("USB audio device was not exposed by DirectUsbAudioManager", option != null)
 
         val engine = NativeEngine.getInstance()
         val originalDeviceId = AudioSettingsManager.getDirectUsbDeviceId(context)
@@ -87,6 +83,10 @@ class DirectUsbDeviceStressTest {
             originalTransport = runCatching { engine.getTransportInfo() }.getOrNull()
             val probe = runBlocking { DirectUsbAudioManager.probeFormats(context, option!!) }
             assertTrue("Direct USB probe failed: ${probe.exceptionOrNull()?.message}", probe.isSuccess)
+            assertTrue(
+                "USB permission was not granted after probing",
+                audioDevices.any { it.deviceId == option!!.id && usb.hasPermission(it) }
+            )
             // probeFormats may return manager fallbacks when native descriptors are empty.
             // Only native descriptor tuples are verified negotiated formats.
             val verifiedFormats = runCatching {
@@ -223,6 +223,7 @@ class DirectUsbDeviceStressTest {
         durationMs: Long,
         warmupMs: Long,
     ): CaseResult {
+        val temporarySlot = 0
         val requestedBpm = 120.0
         var reason: String? = null
         var temporaryTrackId = 0L
@@ -236,7 +237,9 @@ class DirectUsbDeviceStressTest {
         try {
             AudioSettingsManager.setBufferSize(context, buffer)
             DirectUsbAudioManager.startSelected(context, format)
-            val started = runBlocking { DirectUsbAudioManager.startConfigured(context) }
+            val started = runBlocking {
+                DirectUsbAudioManager.startConfigured(context, allowUnsafeBuffer = true)
+            }
             if (started.isFailure) {
                 reason = "start-failed detail=${started.exceptionOrNull()?.message ?: "unknown"}"
             }
@@ -262,14 +265,14 @@ class DirectUsbDeviceStressTest {
                 temporaryTrackId = engine.addTrack()
                 if (temporaryTrackId <= 0L) {
                     reason = "temporary-track-create-failed"
-                } else if (!engine.setTrackTransportLooping(temporaryTrackId, true)) {
-                    reason = "track-looping-set-failed"
                 }
             }
             if (reason == null) {
                 wav = createStressWav(context.cacheDir, format.sampleRate)
                 if (!engine.loadTrackWav(temporaryTrackId, wav.absolutePath, wav.name)) {
                     reason = "track-wav-load-failed"
+                } else if (!engine.setClipLooping(temporaryTrackId, temporarySlot, true)) {
+                    reason = "track-looping-set-failed"
                 }
             }
             if (reason == null) {
@@ -277,7 +280,13 @@ class DirectUsbDeviceStressTest {
                     reason = "transport-bpm-set-failed"
                 } else if (!engine.restartTransport()) {
                     reason = "transport-start-failed"
-                } else if (!engine.setTrackTransportPlaying(temporaryTrackId, true, TrackLaunchQuantization.Sixteenth)) {
+                } else if (!engine.setClipTransportPlaying(
+                        temporaryTrackId,
+                        temporarySlot,
+                        true,
+                        TrackLaunchQuantization.Sixteenth
+                    )
+                ) {
                     reason = "track-play-set-failed"
                 } else if (!engine.setTransportPlaying(true)) {
                     reason = "transport-start-failed"
@@ -396,7 +405,14 @@ class DirectUsbDeviceStressTest {
         } finally {
             runCatching { engine.setTransportPlaying(false) }
             if (temporaryTrackId > 0L) {
-                runCatching { engine.setTrackTransportPlaying(temporaryTrackId, false, TrackLaunchQuantization.Sixteenth) }
+                runCatching {
+                    engine.setClipTransportPlaying(
+                        temporaryTrackId,
+                        temporarySlot,
+                        false,
+                        TrackLaunchQuantization.Sixteenth
+                    )
+                }
                 runCatching { engine.unloadTrackWav(temporaryTrackId) }
                 runCatching { engine.removeTrack(temporaryTrackId) }
             }

@@ -185,6 +185,49 @@ data class DirectUsbStats(
 }
 
 
+data class AudioRealtimeStats(
+    val callbackCount: Long,
+    val callbackFrames: Long,
+    val frameCapacityViolations: Long,
+    val inputUnderflowFrames: Long,
+    val inputOverflowFrames: Long,
+    val midiEventDrops: Long,
+    val planPublishDeferrals: Long,
+    val vstInputStarvations: Long,
+    val vstOutputUnderrunFrames: Long,
+    val vstGuestDeadlineMisses: Long,
+    val xRunCount: Long,
+    val audioApi: Long,
+    val sampleRateHz: Long,
+    val framesPerBurst: Long,
+    val bufferSize: Long,
+    val performanceMode: Long,
+    val sharingMode: Long,
+    val callbackFramesPerBurst: Long,
+    val activatedCapacity: Long,
+    val deviceId: Long,
+    val inputChannels: Long,
+    val lastCallbackNs: Long,
+    val peakCallbackNs: Long,
+    val callbackDeadlineBudgetNs: Long,
+    val callbackDeadlineMisses: Long,
+) {
+    companion object {
+        private const val VERSION = 1L
+        private const val SIZE = 26
+        fun fromRaw(raw: LongArray): AudioRealtimeStats {
+            require(raw.size >= SIZE) { "Realtime stats payload is truncated" }
+            require(raw[0] == VERSION) { "Unsupported realtime stats schema: ${raw[0]}" }
+            return AudioRealtimeStats(
+                raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+                raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14],
+                raw[15], raw[16], raw[17], raw[18], raw[19], raw[20], raw[21],
+                raw[22], raw[23], raw[24], raw[25]
+            )
+        }
+    }
+}
+
 typealias RackPathId = Long
 const val MASTER_PATH_ID: RackPathId = 0L
 
@@ -494,6 +537,9 @@ class NativeEngine private constructor() {
      * Get actual buffer frame count used by the audio callback.
      */
     external fun nativeGetBufferFrameCount(): Int
+    fun getRealtimeStats(): AudioRealtimeStats =
+        AudioRealtimeStats.fromRaw(nativeGetRealtimeStats())
+    external fun nativeGetRealtimeStats(): LongArray
 
 
     /**
@@ -545,14 +591,18 @@ class NativeEngine private constructor() {
     external fun nativeRemovePluginFromRack(pathId: Long, position: Int): Boolean
     external fun nativeReorderRack(pathId: Long, fromPos: Int, toPos: Int): Boolean
     external fun nativeSetPluginFilePath(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String)
-    external fun nativeSetParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float)
+    external fun nativeSetParameter(pathId: Long, pluginInstanceId: Long, portIndex: Int, value: Float)
     external fun nativeSetManualLatencyFrames(pathId: Long, pluginIndex: Int, frames: Int): Boolean
     external fun nativeGetManualLatencyFrames(pathId: Long, pluginIndex: Int): Int
     external fun nativeGetPluginLatencyFrames(pathId: Long, pluginIndex: Int): Long
     external fun nativeGetPluginEffectiveLatencyFrames(pathId: Long, pluginIndex: Int): Long
-    external fun nativeGetParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float
-    external fun nativeGetParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String
+    external fun nativeGetParameter(pathId: Long, pluginInstanceId: Long, portIndex: Int): Float
+    external fun nativeGetParameterSnapshot(
+        pathId: Long, pluginInstanceId: Long, portIndices: IntArray
+    ): FloatArray?
+    external fun nativeGetParameterDisplay(pathId: Long, pluginInstanceId: Long, portIndex: Int): String
     external fun nativeGetRackSize(pathId: Long): Int
+    external fun nativeGetRackRealtimeDiagnostic(pathId: Long): String
     external fun nativeGetRackPluginInfo(pathId: Long, index: Int): PluginInfo?
 
     // --- X11 UI management (EGL + ANativeWindow, native X server) ---
@@ -754,8 +804,8 @@ class NativeEngine private constructor() {
     fun reorderRack(pathId: Long, fromPos: Int, toPos: Int): Boolean = nativeReorderRack(pathId, fromPos, toPos)
     fun setPluginFilePath(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String) =
         nativeSetPluginFilePath(pathId, pluginIndex, propertyUri, filePath)
-    fun setParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float) =
-        nativeSetParameter(pathId, pluginIndex, portIndex, value)
+    fun setParameter(pathId: Long, pluginInstanceId: Long, portIndex: Int, value: Float) =
+        nativeSetParameter(pathId, pluginInstanceId, portIndex, value)
     fun setManualLatencyFrames(pathId: Long, pluginIndex: Int, frames: Int): Boolean =
         nativeSetManualLatencyFrames(pathId, pluginIndex, frames)
     fun getManualLatencyFrames(pathId: Long, pluginIndex: Int): Int =
@@ -764,11 +814,16 @@ class NativeEngine private constructor() {
         nativeGetPluginLatencyFrames(pathId, pluginIndex)
     fun getPluginEffectiveLatencyFrames(pathId: Long, pluginIndex: Int): Long =
         nativeGetPluginEffectiveLatencyFrames(pathId, pluginIndex)
-    fun getParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float =
-        nativeGetParameter(pathId, pluginIndex, portIndex)
-    fun getParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String =
-        nativeGetParameterDisplay(pathId, pluginIndex, portIndex)
+    fun getParameter(pathId: Long, pluginInstanceId: Long, portIndex: Int): Float =
+        nativeGetParameter(pathId, pluginInstanceId, portIndex)
+    fun getParameterSnapshot(
+        pathId: Long, pluginInstanceId: Long, portIndices: IntArray
+    ): FloatArray? = nativeGetParameterSnapshot(pathId, pluginInstanceId, portIndices)
+    fun getParameterDisplay(pathId: Long, pluginInstanceId: Long, portIndex: Int): String =
+        nativeGetParameterDisplay(pathId, pluginInstanceId, portIndex)
     fun getRackSize(pathId: Long): Int = nativeGetRackSize(pathId)
+    fun getRackRealtimeDiagnostic(pathId: Long): String =
+        nativeGetRackRealtimeDiagnostic(pathId)
     fun getRackPluginInfo(pathId: Long, index: Int): PluginInfo? = nativeGetRackPluginInfo(pathId, index)
     fun getRackPluginInstanceId(pathId: Long, index: Int): Long = nativeGetRackPluginInstanceId(pathId, index)
     fun getRackPlugins(pathId: Long): Array<RackPluginEntry> = nativeGetRackPlugins(pathId)

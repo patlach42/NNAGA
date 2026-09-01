@@ -197,10 +197,16 @@ data class DirectUsbCalibrationResult(
     val productId: Int = 0,
     val format: DirectUsbFormat = profiles.firstOrNull()?.format
         ?: DirectUsbFormat(48_000, 32, 4),
-    val selectedFrames: Int = profiles.firstOrNull { it.stable }?.latencyFrames?.toInt() ?: 0,
-    val selectedMilliseconds: Double = profiles.firstOrNull { it.stable }?.latencyMilliseconds ?: 0.0,
-    val passedCandidates: List<Int> = profiles.filter { it.stable }.map { it.latencyFrames.toInt() },
-    val failedCandidates: List<Int> = profiles.filterNot { it.stable }.map { it.latencyFrames.toInt() }
+    val selectedFrames: Int =
+        profiles.firstOrNull { it.stable }?.bufferConfig?.playbackTargetFrames ?: 0,
+    val selectedMilliseconds: Double =
+        profiles.firstOrNull { it.stable }?.let {
+            selectedFrames * 1000.0 / it.format.sampleRate
+        } ?: 0.0,
+    val passedCandidates: List<Int> =
+        profiles.filter { it.stable }.map { it.bufferConfig.playbackTargetFrames },
+    val failedCandidates: List<Int> =
+        profiles.filterNot { it.stable }.map { it.bufferConfig.playbackTargetFrames }
 )
 
 
@@ -211,6 +217,9 @@ data class DirectUsbCalibrationResult(
  */
 object DirectUsbAudioManager {
     private const val TAG = "DirectUsbAudio"
+    private const val AUDIENT_VENDOR_ID = 9992
+    private const val AUDIENT_ID4_PRODUCT_ID = 9
+    private const val AUDIENT_ID4_MIN_SAFE_BUFFER = 128
     private const val ACTION_USB_PERMISSION =
         "com.vibes.dsp.action.DIRECT_USB_PERMISSION"
     private const val CALIBRATION_WARMUP_MS = 1_500L
@@ -414,8 +423,10 @@ object DirectUsbAudioManager {
             Result.success(formats)
         }
 
-    suspend fun startConfigured(context: Context): Result<Unit> =
-        lifecycleMutex.withLock {
+    suspend fun startConfigured(
+        context: Context,
+        allowUnsafeBuffer: Boolean = false
+    ): Result<Unit> = lifecycleMutex.withLock {
             if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
                 if (ContextCompat.checkSelfPermission(
                         context,
@@ -468,8 +479,41 @@ object DirectUsbAudioManager {
             val outputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
                 .coerceIn(0, (exact.channels / 2 - 1).coerceAtLeast(0))
             AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
+            val requestedBuffer = AudioSettingsManager.getBufferSize(context)
+            val periodMultiplier =
+                AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
+            val calibratedAtRequestedBuffer =
+                AudioSettingsManager.getDirectUsbCalibrationProfiles(
+                    context, device.vendorId, device.productId
+                ).any { profile ->
+                    profile.stable && profile.format == exact &&
+                        profile.bufferFrames == requestedBuffer &&
+                        profile.periodMultiplier == periodMultiplier
+                }
+            val effectiveBuffer =
+                if (!allowUnsafeBuffer &&
+                    device.vendorId == AUDIENT_VENDOR_ID &&
+                    device.productId == AUDIENT_ID4_PRODUCT_ID &&
+                    requestedBuffer < AUDIENT_ID4_MIN_SAFE_BUFFER &&
+                    !calibratedAtRequestedBuffer
+                ) {
+                    AUDIENT_ID4_MIN_SAFE_BUFFER
+                } else {
+                    requestedBuffer
+                }
+            if (effectiveBuffer != requestedBuffer) {
+                Log.w(
+                    TAG,
+                    "Audient iD4 buffer $requestedBuffer is below verified safe minimum; " +
+                        "using $effectiveBuffer"
+                )
+                AudioSettingsManager.setBufferSize(context, effectiveBuffer)
+            }
             val bufferConfig = AudioSettingsManager.getDirectUsbBufferConfig(context)
-            startExact(context, exact, outputPair, bufferConfig)
+            startExact(
+                context, exact, outputPair, bufferConfig,
+                effectiveBuffer, periodMultiplier
+            )
         }
 
     private fun startExact(
@@ -723,9 +767,11 @@ object DirectUsbAudioManager {
                                 val errors = (after.captureTransferErrors - measured.captureTransferErrors +
                                     after.playbackTransferErrors - measured.playbackTransferErrors).coerceAtLeast(0)
                                 val started = after.state == DirectUsbSessionState.Running
-                                val stable = started && after.failure == DirectUsbFailure.Ok && !after.transportFailed &&
-                                    xruns == 0L && misses == 0L && errors == 0L && after.queuedOut > 0 &&
-                                    after.lastCycleNs > 0 && after.deadlineBudgetNs > 0
+                                val stable = started && after.failure == DirectUsbFailure.Ok &&
+                                    !after.transportFailed && xruns == 0L && misses == 0L &&
+                                    errors == 0L && after.steadyTarget > 0 &&
+                                    after.playbackRingFrames > 0 && after.lastCycleNs > 0 &&
+                                    after.deadlineBudgetNs > 0
                                 DirectUsbCalibrationProfile(
                                     "${option.vendorId}:${option.productId}:${candidateFormat.sampleRate}:${candidateFormat.bits}:${candidateFormat.subslotBytes}:${candidateFormat.channels}:$bufferFrames:$multiplier",
                                     candidateFormat, bufferFrames, multiplier, resolved, bufferFrames !in standard, ranAt,
@@ -753,9 +799,18 @@ object DirectUsbAudioManager {
                         }
                     }
                     }
-                    DirectUsbCalibrationResult(profiles, profiles.any { it.stable },
-                        if (profiles.any { it.stable }) "Calibration complete" else "No stable profiles",
-                        option.vendorId, option.productId, candidates.firstOrNull() ?: format)
+                    val selected = scoreAutoCalibrationProfiles(profiles)
+                    if (selected != null) {
+                        AudioSettingsManager.applyDirectUsbCalibrationProfile(context, selected)
+                    }
+                    DirectUsbCalibrationResult(
+                        profiles,
+                        selected != null,
+                        if (selected != null) "Calibration complete" else "No stable profiles",
+                        option.vendorId,
+                        option.productId,
+                        selected?.format ?: candidates.firstOrNull() ?: format
+                    )
                 }
             }
         } finally {

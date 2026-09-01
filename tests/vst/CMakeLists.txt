@@ -15,7 +15,6 @@ target_include_directories(vst_parameter_tests PRIVATE
     ${VSTHOST_CPP_DIR}
 )
 
-target_compile_definitions(vst_parameter_tests PRIVATE _Alignas=alignas)
 target_link_libraries(vst_parameter_tests PRIVATE GTest::gtest_main pthread)
 
 add_executable(wine_plugin_path_tests
@@ -34,10 +33,9 @@ target_include_directories(vst_transport_tests PRIVATE
     ${VSTHOST_CPP_DIR}
 )
 
-# shared_layout.h is C-compatible and uses _Alignas; map the C spelling to
-# the C++ keyword for this host-only target without modifying production code.
-target_compile_definitions(vst_transport_tests PRIVATE _Alignas=alignas)
+# shared_layout.h maps its C11 _Alignas spelling to the C++ keyword itself.
 target_link_libraries(vst_transport_tests PRIVATE GTest::gtest_main pthread)
+
 
 include(GoogleTest)
 gtest_discover_tests(vst_transport_tests)

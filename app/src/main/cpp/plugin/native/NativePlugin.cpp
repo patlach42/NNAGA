@@ -23,6 +23,9 @@ bool validId(const char* value) {
     }
     return true;
 }
+bool auditedRealtimeId(const char* id) noexcept {
+    return id && (!std::strcmp(id, "com.vibes.dsp.filter") || !std::strcmp(id, "com.vibes.dsp.shuffle"));
+}
 
 float clampNormalized(float value) noexcept {
     if (!std::isfinite(value)) return 0.0f;
@@ -45,7 +48,7 @@ NativePluginLibrary::~NativePluginLibrary() {
 }
 
 bool validateNativePluginLibrary(const std::shared_ptr<NativePluginLibrary>& library,
-                                 std::vector<const NnagaPluginDescriptorV1*>* descriptors,
+                                 std::vector<const NnagaPluginDescriptorV2*>* descriptors,
                                  std::string* error) {
     auto fail = [&](const char* message) {
         if (error) *error = message;
@@ -53,24 +56,28 @@ bool validateNativePluginLibrary(const std::shared_ptr<NativePluginLibrary>& lib
     };
     if (!library || !library->abi) return fail("missing library entry");
     const auto* abi = library->abi;
-    if (abi->struct_size < sizeof(NnagaPluginLibraryV1) || abi->abi_version != NNAGA_NATIVE_ABI_VERSION ||
+    if (abi->struct_size < sizeof(NnagaPluginLibraryV2) || abi->abi_version != NNAGA_NATIVE_ABI_VERSION ||
         abi->plugin_count == 0 || !abi->get_plugin) return fail("invalid library ABI");
     std::unordered_set<std::string> ids;
     std::unordered_set<uint32_t> ports;
     for (uint32_t i = 0; i < abi->plugin_count; ++i) {
         const auto* descriptor = abi->get_plugin(i);
-        if (!descriptor || descriptor->struct_size < sizeof(NnagaPluginDescriptorV1) ||
-            !validId(descriptor->id) || !validText(descriptor->name) || !validText(descriptor->vendor) ||
-            !validText(descriptor->version) || descriptor->audio_inputs != 2 || descriptor->audio_outputs != 2 ||
-            descriptor->parameter_count > NNAGA_NATIVE_MAX_PARAMETERS || !descriptor->parameters ||
+        if (!descriptor || descriptor->struct_size < sizeof(NnagaPluginDescriptorV2) ||
+            !validId(descriptor->id) || !validId(descriptor->alias) || !validText(descriptor->name) ||
+            !validText(descriptor->vendor) || !validText(descriptor->version) ||
+            descriptor->audio_inputs != 2 || descriptor->audio_outputs != 2 ||
+            descriptor->parameter_count > NNAGA_NATIVE_MAX_PARAMETERS || descriptor->max_frames == 0 ||
+            descriptor->max_frames > NNAGA_NATIVE_MAX_FRAMES ||
+            descriptor->realtime_class > NNAGA_REALTIME_UNSUPPORTED || !descriptor->parameters ||
             !descriptor->create || !descriptor->destroy || !descriptor->activate || !descriptor->deactivate ||
-            !descriptor->reset || !descriptor->set_parameter || !descriptor->process || !ids.emplace(descriptor->id).second)
+            !descriptor->reset || !descriptor->set_parameter || !descriptor->process ||
+            !ids.emplace(descriptor->id).second)
             return fail("invalid plugin descriptor");
         ports.clear();
         std::unordered_set<std::string> symbols;
         for (uint32_t p = 0; p < descriptor->parameter_count; ++p) {
             const auto& parameter = descriptor->parameters[p];
-            if (parameter.struct_size < sizeof(NnagaParameterV1) || parameter.port_index < 4 ||
+            if (parameter.struct_size < sizeof(NnagaParameterV2) || parameter.port_index < 4 ||
                 !validText(parameter.name) || !validText(parameter.symbol) || !std::isfinite(parameter.default_normalized) ||
                 parameter.default_normalized < 0.0f || parameter.default_normalized > 1.0f ||
                 !ports.emplace(parameter.port_index).second || !symbols.emplace(parameter.symbol).second)
@@ -79,7 +86,7 @@ bool validateNativePluginLibrary(const std::shared_ptr<NativePluginLibrary>& lib
                 return fail("missing parameter scale points");
             for (uint32_t s = 0; s < parameter.scale_point_count; ++s) {
                 const auto& point = parameter.scale_points[s];
-                if (point.struct_size < sizeof(NnagaScalePointV1) || !validText(point.label) ||
+                if (point.struct_size < sizeof(NnagaScalePointV2) || !validText(point.label) ||
                     !std::isfinite(point.normalized_value) || point.normalized_value < 0.0f ||
                     point.normalized_value > 1.0f)
                     return fail("invalid parameter scale point");
@@ -90,15 +97,18 @@ bool validateNativePluginLibrary(const std::shared_ptr<NativePluginLibrary>& lib
     return true;
 }
 
-NativePlugin::NativePlugin(std::shared_ptr<NativePluginLibrary> library, const NnagaPluginDescriptorV1* descriptor)
+NativePlugin::NativePlugin(std::shared_ptr<NativePluginLibrary> library, const NnagaPluginDescriptorV2* descriptor)
     : library_(std::move(library)), descriptor_(descriptor), handle_(descriptor ? descriptor->create() : nullptr) {
     if (!descriptor_ || !handle_) return;
     info_.id = descriptor_->id;
     info_.name = descriptor_->name;
     info_.format = "NATIVE";
+    info_.realtimeClass = auditedRealtimeId(descriptor_->id)
+        ? RealtimeClass::CertifiedInProcess : RealtimeClass::Unsupported;
     info_.originPath = library_->path;
     info_.ports = {audioPort(0, "Input L", true), audioPort(1, "Input R", true),
                    audioPort(2, "Output L", false), audioPort(3, "Output R", false)};
+    maxFrames_ = descriptor_->max_frames;
     parameterCount_ = descriptor_->parameter_count;
     for (uint32_t i = 0; i < parameterCount_; ++i) {
         const auto& parameter = descriptor_->parameters[i];
@@ -130,8 +140,13 @@ NativePlugin::~NativePlugin() {
 }
 
 void NativePlugin::activate(float sampleRate, uint32_t bufferSize) {
-    if (handle_ && !descriptor_->activate(handle_, sampleRate, bufferSize))
-        __android_log_print(ANDROID_LOG_ERROR, kTag, "activation failed for %s", descriptor_->id);
+    maxFrames_ = descriptor_ ? descriptor_->max_frames : 0;
+    if (!handle_ || bufferSize == 0 || bufferSize > maxFrames_ ||
+        !descriptor_->activate(handle_, sampleRate, bufferSize)) {
+        __android_log_print(ANDROID_LOG_ERROR, kTag, "activation failed for %s",
+                            descriptor_ ? descriptor_->id : "unknown");
+        maxFrames_ = 0;
+    }
 }
 
 void NativePlugin::deactivate() {
@@ -141,7 +156,24 @@ void NativePlugin::deactivate() {
 uint32_t NativePlugin::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
                                const AudioProcessContext& context, const MidiEvent*, uint32_t,
                                MidiEvent*, uint32_t) {
-    if (!handle_ || !inputs || !outputs || !inputs[0] || !inputs[1] || !outputs[0] || !outputs[1]) return 0;
+    if (!handle_ || maxFrames_ == 0 || numFrames == 0 || numFrames > maxFrames_ ||
+        !inputs || !outputs || !inputs[0] || !inputs[1] || !outputs[0] || !outputs[1]) {
+        if (numFrames > maxFrames_) {
+            frameCapacityViolations_.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (outputs) {
+            for (uint32_t channel = 0; channel < 2; ++channel) {
+                if (!outputs[channel]) continue;
+                if (inputs && inputs[channel]) {
+                    std::memcpy(
+                        outputs[channel], inputs[channel], numFrames * sizeof(float));
+                } else {
+                    std::memset(outputs[channel], 0, numFrames * sizeof(float));
+                }
+            }
+        }
+        return 0;
+    }
     for (uint32_t word = 0; word < dirty_.size(); ++word) {
         uint64_t changed = dirty_[word].exchange(0, std::memory_order_acquire);
         while (changed) {
@@ -152,8 +184,8 @@ uint32_t NativePlugin::process(const float* const* inputs, float* const* outputs
             changed &= changed - 1;
         }
     }
-    const NnagaProcessContextV1 nativeContext{
-        sizeof(NnagaProcessContextV1), context.samplePosition, context.transportFrame, context.loopEndFrame,
+    const NnagaProcessContextV2 nativeContext{
+        sizeof(NnagaProcessContextV2), context.samplePosition, context.transportFrame, context.loopEndFrame,
         context.sampleRate, context.beatsPerMinute, static_cast<uint8_t>(context.playing), static_cast<uint8_t>(context.looping), 0,
         context.beatPosition, context.bar, context.barBeat, context.musicalQuarterNotes, context.beatsPerBar, context.beatUnit};
     descriptor_->process(handle_, inputs[0], inputs[1], outputs[0], outputs[1], numFrames, &nativeContext);

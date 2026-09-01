@@ -51,7 +51,11 @@ public:
         return 0;
     }
 
-    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
@@ -96,7 +100,11 @@ public:
         return 0;
     }
 
-    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
@@ -133,7 +141,11 @@ public:
         return 0;
     }
 
-    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
@@ -175,7 +187,11 @@ public:
         return 0;
     }
 
-    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
@@ -207,12 +223,15 @@ public:
         return 0;
     }
 
-    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
     uint32_t getNumOutputPorts() const override { return 2; }
-
 private:
     RackGraph& graph_;
     size_t& observedTrackCount_;
@@ -239,7 +258,11 @@ public:
         return 0;
     }
 
-    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
@@ -2472,6 +2495,38 @@ TEST(RackGraphTransportTest, MidiEventsCaptureTailAndFrameZeroAcrossLoopBoundary
     EXPECT_EQ(capturePtr->captured(2).data1, 60u);
 }
 
+TEST(RackGraphTransportTest, MidiOverflowDropsNewestEventsAfterFixedCapacity) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    auto clip = std::make_shared<MidiClip>();
+    clip->durationMicroseconds = 1'000'000;
+    for (uint32_t index = 0; index < 140; ++index) {
+        clip->events.push_back({0u, {0u, 0x90u,
+                                     static_cast<uint8_t>(index), 100u}});
+    }
+    ASSERT_TRUE(graph.attachTrackMidiSlot(track, 0, clip));
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+    auto capture = std::make_unique<MidiCapturingPlugin>();
+    auto* capturePtr = capture.get();
+    ASSERT_EQ(chain->addPlugin(std::move(capture)), 0);
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    ASSERT_EQ(capturePtr->capturedCount(), 128u);
+    for (uint32_t index = 0; index < 128; ++index) {
+        EXPECT_EQ(capturePtr->captured(index).frameOffset, 0u);
+        EXPECT_EQ(capturePtr->captured(index).data1,
+                  static_cast<uint8_t>(index));
+    }
+}
+
 TEST(RackGraphTransportTest, MidiEventsBeyondShorterConfiguredLoopAreOmitted) {
     RackGraph graph;
     configure(graph);
@@ -3994,6 +4049,75 @@ TEST(RackGraphSnapshotTest, TrackAndSlotSnapshotsDoNotMixCallbackGenerations) {
     expectStatusInWindow(racedSlot, *beforeSlot, *afterSlot,
                          "getTrackClipSlots");
 }
+TEST(RackGraphSnapshotTest,
+     AudioSnapshotRetainsClipUntilHazardExitWithoutCallbackAllocation) {
+    RackGraph graph;
+    configure(graph, 64);
+    const RackPathId track = graph.getTracks().front().id;
+    auto clipDestroyed = std::make_shared<std::atomic<bool>>(false);
+    auto clip = std::shared_ptr<WavClip>(
+        new WavClip,
+        [clipDestroyed](WavClip* value) {
+            clipDestroyed->store(true, std::memory_order_release);
+            delete value;
+        });
+    clip->left.assign(64, 1.0f);
+    clip->sampleRate = static_cast<uint32_t>(kTestSampleRate);
+    ASSERT_TRUE(graph.attachTrackWavSlot(track, 0, clip));
+    clip.reset();
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    const auto chain = graph.getChain(track);
+    ASSERT_NE(chain, nullptr);
+    std::atomic<bool> blockNext{true};
+    std::atomic<bool> callbackEntered{false};
+    std::atomic<bool> releaseCallback{false};
+    ASSERT_EQ(chain->addPlugin(std::make_unique<SnapshotGatePlugin>(
+                                   blockNext, callbackEntered, releaseCallback)),
+              0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    std::atomic<std::size_t> callbackAllocations{0};
+    std::thread audio([&] {
+        allocation_probe::allocations = 0;
+        allocation_probe::enabled = true;
+        graph.process(buffers.inputs, 2, buffers.outputs, 64);
+        allocation_probe::enabled = false;
+        callbackAllocations.store(allocation_probe::allocations,
+                                  std::memory_order_release);
+    });
+    for (uint32_t spin = 0;
+         spin < 100'000 && !callbackEntered.load(std::memory_order_acquire);
+         ++spin)
+        std::this_thread::yield();
+    if (!callbackEntered.load(std::memory_order_acquire)) {
+        releaseCallback.store(true, std::memory_order_release);
+        audio.join();
+        FAIL() << "audio callback did not reach the snapshot barrier";
+        return;
+    }
+
+    if (!graph.unloadTrackWavSlot(track, 0)) {
+        releaseCallback.store(true, std::memory_order_release);
+        audio.join();
+        ADD_FAILURE() << "clip unload failed";
+        return;
+    }
+    EXPECT_FALSE(clipDestroyed->load(std::memory_order_acquire));
+
+    releaseCallback.store(true, std::memory_order_release);
+    audio.join();
+    for (uint32_t spin = 0;
+         spin < 100'000 && !clipDestroyed->load(std::memory_order_acquire);
+         ++spin)
+        std::this_thread::yield();
+    EXPECT_TRUE(clipDestroyed->load(std::memory_order_acquire));
+    EXPECT_EQ(callbackAllocations.load(std::memory_order_acquire), 0u);
+}
+
 
 TEST(RackGraphStatusSnapshotTest,
      GetTracksTerminatesWhenAudioStatusSequenceRemainsOdd) {
@@ -4046,6 +4170,7 @@ public:
         guitarrackcraft::PluginInfo info;
         info.id = id_;
         info.format = "TEST";
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
         return info;
     }
     void setParameter(uint32_t, float) override {}
@@ -4082,8 +4207,11 @@ public:
 };
 std::string firstPluginId(const std::shared_ptr<guitarrackcraft::PluginChain>& chain) {
     if (!chain || chain->getSize() == 0) return {};
-    const auto* plugin = chain->getPlugin(0);
-    return plugin ? plugin->getInfo().id : std::string{};
+    std::string id;
+    chain->visitPlugin(0, [&](const guitarrackcraft::IPlugin& plugin) {
+        id = plugin.getInfo().id;
+    });
+    return id;
 }
 
 

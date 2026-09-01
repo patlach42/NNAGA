@@ -2667,7 +2667,7 @@ fun PluginCard(
                             }
                             InlineModguiView(
                                 pathId = pathId,
-                                pluginIndex = pluginIndex,
+                                pluginInstanceId = plugin.instanceId,
                                 pluginInfo = pluginInfo,
                                 isVisible = (expanded || modguiFullscreen) && modguiOnScreen &&
                                     isRackVisible && (!isAnyPluginFullscreen || isFullscreen),
@@ -2807,9 +2807,9 @@ fun PluginCard(
                             ) {
                                 controlPorts.forEach { port ->
                                     ParameterControl(
-                                        port = port,
-                                        pluginIndex = pluginIndex,
+                                        pluginInstanceId = plugin.instanceId,
                                         pathId = pathId,
+                                        port = port,
                                         viewModel = viewModel
                                     )
                                 }
@@ -2838,12 +2838,12 @@ fun PluginCard(
 @Composable
 fun ParameterControl(
     port: com.vibes.dsp.engine.PortInfo,
-    pluginIndex: Int,
+    pluginInstanceId: Long,
     pathId: Long,
     viewModel: RackViewModel
 ) {
     val selectedPathId = pathId
-    val currentValue = remember(pathId, pluginIndex, port.index) {
+    val currentValue = remember(pathId, pluginInstanceId, port.index) {
         mutableFloatStateOf(port.defaultValue)
     }
     var isUserInteracting by remember { mutableStateOf(false) }
@@ -2851,17 +2851,17 @@ fun ParameterControl(
 
     // Poll native parameter value periodically so that changes made via the X11 UI
     // (or other external sources) are reflected in the Android controls.
-    LaunchedEffect(selectedPathId, pluginIndex, port.index) {
+    LaunchedEffect(selectedPathId, pluginInstanceId, port.index) {
         while (true) {
             delay(200)
             if (!isUserInteracting) {
-                val nativeValue = viewModel.getParameter(selectedPathId, pluginIndex, port.index)
+                val nativeValue = viewModel.getParameter(selectedPathId, pluginInstanceId, port.index)
                 if (kotlin.math.abs(nativeValue - currentValue.value) > 1e-5f) {
                     currentValue.value = nativeValue
                 }
             }
-            nativeDisplay = RackManager.getParameterDisplay(
-                selectedPathId, pluginIndex, port.index
+            nativeDisplay = viewModel.getParameterDisplay(
+                selectedPathId, pluginInstanceId, port.index
             )
         }
     }
@@ -2907,7 +2907,7 @@ fun ParameterControl(
                 onCheckedChange = { checked ->
                     val newValue = if (checked) port.maxValue else port.minValue
                     currentValue.value = newValue
-                    viewModel.setParameter(selectedPathId, pluginIndex, port.index, newValue)
+                    viewModel.setParameter(selectedPathId, pluginInstanceId, port.index, newValue)
                 },
                 enabled = !port.isReadOnly
             )
@@ -2947,7 +2947,7 @@ fun ParameterControl(
                             selected = kotlin.math.abs(sp.value - currentValue.value) < 1e-6f,
                             onClick = {
                                 currentValue.value = sp.value
-                                viewModel.setParameter(selectedPathId, pluginIndex, port.index, sp.value)
+                                viewModel.setParameter(selectedPathId, pluginInstanceId, port.index, sp.value)
                                 expanded = false
                             },
                             enabled = !port.isReadOnly
@@ -2977,7 +2977,7 @@ fun ParameterControl(
                         val quantizedValue = quantize(newValue)
                         currentValue.value = quantizedValue
                         viewModel.setParameter(
-                            selectedPathId, pluginIndex, port.index, quantizedValue
+                            selectedPathId, pluginInstanceId, port.index, quantizedValue
                         )
                     },
                     valueRange = port.minValue..port.maxValue,
@@ -2989,7 +2989,7 @@ fun ParameterControl(
                     onValueChangeFinished = {
                         isUserInteracting = false
                         viewModel.setParameter(
-                            selectedPathId, pluginIndex, port.index, currentValue.value
+                            selectedPathId, pluginInstanceId, port.index, currentValue.value
                         )
                     },
                 )

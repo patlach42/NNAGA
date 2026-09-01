@@ -85,13 +85,16 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
     }
     if (!chainSnapshot) return false;
 
-    IPlugin* plugin = chainSnapshot->getPlugin(pluginIndex);
+    IPlugin* plugin = nullptr;
+    PluginInfo info;
+    chainSnapshot->visitPlugin(static_cast<size_t>(pluginIndex), [&](IPlugin& candidate) {
+        plugin = &candidate;
+        info = candidate.getInfo();
+    });
     if (!plugin) {
         LOGI("createPluginUI: invalid index %d", pluginIndex);
         return false;
     }
-
-    PluginInfo info = plugin->getInfo();
 
     if (!info.hasX11Ui || info.x11UiBinaryPath.empty()) {
         LOGI("createPluginUI: plugin %d has no X11 UI", pluginIndex);
@@ -103,34 +106,46 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
     auto ui = std::make_unique<LV2PluginUI>();
     auto indexPtr = std::make_shared<std::atomic<int>>(pluginIndex);
     auto detachedPtr = std::make_shared<std::atomic<bool>>(false);
-    auto paramCb = [this, plugin, detachedPtr](uint32_t portIndex, float value) {
+    auto instanceId = chainSnapshot->getPluginInstanceId(pluginIndex);
+    auto paramCb = [this, instanceId, detachedPtr](uint32_t portIndex, float value) {
         if (detachedPtr->load(std::memory_order_acquire)) return;
-        std::lock_guard uiLock(uiMutex_);
-        if (!chain_) return;
-        for (const auto& entry : uiEntries_) {
-            if (entry.plugin == plugin && entry.detached == detachedPtr &&
-                entry.pluginIndex) {
-                chain_->setParameter(entry.pluginIndex->load(std::memory_order_acquire),
-                                     portIndex, value);
-                return;
+        PluginChain* chain = nullptr;
+        uint64_t generation = 0;
+        {
+            std::lock_guard uiLock(uiMutex_);
+            chain = chain_;
+            generation = chainGeneration_;
+            bool found = false;
+            for (const auto& entry : uiEntries_) {
+                if (entry.detached == detachedPtr) { found = true; break; }
             }
+            if (!found) chain = nullptr;
         }
+        if (chain && generation == chainGeneration_ &&
+            !detachedPtr->load(std::memory_order_acquire))
+            chain->submitParameter(instanceId, portIndex, value);
     };
 
-    /* Forward atom messages from X11 UI to DSP plugin (DPF state sync, etc.). */
-    ui->setAtomCallback([this, plugin, detachedPtr](uint32_t portIndex, uint32_t size, const void* data) {
+    auto atomCb = [this, instanceId, detachedPtr](uint32_t portIndex, uint32_t size, const void* data) {
         if (detachedPtr->load(std::memory_order_acquire)) return;
-        std::lock_guard uiLock(uiMutex_);
-        if (!chain_) return;
-        for (const auto& entry : uiEntries_) {
-            if (entry.plugin == plugin && entry.detached == detachedPtr &&
-                entry.pluginIndex) {
-                chain_->injectAtom(entry.pluginIndex->load(std::memory_order_acquire),
-                                   data, size);
-                return;
+        PluginChain* chain = nullptr;
+        uint64_t generation = 0;
+        {
+            std::lock_guard uiLock(uiMutex_);
+            chain = chain_;
+            generation = chainGeneration_;
+            bool found = false;
+            for (const auto& entry : uiEntries_) {
+                if (entry.detached == detachedPtr) { found = true; break; }
             }
+            if (!found) chain = nullptr;
         }
-    });
+        if (chain && generation == chainGeneration_ &&
+            !detachedPtr->load(std::memory_order_acquire))
+            chain->injectAtom(instanceId, portIndex, data, size);
+    };
+
+    ui->setAtomCallback(atomCb);
 
     X11NativeDisplay* display = getX11Display(displayNumber);
     if (!display) {
@@ -208,27 +223,27 @@ bool PluginUIManager::createPluginUI(int pluginIndex, int displayNumber,
     }
 
     LOGI("createPluginUI: requesting initial frame for display=%d", displayNumber);
-
     if (display) {
         display->setIdleCallback([this, plugin, detachedPtr]() {
-            if (paused_.load(std::memory_order_acquire)) return;
-            if (detachedPtr->load(std::memory_order_acquire)) return;
-            auto start = std::chrono::steady_clock::now();
-            std::lock_guard uiLock(uiMutex_);
-            if (!chain_) return;
-            for (auto& entry : uiEntries_) {
-                if (entry.plugin == plugin && entry.detached == detachedPtr &&
-                    entry.ui && entry.ui->isValid()) {
-                    entry.ui->idle();
-                    entry.ui->syncOutputPorts(chain_->getChainMutex());
-                    break;
+            if (paused_.load(std::memory_order_acquire) ||
+                detachedPtr->load(std::memory_order_acquire)) return;
+            LV2PluginUI* uiSnapshot = nullptr;
+            uint64_t generationSnapshot = 0;
+            {
+                std::lock_guard uiLock(uiMutex_);
+                generationSnapshot = chainGeneration_;
+                for (const auto& entry : uiEntries_) {
+                    if (entry.plugin == plugin && entry.detached == detachedPtr &&
+                        entry.ui && entry.ui->isValid()) {
+                        uiSnapshot = entry.ui.get();
+                        break;
+                    }
                 }
             }
-            auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - start).count();
-            if (elapsed > 1000) {
-                LOGI("PluginUIManager::idle callback took %lld us", (long long)elapsed);
-            }
+            if (!uiSnapshot || detachedPtr->load(std::memory_order_acquire)) return;
+            if (generationSnapshot != chainGeneration_) return;
+            uiSnapshot->idle();
+            uiSnapshot->syncOutputPorts(nullptr);
         });
         LOGI("createPluginUI: idle callback set on display=%d", displayNumber);
     }

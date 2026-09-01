@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 namespace vsthost {
 
@@ -47,6 +48,15 @@ public:
 
     guitarrackcraft::PluginInfo getInfo() const override;
     uint32_t getLatencyFrames() const noexcept override;
+    guitarrackcraft::PluginRealtimeCounters getRealtimeCounters() const noexcept override {
+        guitarrackcraft::PluginRealtimeCounters counters;
+        if (ring_) {
+            counters.inputStarvations = ring_->starvationCount();
+            counters.guestDeadlineMisses = ring_->deadlineMissCount();
+        }
+        counters.outputUnderrunFrames = underrunFrames_.load(std::memory_order_relaxed);
+        return counters;
+    }
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
     std::string getParameterDisplay(uint32_t portIndex) const override;
@@ -110,6 +120,13 @@ private:
     // is publishing a new value so contention never transiently reports zero.
     mutable std::atomic<uint32_t> lastStableLatencyFrames_{0};
     std::atomic<int32_t> underruns_{0};
+    std::atomic<uint64_t> underrunFrames_{0};
+    uint32_t dryRampSamples_ = 0;
+    uint32_t wetRampSamples_ = 0;
+    bool dryFallback_ = true;
+    float lastOutputLeft_ = 0.0f;
+    float lastOutputRight_ = 0.0f;
+    bool haveLastOutput_ = false;
 };
 
 } // namespace vsthost

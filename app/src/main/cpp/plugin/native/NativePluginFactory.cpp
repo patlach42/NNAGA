@@ -50,7 +50,7 @@ void* openHandle(const std::string& path) {
 std::shared_ptr<NativePluginLibrary> openLibrary(const std::string& path) {
     void* handle = openHandle(path);
     if (!handle) return {};
-    auto entry = reinterpret_cast<const NnagaPluginLibraryV1* (*)(uint32_t) noexcept>(
+    auto entry = reinterpret_cast<const NnagaPluginLibraryV2* (*)(uint32_t) noexcept>(
         dlsym(handle, "nnaga_plugin_entry"));
     if (!entry) { dlclose(handle); return {}; }
     const auto* abi = entry(NNAGA_NATIVE_ABI_VERSION);
@@ -72,7 +72,7 @@ bool NativePluginFactory::initialize() {
     const std::vector<std::string> roots = {filesDir_ + "/plugin-repositories/installed/native", nativeLibDir_, pluginLibDir_};
     for (const auto& root : roots) for (const auto& path : candidates(root)) {
         auto library = openLibrary(path);
-        std::vector<const NnagaPluginDescriptorV1*> descriptors;
+        std::vector<const NnagaPluginDescriptorV2*> descriptors;
         std::string error;
         if (!validateNativePluginLibrary(library, &descriptors, &error)) {
             __android_log_print(ANDROID_LOG_WARN, kTag, "Skipping %s: %s", path.c_str(), error.c_str());

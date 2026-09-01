@@ -80,7 +80,7 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_RING_CAPACITY_KIB = "directUsbRingCapacityKiB"
     private const val KEY_DIRECT_USB_CALIBRATION_PREFIX = "directUsbCalibration:"
     private const val KEY_DIRECT_USB_THERMAL_SAFETY = "directUsbThermalSafety"
-    private const val DEFAULT_BUFFER_SIZE = 16
+    private const val DEFAULT_BUFFER_SIZE = 128
 
     private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 3
     private const val MIN_DIRECT_USB_PERIOD_MULTIPLIER = 1

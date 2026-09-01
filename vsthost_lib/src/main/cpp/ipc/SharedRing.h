@@ -3,8 +3,6 @@
 #include "../../../../../app/src/main/cpp/plugin/IPlugin.h"
 #include <cstdint>
 #include <string>
-#include <thread>
-#include <atomic>
 
 extern "C" {
 #include "../../../../external/shared_layout.h"
@@ -60,15 +58,12 @@ public:
 
     bool guestReady() const;
     uint64_t guestFramesProduced() const;
+    uint64_t starvationCount() const noexcept;
+    uint64_t outputDropCount() const noexcept;
+    uint64_t guestDeadlineNs() const noexcept;
+    uint64_t deadlineMissCount() const noexcept;
     void notifyGuest();
 private:
-    void notifyWake() const;
-    void acceptLoop();
     int fd_ = -1;
     VstpocShared* data_ = nullptr;
-    int wakeListener_ = -1;
-    mutable std::atomic<int> wakeClient_{-1};
-    std::atomic<bool> wakeStop_{false};
-    std::thread wakeThread_;
-    std::string wakePath_;
 };

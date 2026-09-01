@@ -514,8 +514,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginX11Display(
     if (!g_ctx || !g_ctx->audioEngine) return -1;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    auto* plugin = chain ? chain->getPlugin(position) : nullptr;
-    return plugin ? plugin->getX11DisplayNumber() : -1;
+    if (!chain || position < 0 || static_cast<size_t>(position) >= chain->getSize()) return -1;
+    return chain->visitPlugin(static_cast<size_t>(position),
+                              [](IPlugin& plugin) { return plugin.getX11DisplayNumber(); });
 }
 
 JNIEXPORT jlong JNICALL
@@ -524,11 +525,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginEditorSize(
     if (!g_ctx || !g_ctx->audioEngine) return 0;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    auto* plugin = chain ? chain->getPlugin(position) : nullptr;
-    if (!plugin) return 0;
-    const int64_t w = plugin->getEditorWidth();
-    const int64_t h = plugin->getEditorHeight();
-    return (w << 32) | (h & 0xffffffffLL);
+    if (!chain || position < 0 || static_cast<size_t>(position) >= chain->getSize()) return 0;
+    return chain->visitPlugin(static_cast<size_t>(position), [](IPlugin& plugin) -> jlong {
+        const int64_t w = plugin.getEditorWidth();
+        const int64_t h = plugin.getEditorHeight();
+        return (w << 32) | (h & 0xffffffffLL);
+    });
 }
 
 JNIEXPORT jboolean JNICALL
@@ -729,6 +731,45 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
     }
     jlongArray out = env->NewLongArray(kStatCount);
     if (out) env->SetLongArrayRegion(out, 0, kStatCount, values);
+    return out;
+}
+JNIEXPORT jlongArray JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRealtimeStats(
+        JNIEnv* env, jobject) {
+    // Schema v1; order mirrors AudioRealtimeStats.fromRaw.
+    constexpr jsize kCount = 26;
+    const auto stats = g_ctx && g_ctx->audioEngine
+        ? g_ctx->audioEngine->getRealtimeStatsSnapshot()
+        : AudioEngine::RealtimeStatsSnapshot{};
+    const jlong values[kCount] = {
+        1, static_cast<jlong>(stats.callbackCount),
+        static_cast<jlong>(stats.callbackFrames),
+        static_cast<jlong>(stats.frameCapacityViolations),
+        static_cast<jlong>(stats.inputUnderflowFrames),
+        static_cast<jlong>(stats.inputOverflowFrames),
+        static_cast<jlong>(stats.midiEventDrops),
+        static_cast<jlong>(stats.planPublishDeferrals),
+        static_cast<jlong>(stats.vstInputStarvations),
+        static_cast<jlong>(stats.vstOutputUnderrunFrames),
+        static_cast<jlong>(stats.vstGuestDeadlineMisses),
+        static_cast<jlong>(stats.xRunCount),
+        static_cast<jlong>(stats.audioApi),
+        static_cast<jlong>(stats.sampleRateHz),
+        static_cast<jlong>(stats.framesPerBurst),
+        static_cast<jlong>(stats.bufferSize),
+        static_cast<jlong>(stats.performanceMode),
+        static_cast<jlong>(stats.sharingMode),
+        static_cast<jlong>(stats.callbackFramesPerBurst),
+        static_cast<jlong>(stats.activatedCapacity),
+        static_cast<jlong>(stats.deviceId),
+        static_cast<jlong>(stats.inputChannels),
+        static_cast<jlong>(stats.lastCallbackNanoseconds),
+        static_cast<jlong>(stats.peakCallbackNanoseconds),
+        static_cast<jlong>(stats.callbackDeadlineBudgetNanoseconds),
+        static_cast<jlong>(stats.callbackDeadlineMisses),
+    };
+    jlongArray out = env->NewLongArray(kCount);
+    if (out) env->SetLongArrayRegion(out, 0, kCount, values);
     return out;
 }
 JNIEXPORT jstring JNICALL
@@ -1024,12 +1065,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetPluginFilePath(
 
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeSetParameter(
-    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex, jfloat value) {
-    if (!g_ctx || !g_ctx->audioEngine) return;
+    JNIEnv*, jobject, jlong pathId, jlong pluginInstanceId, jint portIndex, jfloat value) {
+    if (!g_ctx || !g_ctx->audioEngine || pluginInstanceId == 0 || portIndex < 0) return;
     std::lock_guard lock(g_ctx->rackControlMutex);
-    if (auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId))) {
-        chain->setParameter(pluginIndex, static_cast<uint32_t>(portIndex), value);
-    }
+    if (auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId)))
+        chain->submitParameter(static_cast<uint64_t>(pluginInstanceId),
+                               static_cast<uint32_t>(portIndex), value);
 }
 
 JNIEXPORT jboolean JNICALL
@@ -1088,23 +1129,54 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeHasPluginLatencyOverflow(
 
 JNIEXPORT jfloat JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameter(
-    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex) {
-    if (!g_ctx || !g_ctx->audioEngine) return 0.0f;
+    JNIEnv*, jobject, jlong pathId, jlong pluginInstanceId, jint portIndex) {
+    if (!g_ctx || !g_ctx->audioEngine || pluginInstanceId == 0 || portIndex < 0) return 0.0f;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
-    return chain ? chain->getParameter(pluginIndex, static_cast<uint32_t>(portIndex)) : 0.0f;
+    return chain ? chain->getParameter(static_cast<uint64_t>(pluginInstanceId),
+                                        static_cast<uint32_t>(portIndex)) : 0.0f;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameterSnapshot(
+    JNIEnv* env, jobject, jlong pathId, jlong pluginInstanceId, jintArray portIndices) {
+    if (!g_ctx || !g_ctx->audioEngine || pluginInstanceId == 0 || !portIndices) return nullptr;
+    const jsize count = env->GetArrayLength(portIndices);
+    if (count < 0 || count > 4096) return nullptr;
+    std::vector<jint> javaPorts(static_cast<size_t>(count));
+    env->GetIntArrayRegion(portIndices, 0, count, javaPorts.data());
+    if (env->ExceptionCheck()) return nullptr;
+    std::vector<uint32_t> ports(static_cast<size_t>(count));
+    for (jsize index = 0; index < count; ++index) {
+        if (javaPorts[static_cast<size_t>(index)] < 0) return nullptr;
+        ports[static_cast<size_t>(index)] =
+            static_cast<uint32_t>(javaPorts[static_cast<size_t>(index)]);
+    }
+    std::shared_ptr<PluginChain> chain;
+    {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
+    }
+    std::vector<float> values(static_cast<size_t>(count));
+    if (!chain || !chain->getParameters(
+            static_cast<uint64_t>(pluginInstanceId), ports.data(), ports.size(), values.data())) {
+        return nullptr;
+    }
+    jfloatArray result = env->NewFloatArray(count);
+    if (result) env->SetFloatArrayRegion(result, 0, count, values.data());
+    return result;
 }
 
 JNIEXPORT jstring JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameterDisplay(
-    JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jint portIndex) {
-    if (!g_ctx || !g_ctx->audioEngine) return env->NewStringUTF("");
+    JNIEnv* env, jobject, jlong pathId, jlong pluginInstanceId, jint portIndex) {
+    if (!g_ctx || !g_ctx->audioEngine || pluginInstanceId == 0 || portIndex < 0)
+        return env->NewStringUTF("");
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
     if (!chain) return env->NewStringUTF("");
-    auto* plugin = chain->getPlugin(pluginIndex);
-    if (!plugin) return env->NewStringUTF("");
-    const std::string display = plugin->getParameterDisplay(static_cast<uint32_t>(portIndex));
+    const std::string display = chain->getParameterDisplay(
+        static_cast<uint64_t>(pluginInstanceId), static_cast<uint32_t>(portIndex));
     return env->NewStringUTF(display.c_str());
 }
 
@@ -1497,13 +1569,29 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackSize(JNIEnv*, jobject, jlong
     return chain ? static_cast<jint>(chain->getSize()) : 0;
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackRealtimeDiagnostic(
+    JNIEnv* env, jobject, jlong pathId) {
+    if (!g_ctx || !g_ctx->audioEngine) return env->NewStringUTF("engine-unavailable");
+    std::shared_ptr<PluginChain> chain;
+    {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    }
+    const std::string diagnostic =
+        chain ? chain->getRealtimeDiagnostic() : "path-not-found";
+    return env->NewStringUTF(diagnostic.c_str());
+}
+
 JNIEXPORT jobject JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginInfo(JNIEnv* env, jobject, jlong pathId, jint index) {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    IPlugin* plugin = chain ? chain->getPlugin(index) : nullptr;
-    return plugin ? createPluginInfoObject(env, plugin->getInfo()) : nullptr;
+    if (!chain || index < 0 || static_cast<size_t>(index) >= chain->getSize()) return nullptr;
+    const PluginInfo info = chain->visitPlugin(
+            static_cast<size_t>(index), [](const IPlugin& plugin) { return plugin.getInfo(); });
+    return createPluginInfoObject(env, info);
 }
 
 JNIEXPORT jlong JNICALL
@@ -1529,9 +1617,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPlugins(
     const size_t size = chain->getSize();
     jobjectArray result = env->NewObjectArray(static_cast<jsize>(size), entryClass, nullptr);
     for (size_t index = 0; index < size; ++index) {
-        IPlugin* plugin = chain->getPlugin(static_cast<int>(index));
-        if (!plugin) continue;
-        jobject info = createPluginInfoObject(env, plugin->getInfo());
+        const PluginInfo pluginInfo = chain->visitPlugin(
+                index, [](const IPlugin& plugin) { return plugin.getInfo(); });
+        jobject info = createPluginInfoObject(env, pluginInfo);
         jobject entry = env->NewObject(entryClass, ctor, static_cast<jint>(index),
                                        static_cast<jlong>(chain->getPluginInstanceId(index)), info);
         env->SetObjectArrayElement(result, static_cast<jsize>(index), entry);
@@ -1960,11 +2048,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativePollVstFilePickerRequest(
 {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    IPlugin* plugin = chain ? chain->getPlugin(pluginIndex) : nullptr;
-    if (!plugin) return nullptr;
-
+    if (!chain || pluginIndex < 0 || static_cast<size_t>(pluginIndex) >= chain->getSize()) {
+        return nullptr;
+    }
     NativeFilePickerRequest req;
-    if (!plugin->pollNativeFilePicker(req)) return nullptr;
+    const bool hasRequest = chain->visitPlugin(
+            static_cast<size_t>(pluginIndex),
+            [&](IPlugin& plugin) { return plugin.pollNativeFilePicker(req); });
+    if (!hasRequest) return nullptr;
 
     jclass stringClass = env->FindClass("java/lang/String");
     jobjectArray result = env->NewObjectArray(6, stringClass, nullptr);
@@ -1993,8 +2084,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRespondVstFilePicker(
 {
     if (!g_ctx || !g_ctx->audioEngine) return;
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    IPlugin* plugin = chain ? chain->getPlugin(pluginIndex) : nullptr;
-    if (!plugin) return;
+    if (!chain || pluginIndex < 0 || static_cast<size_t>(pluginIndex) >= chain->getSize()) return;
 
     std::string path;
     if (windowsPath) {
@@ -2005,10 +2095,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRespondVstFilePicker(
         }
     }
 
-    plugin->respondNativeFilePicker(
-        static_cast<uint32_t>(sequence),
-        cancelled == JNI_TRUE,
-        path);
+    chain->visitPlugin(static_cast<size_t>(pluginIndex), [&](IPlugin& plugin) {
+        plugin.respondNativeFilePicker(
+            static_cast<uint32_t>(sequence),
+            cancelled == JNI_TRUE,
+            path);
+    });
 }
 
 

@@ -6,14 +6,17 @@
 #include <lv2/atom/atom.h>
 
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
-#include <vector>
 #include <memory>
 #include <string>
-
+#include <thread>
+#include <vector>
 namespace guitarrackcraft {
 
 // LV2Plugin.cpp only needs this guard for its host-side destruction path.  The
@@ -124,10 +127,17 @@ TEST_F(LV2HostContractTest, SendsTypedTransportAndEchoesLargeInjectedAtom) {
     context.beatUnit = 8;
     context.bar = 42;
     context.barBeat = 2.5;
-    ASSERT_EQ(instance.process(nullptr, nullptr, 64, context,
-                               nullptr, 0, nullptr, 0), 0u);
-
-    const std::vector<OutputAtomEvent> output = instance.drainOutputAtoms();
+    std::vector<OutputAtomEvent> output;
+    output.reserve(kBurstCount + 2);
+    for (uint32_t tick = 0; tick < 6; ++tick) {
+        const auto& processContext = tick == 0
+            ? context
+            : guitarrackcraft::AudioProcessContext{};
+        ASSERT_EQ(instance.process(nullptr, nullptr, 64, processContext,
+                                   nullptr, 0, nullptr, 0), 0u);
+        auto current = instance.drainOutputAtoms();
+        output.insert(output.end(), current.begin(), current.end());
+    }
     ASSERT_EQ(output.size(), kBurstCount + 2);
     bool foundEcho = false;
     bool foundTypedTransportMarker = false;
@@ -235,4 +245,316 @@ TEST(LV2PluginProcessTest, RunsDspAndCopiesProcessedAudio) {
     }
 
     lilv_node_free(uri);
+}
+
+namespace {
+
+struct LilvFixture final {
+    explicit LilvFixture(const char* pluginUri)
+        : environment(std::make_unique<ScopedEnvironment>("LV2_PATH", LV2_FIXTURE_DIR)),
+          world(lilv_world_new()),
+          uri(world ? lilv_new_uri(world, pluginUri) : nullptr) {
+        if (world) lilv_world_load_all(world);
+        if (world) generation =
+            std::make_shared<const guitarrackcraft::LV2PluginGeneration>(world);
+        const LilvPlugins* plugins = world ? lilv_world_get_all_plugins(world) : nullptr;
+        plugin = plugins && uri ? lilv_plugins_get_by_uri(plugins, uri) : nullptr;
+    }
+
+    ~LilvFixture() {
+        if (uri) lilv_node_free(uri);
+        generation.reset();
+        world = nullptr;
+    }
+
+    std::unique_ptr<ScopedEnvironment> environment;
+    LilvWorld* world = nullptr;
+    LilvNode* uri = nullptr;
+    const LilvPlugin* plugin = nullptr;
+    std::shared_ptr<const guitarrackcraft::LV2PluginGeneration> generation;
+};
+
+std::vector<int32_t> drainIntEvents(guitarrackcraft::LV2Plugin& instance) {
+    std::vector<int32_t> values;
+    for (const OutputAtomEvent& event : instance.drainOutputAtoms()) {
+        if (event.data.size() != sizeof(LV2_Atom) + sizeof(int32_t)) continue;
+        int32_t value = 0;
+        std::memcpy(&value, event.data.data() + sizeof(LV2_Atom), sizeof(value));
+        values.push_back(value);
+    }
+    return values;
+}
+
+bool contains(const std::vector<int32_t>& values, int32_t expected) {
+    return std::find(values.begin(), values.end(), expected) != values.end();
+}
+
+}  // namespace
+
+TEST(LV2PluginProcessTest, ActivatedQuantumIsExactAndOversizedCallbacksDoNotProcessPartialTail) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/tiny-gain");
+    ASSERT_NE(fixture.plugin, nullptr);
+    guitarrackcraft::LV2Plugin instance(fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    instance.activate(48000.0f, 64);
+
+    std::array<float, 65> input{};
+    std::array<float, 65> output{};
+    for (uint32_t i = 0; i < input.size(); ++i) {
+        input[i] = 0.25f + static_cast<float>(i) * 0.01f;
+        output[i] = -99.0f;
+    }
+    const float* inputs[] = {input.data(), nullptr};
+    float* outputs[] = {output.data(), nullptr};
+
+    ASSERT_EQ(instance.process(inputs, outputs, 64,
+                               guitarrackcraft::AudioProcessContext{},
+                               nullptr, 0, nullptr, 0), 0u);
+    for (uint32_t i = 0; i < 64; ++i)
+        EXPECT_FLOAT_EQ(output[i], input[i] * 2.0f);
+    EXPECT_FLOAT_EQ(output[64], -99.0f);
+
+    output.fill(-99.0f);
+    ASSERT_EQ(instance.process(inputs, outputs, 65,
+                               guitarrackcraft::AudioProcessContext{},
+                               nullptr, 0, nullptr, 0), 0u);
+    for (uint32_t i = 0; i < input.size(); ++i)
+        EXPECT_FLOAT_EQ(output[i], input[i]);
+    instance.deactivate();
+}
+
+TEST(LV2PluginProcessTest, ActivationAndDeactivationAreAcknowledgedBeforeNextProcess) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/tiny-gain");
+    ASSERT_NE(fixture.plugin, nullptr);
+    guitarrackcraft::LV2Plugin instance(fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    const float* inputs[2];
+    float* outputs[2];
+    std::array<float, 64> input{};
+    std::array<float, 64> output{};
+    for (uint32_t i = 0; i < input.size(); ++i) input[i] = 0.5f + i;
+    inputs[0] = input.data();
+    inputs[1] = nullptr;
+    outputs[0] = output.data();
+    outputs[1] = nullptr;
+
+    instance.activate(48000.0f, 32);
+    ASSERT_EQ(instance.process(inputs, outputs, 32,
+                               guitarrackcraft::AudioProcessContext{},
+                               nullptr, 0, nullptr, 0), 0u);
+    EXPECT_FLOAT_EQ(output[31], input[31] * 2.0f);
+
+    instance.activate(48000.0f, 64);
+    ASSERT_EQ(instance.process(inputs, outputs, 64,
+                               guitarrackcraft::AudioProcessContext{},
+                               nullptr, 0, nullptr, 0), 0u);
+    EXPECT_FLOAT_EQ(output[63], input[63] * 2.0f);
+
+    instance.deactivate();
+    output.fill(-7.0f);
+    ASSERT_EQ(instance.process(inputs, outputs, 64,
+                               guitarrackcraft::AudioProcessContext{},
+                               nullptr, 0, nullptr, 0), 0u);
+    for (uint32_t i = 0; i < input.size(); ++i)
+        EXPECT_FLOAT_EQ(output[i], input[i]);
+}
+
+TEST_F(LV2HostContractTest, BoundedAtomQueueDropsAfterCapacityWithoutReorderingEarlierEvents) {
+    guitarrackcraft::LV2Plugin instance(plugin_, generation_, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    instance.activate(48000.0f, 64);
+
+    constexpr uint32_t kQueuedAtoms = 300;
+    constexpr uint32_t kExpectedAtoms = 256;
+    constexpr uint32_t kBodySize = 4;
+    for (uint32_t index = 0; index < kQueuedAtoms; ++index) {
+        std::vector<uint8_t> atom(sizeof(LV2_Atom) + kBodySize);
+        const LV2_Atom header = {kBodySize, 0x55000000u + index};
+        std::memcpy(atom.data(), &header, sizeof(header));
+        std::memcpy(atom.data() + sizeof(LV2_Atom), &index, sizeof(index));
+        instance.injectAtom(atom.data(), static_cast<uint32_t>(atom.size()));
+    }
+    // The payload is deliberately over the fixture's declared 524288-byte
+    // atom capacity.  It must be rejected without corrupting queued records.
+    std::vector<uint8_t> oversized(524289, 0xa5);
+    instance.injectAtom(oversized.data(), static_cast<uint32_t>(oversized.size()));
+
+    std::vector<uint32_t> seen;
+    for (uint32_t tick = 0; tick < 40; ++tick) {
+        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
+                                   guitarrackcraft::AudioProcessContext{},
+                                   nullptr, 0, nullptr, 0), 0u);
+        for (const OutputAtomEvent& event : instance.drainOutputAtoms()) {
+            if (event.data.size() != sizeof(LV2_Atom) + kBodySize) continue;
+            uint32_t value = 0;
+            std::memcpy(&value, event.data.data() + sizeof(LV2_Atom), sizeof(value));
+            seen.push_back(value);
+        }
+    }
+    ASSERT_EQ(seen.size(), kExpectedAtoms);
+    for (uint32_t index = 0; index < kExpectedAtoms; ++index)
+        EXPECT_EQ(seen[index], index);
+    instance.deactivate();
+}
+
+TEST_F(LV2HostContractTest, ConcurrentInstancesShareCollisionSafeURIDs) {
+    constexpr uint32_t kInstances = 12;
+    struct PerThreadWorld final {
+        ~PerThreadWorld() {
+            if (uri) lilv_node_free(uri);
+            generation.reset();
+            world = nullptr;
+        }
+        LilvWorld* world = nullptr;
+        LilvNode* uri = nullptr;
+        const LilvPlugin* plugin = nullptr;
+        std::shared_ptr<const guitarrackcraft::LV2PluginGeneration> generation;
+    };
+
+    std::vector<PerThreadWorld> fixtures(kInstances);
+    for (auto& fixture : fixtures) {
+        fixture.world = lilv_world_new();
+        ASSERT_NE(fixture.world, nullptr);
+        lilv_world_load_all(fixture.world);
+        fixture.uri = lilv_new_uri(
+            fixture.world, "https://guitarrackcraft.test/lv2/host-contract");
+        ASSERT_NE(fixture.uri, nullptr);
+        fixture.generation =
+            std::make_shared<const guitarrackcraft::LV2PluginGeneration>(fixture.world);
+        const LilvPlugins* plugins = lilv_world_get_all_plugins(fixture.world);
+        fixture.plugin = plugins
+            ? lilv_plugins_get_by_uri(plugins, fixture.uri)
+            : nullptr;
+        ASSERT_NE(fixture.plugin, nullptr);
+    }
+
+    std::vector<std::thread> threads;
+    std::vector<uint8_t> succeeded(kInstances, 0);
+    std::atomic<uint32_t> ready{0};
+    std::atomic<bool> go{false};
+    threads.reserve(kInstances);
+    for (uint32_t index = 0; index < kInstances; ++index) {
+        threads.emplace_back([&, index] {
+            ready.fetch_add(1, std::memory_order_release);
+            while (!go.load(std::memory_order_acquire)) std::this_thread::yield();
+            const auto& fixture = fixtures[index];
+            guitarrackcraft::LV2Plugin instance(
+                fixture.plugin, fixture.generation, 48000.0f);
+            if (!instance.hasInstance()) return;
+            instance.activate(48000.0f, 64);
+            guitarrackcraft::AudioProcessContext context{};
+            context.transportFrame = 123456789;
+            context.playing = true;
+            context.beatsPerMinute = 137.5;
+            context.beatsPerBar = 7.0f;
+            context.beatUnit = 8;
+            context.bar = 42;
+            context.barBeat = 2.5;
+            instance.process(nullptr, nullptr, 64, context, nullptr, 0, nullptr, 0);
+            const auto values = drainIntEvents(instance);
+            succeeded[index] = contains(values, 0x4c563254) ? 1 : 0;
+            instance.deactivate();
+        });
+    }
+    while (ready.load(std::memory_order_acquire) != kInstances) std::this_thread::yield();
+    go.store(true, std::memory_order_release);
+    for (auto& thread : threads) thread.join();
+    for (bool success : succeeded) EXPECT_TRUE(success);
+}
+
+TEST(LV2WorkerContractTest, WorkerResponseIsDeliveredBeforeEndRunWhenAvailable) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/worker-contract");
+    ASSERT_NE(fixture.plugin, nullptr);
+    guitarrackcraft::LV2Plugin instance(fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    instance.activate(48000.0f, 64);
+    instance.setParameter(0, 1.0f);
+
+    bool sawResponse = false;
+    for (uint32_t tick = 0; tick < 128 && !sawResponse; ++tick) {
+        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
+                                   guitarrackcraft::AudioProcessContext{},
+                                   nullptr, 0, nullptr, 0), 0u);
+        const auto values = drainIntEvents(instance);
+        const auto response = std::find(values.begin(), values.end(), 10201);
+        if (response != values.end()) {
+            sawResponse = true;
+            const auto end = std::find(values.begin(), values.end(), 30000);
+            ASSERT_NE(end, values.end());
+            EXPECT_LT(response, end);
+        }
+        if (!sawResponse) std::this_thread::yield();
+    }
+    EXPECT_TRUE(sawResponse);
+    instance.deactivate();
+}
+
+TEST(LV2WorkerContractTest, FullRequestQueueReturnsNoSpaceInsteadOfBlockingOrReordering) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/worker-contract");
+    ASSERT_NE(fixture.plugin, nullptr);
+    guitarrackcraft::LV2Plugin instance(fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    instance.activate(48000.0f, 64);
+    instance.setParameter(0, 3.0f);
+
+    std::vector<int32_t> values;
+    for (uint32_t tick = 0; tick < 8; ++tick) {
+        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
+                                   guitarrackcraft::AudioProcessContext{},
+                                   nullptr, 0, nullptr, 0), 0u);
+        const auto current = drainIntEvents(instance);
+        values.insert(values.end(), current.begin(), current.end());
+        std::this_thread::yield();
+    }
+    auto accepted = std::find_if(values.begin(), values.end(),
+                                 [](int32_t value) { return value >= 3000 && value < 3100; });
+    auto rejected = std::find_if(values.begin(), values.end(),
+                                 [](int32_t value) { return value >= 3100 && value < 3200; });
+    ASSERT_NE(accepted, values.end());
+    ASSERT_NE(rejected, values.end());
+    EXPECT_EQ((*accepted - 3000) + (*rejected - 3100), 128);
+    EXPECT_GT(*rejected, 3100);
+    instance.deactivate();
+}
+
+TEST(LV2WorkerContractTest, ResponseQueueAndPayloadBoundariesReturnNoSpaceWithDropBudget) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/worker-contract");
+    ASSERT_NE(fixture.plugin, nullptr);
+    guitarrackcraft::LV2Plugin instance(fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    instance.activate(48000.0f, 64);
+
+    instance.setParameter(0, 2.0f);
+    std::vector<int32_t> responseValues;
+    bool sawResponseDrop = false;
+    for (uint32_t tick = 0; tick < 128; ++tick) {
+        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
+                                   guitarrackcraft::AudioProcessContext{},
+                                   nullptr, 0, nullptr, 0), 0u);
+        for (int32_t value : drainIntEvents(instance)) {
+            if (value >= 12000 && value < 12200) responseValues.push_back(value);
+            if (value > 3200) sawResponseDrop = true;
+        }
+        if (tick == 0) instance.setParameter(0, 0.0f);
+        std::this_thread::yield();
+    }
+    ASSERT_FALSE(responseValues.empty());
+    for (int32_t value : responseValues) {
+        EXPECT_GE(value, 12000);
+        EXPECT_LT(value, 12200);
+    }
+    EXPECT_TRUE(sawResponseDrop);
+
+    instance.setParameter(0, 4.0f);
+    bool sawOversizedDrop = false;
+    for (uint32_t tick = 0; tick < 128 && !sawOversizedDrop; ++tick) {
+        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
+                                   guitarrackcraft::AudioProcessContext{},
+                                   nullptr, 0, nullptr, 0), 0u);
+        for (int32_t value : drainIntEvents(instance))
+            if (value >= 3201) sawOversizedDrop = true;
+        if (!sawOversizedDrop) std::this_thread::yield();
+    }
+    EXPECT_TRUE(sawOversizedDrop);
+    instance.deactivate();
 }

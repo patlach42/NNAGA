@@ -26,8 +26,7 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <atomic>
-#include <mutex>
+#include <semaphore.h>
 
 
 
@@ -44,7 +43,6 @@
 #include <lv2/resize-port/resize-port.h>
 #include <lv2/state/state.h>
 #include <thread>
-#include <condition_variable>
 
 namespace guitarrackcraft {
 
@@ -128,7 +126,12 @@ private:
     float sampleRate_;
     std::atomic<bool> isActive_{false};
     std::atomic<uint32_t> latencyFrames_{0};
-    std::atomic<bool> processing_{false}; // guards instance_ use in process()
+    // 0 idle, 1 process owns instance, 2 control requested stop.
+    std::atomic<uint8_t> processState_{0};
+    sem_t processDone_{};
+    bool processSemInitialized_ = false;
+    std::atomic<bool> uridFaulted_{false};
+    std::atomic<uint32_t> quantumViolations_{0};
 
     int32_t latencyControlPosition_ = -1;
     std::vector<std::unique_ptr<float>> controlPorts_;
@@ -158,8 +161,8 @@ private:
     std::vector<const LV2_Feature*> instanceFeatures_;
 
     std::thread workerThread_;
-    std::mutex workerMutex_;
-    std::condition_variable workerCond_;
+    sem_t workerWake_{};
+    std::atomic<bool> workerSemInitialized_{false};
     static constexpr size_t kWorkerQueueCapacity = 64;
     static constexpr size_t kWorkerPayloadSize = 8192;
     struct WorkerMessage {
@@ -171,7 +174,6 @@ private:
     std::atomic<uint32_t> workRequestDrops_{0};
     std::atomic<uint32_t> workResponseDrops_{0};
     std::atomic<bool> workerRunning_{false};
-    std::atomic<bool> workerWake_{false};
 
     // Atom port buffers
     static constexpr size_t kAtomBufferSize = 8192;
@@ -220,6 +222,9 @@ private:
     VariablePayloadSPSCQueue pendingAtoms_;
     BoundedSPSCQueue<FilePathMessage, 8> pendingFilePaths_;
     VariablePayloadSPSCQueue pendingOutputAtoms_;
+    std::vector<uint8_t> outputDrainRecord_;
+    size_t outputDrainOffset_ = 0;
+    uint32_t outputDrainPort_ = 0;
     std::atomic<uint32_t> pendingAtomDrops_{0};
     std::atomic<uint32_t> timeEventDrops_{0};
     std::atomic<uint32_t> filePathDrops_{0};
@@ -240,6 +245,7 @@ private:
     void buildFeatures();
     void startWorker();
     void stopWorker();
+    bool waitForProcessAcknowledgement() noexcept;
     void workerThreadFunc();
     static LV2_Worker_Status scheduleWorkCallback(
         LV2_Worker_Schedule_Handle handle, uint32_t size, const void* data);

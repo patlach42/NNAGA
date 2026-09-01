@@ -87,6 +87,8 @@ bool LV2PluginFactory::initialize() {
         if (uri) info.id = lilv_node_as_string(uri);
         if (name) info.name = lilv_node_as_string(name);
         info.format = "LV2";
+        // Third-party LV2 payloads are not certified for in-process realtime execution.
+        info.realtimeClass = RealtimeClass::Unsupported;
         const LilvNode* bundleUri = lilv_plugin_get_bundle_uri(plugin);
         if (bundleUri) {
             char* bundlePath = lilv_file_uri_parse(lilv_node_as_string(bundleUri), nullptr);

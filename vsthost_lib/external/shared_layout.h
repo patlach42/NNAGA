@@ -16,7 +16,9 @@
 
 #include <stdint.h>
 #include <stddef.h>
-
+#ifdef __cplusplus
+#define _Alignas(x) alignas(x)
+#endif
 #define VSTPOC_AUDIO_RING_FRAMES  16384   /* power of 2; ~340 ms at 48 kHz stereo */
 #define VSTPOC_PARAM_RING_MSGS     64     /* power of 2 */
 #define VSTPOC_CHANNELS            2
@@ -26,15 +28,26 @@
 #define VSTPOC_PARAM_UNIT_LEN      24     /* display unit, e.g. dB/Hz/ms */
 #define VSTPOC_PARAM_DISPLAY_LEN   64     /* current plugin-formatted value */
 
-#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435337) /* "VSTPOCS7" */
-#define VSTPOC_SHARED_LAYOUT_VERSION 7u
+#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435338) /* "VSTPOCS8" */
+#define VSTPOC_SHARED_LAYOUT_VERSION 8u
 #define VSTPOC_TRANSPORT_QUEUE_CAPACITY 1024u
 #define VSTPOC_FEATURE_PLANAR_AUDIO (UINT64_C(1) << 0)
-#define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1)
+#define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1) /* reserved; wake is atomic in v8 */
 #define VSTPOC_FEATURE_MIDI_EVENTS (UINT64_C(1) << 2)
 #define VSTPOC_FEATURE_MIDI_OUTPUT (UINT64_C(1) << 3)
+#define VSTPOC_GUEST_STATE_STARTING 1u
+#define VSTPOC_GUEST_STATE_RUNNING  2u
+#define VSTPOC_GUEST_STATE_STARVED  3u
+#define VSTPOC_GUEST_STATE_DEAD     4u
 #define VSTPOC_MAX_BLOCK_FRAMES 2048u
 #define VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK 128u
+#define VSTPOC_OUTPUT_BLOCK_CAPACITY 128u
+
+typedef struct {
+    uint64_t sequence;
+    uint32_t frame_count;
+    uint32_t ring_offset;
+} VstpocOutputBlock;
 
 typedef struct {
     uint32_t frame_offset;
@@ -255,30 +268,43 @@ typedef struct {
     VstpocMidiEvent midi_output_events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_dropped;
 
-    /* Generic editor extension (layout v7). Metadata is published before
-     * metadata_seq is incremented. Desired values form lossless coalescing
-     * mailboxes: the host writes a value then increments that parameter's
-     * sequence; the guest applies the newest value once per observed seq. */
+    /* Generic editor extension. */
     _Alignas(VSTPOC_CACHELINE) uint64_t param_metadata_seq;
     _Alignas(VSTPOC_CACHELINE) VstpocParamMetadata param_metadata[VSTPOC_MAX_PARAMS];
     _Alignas(VSTPOC_CACHELINE) char param_display_values[VSTPOC_MAX_PARAMS][VSTPOC_PARAM_DISPLAY_LEN];
     _Alignas(VSTPOC_CACHELINE) uint64_t param_desired_seq[VSTPOC_MAX_PARAMS];
     _Alignas(VSTPOC_CACHELINE) float param_desired_values[VSTPOC_MAX_PARAMS];
 
-    /* Latency extension (layout v8), append-only. The guest publishes the
-     * plugin's own delay and the fixed shared-ring bridge quantum. A seqlock
-     * lets the host read both values without locks or torn updates. */
+    /* v8 latency and realtime state. */
     _Alignas(VSTPOC_CACHELINE) uint64_t latency_seq;
     uint32_t plugin_latency_frames;
     uint32_t bridge_quantum_frames;
     uint32_t latency_layout_v;
     uint32_t latency_reserved;
+    _Alignas(VSTPOC_CACHELINE) uint64_t guest_state;
+    _Alignas(VSTPOC_CACHELINE) uint64_t guest_generation;
+    _Alignas(VSTPOC_CACHELINE) uint64_t guest_heartbeat;
+    _Alignas(VSTPOC_CACHELINE) uint64_t transport_generation;
+    _Alignas(VSTPOC_CACHELINE) uint64_t block_deadline_ns;
+    _Alignas(VSTPOC_CACHELINE) uint64_t deadline_miss_count;
+    _Alignas(VSTPOC_CACHELINE) uint64_t starvation_count;
+    _Alignas(VSTPOC_CACHELINE) uint64_t output_drop_count;
+    _Alignas(VSTPOC_CACHELINE) uint64_t parameter_error_count;
+    _Alignas(VSTPOC_CACHELINE) uint64_t error_code;
+    _Alignas(VSTPOC_CACHELINE) uint64_t wake_requested;
+    _Alignas(VSTPOC_CACHELINE) uint64_t output_block_head;
+    _Alignas(VSTPOC_CACHELINE) uint64_t output_block_tail;
+    _Alignas(VSTPOC_CACHELINE) VstpocOutputBlock output_blocks[VSTPOC_OUTPUT_BLOCK_CAPACITY];
+    _Alignas(VSTPOC_CACHELINE) uint64_t output_block_sequence;
+    _Alignas(VSTPOC_CACHELINE) uint32_t output_block_frames;
+    uint32_t output_block_reserved;
+    _Alignas(VSTPOC_CACHELINE) uint64_t parameter_generation;
+    _Alignas(VSTPOC_CACHELINE) uint64_t parameter_error;
+    _Alignas(VSTPOC_CACHELINE) uint64_t error_generation;
+    uint8_t reserved_v8[64];
 } VstpocShared;
 
-/* Legacy v7 guests validate this exact prefix size. The latency extension
- * remains mapped in the current allocation, but is outside the advertised
- * compatibility layout. */
-#define VSTPOC_SHARED_LAYOUT_V7_SIZE offsetof(VstpocShared, latency_seq)
+#define VSTPOC_SHARED_LAYOUT_V8_SIZE sizeof(VstpocShared)
 
 /* Native file-picker channel — lives in its OWN mmap file
  * (vst_picker_pN.dat next to vst_shm_pN.dat) so wine's comdlg32 hook

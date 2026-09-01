@@ -67,13 +67,20 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val _latencyMs = MutableStateFlow(0.0); val latencyMs = _latencyMs.asStateFlow()
     private val _meterState = MutableStateFlow(MeterState()); val meterState = _meterState.asStateFlow()
     private val _cpuLoad = MutableStateFlow(0f); val cpuLoad = _cpuLoad.asStateFlow()
-    private data class ParameterKey(val pathId: RackPathId, val pluginIndex: Int, val portIndex: Int)
-    private val parameterChannels = ConcurrentHashMap<ParameterKey, Channel<Float>>()
-    private val parameterJobs = ConcurrentHashMap<ParameterKey, Job>()
+    private data class ParameterKey(val pathId: RackPathId, val instanceId: Long, val portIndex: Int)
+    private data class PendingParameter(val value: Float, val generation: Long)
+    private val parameterLatest = ConcurrentHashMap<ParameterKey, PendingParameter>()
+    private val parameterWake = Channel<Unit>(Channel.CONFLATED)
+    private val trackVolumeLatest = ConcurrentHashMap<RackPathId, Float>()
+    private val trackVolumeWake = Channel<Unit>(Channel.CONFLATED)
     private val _xRunCount = MutableStateFlow(0); val xRunCount = _xRunCount.asStateFlow()
     private val _tracks = MutableStateFlow<List<RackTrackInfo>>(emptyList()); val tracks: StateFlow<List<RackTrackInfo>> = _tracks.asStateFlow()
     private val _selectedPathId = MutableStateFlow<RackPathId>(1L); val selectedPathId = _selectedPathId.asStateFlow()
     private val _directUsbStats = MutableStateFlow(DirectUsbStats())
+    private val _realtimeStats = MutableStateFlow(
+        AudioRealtimeStats.fromRaw(LongArray(26) { if (it == 0) 1L else 0L })
+    )
+    val realtimeStats: StateFlow<AudioRealtimeStats> = _realtimeStats.asStateFlow()
     val directUsbStats: StateFlow<DirectUsbStats> = _directUsbStats.asStateFlow()
     private val _directUsbState = MutableStateFlow(DirectUsbSessionState.Stopped)
     val directUsbState: StateFlow<DirectUsbSessionState> = _directUsbState.asStateFlow()
@@ -95,14 +102,47 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val rackControlMutex = Mutex()
     // Only the latest asynchronous path refresh may publish its result.
     private val selectedPathRefreshGeneration = AtomicLong(0L)
+    private val parameterGeneration = AtomicLong(0L)
     private var restartJob: Job? = null
     private var autoStartAttempted = false
     @Volatile private var nativeReady = false
     @Volatile private var rackVisible = false
     @Volatile private var usbDiagnosticsVisible = false
-
     init {
-        // Native meters are sampled once and published as one conflated immutable state.
+        viewModelScope.launch(Dispatchers.IO) {
+            for (ignored in parameterWake) {
+                var processed = 0
+                val iterator = parameterLatest.entries.iterator()
+                while (iterator.hasNext() && processed < 256) {
+                    val entry = iterator.next()
+                    val key = entry.key
+                    val pending = entry.value
+                    if (parameterLatest[key] != pending) continue
+                    runCatching {
+                        rackControlMutex.withLock {
+                            RackManager.setParameter(
+                                key.pathId, key.instanceId, key.portIndex, pending.value)
+                        }
+                    }.onFailure {
+                        _errorMessage.value = "Failed to set parameter: ${it.message}"
+                    }
+                    parameterLatest.remove(key, pending)
+                    ++processed
+                }
+                if (parameterLatest.isNotEmpty()) parameterWake.trySend(Unit)
+            }
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            for (ignored in trackVolumeWake) {
+                for ((trackId, volume) in trackVolumeLatest) {
+                    if (trackVolumeLatest[trackId] != volume) continue
+                    runCatching {
+                        rackControlMutex.withLock { RackManager.setTrackVolume(trackId, volume) }
+                    }.onFailure { _errorMessage.value = "Failed to set track volume: ${it.message}" }
+                    trackVolumeLatest.remove(trackId, volume)
+                }
+            }
+        }
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
                 if (nativeReady && rackVisible && _isEngineRunning.value) {
@@ -125,6 +165,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             while (true) {
                 if (nativeReady && (rackVisible || usbDiagnosticsVisible)) {
+                    runCatching { _realtimeStats.value = native.getRealtimeStats() }
                     runCatching { pollDirectUsbStats() }
                     if (_isEngineRunning.value && rackVisible) {
                         runCatching {
@@ -295,7 +336,10 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             runCatching { RackManager.addPlugin(pathId, pluginId, position) }
                 .onSuccess { index ->
-                    if (index < 0) _errorMessage.value = "Unable to add plugin"
+                    if (index < 0) {
+                        _errorMessage.value = RackManager.getRackRealtimeDiagnostic(pathId)
+                            .ifBlank { "Unable to add plugin" }
+                    }
                 }
                 .onFailure { failure ->
                     _errorMessage.value = failure.message ?: "Unable to add plugin"
@@ -310,7 +354,10 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                     _errorMessage.value = failure.message ?: "Unable to remove plugin"
                 }
                 .onSuccess { removed ->
-                    if (!removed) _errorMessage.value = "Unable to remove plugin"
+                    if (!removed) {
+                        _errorMessage.value = RackManager.getRackRealtimeDiagnostic(pathId)
+                            .ifBlank { "Unable to remove plugin" }
+                    }
                 }
             refreshSelectedPath()
         }
@@ -322,7 +369,10 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                     _errorMessage.value = failure.message ?: "Unable to reorder plugin"
                 }
                 .onSuccess { reordered ->
-                    if (!reordered) _errorMessage.value = "Unable to reorder plugin"
+                    if (!reordered) {
+                        _errorMessage.value = RackManager.getRackRealtimeDiagnostic(pathId)
+                            .ifBlank { "Unable to reorder plugin" }
+                    }
                 }
             refreshSelectedPath()
         }
@@ -332,17 +382,8 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         _tracks.value = _tracks.value.map { track ->
             if (track.id == trackId) track.copy(volume = clamped) else track
         }
-        viewModelScope.launch {
-            rackControlMutex.withLock {
-                val ok = withContext(Dispatchers.IO) {
-                    RackManager.setTrackVolume(trackId, clamped)
-                }
-                if (!ok) {
-                    _errorMessage.value = "Failed to set track volume"
-                    refreshRackNow()
-                }
-            }
-        }
+        trackVolumeLatest[trackId] = clamped
+        trackVolumeWake.trySend(Unit)
     }
     fun setTrackName(trackId: RackPathId, value: String) {
         val name = value.trim()
@@ -1086,27 +1127,44 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun setParameter(
         pathId: RackPathId,
-        pluginIndex: Int,
+        pluginInstanceId: Long,
         portIndex: Int,
-        value: Float
+        value: Float,
+        flush: Boolean = false
     ) {
-        val key = ParameterKey(pathId, pluginIndex, portIndex)
-        val channel = parameterChannels.computeIfAbsent(key) { Channel(Channel.CONFLATED) }
-        parameterJobs.computeIfAbsent(key) {
-            viewModelScope.launch {
-                for (pending in channel) {
-                    rackControlMutex.withLock {
-                        withContext(Dispatchers.IO) {
-                            runCatching { RackManager.setParameter(pathId, pluginIndex, portIndex, pending) }
-                                .onFailure { _errorMessage.value = "Failed to set parameter: ${it.message}" }
-                        }
-                    }
-                }
-            }
-        }
-        channel.trySend(value)
+        if (pluginInstanceId == 0L || portIndex < 0 || !value.isFinite()) return
+        val key = ParameterKey(pathId, pluginInstanceId, portIndex)
+        val generation = parameterGeneration.incrementAndGet()
+        parameterLatest[key] = PendingParameter(value, generation)
+        parameterWake.trySend(Unit)
+        if (flush) parameterWake.trySend(Unit)
     }
-    suspend fun getParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int): Float = withContext(Dispatchers.IO) { runCatching { RackManager.getParameter(pathId, pluginIndex, portIndex) }.getOrDefault(0f) }
+
+    suspend fun getParameter(pathId: RackPathId, pluginInstanceId: Long, portIndex: Int): Float =
+        withContext(Dispatchers.IO) {
+            runCatching { RackManager.getParameter(pathId, pluginInstanceId, portIndex) }.getOrDefault(0f)
+        }
+
+    suspend fun getParameterSnapshot(
+        pathId: RackPathId, pluginInstanceId: Long, portIndices: IntArray
+    ): FloatArray? = withContext(Dispatchers.IO) {
+        runCatching {
+            RackManager.getParameterSnapshot(pathId, pluginInstanceId, portIndices)
+        }.getOrNull()
+    }
+
+    suspend fun getParameterDisplay(pathId: RackPathId, pluginInstanceId: Long, portIndex: Int): String =
+        withContext(Dispatchers.IO) {
+            runCatching { RackManager.getParameterDisplay(pathId, pluginInstanceId, portIndex) }.getOrDefault("")
+        }
+
+    override fun onCleared() {
+        parameterLatest.clear()
+        trackVolumeLatest.clear()
+        parameterWake.close()
+        trackVolumeWake.close()
+        super.onCleared()
+    }
     suspend fun getPluginManualLatencyFrames(pathId: RackPathId, pluginIndex: Int): Long =
         withContext(Dispatchers.IO) {
             runCatching { RackManager.getManualLatencyFrames(pathId, pluginIndex).toLong() }

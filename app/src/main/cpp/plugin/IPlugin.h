@@ -22,6 +22,7 @@
 
 #include <cstdint>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -89,11 +90,17 @@ struct PortInfo {
     int32_t stepCount = 0;
     bool isReadOnly = false;
 };
+enum class RealtimeClass : uint8_t {
+    CertifiedInProcess,
+    Isolated,
+    Unsupported
+};
 
 struct PluginInfo {
     std::string id;
     std::string name;
     std::string format;  // "LV2", "CLAP", "VST3", etc.
+    RealtimeClass realtimeClass = RealtimeClass::Unsupported;
     /** Canonical filesystem origin of the installed plugin payload. */
     std::string originPath;
     std::vector<PortInfo> ports;
@@ -136,6 +143,12 @@ struct MidiEvent {
     uint8_t data1;
     uint8_t data2;
 };
+struct PluginRealtimeCounters {
+    uint64_t inputStarvations = 0;
+    uint64_t outputUnderrunFrames = 0;
+    uint64_t guestDeadlineMisses = 0;
+};
+
 
 
 /**
@@ -159,6 +172,9 @@ public:
      * @param bufferSize Nominal audio callback buffer size in frames (0 = unknown)
      */
     virtual void activate(float sampleRate, uint32_t bufferSize = 0) = 0;
+
+    /** True only after format-specific activation accepted the negotiated quantum. */
+    virtual bool isReadyForRealtime() const noexcept { return true; }
 
     /**
      * Deactivate the plugin (called after processing stops).
@@ -185,6 +201,7 @@ public:
      * Get plugin metadata.
      */
     virtual PluginInfo getInfo() const = 0;
+    virtual PluginRealtimeCounters getRealtimeCounters() const noexcept { return {}; }
     /**
      * Report the plugin's current serial processing latency in frames.
      * Implementations update this value from their real-time-safe processing
