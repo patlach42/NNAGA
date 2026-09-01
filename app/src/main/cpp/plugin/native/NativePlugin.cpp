@@ -116,7 +116,9 @@ NativePlugin::NativePlugin(std::shared_ptr<NativePluginLibrary> library, const N
         port.minValue = 0.0f;
         port.maxValue = 1.0f;
         port.unit = parameter.unit ? parameter.unit : "";
-        port.stepCount = static_cast<int32_t>(parameter.scale_point_count == 0 ? 0 : parameter.scale_point_count - 1);
+        port.stepCount = static_cast<int32_t>(parameter.step_count != 0
+            ? parameter.step_count
+            : (parameter.scale_point_count == 0 ? 0 : parameter.scale_point_count - 1));
         for (uint32_t s = 0; s < parameter.scale_point_count; ++s)
             port.scalePoints.push_back({parameter.scale_points[s].label, parameter.scale_points[s].normalized_value});
         info_.ports.push_back(std::move(port));
