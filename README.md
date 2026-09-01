@@ -63,17 +63,26 @@ RELEASE_KEY_PASSWORD=...
 
 Do not commit the keystore or its passwords. Every Android variant uses this signing configuration, and packaging fails when any `RELEASE_*` property is missing or the keystore path is not a file.
 
-NNAGA reads version metadata from root `version.properties`
-(`VERSION_NAME`, `VERSION_CODE`, and the explicit `VERSION_BUILD` counter).
-`VERSION_NAME` is strict SemVer and release tags use `v<VERSION_NAME>`.
-`VERSION_BUILD` is display-only: `0` has no suffix. Positive values use
-spreadsheet-style lowercase base-26 letters: `1` through `26` map to `a`
-through `z`, `27` maps to `aa`, `28` to `ab`, and so on indefinitely.
-Increment it manually for subsequent builds of the same SemVer and reset it to
-`0` when `VERSION_NAME` changes; the build system never mutates it. Canonical
-artifact names remain based only on SemVer `VERSION_NAME`.
+NNAGA reads its authoritative application version from root `version.properties`,
+which contains only `VERSION_NAME` (strict SemVer) and `VERSION_CODE`
+(independent Android/Play ordering integer). Release tags use `v<VERSION_NAME>`.
 
-Canonical Android artifacts are versioned under:
+The dashboard's clean display suffix counts Git commits since the latest commit
+that introduced the current exact `VERSION_NAME` line. Count `0` is empty;
+positive counts use spreadsheet-style lowercase base-26 (`1=a`, ..., `26=z`,
+`27=aa`). Changing `VERSION_NAME` resets the baseline; history rewrites and
+cherry-picks recompute it from the resulting history. For dirty worktrees,
+status is computed with `git status --porcelain=v1 --untracked-files=all
+--ignore-submodules=dirty`, and the dashboard appends `-dirty-<letter>` using
+the same spreadsheet mapping (`1=a`, ..., `26=z`, `27=aa`). The root ignored
+`dirty.version` stores the next local dirty-build index (missing means `1`),
+incremented exactly once atomically after a successful local Gradle graph
+containing an app assemble/bundle task. It is never changed during
+configuration, failed or clean graphs, or GitHub Actions.
+
+Display suffixes are not SemVer and never alter package metadata, canonical
+artifact names, or tags. Canonical Android artifacts are versioned under:
+
 
 - `app/build/outputs/versioned/apk/<variant>/nnaga-<version>-<variant>.apk`
 - `app/build/outputs/versioned/bundle/<variant>/nnaga-<version>-<variant>.aab`

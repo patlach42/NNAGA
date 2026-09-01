@@ -142,3 +142,4 @@ vsthost_lib/external/fex-upstream/build-*/
 # ~8.5 GB; source fetched manually (llvm-project-18.1.3.src tarball), not committed.
 vsthost_lib/external/llvm-android/
 vsthost_lib/toolchain/
+dirty.version

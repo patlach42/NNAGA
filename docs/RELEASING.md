@@ -13,51 +13,70 @@ for each of these keys:
 ```properties
 VERSION_NAME=0.1.0
 VERSION_CODE=100
-VERSION_BUILD=0
 ```
 
-`VERSION_BUILD` is an explicit display-only build counter and must be a
-canonical ASCII nonnegative decimal integer (no leading zeroes). `0` adds no
-suffix. Positive values use spreadsheet-style lowercase base-26 letters: `1`
-through `26` map to `a` through `z`, `27` maps to `aa`, `28` to `ab`, and so on
-indefinitely. When producing a subsequent build without changing
-`VERSION_NAME`, increment the counter explicitly. When `VERSION_NAME` is
-incremented, reset `VERSION_BUILD` to `0`. The workflow validates this value
-but never mutates it automatically. It does not affect SemVer, Android
-`versionName`, package metadata, tags, or canonical artifact filenames.
-
-Set `VERSION_NAME` to a complete SemVer 2.0.0 value, without a leading `v`.
+`VERSION_NAME` is a complete SemVer 2.0.0 value without a leading `v`.
 Use compatibility-oriented increments:
 
 - **MAJOR**: an incompatible public/API change.
 - **MINOR**: backward-compatible functionality.
 - **PATCH**: backward-compatible bug or security fixes.
 
-The `-prerelease` suffix is optional. It consists of dot-separated
-ASCII alphanumeric/hyphen identifiers (for example, `1.2.0-rc.1`); numeric
-identifiers must not have leading zeroes. A prerelease has lower precedence
-than the corresponding normal version, and identifiers are compared left to
-right using SemVer rules. The `+build` suffix is also optional, consists of
-dot-separated ASCII alphanumeric/hyphen identifiers (for example,
-`1.2.0+build.7`), and is ignored when comparing SemVer precedence. Build
-metadata alone therefore does not make a release a prerelease.
+The optional `-prerelease` component uses dot-separated ASCII
+alphanumeric/hyphen identifiers (numeric identifiers have no leading zeroes).
+The optional `+build` component uses the same identifier syntax and does not
+affect SemVer precedence; build metadata alone is not a prerelease.
 
 `VERSION_CODE` is independent of SemVer and is the Android/Google Play
 ordering integer. Every published prerelease or release MUST use a previously
 unused `VERSION_CODE` larger than every code already published for
-`com.vibes.dsp`, including versions that contain `+build` metadata. Before a
+`com.vibes.dsp`, including versions containing `+build` metadata. Before a
 Play upload, confirm the next code is unused in Play Console.
 
+### Dashboard display suffix
+
+The dashboard derives its clean suffix from Git rather than a version-file
+counter. It counts commits since the latest commit that introduced the current
+exact `VERSION_NAME` line:
+
+```sh
+git log --format=%H -S"VERSION_NAME=<version>" -- version.properties
+git rev-list --count <baseline>..HEAD
+```
+
+The count is displayed as no suffix for `0`, otherwise spreadsheet-style
+lowercase base-26 (`1=a`, ..., `26=z`, `27=aa`, `28=ab`). Changing
+`VERSION_NAME` establishes a new baseline; if history is rewritten or a commit
+is cherry-picked, the baseline is recomputed from the resulting history.
+
+For a dirty worktree, status is exactly:
+
+```sh
+git status --porcelain=v1 --untracked-files=all --ignore-submodules=dirty
+```
+
+When that output is non-empty, the dashboard appends `-dirty-<letter>`, using
+the same spreadsheet-style mapping for the index (`1=a`, ..., `26=z`,
+`27=aa`). The root ignored file `dirty.version` stores the next local
+dirty-build index;
+when absent, the index starts at `1`. The index is incremented exactly once,
+atomically, after a successful local Gradle graph containing at least one app
+assemble/bundle task. It is never incremented during configuration, a failed
+graph, a clean graph, or GitHub Actions. These display suffixes do not alter
+SemVer, Android package metadata, canonical artifact names, or release tags.
+
 Git tags use the `v<version>` convention: for `VERSION_NAME=1.2.0`, the tag is
-`v1.2.0` and the GitHub Release display name is `NNAGA v1.2.0`.
+`v1.2.0` and the GitHub Release display name is `NNAGA v1.2.0`. Artifacts and
+tags are SemVer-only; dashboard display suffixes are never embedded in them.
+
 
 ## Ordered release checklist
 
-1. **Choose and record the identity.** Update `VERSION_NAME`, `VERSION_CODE`,
-   and `VERSION_BUILD` in root `version.properties`. Increment
-   `VERSION_BUILD` explicitly for a subsequent build of the same SemVer, or
-   reset it to `0` when incrementing `VERSION_NAME`. Do not edit
+1. **Choose and record the identity.** Update `VERSION_NAME` and
+   `VERSION_CODE` in root `version.properties`. Do not edit
    `app/build.gradle.kts`, pass version inputs, or use environment overrides.
+   The dashboard suffix is derived automatically from Git history and local
+   dirty state.
 2. **Prepare the changelog.** Move the entries under `[Unreleased]` in
    `CHANGELOG.md` under a heading `## [<version>] - YYYY-MM-DD`, using the
    exact `VERSION_NAME`, and recreate an empty `[Unreleased]` section.
@@ -76,7 +95,7 @@ Git tags use the `v<version>` convention: for `VERSION_NAME=1.2.0`, the tag is
    A Play-Store-only dispatch does not run the full/VST path; selecting both
    paths does not merge their publication boundaries.
 5. **Verify the preflight.** Confirm the initial `version` job accepts the
-   committed three-key properties, exports the expected name/code, and reports
+   committed two-key properties, exports the expected name/code, and reports
    `prerelease=true` only when `VERSION_NAME` has a `-prerelease` component.
    A `+build` component alone must report `prerelease=false`.
 6. **Verify exact build outputs.** For a full release, inspect

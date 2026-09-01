@@ -18,21 +18,28 @@
  */
 
 import com.android.build.api.artifact.SingleArtifact
+import java.math.BigInteger
+import org.gradle.api.invocation.Gradle
 import org.gradle.api.tasks.Sync
 
-import java.math.BigInteger
 import java.net.InetAddress
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Properties
+
 
 
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
+val projectRoot = rootProject.projectDir
 val versionPropertiesFile = rootProject.file("version.properties")
-val requiredVersionPropertyKeys = setOf("VERSION_NAME", "VERSION_CODE", "VERSION_BUILD")
+val requiredVersionPropertyKeys = setOf("VERSION_NAME", "VERSION_CODE")
 val semVerPattern = Regex(
     "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)" +
         "(?:-(?:(?:0|[1-9][0-9]*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))" +
@@ -88,27 +95,99 @@ require(applicationVersionCode in 1..2_100_000_000) {
     "VERSION_CODE must be between 1 and 2100000000"
 }
 
-val applicationVersionBuildText = versionProperties.getProperty("VERSION_BUILD")
-    ?.takeIf { it.isNotBlank() }
-    ?: error("Missing or blank VERSION_BUILD in version.properties")
-require(applicationVersionBuildText.matches(Regex("^(0|[1-9][0-9]*)$"))) {
-    "VERSION_BUILD must be canonical ASCII decimal"
-}
-val applicationVersionBuild = try {
-    BigInteger(applicationVersionBuildText)
-} catch (_: NumberFormatException) {
-    error("VERSION_BUILD could not be parsed as canonical ASCII decimal")
-}
-val applicationVersionBuildSuffix = buildString {
-    var remaining = applicationVersionBuild
+fun gitOutput(vararg arguments: String): String? = runCatching {
+    val process = ProcessBuilder(listOf("git") + arguments)
+        .directory(projectRoot)
+        .redirectErrorStream(true)
+        .start()
+    val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+    if (process.waitFor() == 0) output else null
+}.getOrNull()
+
+fun base26Suffix(index: BigInteger): String {
+    require(index.signum() >= 0) { "Build suffix index must be nonnegative" }
     val alphabetSize = BigInteger.valueOf(26L)
-    while (remaining.signum() > 0) {
-        remaining = remaining.subtract(BigInteger.ONE)
-        insert(0, ('a'.code + remaining.mod(alphabetSize).toInt()).toChar())
-        remaining = remaining.divide(alphabetSize)
+    return buildString {
+        var remaining = index
+        while (remaining.signum() > 0) {
+            remaining = remaining.subtract(BigInteger.ONE)
+            insert(0, ('a'.code + remaining.mod(alphabetSize).toInt()).toChar())
+            remaining = remaining.divide(alphabetSize)
+        }
     }
 }
-val applicationVersionDisplayName = applicationVersionName + applicationVersionBuildSuffix
+
+val versionLinePattern = "^VERSION_NAME=${applicationVersionName.replace(".", "\\.").replace("+", "\\+")}$"
+val baselineCommit = gitOutput(
+    "log", "-n", "1", "--format=%H", "-G", versionLinePattern, "--", "version.properties"
+)
+val gitCommitCount = baselineCommit
+    ?.let { gitOutput("rev-list", "--count", "$it..HEAD")?.toBigIntegerOrNull() }
+    ?.takeIf { it.signum() >= 0 }
+    ?: BigInteger.ZERO
+val gitDirty = gitOutput(
+    "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=dirty"
+)?.isNotEmpty() == true
+val dirtyVersionFile = rootProject.file("dirty.version")
+val dirtyBuildIndex = if (gitDirty) {
+    val stored = if (dirtyVersionFile.isFile) dirtyVersionFile.readText() else ""
+    if (stored.isEmpty()) {
+        BigInteger.ONE
+    } else {
+        require(stored.matches(Regex("^(0|[1-9][0-9]*)$"))) {
+            "dirty.version must contain a canonical nonnegative ASCII decimal"
+        }
+        stored.toBigInteger()
+    }
+} else {
+    BigInteger.ZERO
+}
+val applicationVersionDisplayName = applicationVersionName +
+    base26Suffix(gitCommitCount) +
+    if (gitDirty) "-dirty-${base26Suffix(dirtyBuildIndex)}" else ""
+
+fun incrementDirtyVersionCounter(file: java.io.File) {
+    FileChannel.open(
+        file.toPath(),
+        StandardOpenOption.CREATE,
+        StandardOpenOption.READ,
+        StandardOpenOption.WRITE
+    ).use { channel ->
+        channel.lock().use {
+            val bytes = ByteArray(channel.size().toInt())
+            if (bytes.isNotEmpty()) channel.read(ByteBuffer.wrap(bytes), 0)
+            val stored = String(bytes, StandardCharsets.UTF_8)
+            val current = if (stored.isEmpty()) {
+                BigInteger.ONE
+            } else {
+                require(stored.matches(Regex("^(0|[1-9][0-9]*)$"))) {
+                    "dirty.version must contain a canonical nonnegative ASCII decimal"
+                }
+                stored.toBigInteger()
+            }
+            val next = current.add(BigInteger.ONE).toString().toByteArray(StandardCharsets.UTF_8)
+            channel.truncate(0)
+            channel.position(0)
+            channel.write(ByteBuffer.wrap(next))
+            channel.force(true)
+        }
+    }
+}
+
+val gradleRef: Gradle = gradle
+gradleRef.buildFinished {
+    val artifactTasks = gradleRef.taskGraph.allTasks.filter {
+        it.path.startsWith(":app:assemble") || it.path.startsWith(":app:bundle")
+    }
+    if (
+        gitDirty &&
+        System.getenv("GITHUB_ACTIONS") != "true" &&
+        failure == null &&
+        artifactTasks.any { it.state.executed && it.state.failure == null }
+    ) {
+        incrementDirtyVersionCounter(dirtyVersionFile)
+    }
+}
 
 android {
     namespace = "com.vibes.dsp"
