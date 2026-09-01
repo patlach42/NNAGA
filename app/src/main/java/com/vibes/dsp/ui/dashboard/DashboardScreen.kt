@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -86,10 +85,13 @@ import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
 import com.vibes.dsp.engine.PluginRepositoryService
 import com.vibes.dsp.ui.dashboard.RepositoryPackageItem
 import com.vibes.dsp.ui.rack.RackViewModel
-import com.vibes.dsp.ui.settings.SettingsScreen
 import com.vibes.dsp.ui.settings.SettingsTab
+import com.vibes.dsp.ui.settings.SettingsScreen
 import com.vibes.dsp.ui.tone3000.Tone
 import com.vibes.dsp.ui.tone3000.Tone3000Screen
+import com.vibes.dsp.ui.layout.DisplayEdge
+import com.vibes.dsp.ui.layout.LocalScreenGeometry
+import com.vibes.dsp.ui.layout.screenSafePadding
 import kotlin.math.roundToInt
 
 private object DashboardDimensions {
@@ -159,17 +161,17 @@ fun DashboardScreen(
     }
     var fullscreenContent by remember { mutableStateOf(false) }
     val sectionStateHolder = rememberSaveableStateHolder()
-    val cutoutBounds = rememberTopCutoutBounds()
+    val geometry = LocalScreenGeometry.current
 
     BackHandler(enabled = !fullscreenContent, onBack = onNavigateBack)
 
     Scaffold(
+        modifier = Modifier.screenSafePadding(setOf(DisplayEdge.Top)),
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
             if (!fullscreenContent) {
                 DashboardTopBar(
                     selectedSection = selectedSection,
-                    cutoutBounds = cutoutBounds,
                     onNavigateBack = onNavigateBack,
                     onSectionSelected = { selectedSection = it },
                 )
@@ -216,26 +218,30 @@ fun DashboardScreen(
 @Composable
 private fun DashboardTopBar(
     selectedSection: DashboardSection,
-    cutoutBounds: TopCutoutBounds,
     onNavigateBack: () -> Unit,
     onSectionSelected: (DashboardSection) -> Unit,
 ) {
+    val geometry = LocalScreenGeometry.current
+    val density = LocalDensity.current
+    val topDepth = with(density) { DashboardDimensions.topBarHeight.toPx().roundToInt() }
+    val gap = with(density) { 4.dp.toPx().roundToInt() }
+    val segments = geometry.edgeSafeSegments(DisplayEdge.Top, topDepth, gap)
+    val safe = geometry.safeInsets()
+    val leftWidth = with(density) { safe.left.toDp() }
+    val rightWidth = with(density) { safe.right.toDp() }
+    val topInset = with(density) { safe.top.toDp() }
+    val usesCutoutZones = segments.size >= 2 &&
+        segments.first().startPx == safe.left &&
+        segments.last().endPx == geometry.windowWidth - safe.right &&
+        leftWidth >= DashboardDimensions.touchTarget + DashboardDimensions.minimumTopTabWidth &&
+        rightWidth >= DashboardDimensions.minimumTopTabWidth
     Surface(color = MaterialTheme.colorScheme.background) {
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            val density = LocalDensity.current
-            val screenWidthPx = with(density) { maxWidth.toPx().roundToInt() }
-            val leftWidth = with(density) { cutoutBounds.left.toDp() }
-            val rightWidth = maxWidth - with(density) { cutoutBounds.right.toDp() }
-            val cutoutHeight = with(density) { cutoutBounds.bottom.toDp() }
-            val usesCutoutZones = cutoutBounds.isValidFor(screenWidthPx) &&
-                leftWidth >= DashboardDimensions.touchTarget + DashboardDimensions.minimumTopTabWidth &&
-                rightWidth >= DashboardDimensions.minimumTopTabWidth
-
             if (usesCutoutZones) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(maxOf(DashboardDimensions.topBarHeight, cutoutHeight)),
+                        .height(maxOf(DashboardDimensions.topBarHeight, topInset)),
                 ) {
                     Row(
                         modifier = Modifier
@@ -267,11 +273,7 @@ private fun DashboardTopBar(
                     )
                 }
             } else {
-                Column(
-                    modifier = Modifier.windowInsetsPadding(
-                        WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-                    ),
-                ) {
+                Column(modifier = Modifier.screenSafePadding(setOf(DisplayEdge.Bottom, DisplayEdge.Left, DisplayEdge.Right))) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -292,10 +294,7 @@ private fun DashboardTopBar(
                             modifier = Modifier.weight(1f),
                         )
                     }
-                    Divider(
-                        thickness = DashboardDimensions.divider,
-                        color = MaterialTheme.colorScheme.outlineVariant,
-                    )
+                    Divider(thickness = DashboardDimensions.divider, color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }

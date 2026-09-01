@@ -21,7 +21,8 @@
             android:name="com.vibes.dsp.ui.vst.VstEditorActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize|screenLayout"
-            android:theme="@style/Theme.NNAGA" />
+            android:theme="@style/Theme.NNAGA"
+            android:windowLayoutInDisplayCutoutMode="shortEdges" />
 
         <!-- Debug-only: fork `wine <exe>` against a prefix from adb (no UI).
              Gated on BuildConfig.DEBUG inside the receiver. See DebugRunReceiver. -->

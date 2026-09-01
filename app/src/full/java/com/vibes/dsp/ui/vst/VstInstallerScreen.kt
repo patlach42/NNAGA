@@ -52,15 +52,6 @@ fun VstInstallerScreen(vm: VstInstallerViewModel = viewModel()) {
     val discovered by vm.discovered.collectAsState()
     val mode = session?.mode ?: VstInstallerViewModel.Mode.INSTALL
 
-    // Force landscape while the installer overlay is up — installer wizards
-    // are 4:3 or 16:9 by convention and look squished/clipped in portrait.
-    // Restore default orientation when we exit back to IDLE.
-    val activity = LocalContext.current as? Activity
-    DisposableEffect(Unit) {
-        val previous = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-        onDispose { activity?.requestedOrientation = previous }
-    }
 
     when (state) {
         VstInstallerViewModel.State.RUNNING -> {

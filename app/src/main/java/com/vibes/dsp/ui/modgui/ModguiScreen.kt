@@ -150,17 +150,6 @@ fun ModguiScreen(
         pluginInfoLoaded = true
     }
 
-    // Landscape orientation for wide plugins
-    val activity = context as? Activity
-    LaunchedEffect(contentWidth, contentHeight) {
-        if (contentWidth > 0 && contentHeight > 0 && contentWidth > contentHeight * 1.3) {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
-    }
-
     if (!pluginInfoLoaded) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(
@@ -170,12 +159,11 @@ fun ModguiScreen(
         }
         return
     }
-    val loadedPluginInfo = pluginInfo
-    if (loadedPluginInfo == null || !loadedPluginInfo.hasModgui) {
+    val loadedPluginInfo = pluginInfo ?: run {
         Box(modifier = Modifier.fillMaxSize()) {
             Text(
-                text = if (loadedPluginInfo == null) "Plugin not found" else "No modgui UI for this plugin",
-                modifier = Modifier.padding(16.dp)
+                text = "Plugin not found",
+                modifier = Modifier.padding(16.dp),
             )
         }
         return
@@ -211,7 +199,6 @@ fun ModguiScreen(
         ModguiHostBridge(pathId, pluginIndex, loadedPluginInfo)
     }
     bridge.pluginIndex = pluginIndex  // keep current after reorders
-
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = {

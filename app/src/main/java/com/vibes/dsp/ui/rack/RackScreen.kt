@@ -111,6 +111,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
+import com.vibes.dsp.ui.layout.LocalScreenGeometry
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -313,20 +314,6 @@ fun RackScreen(
     var fullscreenPluginHeight by rememberSaveable { mutableIntStateOf(0) }
     val isFullscreenActive = fullscreenPluginIndex != null
 
-    // Orientation handling for fullscreen
-    val activity = context as? Activity
-    LaunchedEffect(fullscreenPluginIndex) {
-        if (fullscreenPluginIndex != null && fullscreenPluginWidth > 0 && fullscreenPluginHeight > 0) {
-            if (fullscreenPluginWidth > fullscreenPluginHeight * 1.3) {
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
-            }
-        } else if (fullscreenPluginIndex == null) {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
-    }
     BackHandler(enabled = isFullscreenActive) {
         fullscreenPluginIndex = null
     }
@@ -385,27 +372,12 @@ fun RackScreen(
             else
                 MaterialTheme.colorScheme.onSurfaceVariant
 
-            val cutoutPadding = WindowInsets.displayCutout.asPaddingValues()
-            val cutoutTop = cutoutPadding.calculateTopPadding()
-
-            // Get actual cutout bounds to center VU meters in each half
-            val view = LocalView.current
+            val geometry = LocalScreenGeometry.current
             val density = LocalDensity.current
-            val displayCutout = view.rootWindowInsets?.displayCutout
-            val screenWidthPx = view.width.toFloat()
-            // Find the cutout center zone (left edge to right edge) with generous padding
-            val cutoutCenterStartDp: Dp
-            val cutoutCenterEndDp: Dp
-            if (displayCutout != null && displayCutout.boundingRects.isNotEmpty()) {
-                val topCutout = displayCutout.boundingRects.firstOrNull { it.top == 0 }
-                    ?: displayCutout.boundingRects[0]
-                val extraPadding = with(density) { 4.dp.toPx() }
-                cutoutCenterStartDp = with(density) { (topCutout.left - extraPadding).coerceAtLeast(0f).toDp() }
-                cutoutCenterEndDp = with(density) { (screenWidthPx - topCutout.right - extraPadding).coerceAtLeast(0f).toDp() }
-            } else {
-                cutoutCenterStartDp = 0.dp
-                cutoutCenterEndDp = 0.dp
-            }
+            val safe = geometry.safeInsets()
+            val cutoutTop = with(density) { safe.top.toDp() }
+            val cutoutCenterStartDp = with(density) { safe.left.toDp() }
+            val cutoutCenterEndDp = with(density) { safe.right.toDp() }
 
             Surface(
                 color = MaterialTheme.colorScheme.background,

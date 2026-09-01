@@ -20,8 +20,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Divider
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import com.vibes.dsp.ui.components.NnagaSwitch
+import androidx.compose.material3.ExposedDropdownMenuBox
+import com.vibes.dsp.ui.components.NnagaSelectorField
+import com.vibes.dsp.ui.components.NnagaSelectorMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -42,8 +46,11 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import com.vibes.dsp.ui.live.LiveLayoutPreferences
 import com.vibes.dsp.ui.theme.AppearancePreferences
+import com.vibes.dsp.ui.layout.DisplayLayoutPreferences
+import com.vibes.dsp.ui.layout.DisplayOrientation
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun InterfaceSettingsScreen() {
     val context = LocalContext.current
     var horizontalPlugins by remember { mutableStateOf(LiveLayoutPreferences.getHorizontalPlugins(context)) }
@@ -55,6 +62,11 @@ fun InterfaceSettingsScreen() {
         mutableStateOf(LiveLayoutPreferences.getArmExclusiveOnTrackSelection(context))
     }
     var selectedPaletteId by remember { mutableStateOf(AppearancePreferences.selectedPaletteId(context)) }
+    var orientation by remember { mutableStateOf(DisplayLayoutPreferences.getOrientation(context)) }
+    var orientationExpanded by remember { mutableStateOf(false) }
+    var useVerticalCameraStrip by remember {
+        mutableStateOf(DisplayLayoutPreferences.getUseVerticalCameraStrip(context))
+    }
 
     Column(
         modifier = Modifier
@@ -65,6 +77,66 @@ fun InterfaceSettingsScreen() {
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(SettingsDimensions.spacing)
     ) {
+        Text(text = "Screen orientation", style = MaterialTheme.typography.titleMedium)
+        ExposedDropdownMenuBox(
+            expanded = orientationExpanded,
+            onExpandedChange = { orientationExpanded = it },
+        ) {
+            NnagaSelectorField(
+                value = when (orientation) {
+                    DisplayOrientation.Portrait -> "Portrait"
+                    DisplayOrientation.Landscape -> "Landscape"
+                    DisplayOrientation.ReverseLandscape -> "Reverse landscape"
+                },
+                expanded = orientationExpanded,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            ExposedDropdownMenu(
+                expanded = orientationExpanded,
+                onDismissRequest = { orientationExpanded = false },
+            ) {
+                listOf(
+                    DisplayOrientation.Portrait to "Portrait",
+                    DisplayOrientation.Landscape to "Landscape",
+                    DisplayOrientation.ReverseLandscape to "Reverse landscape",
+                ).forEach { (value, label) ->
+                    NnagaSelectorMenuItem(
+                        text = label,
+                        selected = orientation == value,
+                        onClick = {
+                            orientation = value
+                            DisplayLayoutPreferences.setOrientation(context, value)
+                            orientationExpanded = false
+                        },
+                    )
+                }
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = SettingsDimensions.touchTarget),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "Use vertical camera strip for icons in landscape",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            NnagaSwitch(
+                checked = useVerticalCameraStrip,
+                onCheckedChange = { enabled ->
+                    useVerticalCameraStrip = enabled
+                    DisplayLayoutPreferences.setUseVerticalCameraStrip(context, enabled)
+                },
+                modifier = Modifier.semantics {
+                    contentDescription = "Use vertical camera strip for icons in landscape"
+                },
+            )
+        }
+        Divider(
+            thickness = SettingsDimensions.divider,
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
         Text(text = "Accent color", style = MaterialTheme.typography.titleMedium)
         Text(
             text = "Used for selected, active, and performance controls.",

@@ -13,6 +13,10 @@ import android.os.Looper
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import com.vibes.dsp.ui.layout.DisplayOrientation
+import com.vibes.dsp.ui.layout.NnagaScreenGeometryProvider
+import com.vibes.dsp.ui.layout.NnagaWindowPolicy
+import com.vibes.dsp.ui.layout.screenSafePadding
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,6 +50,7 @@ class VstEditorActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NnagaWindowPolicy.install(this)
         val displayNumber = intent.getIntExtra(EXTRA_DISPLAY_NUMBER, -1)
         val pathId = intent.getLongExtra(EXTRA_PATH_ID, -1L)
         val pluginIndex = intent.getIntExtra(EXTRA_PLUGIN_INDEX, -1)
@@ -59,11 +64,13 @@ class VstEditorActivity : ComponentActivity() {
 
         setContent {
             NNAGATheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
-                ) {
-                    EditorScreen(displayNumber = displayNumber, pathId = pathId, pluginIndex = pluginIndex)
+                NnagaScreenGeometryProvider {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        EditorScreen(displayNumber = displayNumber, pathId = pathId, pluginIndex = pluginIndex)
+                    }
                 }
             }
         }
@@ -107,10 +114,10 @@ private fun EditorScreen(displayNumber: Int, pathId: Long, pluginIndex: Int) {
     val s = size
     if (s != null) {
         PluginSurface(
-            displayNumber = displayNumber,
+            modifier = Modifier.fillMaxSize().screenSafePadding(),
             pluginWidth = s.first,
             pluginHeight = s.second,
-            modifier = Modifier.fillMaxSize(),
+            displayNumber = displayNumber,
             isVisible = true,
         )
     } else {

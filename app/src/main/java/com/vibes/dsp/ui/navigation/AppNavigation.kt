@@ -27,6 +27,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,7 @@ import com.vibes.dsp.engine.WineInstallOwnership
 import com.vibes.dsp.ui.vst.RepositoryVstAdapter
 import com.vibes.dsp.ui.dashboard.RepositoryViewModel
 import com.vibes.dsp.ui.tone3000.ToneDetailScreen
+import com.vibes.dsp.ui.layout.screenSafePadding
 private const val PENDING_REPOSITORY_PACKAGE_ID = "pendingRepositoryPackageId"
 
 sealed class Screen(val route: String) {
@@ -280,13 +282,15 @@ fun AppNavigation(
                 val pluginIndex = entry.arguments?.getInt("pluginIndex") ?: 0
                 val contentWidth = entry.arguments?.getInt("w") ?: 0
                 val contentHeight = entry.arguments?.getInt("h") ?: 0
-                ModguiScreen(
-                    pathId = pathId,
-                    pluginIndex = pluginIndex,
-                    contentWidth = contentWidth,
-                    contentHeight = contentHeight,
-                    onNavigateBack = { navController.popBackStack() }
-                )
+                Box(Modifier.fillMaxSize().screenSafePadding()) {
+                    ModguiScreen(
+                        pathId = pathId,
+                        pluginIndex = pluginIndex,
+                        contentWidth = contentWidth,
+                        contentHeight = contentHeight,
+                        onNavigateBack = { navController.popBackStack() },
+                    )
+                }
             }
             composable(
                 route = Screen.ToneDetail.route,
@@ -301,16 +305,16 @@ fun AppNavigation(
                 val sourcePluginIndex = entry.arguments?.getInt("sourcePlugin") ?: -1
                 val sourceSlot = entry.arguments?.getString("sourceSlot")
                 val architecture = entry.arguments?.getString("architecture")
-                val selectedTone = navController.previousBackStackEntry?.savedStateHandle?.get<Tone>("selected_tone")
-
-                ToneDetailScreen(
-                    toneId = toneId,
-                    initialTone = selectedTone,
-                    onNavigateBack = { navController.popBackStack() },
-                    sourcePluginIndex = sourcePluginIndex,
-                    sourceSlot = sourceSlot,
-                    architecture = architecture
-                )
+                Box(Modifier.fillMaxSize().screenSafePadding()) {
+                    ToneDetailScreen(
+                        toneId = toneId,
+                        initialTone = null,
+                        onNavigateBack = { navController.popBackStack() },
+                        sourcePluginIndex = sourcePluginIndex,
+                        sourceSlot = sourceSlot,
+                        architecture = architecture,
+                    )
+                }
             }
         }
     }

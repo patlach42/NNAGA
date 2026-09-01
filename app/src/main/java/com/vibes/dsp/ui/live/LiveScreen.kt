@@ -91,7 +91,9 @@ import com.vibes.dsp.ui.components.NnagaCheckbox
 import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.ui.components.NnagaTextButton
 import com.vibes.dsp.ui.components.nnagaOutlinedTextFieldColors
-import com.vibes.dsp.ui.dashboard.rememberTopCutoutBounds
+import com.vibes.dsp.ui.layout.DisplayEdge
+import com.vibes.dsp.ui.layout.LocalScreenGeometry
+import com.vibes.dsp.ui.layout.screenSafePadding
 import com.vibes.dsp.ui.interpolatedElapsedSeconds
 import com.vibes.dsp.ui.interpolatedMusicalQuarterNotes
 import com.vibes.dsp.ui.rememberFrameClockNanos
@@ -460,22 +462,6 @@ fun LiveScreen(
     val fullscreenPlugin = fullscreenRequest?.let { request ->
         resolveLiveFullscreenPlugin(request, selectedPath, selectedPlugins)
     }
-    val activity = context as? Activity
-    LaunchedEffect(fullscreenRequest) {
-        if (fullscreenRequest != null &&
-            fullscreenRequest.width > 0 &&
-            fullscreenRequest.height > 0
-        ) {
-            if (fullscreenRequest.width > fullscreenRequest.height * 1.3) {
-                activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_USER_LANDSCAPE
-            }
-        } else if (fullscreenRequest == null) {
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-        }
-    }
-    DisposableEffect(Unit) {
-        onDispose { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT }
-    }
     BackHandler(enabled = fullscreenRequest != null) {
         exitFullscreen()
     }
@@ -487,7 +473,7 @@ fun LiveScreen(
 
     if (fullscreenRequest != null) {
         BoxWithConstraints(
-            modifier = Modifier.fillMaxSize().background(Color.Black),
+            modifier = Modifier.fillMaxSize().background(Color.Black).screenSafePadding(),
         ) {
             fullscreenPlugin?.let { plugin ->
                 key(plugin.instanceId) {
@@ -1034,7 +1020,7 @@ fun LiveScreen(
             },
         ) {
     Scaffold(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().screenSafePadding(setOf(DisplayEdge.Top)),
         containerColor = Color.Black,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButtonPosition = androidx.compose.material3.FabPosition.Center,
@@ -1288,46 +1274,69 @@ private fun CameraToolbar(
     onToggleEdit: () -> Unit,
     onMediaBrowser: () -> Unit,
 ) {
+    val geometry = LocalScreenGeometry.current
     val density = LocalDensity.current
-    val cutout = rememberTopCutoutBounds()
+    val verticalLayout = resolveLiveToolbarLayout(
+        geometry = geometry,
+        useVerticalStrip = com.vibes.dsp.ui.layout.rememberUseVerticalCameraStrip(),
+        buttonCount = 6,
+        buttonSizePx = with(density) { LiveDimensions.hitTarget.toPx().roundToInt() },
+        gapPx = with(density) { LiveDimensions.smallGap.toPx().roundToInt() },
+    )
     BoxWithConstraints(
         modifier = Modifier.fillMaxWidth().background(LiveColors.panel),
     ) {
-        val leftWidth = with(density) { cutout.left.toDp() }
-        val rightWidth = maxWidth - with(density) { cutout.right.toDp() }
-        val cutoutBottom = with(density) { cutout.bottom.toDp() }
-        val canUseSideZones = cutout.present &&
+        val safe = geometry.safeInsets()
+        val leftWidth = with(density) { safe.left.toDp() }
+        val rightWidth = with(density) { safe.right.toDp() }
+        val topInset = with(density) { safe.top.toDp() }
+        val depthPx = with(density) { LiveDimensions.toolbar.toPx().roundToInt() }
+        val segments = geometry.edgeSafeSegments(DisplayEdge.Top, depthPx, with(density) { LiveDimensions.smallGap.toPx().roundToInt() })
+        val canUseSideZones = segments.size >= 2 &&
             leftWidth >= LiveDimensions.hitTarget * 3 &&
             rightWidth >= LiveDimensions.hitTarget * 3 + LiveDimensions.smallGap * 2
-
-        if (canUseSideZones) {
-            Box(
-                modifier = Modifier.fillMaxWidth().height(maxOf(LiveDimensions.toolbar, cutoutBottom)),
-            ) {
-                Row(
-                    modifier = Modifier.align(Alignment.TopStart).width(leftWidth),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+        if (verticalLayout is LiveToolbarLayout.Vertical) {
+            val offsets = verticalLayout.buttonTopOffsetsPx
+            val railHeight = with(density) {
+                (offsets.last() + LiveDimensions.hitTarget.toPx().roundToInt()).toDp()
+            }
+            Box(modifier = Modifier.fillMaxWidth().height(railHeight)) {
+                Column(
+                    modifier = Modifier
+                        .align(
+                            if (verticalLayout.edge == DisplayEdge.Left) {
+                                Alignment.TopStart
+                            } else {
+                                Alignment.TopEnd
+                            },
+                        )
+                        .width(with(density) { verticalLayout.railWidthPx.toDp() }),
                 ) {
                     MediaBrowserToolbarButton(onMediaBrowser)
                     CameraToolbarButton("mixer", "Mixer tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("devices", "Devices tile", visibleTiles, onToggleTile)
+                    CameraToolbarButton("launcher", "Clip launcher tile", visibleTiles, onToggleTile)
+                    CameraToolbarButton("inspector", "Clip inspector tile", visibleTiles, onToggleTile)
+                    NnagaToolbarButton(editMode, onDashboard, onToggleEdit)
                 }
-                Row(
-                    modifier = Modifier.align(Alignment.TopEnd).width(rightWidth),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                ) {
+            }
+        } else
+        if (canUseSideZones) {
+            Box(modifier = Modifier.fillMaxWidth().height(maxOf(LiveDimensions.toolbar, topInset))) {
+                Row(modifier = Modifier.align(Alignment.TopStart).width(leftWidth), horizontalArrangement = Arrangement.SpaceEvenly) {
+                    MediaBrowserToolbarButton(onMediaBrowser)
+                    CameraToolbarButton("mixer", "Mixer tile", visibleTiles, onToggleTile)
+                    CameraToolbarButton("devices", "Devices tile", visibleTiles, onToggleTile)
+                }
+                Row(modifier = Modifier.align(Alignment.TopEnd).width(rightWidth), horizontalArrangement = Arrangement.SpaceEvenly) {
                     CameraToolbarButton("launcher", "Clip launcher tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("inspector", "Clip inspector tile", visibleTiles, onToggleTile)
                     NnagaToolbarButton(editMode, onDashboard, onToggleEdit)
                 }
             }
         } else {
-            Column {
-                if (cutout.present) Spacer(Modifier.height(cutoutBottom))
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(LiveDimensions.toolbar),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
-                ) {
+            Column(modifier = Modifier.screenSafePadding(setOf(DisplayEdge.Bottom, DisplayEdge.Left, DisplayEdge.Right))) {
+                Row(modifier = Modifier.fillMaxWidth().height(LiveDimensions.toolbar), horizontalArrangement = Arrangement.SpaceEvenly) {
                     MediaBrowserToolbarButton(onMediaBrowser)
                     CameraToolbarButton("mixer", "Mixer tile", visibleTiles, onToggleTile)
                     CameraToolbarButton("devices", "Devices tile", visibleTiles, onToggleTile)

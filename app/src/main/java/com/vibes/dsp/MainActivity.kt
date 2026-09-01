@@ -28,9 +28,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import com.vibes.dsp.engine.AudioBackend
 import com.vibes.dsp.engine.AudioSettingsManager
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Arrangement
+import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -46,10 +45,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import com.vibes.dsp.ui.layout.NnagaWindowPolicy
 import com.vibes.dsp.engine.AudioEngine
 import com.vibes.dsp.engine.EngineInitHelper
 import com.vibes.dsp.engine.NativeEngine
@@ -113,8 +110,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         NativeEngine.getInstance().nativeApplyCurrentThreadUiAffinity()
-        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        NnagaWindowPolicy.install(this)
         if (AudioSettingsManager.getAudioBackend(this) == AudioBackend.AndroidOboe &&
             ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
                 PackageManager.PERMISSION_GRANTED
@@ -136,12 +133,6 @@ class MainActivity : ComponentActivity() {
         // Handle auth callback if activity started via deep link
         handleAuthIntent(intent)
 
-        // Full-screen immersive: hide system bars, draw behind cutout
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
-        controller.hide(WindowInsetsCompat.Type.systemBars())
-        controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
         startEngineInitialization()
 
@@ -396,8 +387,11 @@ class MainActivity : ComponentActivity() {
             }
             android.util.Log.i("Autostart", "opening editor for ${match.name} (${match.fullId})")
             startActivity(
-                android.content.Intent(this@MainActivity, X11PluginUIActivity::class.java)
-                    .putExtra(X11PluginUIActivity.EXTRA_PLUGIN_ID, match.fullId)
+                X11PluginUIActivity.intent(
+                    this@MainActivity,
+                    match.fullId,
+                    com.vibes.dsp.ui.layout.DisplayLayoutPreferences.getOrientation(this@MainActivity),
+                )
             )
         } catch (e: Exception) {
             android.util.Log.e("Autostart", "failed", e)

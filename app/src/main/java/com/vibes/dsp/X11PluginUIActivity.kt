@@ -24,13 +24,21 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Choreographer
+import android.widget.FrameLayout
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.view.View
 import androidx.activity.ComponentActivity
+import androidx.core.view.ViewCompat
 import com.vibes.dsp.engine.EngineInitHelper
+import com.vibes.dsp.ui.layout.DisplayOrientation
+import com.vibes.dsp.ui.layout.GeometryCachePolicy
+import com.vibes.dsp.ui.layout.NnagaWindowPolicy
+import com.vibes.dsp.ui.layout.ScreenGeometryStore
 import com.vibes.dsp.engine.RackManager
 import com.vibes.dsp.engine.X11Bridge
 import com.vibes.dsp.ui.x11.X11DisplayManager
+import com.vibes.dsp.ui.layout.ScreenGeometryObserver
 
 /**
  * Hosts the X11 plugin UI in a **separate process** (:x11ui) so EGL/GL state is not shared
@@ -45,6 +53,10 @@ class X11PluginUIActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        NnagaWindowPolicy.install(
+            this,
+            intent.getStringExtra(EXTRA_ORIENTATION)?.let(DisplayOrientation::fromPersisted),
+        )
         pluginId = intent.getStringExtra(EXTRA_PLUGIN_ID)
         if (pluginId.isNullOrEmpty()) {
             Log.e(TAG, "Missing $EXTRA_PLUGIN_ID")
@@ -52,9 +64,11 @@ class X11PluginUIActivity : ComponentActivity() {
             return
         }
         Log.i(TAG, "onCreate process=${android.os.Process.myPid()} pluginId=$pluginId")
-        initNativeInThisProcess()
-        var touchLogCount = 0
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+        }
         val surfaceView = SurfaceView(this).apply {
+            visibility = View.GONE
             setOnTouchListener { _, event ->
                 val action = when (event.action) {
                     android.view.MotionEvent.ACTION_DOWN -> 0
@@ -115,7 +129,24 @@ class X11PluginUIActivity : ComponentActivity() {
             }
         })
         surfaceView.contentDescription = "x11_plugin_viewport"
-        setContentView(surfaceView)
+        root.addView(surfaceView, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
+        geometryObserver = ScreenGeometryObserver(
+            root,
+            com.vibes.dsp.ui.layout.ScreenGeometryStore(this, GeometryCachePolicy.NoCache),
+        ) { geometry ->
+            if (geometry.authoritative) {
+                val safe = geometry.safeInsets()
+                val params = surfaceView.layoutParams as FrameLayout.LayoutParams
+                params.setMargins(safe.left, safe.top, safe.right, safe.bottom)
+                surfaceView.layoutParams = params
+                surfaceView.visibility = View.VISIBLE
+                surfaceView.isEnabled = true
+            }
+        }.also { it.start() }
+        setContentView(root)
     }
 
     private fun initNativeInThisProcess() {
@@ -148,6 +179,7 @@ class X11PluginUIActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        geometryObserver?.stop()
         stopFrameAndIdleLoops()
         if (pendingDetach && displayNumber >= 0) {
             X11Bridge.detachAndDestroyX11DisplayIfExists(displayNumber)
@@ -195,10 +227,18 @@ class X11PluginUIActivity : ComponentActivity() {
     }
     companion object {
         const val EXTRA_PLUGIN_ID = "com.vibes.dsp.extra.PLUGIN_ID"
+        const val EXTRA_ORIENTATION = "com.vibes.dsp.extra.ORIENTATION"
+
+        fun intent(context: android.content.Context, pluginId: String, orientation: DisplayOrientation? = null) =
+            android.content.Intent(context, X11PluginUIActivity::class.java).apply {
+                putExtra(EXTRA_PLUGIN_ID, pluginId)
+                orientation?.let { putExtra(EXTRA_ORIENTATION, it.persisted) }
+            }
+
         private const val TAG = "X11PluginUIActivity"
-        private const val X11_INIT_DELAY_MS = 400L
-        private const val FRAME_INTERVAL_NANOS = 16_000_000L
         private const val PLUGIN_IDLE_INTERVAL_MS = 17L
+        private const val X11_INIT_DELAY_MS = 150L
+        private const val FRAME_INTERVAL_NANOS = 16_000_000L
     }
 
     private var pluginId: String? = null
@@ -213,5 +253,7 @@ class X11PluginUIActivity : ComponentActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastFrameRequestNanos: Long = 0L
     private var idleScheduled: Boolean = false
+    private var touchLogCount = 0
+    private var geometryObserver: ScreenGeometryObserver? = null
 
 }
