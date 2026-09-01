@@ -23,8 +23,16 @@ fun resolveLiveToolbarLayout(
     if (!useVerticalStrip || geometry.windowWidth <= geometry.windowHeight || buttonCount <= 0 || buttonSizePx <= 0) {
         return LiveToolbarLayout.Top
     }
-    val topCutout = geometry.cutouts.any { DisplayEdge.Top in it.edges }
-    val sideEdges = geometry.cutouts.flatMap { it.edges }.filter { it == DisplayEdge.Left || it == DisplayEdge.Right }.toSet()
+    val topCutout = geometry.cutouts.any { DisplayEdge.Top in it.edges } ||
+        geometry.cutoutInsets.top > 0
+    val sideEdges = buildSet {
+        geometry.cutouts
+            .flatMapTo(this) { obstruction ->
+                obstruction.edges.filter { it == DisplayEdge.Left || it == DisplayEdge.Right }
+            }
+        if (geometry.cutoutInsets.left > 0) add(DisplayEdge.Left)
+        if (geometry.cutoutInsets.right > 0) add(DisplayEdge.Right)
+    }
     if (topCutout || sideEdges.size != 1) return LiveToolbarLayout.Top
     val edge = sideEdges.single()
     val railWidth = max(

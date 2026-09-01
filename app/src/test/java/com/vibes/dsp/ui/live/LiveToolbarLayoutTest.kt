@@ -161,6 +161,34 @@ class LiveToolbarLayoutTest {
         )
     }
 
+    @Test
+    fun sideCutoutInsetEnablesVerticalRailWhenBoundingRectsAreEmpty() {
+        val geometry = ScreenGeometry(
+            windowWidth = 1920,
+            windowHeight = 900,
+            cutoutInsets = PixelInsets(left = 80),
+            cutouts = emptyList(),
+            authoritative = true,
+        )
+
+        val layout = resolveLiveToolbarLayout(
+            geometry = geometry,
+            useVerticalStrip = true,
+            buttonCount = 6,
+            buttonSizePx = 48,
+            gapPx = 4,
+        )
+
+        assertEquals(
+            LiveToolbarLayout.Vertical(
+                edge = DisplayEdge.Left,
+                railWidthPx = 80,
+                buttonTopOffsetsPx = listOf(0, 52, 104, 156, 208, 260),
+            ),
+            layout,
+        )
+    }
+
     private fun landscapeWithCutout(edge: DisplayEdge, cutoutInset: Int): ScreenGeometry {
         val bounds = when (edge) {
             DisplayEdge.Left -> PixelRect(0, 120, cutoutInset, 300)
