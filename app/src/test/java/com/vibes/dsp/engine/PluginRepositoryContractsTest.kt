@@ -7,7 +7,29 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.tomlj.Toml
 
+
 class PluginRepositoryContractsTest {
+    @Test
+    fun comparesRepositoryVersionsByNumericTokensAndPrereleaseOrdering() {
+        listOf(
+            "numeric segments" to Triple("1.0.10", "1.0.9", 1),
+            "equal versions" to Triple("1.2.3", "1.2.3", 0),
+            "release after prerelease" to Triple("1.0.0", "1.0.0-alpha", 1),
+            "prerelease lexical ordering" to Triple("1.0.0-alpha", "1.0.0-beta", -1),
+        ).forEach { (case, values) ->
+            val (left, right, expected) = values
+            assertEquals(case, expected, compareRepositoryVersions(left, right).compareTo(0))
+        }
+    }
+
+    @Test
+    fun repositoryRequestDisablesCaching() {
+        val request = repositoryRequest("https://plugins.example/repo/index.toml")
+
+        assertEquals("https://plugins.example/repo/index.toml", request.url.toString())
+        assertEquals("no-cache, no-store", request.header("Cache-Control"))
+        assertEquals("no-cache", request.header("Pragma"))
+    }
     @Test
     fun validatesDeclaredContentLengthBoundaries() {
         val max = 1024L
@@ -444,7 +466,7 @@ class PluginRepositoryContractsTest {
     )
 
     @Test
-    fun migratesStaleBuiltinSourceToVersionedUrlAndClearsError() {
+    fun migratesStaleBuiltinSourceToStableUrlAndClearsError() {
         val staleBuiltin = RepositorySourceRecord(
             id = "builtin",
             name = "NNAGA Base",
@@ -456,7 +478,7 @@ class PluginRepositoryContractsTest {
         val currentBuiltin = RepositorySourceRecord(
             id = "builtin",
             name = "NNAGA Base",
-            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-28",
+            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml",
             enabled = true,
             custom = false,
             lastError = null,
@@ -480,7 +502,7 @@ class PluginRepositoryContractsTest {
         val builtin = RepositorySourceRecord(
             id = "builtin",
             name = "NNAGA Base",
-            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-08-28",
+            url = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml",
             enabled = true,
             custom = false,
             lastError = null,

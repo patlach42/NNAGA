@@ -51,6 +51,48 @@ internal fun validateDeclaredContentLength(length: Long, max: Long, url: String)
     return length
 }
 
+private val REPOSITORY_VERSION_TOKEN = Regex("[0-9]+|[A-Za-z]+")
+
+internal fun compareRepositoryVersions(left: String, right: String): Int {
+    val leftTokens = REPOSITORY_VERSION_TOKEN.findAll(left).map { it.value }.toList()
+    val rightTokens = REPOSITORY_VERSION_TOKEN.findAll(right).map { it.value }.toList()
+    for (index in 0 until minOf(leftTokens.size, rightTokens.size)) {
+        val a = leftTokens[index]
+        val b = rightTokens[index]
+        val aNumber = a.all(Char::isDigit)
+        val bNumber = b.all(Char::isDigit)
+        val comparison = when {
+            aNumber && bNumber -> {
+                val aa = a.trimStart('0').ifEmpty { "0" }
+                val bb = b.trimStart('0').ifEmpty { "0" }
+                aa.length.compareTo(bb.length).takeIf { it != 0 } ?: aa.compareTo(bb)
+            }
+            aNumber != bNumber -> if (aNumber) 1 else -1
+            else -> a.compareTo(b, ignoreCase = true)
+        }
+        if (comparison != 0) return comparison
+    }
+    val sizeComparison = leftTokens.size.compareTo(rightTokens.size)
+    if (sizeComparison != 0) {
+        val extra = if (leftTokens.size > rightTokens.size) {
+            leftTokens.drop(rightTokens.size)
+        } else {
+            rightTokens.drop(leftTokens.size)
+        }
+        val prereleaseExtra = extra.any { token -> token.any { !it.isDigit() } }
+        if (prereleaseExtra) return if (leftTokens.size < rightTokens.size) 1 else -1
+        return sizeComparison
+    }
+    return left.compareTo(right, ignoreCase = true)
+}
+
+internal fun repositoryRequest(url: String): Request =
+    Request.Builder()
+        .url(url)
+        .header("Cache-Control", "no-cache, no-store")
+        .header("Pragma", "no-cache")
+        .build()
+
 
 data class RepoManifestFile(
     val url: String,
@@ -381,7 +423,6 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private val installedRoot = File(root, "installed")
     private val jsfxInstalledRoot = File(context.filesDir, "jsfx/Effects/repository")
     private val state = MutableStateFlow(RepositorySnapshot())
-    private val cache = mutableMapOf<String, RepoManifest>()
     private val catalog = mutableMapOf<String, RepositoryCatalogEntry>()
     private val stagedManifests = mutableMapOf<String, StagedRepositoryPayload>()
     private val mutex = Mutex()
@@ -538,8 +579,6 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     }
     private fun fullManifest(packageId: String): RepoManifest {
         val expected = catalog[packageId] ?: error("Package is not available: $packageId")
-        cache[packageId]?.takeIf { manifestMatchesSummary(it, expected) }?.let { return it }
-        cache.remove(packageId)
         val manifest = parseManifest(
             fetchText(expected.manifestUrl),
             expected.sourceName,
@@ -548,22 +587,8 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
         )
         validate(manifest)
         require("${manifest.format}:${manifest.id}" == packageId) { "Manifest package identity mismatch" }
-        require(manifestMatchesSummary(manifest, expected)) { "Manifest package metadata mismatch" }
-        cache[packageId] = manifest
         return manifest
     }
-    private fun manifestMatchesSummary(
-        manifest: RepoManifest,
-        entry: RepositoryCatalogEntry,
-    ): Boolean =
-        manifest.version == entry.version &&
-            manifest.name == entry.name &&
-            manifest.description == entry.description &&
-            manifest.manufacturer == entry.manufacturer &&
-            manifest.tags == entry.tags &&
-            manifest.source == entry.source &&
-            manifest.manifestUrl == entry.manifestUrl &&
-            manifest.repositoryRoot == entry.repositoryRoot
     private fun publishCurrent(){ publish(loadSources(), catalog.values.toList(), null) }
     private fun publish(
         sources: List<RepositorySourceRecord>,
@@ -572,10 +597,6 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     ) {
         catalog.clear()
         entries.forEach { catalog["${it.format}:${it.id}"] = it }
-        cache.entries.removeAll { (id, manifest) ->
-            val entry = catalog[id]
-            entry == null || !manifestMatchesSummary(manifest, entry)
-        }
         val installed = inventory()
         val packages = entries.map { entry ->
             val id = "${entry.format}:${entry.id}"
@@ -584,8 +605,9 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
                 !com.vibes.dsp.BuildConfig.HAS_VST_HOST && entry.format.startsWith("wine_") ->
                     RepositoryPackageStatus.Incompatible
                 installedVersion == null -> RepositoryPackageStatus.Available
-                installedVersion == entry.version -> RepositoryPackageStatus.Installed
-                else -> RepositoryPackageStatus.Update
+                compareRepositoryVersions(installedVersion, entry.version) < 0 ->
+                    RepositoryPackageStatus.Update
+                else -> RepositoryPackageStatus.Installed
             }
             RepositoryPackageItem(
                 id = id,
@@ -632,7 +654,9 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             format.listFiles().orEmpty().forEach { id ->
                 id.listFiles().orEmpty()
                     .filter { it.isDirectory && !it.name.startsWith(".") }
-                    .maxByOrNull { it.name }
+                    .maxWithOrNull(Comparator { a, b ->
+                        compareRepositoryVersions(a.name, b.name)
+                    })
                     ?.let { versionDir ->
                         readMetadata(versionDir)?.let { manifest ->
                             out["${manifest.format}:${manifest.id}"] = Installed(versionDir.name, manifest)
@@ -645,7 +669,9 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
             .forEach { id ->
                 id.listFiles().orEmpty()
                     .filter { it.isDirectory && !it.name.startsWith(".") }
-                    .maxByOrNull { it.name }
+                    .maxWithOrNull(Comparator { a, b ->
+                        compareRepositoryVersions(a.name, b.name)
+                    })
                     ?.let { versionDir ->
                         readMetadata(versionDir)?.let { manifest ->
                             out["jsfx:${id.name}"] = Installed(versionDir.name, manifest)
@@ -675,11 +701,11 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
         resolveContainedRepositoryUrl(base, root, relative)
     private fun fetchText(url:String):String = if(url.startsWith("file:")) {
         File(URI(url)).inputStream().use { input -> val out=java.io.ByteArrayOutputStream(); copyBounded(input,out,MAX_RESPONSE); out.toString(Charsets.UTF_8.name()) }
-    } else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(Request.Builder().url(url).build()).execute().use{r->
+    } else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(repositoryRequest(url)).execute().use{r->
         require(r.isSuccessful) { "HTTP ${r.code} $url" }; val body=r.body ?: error("Empty response body for $url"); validateDeclaredContentLength(body.contentLength(), MAX_RESPONSE, url)
         body.byteStream().use { input -> val out=java.io.ByteArrayOutputStream(); copyBounded(input,out,MAX_RESPONSE); out.toString(Charsets.UTF_8.name()) }
     }
-    private fun download(url:String,out:File,max:Long){if(url.startsWith("file:")){File(URI(url)).inputStream().use{copyBounded(it,out,max)}}else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(Request.Builder().url(url).build()).execute().use{r->require(r.isSuccessful) { "HTTP ${r.code} $url" };val body=r.body ?: error("Empty response body for $url"); validateDeclaredContentLength(body.contentLength(), max, url); body.byteStream().use { copyBounded(it,out,max) }}}
+    private fun download(url:String,out:File,max:Long){if(url.startsWith("file:")){File(URI(url)).inputStream().use{copyBounded(it,out,max)}}else http.newBuilder().followRedirects(false).followSslRedirects(false).build().newCall(repositoryRequest(url)).execute().use{r->require(r.isSuccessful) { "HTTP ${r.code} $url" };val body=r.body ?: error("Empty response body for $url"); validateDeclaredContentLength(body.contentLength(), max, url); body.byteStream().use { copyBounded(it,out,max) }}}
     private fun copyBounded(input:java.io.InputStream,out:java.io.OutputStream,max:Long){val b=ByteArray(8192);var n=0L;while(true){val r=input.read(b);if(r<0)break;n+=r;require(n<=max);out.write(b,0,r)}}
     private fun copyBounded(input:java.io.InputStream,out:File,max:Long){
         val parent = out.parentFile
@@ -712,7 +738,7 @@ class PluginRepositoryService(private val context: Context, private val nativeRe
     private fun encode(s:RepositorySourceRecord)=Base64.encodeToString(listOf(s.id,s.name,s.url,s.enabled,s.custom,s.lastError?:"").joinToString("\u0001").toByteArray(),Base64.NO_WRAP)
     private fun decode(v:String)=runCatching{String(Base64.decode(v,Base64.DEFAULT)).split('\u0001').let{RepositorySourceRecord(it[0],it[1],it[2],it[3].toBoolean(),it[4].toBoolean(),it.getOrNull(5)?.ifEmpty{null})}}.getOrNull()
     private data class Installed(val version:String,val manifest:RepoManifest)
-    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml?v=2026-09-01";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private const val META=".nnaga-package.properties"
+    companion object{private const val BUILTIN_INDEX_URL = "https://raw.githubusercontent.com/patlach42/nnaga-plugin-repository/main/index.toml";private const val PREFS="plugin_repository";private const val SOURCES="sources";private const val MAX_DOWNLOAD=512L*1024*1024;private const val MAX_RESPONSE=8L*1024*1024;private const val MAX_EXTRACTED=1024L*1024*1024;private const val MAX_ENTRIES=4096;private val PACKAGE=Regex("[a-z0-9][a-z0-9._-]{0,127}");private val VERSION=Regex("[A-Za-z0-9][A-Za-z0-9._+-]{0,63}");private const val META=".nnaga-package.properties"
     private fun sha256(b:ByteArray)=digest(b.inputStream())
     private fun sha256(f:File)=digest(f.inputStream())
     private fun digest(i:java.io.InputStream):String { val md=MessageDigest.getInstance("SHA-256"); i.use { val buf=ByteArray(8192); while(true){val n=it.read(buf);if(n<0)break;md.update(buf,0,n)} }; return md.digest().joinToString(""){"%02x".format(it)} }
