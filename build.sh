@@ -132,14 +132,11 @@ fi
 # build produces a working VST APK. The `playstore` flavor never ships VST.
 #
 # In CI the heavy components (llvm/wine/fex/dxvk/mesa/...) build as separate
-# cached jobs and are staged before build.sh runs, so build-all.sh must NOT run
-# here — it would rebuild everything from scratch and defeat the cache. That's
-# detected via $CI, and the CI steps also pass BUILD_VST=0 explicitly. Override:
+# cached jobs and are staged before build.sh runs. Those jobs pass BUILD_VST=0
+# explicitly so build-all.sh does not rebuild everything from scratch.
 #   BUILD_VST=0 ./build.sh full   # skip the VST stack (iterate on LV2/native)
 #   BUILD_VST=1 ./build.sh full   # force it
-_vst_default=1
-[ -n "${CI:-}" ] && _vst_default=0
-if [ "$FLAVOR" != "playstore" ] && [ "${BUILD_VST:-$_vst_default}" = "1" ]; then
+if [ "$FLAVOR" != "playstore" ] && [ "${BUILD_VST:-1}" = "1" ]; then
     echo ""
     echo "=== Building Windows-VST host stack (vsthost_lib/scripts/build-all.sh) ==="
     "$PROJECT_ROOT/vsthost_lib/scripts/build-all.sh"

@@ -540,9 +540,8 @@ androidComponents {
     }
 }
 
-// Full releases must never package without the staged Wine/FEX runtime payload.
-// Debug builds intentionally remain lightweight and are not gated here.
-val verifyFullReleaseRuntimePayload = tasks.register("verifyFullReleaseRuntimePayload") {
+// Full variants must never package without the staged Wine/FEX runtime payload.
+val verifyFullRuntimePayload = tasks.register("verifyFullRuntimePayload") {
     doLast {
         val jniLibDir = rootProject.file("vsthost_lib/src/main/jniLibs/arm64-v8a")
         val assetsDir = rootProject.file("vsthost_lib/src/main/assets")
@@ -556,33 +555,40 @@ val verifyFullReleaseRuntimePayload = tasks.register("verifyFullReleaseRuntimePa
         if (!assetsDir.resolve("wine-fex-manifest.json").isFile) {
             missing += "${assetsDir.relativeTo(rootProject.projectDir).path}/wine-fex-manifest.json"
         }
+        for (hostAsset in listOf("vst_host.exe", "vst_host_x86.exe", "vst3_host.exe")) {
+            if (!assetsDir.resolve(hostAsset).isFile) {
+                missing += "${assetsDir.relativeTo(rootProject.projectDir).path}/$hostAsset"
+            }
+        }
         if (!assetsDir.resolve("wine-fex-nls.tar").isFile &&
             !assetsDir.resolve("wine-fex-nls.tar.gz").isFile
         ) {
             missing += "${assetsDir.relativeTo(rootProject.projectDir).path}/wine-fex-nls.tar[.gz]"
         }
-        for (rendererArchive in listOf("turnip-libs.tar.gz", "mesa-zink-libs.tar.gz")) {
-            if (!assetsDir.resolve(rendererArchive).isFile) {
-                missing += "${assetsDir.relativeTo(rootProject.projectDir).path}/$rendererArchive"
+        for (rendererArchive in listOf("turnip-libs", "mesa-zink-libs")) {
+            if (!assetsDir.resolve("$rendererArchive.tar").isFile &&
+                !assetsDir.resolve("$rendererArchive.tar.gz").isFile
+            ) {
+                missing += "${assetsDir.relativeTo(rootProject.projectDir).path}/$rendererArchive.tar[.gz]"
             }
         }
 
         if (missing.isNotEmpty()) {
             throw GradleException(
-                "Full release Wine/FEX runtime payload verification failed. " +
+                "Full Wine/FEX runtime payload verification failed. " +
                     "Missing required staged files/categories:\n" +
                     missing.joinToString(separator = "\n") { " - $it" }
             )
         }
-        logger.lifecycle("Full release Wine/FEX runtime payload verified.")
+        logger.lifecycle("Full Wine/FEX runtime payload verified.")
     }
 }
 
 // Wire lazily because Android Gradle Plugin creates variant tasks after this script
-// is evaluated. Debug and playstore tasks are intentionally untouched.
+// is evaluated. Playstore tasks are intentionally untouched.
 tasks.configureEach {
-    if (name == "assembleFullRelease" || name == "bundleFullRelease") {
-        dependsOn(verifyFullReleaseRuntimePayload)
+    if (name in setOf("assembleFullDebug", "assembleFullRelease", "bundleFullDebug", "bundleFullRelease")) {
+        dependsOn(verifyFullRuntimePayload)
     }
 }
 
