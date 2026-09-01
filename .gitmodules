@@ -15,17 +15,17 @@
 	url = https://gitlab.com/lv2/sratom.git
 [submodule "3rd_party/lilv"]
 	path = 3rd_party/lilv
-	url = https://github.com/atsushieno/lilv.git
+	url = https://github.com/patlach42/lilv.git
 	branch = android
 [submodule "3rd_party/GxPlugins.lv2.Android"]
 	path = 3rd_party/GxPlugins.lv2.Android
 	url = https://github.com/djshaji/GxPlugins.lv2.Android.git
 [submodule "3rd_party/guitarix"]
 	path = 3rd_party/guitarix
-	url = https://github.com/brummer10/guitarix.git
+	url = https://github.com/patlach42/guitarix.git
 [submodule "3rd_party/oboe"]
 	path = 3rd_party/oboe
-	url = https://github.com/google/oboe.git
+	url = https://github.com/patlach42/oboe.git
 [submodule "3rd_party/x11/xorgproto"]
 	path = 3rd_party/x11/xorgproto
 	url = https://gitlab.freedesktop.org/xorg/proto/xorgproto.git
@@ -58,16 +58,16 @@
 	url = https://github.com/pnggroup/libpng.git
 [submodule "3rd_party/x11/cairo"]
 	path = 3rd_party/x11/cairo
-	url = https://gitlab.freedesktop.org/cairo/cairo.git
+	url = https://github.com/patlach42/cairo.git
 [submodule "3rd_party/x11/util-macros"]
 	path = 3rd_party/x11/util-macros
 	url = https://gitlab.freedesktop.org/xorg/util/macros.git
 [submodule "3rd_party/neural-amp-modeler-lv2"]
 	path = 3rd_party/neural-amp-modeler-lv2
-	url = https://github.com/mikeoliphant/neural-amp-modeler-lv2.git
+	url = https://github.com/patlach42/neural-amp-modeler-lv2.git
 [submodule "3rd_party/aidadsp-lv2"]
 	path = 3rd_party/aidadsp-lv2
-	url = https://github.com/AidaDSP/aidadsp-lv2.git
+	url = https://github.com/patlach42/aidadsp-lv2.git
 [submodule "3rd_party/eigen"]
 	path = 3rd_party/eigen
 	url = https://gitlab.com/libeigen/eigen.git
@@ -76,7 +76,7 @@
 	url = https://github.com/AidaDSP/AIDA-X.git
 [submodule "3rd_party/NeuralRack"]
 	path = 3rd_party/NeuralRack
-	url = https://github.com/brummer10/NeuralRack.git
+	url = https://github.com/patlach42/NeuralRack.git
 [submodule "3rd_party/expat"]
 	path = 3rd_party/expat
 	url = https://github.com/libexpat/libexpat.git
@@ -88,31 +88,31 @@
 	url = https://gitlab.freedesktop.org/mesa/mesa.git
 [submodule "3rd_party/ImpulseLoader"]
 	path = 3rd_party/ImpulseLoader
-	url = https://github.com/brummer10/ImpulseLoader.git
+	url = https://github.com/patlach42/ImpulseLoader.git
 [submodule "3rd_party/XDarkTerror"]
 	path = 3rd_party/XDarkTerror
-	url = https://github.com/brummer10/XDarkTerror.lv2.git
+	url = https://github.com/patlach42/XDarkTerror.lv2.git
 [submodule "3rd_party/XTinyTerror"]
 	path = 3rd_party/XTinyTerror
-	url = https://github.com/brummer10/XTinyTerror.lv2
+	url = https://github.com/patlach42/XTinyTerror.lv2.git
 [submodule "3rd_party/CollisionDrive"]
 	path = 3rd_party/CollisionDrive
-	url = https://github.com/brummer10/CollisionDrive.git
+	url = https://github.com/patlach42/CollisionDrive.git
 [submodule "3rd_party/MetalTone"]
 	path = 3rd_party/MetalTone
-	url = https://github.com/brummer10/MetalTone.git
+	url = https://github.com/patlach42/MetalTone.git
 [submodule "3rd_party/GxCabSim.lv2"]
 	path = 3rd_party/GxCabSim.lv2
 	url = https://github.com/brummer10/GxCabSim.lv2.git
 [submodule "3rd_party/ModularAmpToolKit.lv2"]
 	path = 3rd_party/ModularAmpToolKit.lv2
-	url = https://github.com/brummer10/ModularAmpToolKit.lv2.git
+	url = https://github.com/patlach42/ModularAmpToolKit.lv2.git
 [submodule "3rd_party/FatFrog.lv2"]
 	path = 3rd_party/FatFrog.lv2
-	url = https://github.com/brummer10/FatFrog.lv2.git
+	url = https://github.com/patlach42/FatFrog.lv2.git
 [submodule "3rd_party/fftw3"]
 	path = 3rd_party/fftw3
-	url = https://github.com/FFTW/fftw3.git
+	url = https://github.com/patlach42/fftw3.git
 [submodule "3rd_party/doubletracker.lv2"]
 	path = 3rd_party/doubletracker.lv2
 	url = https://github.com/Varcain/doubletracker.lv2
@@ -124,7 +124,7 @@
 	url = https://github.com/FEX-Emu/FEX.git
 [submodule "vsthost_lib/external/llvm-mingw"]
 	path = vsthost_lib/external/llvm-mingw
-	url = https://github.com/mstorsjo/llvm-mingw.git
+	url = https://github.com/patlach42/llvm-mingw.git
 [submodule "vsthost_lib/external/vst3sdk"]
 	path = vsthost_lib/external/vst3sdk
 	url = https://github.com/steinbergmedia/vst3sdk.git
