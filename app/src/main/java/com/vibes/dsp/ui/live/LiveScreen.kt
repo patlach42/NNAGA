@@ -1311,12 +1311,31 @@ private fun CameraToolbar(
                             },
                         )
                         .width(with(density) { verticalLayout.railWidthPx.toDp() }),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
+                    @Composable
+                    fun OffsetSpacer(index: Int) {
+                        val previousEnd = if (index == 0) 0 else {
+                            offsets[index - 1] + with(density) {
+                                LiveDimensions.hitTarget.toPx().roundToInt()
+                            }
+                        }
+                        val spacerHeight = (offsets[index] - previousEnd).coerceAtLeast(0)
+                        if (spacerHeight > 0) {
+                            Spacer(Modifier.height(with(density) { spacerHeight.toDp() }))
+                        }
+                    }
+                    OffsetSpacer(0)
                     MediaBrowserToolbarButton(onMediaBrowser)
+                    OffsetSpacer(1)
                     CameraToolbarButton("mixer", "Mixer tile", visibleTiles, onToggleTile)
+                    OffsetSpacer(2)
                     CameraToolbarButton("devices", "Devices tile", visibleTiles, onToggleTile)
+                    OffsetSpacer(3)
                     CameraToolbarButton("launcher", "Clip launcher tile", visibleTiles, onToggleTile)
+                    OffsetSpacer(4)
                     CameraToolbarButton("inspector", "Clip inspector tile", visibleTiles, onToggleTile)
+                    OffsetSpacer(5)
                     NnagaToolbarButton(editMode, onDashboard, onToggleEdit)
                 }
             }
