@@ -8,6 +8,7 @@ add_executable(audio_realtime_tests
     TestAudioRealtime.cpp
     TestAudioCpuAffinity.cpp
     TestWavIO.cpp
+    TestRoundTripCorrelation.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginChain.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/RackGraph.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginRegistry.cpp

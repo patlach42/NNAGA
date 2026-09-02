@@ -86,6 +86,7 @@ struct NativeContext {
 };
 
 static NativeContext* g_ctx = nullptr;
+static std::string g_roundTripError;
 
 // NativeContext is process-local and must be published exactly once.  The
 // context owns the live audio graph, so replacing it during Activity
@@ -580,7 +581,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         jint bytesPerSample, jint channels, jint outputPair,
         jint bufferFrames, jint periodMultiplier, jint playbackTargetFrames,
         jint startupPrimeFrames, jint writeHeadroomFrames, jint captureLimitFrames,
-        jint transferCount, jint packetsPerTransfer, jint ringCapacityBytes,
+        jint captureTargetFrames, jint captureHeadroomFrames,
+        jint captureDeadlineSlackFrames, jint transferCount,
+        jint packetsPerTransfer, jint ringCapacityBytes,
         jboolean thermalSafetyEnabled) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->audioEngine->startDirectUsbSession(
@@ -596,6 +599,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
             static_cast<int>(startupPrimeFrames),
             static_cast<int>(writeHeadroomFrames),
             static_cast<int>(captureLimitFrames),
+            static_cast<int>(captureTargetFrames),
+            static_cast<int>(captureHeadroomFrames),
+            static_cast<int>(captureDeadlineSlackFrames),
             static_cast<int>(transferCount),
             static_cast<int>(packetsPerTransfer),
             static_cast<size_t>(std::max(0, ringCapacityBytes))
@@ -660,7 +666,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 48;
+    constexpr jsize kStatCount = 55;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -699,7 +705,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 7;
+            values[18] = 8;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -718,8 +724,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[31] = static_cast<jlong>(
                 hostFrames + stats.playbackRingFrames + stats.queuedOutFrames);
             values[32] = static_cast<jlong>(
-                g_ctx->directUsbOutput->xrunCount() +
-                capture.overruns + capture.underruns);
+                stats.playbackXruns + stats.captureOverruns +
+                stats.captureUnderruns + stats.capturePacketDrops +
+                stats.playbackQuantumDrops);
             values[33] = static_cast<jlong>(stats.lastCycleNanoseconds);
             values[34] = static_cast<jlong>(stats.peakCycleNanoseconds);
             values[35] = static_cast<jlong>(stats.deadlineBudgetNanoseconds);
@@ -727,6 +734,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[38] = stats.performanceHintActive ? 1 : 0;
             values[46] = stats.thermalSafetyEnabled ? 1 : 0;
             values[47] = stats.thermalSafetyActive ? 1 : 0;
+            values[48] = static_cast<jlong>(stats.capturePacketDrops);
+            values[49] = static_cast<jlong>(stats.playbackQuantumDrops);
+            values[50] = static_cast<jlong>(stats.schedulerDeadlineMisses);
+            values[51] = static_cast<jlong>(
+                stats.maxSchedulerLatenessNanoseconds);
+            values[52] = static_cast<jlong>(stats.captureTargetFrames);
+            values[53] = static_cast<jlong>(stats.captureHeadroomFrames);
+            values[54] = static_cast<jlong>(stats.captureDeadlineSlackFrames);
         }
     }
     jlongArray out = env->NewLongArray(kStatCount);
@@ -779,9 +794,27 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbErrorDetail(
     const std::string detail = g_ctx->directUsbOutput->lastErrorDetail();
     return env->NewStringUTF(detail.c_str());
 }
+JNIEXPORT jdoubleArray JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeMeasureRoundTrip(
+        JNIEnv* env, jobject) {
+    double result[5] = {};
+    jdouble values[6] = {};
+    std::string error;
+    const bool ok = g_ctx && g_ctx->audioEngine &&
+        g_ctx->audioEngine->measureDirectUsbRoundTrip(3000, result, error);
+    g_roundTripError = ok ? std::string() : error;
+    values[0] = ok ? 1.0 : 0.0;
+    for (int i = 0; i < 5; ++i) values[i + 1] = result[i];
+    jdoubleArray out = env->NewDoubleArray(6);
+    if (out) env->SetDoubleArrayRegion(out, 0, 6, values);
+    return out;
+}
 
-
-
+JNIEXPORT jstring JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRoundTripError(
+        JNIEnv* env, jobject) {
+    return env->NewStringUTF(g_roundTripError.c_str());
+}
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStopEngine(JNIEnv* env, jobject thiz) {
     LOGI("nativeStopEngine CALLED tid=%ld (Java requested direct USB stop)", getTid());

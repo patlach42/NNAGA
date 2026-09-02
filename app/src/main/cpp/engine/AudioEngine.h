@@ -20,7 +20,7 @@
 #ifndef GUITARRACKCRAFT_AUDIO_ENGINE_H
 #define GUITARRACKCRAFT_AUDIO_ENGINE_H
 
-#include <cstdint>
+
 #include <condition_variable>
 #include <mutex>
 #include <atomic>
@@ -53,6 +53,9 @@ public:
         uint32_t playbackRingFrames = 0;
         uint32_t queuedOutFrames = 0;
         uint32_t captureTransferFrames = 0;
+        uint32_t captureTargetFrames = 0;
+        uint32_t captureHeadroomFrames = 0;
+        uint32_t captureDeadlineSlackFrames = 0;
         uint64_t lastDspNanoseconds = 0;
         uint64_t peakDspNanoseconds = 0;
         uint64_t lastCycleNanoseconds = 0;
@@ -62,9 +65,12 @@ public:
         uint64_t captureWaitTimeouts = 0;
         uint64_t writeWaitTimeouts = 0;
         uint64_t playbackQuantumDrops = 0;
+        uint64_t capturePacketDrops = 0;
         uint64_t captureOverruns = 0;
         uint64_t captureUnderruns = 0;
         uint64_t playbackXruns = 0;
+        uint64_t schedulerDeadlineMisses = 0;
+        uint64_t maxSchedulerLatenessNanoseconds = 0;
         bool performanceHintActive = false;
         bool thermalSafetyEnabled = false;
         bool thermalSafetyActive = false;
@@ -118,6 +124,10 @@ public:
                                bool thermalSafetyEnabled);
 
     void stop();
+    // Blocking control-thread measurement; render thread only observes the atomic request.
+    bool measureDirectUsbRoundTrip(int32_t timeoutMs, double result[5],
+                                   std::string& error) noexcept;
+
     bool startAndroidOboeSession(int32_t inputDeviceId, int32_t outputDeviceId, int32_t bufferFrames);
     bool openDirectUsbDevice(int fd, int driverCode = 0);
     void closeDirectUsbDevice();
@@ -254,6 +264,9 @@ private:
     std::atomic<uint64_t> directUsbPeakCycleNs_{0};
     std::atomic<uint64_t> directUsbDeadlineBudgetNs_{0};
     std::atomic<uint64_t> directUsbDeadlineMisses_{0};
+    std::atomic<uint64_t> directUsbSchedulerDeadlineMisses_{0};
+    std::atomic<uint64_t> directUsbMaxSchedulerLatenessNs_{0};
+    std::atomic<int32_t> directUsbOutputPair_{0};
     std::atomic<bool> directUsbRenderUrgentAudio_{false};
     std::atomic<bool> directUsbPerformanceHintActive_{false};
     std::atomic<bool> cleanupStarted_{true};
@@ -297,13 +310,7 @@ private:
     std::atomic<uint32_t> publishedCallbackFrameCount_{0};
     std::atomic<double> publishedLatencyMs_{0.0};
     std::atomic<int32_t> publishedXRunCount_{0};
-    std::atomic<uint32_t> directCaptureRingFrames_{0};
-    std::atomic<uint32_t> directPlaybackRingFrames_{0};
-    std::atomic<uint32_t> directQueuedOutFrames_{0};
     std::atomic<uint32_t> directCaptureTransferFrames_{0};
-    std::atomic<uint64_t> directCaptureOverruns_{0};
-    std::atomic<uint64_t> directCaptureUnderruns_{0};
-    std::atomic<uint64_t> directPlaybackXruns_{0};
     float inputPeakHold_{0.0f};
     float outputPeakHold_{0.0f};
 
@@ -312,6 +319,21 @@ private:
 
 
 
+    struct RoundTripMeasurement {
+        // 0 idle, 1 armed, 2 complete, 3 cancel requested,
+        // 4 render thread quiesced, 5 control thread preparing.
+        std::atomic<int32_t> state{0};
+        std::atomic<int32_t> processedFrames{0};
+        std::atomic<int32_t> capturedFrames{0};
+        std::atomic<float> inputPeak{0.0f};
+        std::atomic<float> outputPeak{0.0f};
+        int32_t sampleRate = 0;
+        int32_t preRollFrames = 0;
+        std::vector<float> probe;
+        std::vector<float> capture;
+    };
+    RoundTripMeasurement roundTripMeasurement_;
+    std::atomic<RoundTripMeasurement*> activeRoundTripMeasurement_{nullptr};
 
     DirectUsbOutput* directUsbOutput_ = nullptr; // non-owning, NativeContext-owned
     void processRackBlock(const float* const* liveInputs, int32_t inputChannelCount,

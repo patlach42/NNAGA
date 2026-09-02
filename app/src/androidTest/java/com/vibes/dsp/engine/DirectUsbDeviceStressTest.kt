@@ -18,6 +18,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -45,7 +46,8 @@ class DirectUsbDeviceStressTest {
         val selectedRates = argumentCsv(args, "direct_usb_rates", defaultRates, defaultRates)
         val selectedBuffers = argumentCsv(args, "direct_usb_buffers", defaultBuffers, allowedBuffers)
         val selectedMultipliers = argumentCsv(args, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
-        val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 2, 8)
+        val requireLoopback = argumentBoolean(args, "direct_usb_require_loopback")
+        val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 1, 8)
         val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 600_000L)
         val warmupMs = minOf(1_000L, (durationMs / 3L).coerceAtLeast(250L))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -129,7 +131,17 @@ class DirectUsbDeviceStressTest {
                         val bucket = results.getOrPut(key) { mutableListOf() }
                         for (cycle in 1..cycles) {
                             cases++
-                            bucket += runCase(context, engine, format, buffer, multiplier, cycle, durationMs, warmupMs)
+                            bucket += runCase(
+                                context,
+                                engine,
+                                format,
+                                buffer,
+                                multiplier,
+                                cycle,
+                                durationMs,
+                                warmupMs,
+                                requireLoopback
+                            )
                         }
                     }
                 }
@@ -210,8 +222,38 @@ class DirectUsbDeviceStressTest {
             argumentCsv(Bundle().apply { putString("direct_usb_multipliers", "9") }, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
         }
         assertTrue(invalidMultiplier.message?.contains("allowed=1,2,3,4,5,6,7,8") == true)
-    }
 
+        assertTrue(argumentBoolean(Bundle().apply { putString("direct_usb_require_loopback", "true") }, "direct_usb_require_loopback"))
+        assertTrue(!argumentBoolean(Bundle().apply { putString("direct_usb_require_loopback", "false") }, "direct_usb_require_loopback"))
+        val invalidLoopback = assertThrows(IllegalArgumentException::class.java) {
+            argumentBoolean(Bundle().apply { putString("direct_usb_require_loopback", "TRUE") }, "direct_usb_require_loopback")
+        }
+        assertTrue(invalidLoopback.message?.contains("must be true or false") == true)
+
+    }
+    @Test
+    fun directUsbCycleArgumentsRespectBounds() {
+        listOf(
+            "minimum" to ("1" to 1),
+            "below minimum clamps" to ("0" to 1),
+            "maximum" to ("8" to 8),
+            "above maximum clamps" to ("9" to 8),
+        ).forEach { (label, inputAndExpected) ->
+            val (input, expected) = inputAndExpected
+            assertEquals(
+                "direct_usb_cycles $label bound",
+                expected,
+                argumentInt(
+                    Bundle().apply { putString("direct_usb_cycles", input) },
+                    "direct_usb_cycles",
+                    "cycles",
+                    2,
+                    1,
+                    8,
+                ),
+            )
+        }
+    }
 
     private fun runCase(
         context: Context,
@@ -222,6 +264,7 @@ class DirectUsbDeviceStressTest {
         cycle: Int,
         durationMs: Long,
         warmupMs: Long,
+        requireLoopback: Boolean,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -234,11 +277,13 @@ class DirectUsbDeviceStressTest {
         var finalRaw = LongArray(0)
         var finalTransport: TransportInfo? = null
         var finalTrack: RackTrackInfo? = null
+        var maxInputPeak = 0.0f
+        var maxOutputPeak = 0.0f
         try {
             AudioSettingsManager.setBufferSize(context, buffer)
             DirectUsbAudioManager.startSelected(context, format)
             val started = runBlocking {
-                DirectUsbAudioManager.startConfigured(context, allowUnsafeBuffer = true)
+                DirectUsbAudioManager.startConfigured(context)
             }
             if (started.isFailure) {
                 reason = "start-failed detail=${started.exceptionOrNull()?.message ?: "unknown"}"
@@ -328,6 +373,10 @@ class DirectUsbDeviceStressTest {
                 var samplePositionProgressed = false
                 var trackFrameProgressed = false
                 while (SystemClock.elapsedRealtime() < deadline && reason == null) {
+                    val inputLevel = engine.getInputLevel()
+                    if (inputLevel.isFinite()) maxInputPeak = maxOf(maxInputPeak, inputLevel)
+                    val outputLevel = engine.getOutputLevel()
+                    if (outputLevel.isFinite()) maxOutputPeak = maxOf(maxOutputPeak, outputLevel)
                     val stats = engine.getDirectUsbStats()
                     val raw = engine.nativeGetDirectUsbStats()
                     reason = validateRunningStats(stats, raw, format, buffer, multiplier)
@@ -400,6 +449,12 @@ class DirectUsbDeviceStressTest {
                 }
                 if (reason == null) reason = validateRunningStats(finalStats, finalRaw, format, buffer, multiplier)
             }
+            if (reason == null && requireLoopback && maxOutputPeak < LOOPBACK_OUTPUT_MIN_PEAK) {
+                reason = "loopback-output-peak-below-threshold"
+            }
+            if (reason == null && requireLoopback && maxInputPeak < LOOPBACK_INPUT_MIN_PEAK) {
+                reason = "loopback-input-peak-below-threshold"
+            }
         } catch (t: Throwable) {
             reason = "exception-${t.message?.replace(Regex("[\\r\\n]"), " ") ?: t.javaClass.simpleName}"
         } finally {
@@ -427,7 +482,23 @@ class DirectUsbDeviceStressTest {
         val transport = finalTransport ?: runCatching { engine.getTransportInfo() }.getOrNull()
         Log.i(
             tag,
-            telemetry(reason ?: "pass", cycle, format, buffer, multiplier, finalStats, finalRaw, lifecycleOk, transport, finalTrack, warmupStats, warmupRaw)
+            telemetry(
+                reason ?: "pass",
+                cycle,
+                format,
+                buffer,
+                multiplier,
+                finalStats,
+                finalRaw,
+                lifecycleOk,
+                transport,
+                finalTrack,
+                warmupStats,
+                warmupRaw,
+                requireLoopback,
+                maxInputPeak,
+                maxOutputPeak
+            )
         )
         Log.i(
             tag,
@@ -443,7 +514,10 @@ class DirectUsbDeviceStressTest {
                 transport,
                 finalTrack,
                 warmupStats,
-                warmupRaw
+                warmupRaw,
+                requireLoopback,
+                maxInputPeak,
+                maxOutputPeak
             )
         )
         return CaseResult(reason == null, reason)
@@ -502,6 +576,9 @@ class DirectUsbDeviceStressTest {
         track: RackTrackInfo?,
         warmup: DirectUsbStats?,
         warmupRaw: LongArray?,
+        requireLoopback: Boolean,
+        inputPeak: Float,
+        outputPeak: Float,
     ): String {
         val queueLatencyMs =
             if (stats.sampleRateHz > 0L) stats.knownHostLatencyFrames * 1_000.0 / stats.sampleRateHz else 0.0
@@ -532,12 +609,15 @@ class DirectUsbDeviceStressTest {
                 (warmupRaw?.getOrZero(ZERO_RUNWAY_EVENTS) ?: rawStats.getOrZero(ZERO_RUNWAY_EVENTS)))
                 .coerceAtLeast(0L)
         return "TELEMETRY reason=$reason cycle=$cycle rate=${format.sampleRate} bits=${format.bits} bytes=${format.subslotBytes} channels=${format.channels} " +
+            "loopback_required=${if (requireLoopback) 1 else 0} input_peak=$inputPeak output_peak=$outputPeak " +
             "buffer=$buffer multiplier=$multiplier schema=${stats.schemaVersion} state=${stats.state} failure=${stats.failure} period_multiplier=${stats.periodMultiplier} " +
             "effective_quantum=${stats.effectiveQuantum} steady_target_frames=${stats.steadyTarget} startup_prime_frames=${stats.startupPrime} queued_out_frames=${stats.queuedOut} " +
             "known_host_latency_frames=${stats.knownHostLatencyFrames} estimated_host_queue_latency_ms=$queueLatencyMs sequence=${stats.sequence} " +
             "capture_overruns=${rawStats.getOrZero(CAPTURE_OVERRUNS)} capture_underruns=${rawStats.getOrZero(CAPTURE_UNDERRUNS)} " +
-            "capture_transfer_errors=${stats.captureTransferErrors} playback_transfer_errors=${stats.playbackTransferErrors} capture_wait_pressure=${stats.captureWaitPressure} " +
-            "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} aggregate_xruns=${stats.actualXruns} " +
+            "capture_transfer_errors=${stats.captureTransferErrors} playback_transfer_errors=${stats.playbackTransferErrors} " +
+            "capture_packet_drops=${stats.capturePacketDrops} capture_wait_pressure=${stats.captureWaitPressure} " +
+            "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} " +
+            "playback_quantum_drops=${stats.playbackQuantumDrops} aggregate_xruns=${stats.actualXruns} " +
             "playback_backpressure=${stats.playbackBackpressure} playback_silent_packets=${stats.playbackSilentPackets} " +
             "playback_silent_frames=${stats.playbackSilentFrames} playback_silent_packets_growth=$silentPacketGrowth " +
             "playback_silent_frames_growth=$silentFrameGrowth performance_hint_active=${if (stats.performanceHintActive) 1 else 0} " +
@@ -549,7 +629,10 @@ class DirectUsbDeviceStressTest {
             "pending_high_water=${rawStats.getOrZero(PENDING_HIGH_WATER)} max_pending_age_ns=${rawStats.getOrZero(MAX_PENDING_AGE_NS)} " +
             "zero_runway_events=${rawStats.getOrZero(ZERO_RUNWAY_EVENTS)} zero_runway_events_growth=$zeroRunwayGrowth " +
             "last_dsp_ns=${stats.lastDspNs} peak_dsp_ns=${stats.peakDspNs} " +
-            "last_cycle_ns=${stats.lastCycleNs} peak_cycle_ns=${stats.peakCycleNs} deadline_budget_ns=${stats.deadlineBudgetNs} deadline_misses=${stats.deadlineMisses} " +
+            "last_cycle_ns=${stats.lastCycleNs} peak_cycle_ns=${stats.peakCycleNs} deadline_budget_ns=${stats.deadlineBudgetNs} " +
+            "deadline_misses=${stats.deadlineMisses} scheduler_deadline_misses=${stats.schedulerDeadlineMisses} " +
+            "max_scheduler_lateness_ns=${stats.maxSchedulerLatenessNs} capture_target_frames=${stats.captureTargetFrames} " +
+            "capture_headroom_frames=${stats.captureHeadroomFrames} capture_deadline_slack_frames=${stats.captureDeadlineSlackFrames} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
@@ -588,6 +671,14 @@ class DirectUsbDeviceStressTest {
         }
         return allowed.filter { it in requested }.toIntArray()
     }
+    private fun argumentBoolean(args: Bundle, key: String, default: Boolean = false): Boolean {
+        val raw = args.getString(key)?.trim() ?: return default
+        return when (raw) {
+            "true" -> true
+            "false" -> false
+            else -> throw IllegalArgumentException("$key must be true or false: '$raw'")
+        }
+    }
 
     private fun argumentInt(args: Bundle, primary: String, secondary: String, default: Int, min: Int, max: Int): Int =
         (args.getString(primary) ?: args.getString(secondary))?.toIntOrNull()?.coerceIn(min, max) ?: default
@@ -606,9 +697,11 @@ class DirectUsbDeviceStressTest {
     private data class CaseResult(val passed: Boolean, val reason: String?)
 
     private companion object {
-        const val TELEMETRY_SCHEMA_VERSION = 7L
-        const val RAW_STAT_COUNT = 46
+        const val TELEMETRY_SCHEMA_VERSION = 8L
+        const val RAW_STAT_COUNT = 55
         const val MAX_IMPLICIT_FIFO = 256L
+        const val LOOPBACK_OUTPUT_MIN_PEAK = 0.05f
+        const val LOOPBACK_INPUT_MIN_PEAK = 0.005f
         const val CAPTURE_OVERRUNS = 1
         const val CAPTURE_UNDERRUNS = 2
         const val IMPLICIT_FIFO_DEPTH = 3

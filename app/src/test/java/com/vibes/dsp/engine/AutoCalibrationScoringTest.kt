@@ -199,6 +199,139 @@ class AutoCalibrationScoringTest {
         assertEquals(6, lowerId?.score)
     }
 
+    @Test
+    fun directUsbCalibrationEvidenceAcceptsHealthyEmptyQueues() {
+        val evidence = evaluateDirectUsbCalibrationEvidence(
+            baseline = directUsbStats(),
+            sample = directUsbStats(
+                queuedOut = 0,
+                playbackRingFrames = 0
+            )
+        )
+
+        assertEquals(0L, evidence.xruns)
+        assertEquals(0L, evidence.deadlineMisses)
+        assertEquals(0L, evidence.transferErrors)
+        assertEquals(true, evidence.stable)
+    }
+
+    @Test
+    fun directUsbCalibrationEvidenceRejectsAudibleAggregateXrunGrowth() {
+        val evidence = evaluateDirectUsbCalibrationEvidence(
+            baseline = directUsbStats(
+                actualXruns = 17,
+                capturePacketDrops = 10,
+                playbackQuantumDrops = 7
+            ),
+            sample = directUsbStats(
+                actualXruns = 19,
+                capturePacketDrops = 11,
+                playbackQuantumDrops = 8
+            )
+        )
+
+        assertEquals(2L, evidence.xruns)
+        assertEquals(false, evidence.stable)
+    }
+
+    @Test
+    fun directUsbCalibrationEvidenceExposesSchedulerPressureWithoutRejectingCalibration() {
+        val evidence = evaluateDirectUsbCalibrationEvidence(
+            baseline = directUsbStats(),
+            sample = directUsbStats(schedulerDeadlineMisses = 3)
+        )
+
+        assertEquals(0L, evidence.xruns)
+        assertEquals(0L, evidence.deadlineMisses)
+        assertEquals(3L, evidence.schedulerDeadlineMisses)
+        assertEquals(true, evidence.stable)
+    }
+
+    @Test
+    fun directUsbCalibrationEvidenceRejectsPressureErrorsAndInvalidState() {
+        val cases = listOf(
+            Triple("input deadline miss", directUsbStats(deadlineMisses = 1), 1L),
+            Triple("capture transfer error", directUsbStats(captureTransferErrors = 1), 0L),
+            Triple("playback transfer error", directUsbStats(playbackTransferErrors = 1), 0L),
+            Triple("transport failure", directUsbStats(transportFailed = true), 0L),
+            Triple("not running", directUsbStats(state = DirectUsbSessionState.Starting), 0L),
+            Triple("device failure", directUsbStats(failure = DirectUsbFailure.NoDevice), 0L),
+            Triple("missing steady target", directUsbStats(steadyTarget = 0), 0L),
+            Triple("missing cycle timing", directUsbStats(lastCycleNs = 0), 0L),
+            Triple("missing deadline budget", directUsbStats(deadlineBudgetNs = 0), 0L)
+        )
+
+        cases.forEach { (reason, sample, expectedDeadlineMisses) ->
+            val evidence = evaluateDirectUsbCalibrationEvidence(
+                baseline = directUsbStats(),
+                sample = sample
+            )
+            assertEquals(reason, expectedDeadlineMisses, evidence.deadlineMisses)
+            assertEquals(reason, false, evidence.stable)
+        }
+    }
+
+    @Test
+    fun directUsbCalibrationEvidenceClampsCountersWhenSampleRegresses() {
+        val evidence = evaluateDirectUsbCalibrationEvidence(
+            baseline = directUsbStats(
+                actualXruns = 5,
+                deadlineMisses = 5,
+                schedulerDeadlineMisses = 5,
+                captureTransferErrors = 4,
+                playbackTransferErrors = 6
+            ),
+            sample = directUsbStats(
+                actualXruns = 4,
+                deadlineMisses = 3,
+                schedulerDeadlineMisses = 3,
+                captureTransferErrors = 3,
+                playbackTransferErrors = 4
+            )
+        )
+
+        assertEquals(0L, evidence.xruns)
+        assertEquals(0L, evidence.deadlineMisses)
+        assertEquals(0L, evidence.schedulerDeadlineMisses)
+        assertEquals(0L, evidence.transferErrors)
+        assertEquals(true, evidence.stable)
+    }
+
+
+    private fun directUsbStats(
+        actualXruns: Long = 0,
+        capturePacketDrops: Long = 0,
+        playbackQuantumDrops: Long = 0,
+        deadlineMisses: Long = 0,
+        schedulerDeadlineMisses: Long = 0,
+        captureTransferErrors: Long = 0,
+        playbackTransferErrors: Long = 0,
+        transportFailed: Boolean = false,
+        state: DirectUsbSessionState = DirectUsbSessionState.Running,
+        failure: DirectUsbFailure = DirectUsbFailure.Ok,
+        steadyTarget: Long = 128,
+        lastCycleNs: Long = 1_000_000,
+        deadlineBudgetNs: Long = 2_000_000,
+        queuedOut: Long = 0,
+        playbackRingFrames: Long = 0
+    ): DirectUsbStats = DirectUsbStats(
+        actualXruns = actualXruns,
+        capturePacketDrops = capturePacketDrops,
+        playbackQuantumDrops = playbackQuantumDrops,
+        deadlineMisses = deadlineMisses,
+        schedulerDeadlineMisses = schedulerDeadlineMisses,
+        captureTransferErrors = captureTransferErrors,
+        playbackTransferErrors = playbackTransferErrors,
+        transportFailed = transportFailed,
+        state = state,
+        failure = failure,
+        steadyTarget = steadyTarget,
+        lastCycleNs = lastCycleNs,
+        deadlineBudgetNs = deadlineBudgetNs,
+        queuedOut = queuedOut,
+        playbackRingFrames = playbackRingFrames
+    )
+
     private fun profile(
         id: String,
         latencyMs: Double,

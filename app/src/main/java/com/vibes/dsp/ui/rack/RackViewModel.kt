@@ -215,24 +215,31 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         // Occupancy, queued frames and host-latency estimates fluctuate every
         // poll. Logging them as signature fields caused continuous logcat I/O.
         val signature = listOf(
-            stats.playbackXruns, stats.captureOverruns, stats.captureUnderruns,
+            stats.playbackXruns, stats.playbackQuantumDrops,
+            stats.captureOverruns, stats.captureUnderruns, stats.capturePacketDrops,
             stats.captureTransferErrors, stats.playbackTransferErrors,
             stats.captureWaitPressure, stats.writeWaitPressure,
             stats.effectiveQuantum, stats.periodMultiplier, stats.startupPrime,
-            stats.steadyTarget, stats.deadlineMisses,
+            stats.steadyTarget, stats.deadlineMisses, stats.captureTargetFrames,
+            stats.captureHeadroomFrames, stats.captureDeadlineSlackFrames,
         )
         if (signature != lastUsbSignature) {
             lastUsbSignature = signature
             Log.i("DirectUsbDiag", "playbackXruns=${stats.playbackXruns} " +
+                "playbackQuantumDrops=${stats.playbackQuantumDrops} " +
                 "captureOver=${stats.captureOverruns} captureUnder=${stats.captureUnderruns} " +
+                "capturePacketDrops=${stats.capturePacketDrops} " +
                 "transferErrors(capture=${stats.captureTransferErrors},playback=${stats.playbackTransferErrors}) " +
                 "waitPressure(capture=${stats.captureWaitPressure},write=${stats.writeWaitPressure}) " +
                 "ring(capture=${stats.captureRingFrames},playback=${stats.playbackRingFrames}) " +
                 "queued/prime/target=${stats.queuedOut}/${stats.startupPrime}/${stats.steadyTarget} " +
+                "capturePolicy=${stats.captureTargetFrames}/${stats.captureHeadroomFrames}/${stats.captureDeadlineSlackFrames} " +
                 "Q=${stats.effectiveQuantum} multiplier=${stats.periodMultiplier} " +
                 "estimatedHostQueue=${stats.knownHostLatencyFrames}f " +
                 "DSP(last=${stats.lastDspNs},peak=${stats.peakDspNs}) " +
-                "cycle(last=${stats.lastCycleNs},peak=${stats.peakCycleNs},budget=${stats.deadlineBudgetNs},misses=${stats.deadlineMisses})")
+                "cycle(last=${stats.lastCycleNs},peak=${stats.peakCycleNs},budget=${stats.deadlineBudgetNs}," +
+                "inputMisses=${stats.deadlineMisses},schedulerMisses=${stats.schedulerDeadlineMisses}," +
+                "maxLateness=${stats.maxSchedulerLatenessNs})")
         }
     }
 

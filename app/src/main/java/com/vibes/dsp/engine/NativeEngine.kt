@@ -42,10 +42,13 @@ enum class DirectUsbFailure {
     }
 }
 
+
+
 data class DirectUsbStats(
     val sequence: Long = 0,
     val captureOverruns: Long = 0,
     val captureUnderruns: Long = 0,
+    val capturePacketDrops: Long = 0,
     val implicitFeedbackFifoDepth: Long = 0,
     val implicitDeferredTransfers: Long = 0,
     val implicitMetadataOverruns: Long = 0,
@@ -60,6 +63,7 @@ data class DirectUsbStats(
     val captureWaitPressure: Long = 0,
     val writeWaitPressure: Long = 0,
     val playbackXruns: Long = 0,
+    val playbackQuantumDrops: Long = 0,
     val playbackBackpressure: Long = 0,
     val playbackSilentPackets: Long = 0,
     val playbackSilentFrames: Long = 0,
@@ -87,6 +91,11 @@ data class DirectUsbStats(
     val peakCycleNs: Long = 0,
     val deadlineBudgetNs: Long = 0,
     val deadlineMisses: Long = 0,
+    val schedulerDeadlineMisses: Long = 0,
+    val maxSchedulerLatenessNs: Long = 0,
+    val captureTargetFrames: Long = 0,
+    val captureHeadroomFrames: Long = 0,
+    val captureDeadlineSlackFrames: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -133,6 +142,13 @@ data class DirectUsbStats(
         private const val THERMAL_SAFETY_ACTIVE = 47
         private const val IMPLICIT_ZERO_RUNWAY_EVENTS = 44
         private const val IMPLICIT_MAX_PENDING_AGE_NS = 45
+        private const val CAPTURE_PACKET_DROPS = 48
+        private const val PLAYBACK_QUANTUM_DROPS = 49
+        private const val SCHEDULER_DEADLINE_MISSES = 50
+        private const val MAX_SCHEDULER_LATENESS = 51
+        private const val CAPTURE_TARGET = 52
+        private const val CAPTURE_HEADROOM = 53
+        private const val CAPTURE_DEADLINE_SLACK = 54
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -140,6 +156,7 @@ data class DirectUsbStats(
                 sequence = at(SEQUENCE),
                 captureOverruns = at(CAPTURE_OVERRUNS),
                 captureUnderruns = at(CAPTURE_UNDERRUNS),
+                capturePacketDrops = at(CAPTURE_PACKET_DROPS),
                 implicitFeedbackFifoDepth = at(IMPLICIT_FIFO_DEPTH),
                 implicitDeferredTransfers = at(IMPLICIT_DEFERRED_TRANSFERS),
                 implicitMetadataOverruns = at(IMPLICIT_METADATA_OVERRUNS),
@@ -155,6 +172,7 @@ data class DirectUsbStats(
                 writeWaitPressure = at(WRITE_WAIT_PRESSURE),
                 playbackXruns = at(PLAYBACK_XRUNS),
                 playbackBackpressure = at(PLAYBACK_BACKPRESSURE),
+                playbackQuantumDrops = at(PLAYBACK_QUANTUM_DROPS),
                 playbackSilentPackets = at(PLAYBACK_SILENT_PACKETS),
                 transportFailed = at(TRANSPORT_FAILED) != 0L,
                 performanceHintActive = at(PERFORMANCE_HINT_ACTIVE) != 0L,
@@ -179,6 +197,11 @@ data class DirectUsbStats(
                 peakCycleNs = at(PEAK_CYCLE),
                 deadlineBudgetNs = at(DEADLINE_BUDGET),
                 deadlineMisses = at(DEADLINE_MISSES),
+                schedulerDeadlineMisses = at(SCHEDULER_DEADLINE_MISSES),
+                maxSchedulerLatenessNs = at(MAX_SCHEDULER_LATENESS),
+                captureTargetFrames = at(CAPTURE_TARGET),
+                captureHeadroomFrames = at(CAPTURE_HEADROOM),
+                captureDeadlineSlackFrames = at(CAPTURE_DEADLINE_SLACK),
             )
         }
     }
@@ -486,6 +509,9 @@ class NativeEngine private constructor() {
         startupPrimeFrames: Int,
         writeHeadroomFrames: Int,
         captureLimitFrames: Int,
+        captureTargetFrames: Int,
+        captureHeadroomFrames: Int,
+        captureDeadlineSlackFrames: Int,
         transferCount: Int,
         packetsPerTransfer: Int,
         ringCapacityBytes: Int,
@@ -513,6 +539,8 @@ class NativeEngine private constructor() {
     fun getDirectUsbStats(): DirectUsbStats = DirectUsbStats.fromRaw(nativeGetDirectUsbStats())
     external fun nativeGetDirectUsbStats(): LongArray
     external fun nativeGetDirectUsbErrorDetail(): String
+    external fun nativeMeasureRoundTrip(): DoubleArray
+    external fun nativeGetRoundTripError(): String
     /** Flushes live PGO profile data; best effort and safe when unsupported. */
     external fun nativeFlushPgoProfile(): Boolean
 

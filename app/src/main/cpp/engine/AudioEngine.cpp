@@ -18,6 +18,7 @@
  */
 
 #include "AudioEngine.h"
+#include "RoundTripCorrelation.h"
 #include "utils/WavIO.h"
 #include <liblowlatencyaudio/ThreadUtils.h>
 #include <android/log.h>
@@ -249,7 +250,10 @@ bool AudioEngine::startDirectUsbSession(
         bufferConfig.playbackTargetFrames < 0 ||
         bufferConfig.startupPrimeFrames < 0 ||
         bufferConfig.writeHeadroomFrames < 0 ||
-        bufferConfig.captureLimitFrames < 0) {
+        bufferConfig.captureLimitFrames < 0 ||
+        bufferConfig.captureTargetFrames < 0 ||
+        bufferConfig.captureHeadroomFrames < 0 ||
+        bufferConfig.captureDeadlineSlackFrames < 0) {
         directUsbFailureCode_.store(
             usbFailureCode(monotrypt::usb::StartError::Unknown),
             std::memory_order_release);
@@ -276,6 +280,8 @@ bool AudioEngine::startDirectUsbSession(
     directUsbPeakCycleNs_.store(0, std::memory_order_relaxed);
     directUsbDeadlineBudgetNs_.store(0, std::memory_order_relaxed);
     directUsbDeadlineMisses_.store(0, std::memory_order_relaxed);
+    directUsbSchedulerDeadlineMisses_.store(0, std::memory_order_relaxed);
+    directUsbMaxSchedulerLatenessNs_.store(0, std::memory_order_relaxed);
     if (!directUsbOutput_->configureUserspaceBuffers(bufferConfig)) {
         directUsbFailureCode_.store(
             usbFailureCode(monotrypt::usb::StartError::Unknown),
@@ -361,6 +367,7 @@ bool AudioEngine::startDirectUsbSession(
     directUsbBits_ = bitsPerSample;
     directUsbSubslotBytes_ = subslotBytes;
     directUsbChannels_ = channels;
+    directUsbOutputPair_.store(outputPair, std::memory_order_release);
     directUsbStartupBlocks_ = startupBlocks;
     directUsbCaptureWaitTimeouts_.store(0, std::memory_order_relaxed);
     directUsbWriteWaitTimeouts_.store(0, std::memory_order_relaxed);
@@ -386,10 +393,21 @@ bool AudioEngine::startDirectUsbSession(
     }
     const int32_t captureCapacityFrames =
         std::max(renderFrames, directUsbOutput_->captureCapacityFrames());
-    const int32_t desiredCaptureTarget = renderFrames * 2;
-    const int32_t captureTargetFrames = std::min(
-        desiredCaptureTarget,
-        std::max(0, captureCapacityFrames - renderFrames - captureTransferFrames));
+    const int32_t captureTargetFrames =
+        std::max(0, directUsbOutput_->captureTargetFrames());
+    const int32_t captureHeadroomFrames =
+        std::max(0, directUsbOutput_->captureHeadroomFrames());
+    if (captureTargetFrames >
+        captureCapacityFrames - renderFrames - captureHeadroomFrames) {
+        directUsbOutput_->requestStop();
+        directUsbOutput_->stop();
+        directUsbFailureCode_.store(
+            usbFailureCode(monotrypt::usb::StartError::Unknown),
+            std::memory_order_release);
+        directUsbState_.store(DirectUsbState::Failed, std::memory_order_release);
+        cleanupEngineState();
+        return false;
+    }
     const int32_t capturePrimeFrames = renderFrames + captureTargetFrames;
     const auto capturePrimeDeadline =
         std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
@@ -516,13 +534,7 @@ void AudioEngine::finishDirectUsbCleanup() {
     publishedLatencyMs_.store(0.0, std::memory_order_release);
     publishedXRunCount_.store(0, std::memory_order_release);
     publishedCallbackFrameCount_.store(0, std::memory_order_release);
-    directCaptureRingFrames_.store(0, std::memory_order_release);
-    directPlaybackRingFrames_.store(0, std::memory_order_release);
-    directQueuedOutFrames_.store(0, std::memory_order_release);
     directCaptureTransferFrames_.store(0, std::memory_order_release);
-    directCaptureOverruns_.store(0, std::memory_order_release);
-    directCaptureUnderruns_.store(0, std::memory_order_release);
-    directPlaybackXruns_.store(0, std::memory_order_release);
     directUsbPerformanceHintActive_.store(false, std::memory_order_release);
     const int32_t failure = directUsbFailureCode_.load(std::memory_order_acquire);
     directUsbState_.store(failure ? DirectUsbState::Failed : DirectUsbState::Stopped,
@@ -554,19 +566,40 @@ AudioEngine::DirectUsbRuntimeStats AudioEngine::getDirectUsbRuntimeStats() const
     out.deadlineMisses = directUsbDeadlineMisses_.load(std::memory_order_relaxed);
     out.captureWaitTimeouts = directUsbCaptureWaitTimeouts_.load(std::memory_order_relaxed);
     out.writeWaitTimeouts = directUsbWriteWaitTimeouts_.load(std::memory_order_relaxed);
-    out.captureRingFrames = directCaptureRingFrames_.load(std::memory_order_acquire);
-    out.playbackRingFrames = directPlaybackRingFrames_.load(std::memory_order_acquire);
-    out.queuedOutFrames = directQueuedOutFrames_.load(std::memory_order_acquire);
-    out.captureTransferFrames = directCaptureTransferFrames_.load(std::memory_order_acquire);
-    out.captureOverruns = directCaptureOverruns_.load(std::memory_order_acquire);
-    out.captureUnderruns = directCaptureUnderruns_.load(std::memory_order_acquire);
-    out.playbackXruns = directPlaybackXruns_.load(std::memory_order_acquire);
+    out.captureTransferFrames = directCaptureTransferFrames_.load(
+        std::memory_order_acquire);
+    if (directUsbOutput_) {
+        out.captureRingFrames = static_cast<uint32_t>(
+            std::max(0, directUsbOutput_->captureAvailableFrames()));
+        out.playbackRingFrames = static_cast<uint32_t>(
+            std::max(0, directUsbOutput_->bufferedFrames()));
+        out.queuedOutFrames = static_cast<uint32_t>(
+            std::min<uint64_t>(
+                std::numeric_limits<uint32_t>::max(),
+                directUsbOutput_->queuedOutFrames()));
+        out.captureTargetFrames = static_cast<uint32_t>(
+            std::max(0, directUsbOutput_->captureTargetFrames()));
+        out.captureHeadroomFrames = static_cast<uint32_t>(
+            std::max(0, directUsbOutput_->captureHeadroomFrames()));
+        out.captureDeadlineSlackFrames = static_cast<uint32_t>(
+            std::max(0, directUsbOutput_->captureDeadlineSlackFrames()));
+        const auto capture = directUsbOutput_->captureStats();
+        out.captureOverruns = capture.overruns;
+        out.captureUnderruns = capture.underruns;
+        out.capturePacketDrops = directUsbOutput_->capturePacketDropCount();
+        out.playbackXruns = directUsbOutput_->xrunCount();
+        out.playbackQuantumDrops = directUsbOutput_->playbackQuantumDrops();
+    }
+    out.schedulerDeadlineMisses =
+        directUsbSchedulerDeadlineMisses_.load(std::memory_order_relaxed);
+    out.maxSchedulerLatenessNanoseconds =
+        directUsbMaxSchedulerLatenessNs_.load(std::memory_order_relaxed);
     out.performanceHintActive =
         directUsbPerformanceHintActive_.load(std::memory_order_acquire);
-    out.thermalSafetyEnabled = directUsbThermalSafetyEnabled_.load(std::memory_order_acquire);
-    out.thermalSafetyActive = directUsbThermalSafetyActive_.load(std::memory_order_acquire);
-    out.playbackQuantumDrops =
-        directUsbPlaybackQuantumDrops_.load(std::memory_order_relaxed);
+    out.thermalSafetyEnabled =
+        directUsbThermalSafetyEnabled_.load(std::memory_order_acquire);
+    out.thermalSafetyActive =
+        directUsbThermalSafetyActive_.load(std::memory_order_acquire);
     return out;
 }
 
@@ -647,6 +680,17 @@ bool AudioEngine::hasError() const {
 }
 
 double AudioEngine::getLatencyMs() const {
+    if (directUsbSession_.load(std::memory_order_acquire) && directUsbOutput_) {
+        const auto stats = getDirectUsbRuntimeStats();
+        const uint64_t frames =
+            static_cast<uint64_t>(stats.captureRingFrames) +
+            static_cast<uint64_t>(stats.playbackRingFrames) +
+            static_cast<uint64_t>(stats.queuedOutFrames);
+        const float rate = publishedSampleRate_.load(std::memory_order_acquire);
+        return rate > 0.0f
+            ? static_cast<double>(frames) * 1000.0 / rate
+            : 0.0;
+    }
     return publishedLatencyMs_.load(std::memory_order_acquire);
 }
 
@@ -663,6 +707,16 @@ float AudioEngine::getCpuLoad() const {
 }
 
 int32_t AudioEngine::getXRunCount() const {
+    if (directUsbSession_.load(std::memory_order_acquire) && directUsbOutput_) {
+        const auto stats = getDirectUsbRuntimeStats();
+        const uint64_t total =
+            stats.captureOverruns + stats.captureUnderruns +
+            stats.capturePacketDrops + stats.playbackXruns +
+            stats.playbackQuantumDrops;
+        return static_cast<int32_t>(std::min<uint64_t>(
+            total, static_cast<uint64_t>(
+                std::numeric_limits<int32_t>::max())));
+    }
     return publishedXRunCount_.load(std::memory_order_acquire);
 }
 
@@ -766,7 +820,7 @@ AudioEngine::RealtimeStatsSnapshot AudioEngine::getRealtimeStatsSnapshot() const
         out.callbackDeadlineBudgetNanoseconds =
             directUsbDeadlineBudgetNs_.load(std::memory_order_relaxed);
         out.callbackDeadlineMisses =
-            directUsbDeadlineMisses_.load(std::memory_order_relaxed);
+            directUsbSchedulerDeadlineMisses_.load(std::memory_order_relaxed);
     }
     const auto pluginStats = rackGraph_.getRealtimeCounters();
     out.vstInputStarvations = pluginStats.inputStarvations;
@@ -776,6 +830,154 @@ AudioEngine::RealtimeStatsSnapshot AudioEngine::getRealtimeStatsSnapshot() const
     out.planPublishDeferrals = rackGraph_.getPlanPublishDeferrals();
     out.xRunCount = static_cast<uint64_t>(std::max(0, getXRunCount()));
     return out;
+}
+bool AudioEngine::measureDirectUsbRoundTrip(
+        int32_t timeoutMs, double result[5], std::string& error) noexcept {
+    for (int i = 0; i < 5; ++i) result[i] = 0.0;
+    if (timeoutMs <= 0) {
+        error = "invalid timeout";
+        return false;
+    }
+    if (!directUsbSession_.load(std::memory_order_acquire) ||
+        !isRunning_.load(std::memory_order_acquire)) {
+        error = "Direct USB must be running";
+        return false;
+    }
+    if (directUsbOutputPair_.load(std::memory_order_acquire) != 0) {
+        error = "Select USB outputs 1-2 before measuring output 1 to input 1";
+        return false;
+    }
+
+    RoundTripMeasurement& measurement = roundTripMeasurement_;
+    int32_t quiesced = 4;
+    if (measurement.state.compare_exchange_strong(
+            quiesced, 0, std::memory_order_acq_rel)) {
+        activeRoundTripMeasurement_.store(
+            nullptr, std::memory_order_release);
+    }
+    int32_t expected = 0;
+    if (!measurement.state.compare_exchange_strong(
+            expected, 5, std::memory_order_acq_rel)) {
+        error = "A round-trip measurement is already running";
+        return false;
+    }
+
+    const int32_t rate = std::max(
+        1, static_cast<int32_t>(std::lround(sampleRate_)));
+    const int32_t preRollFrames = std::max(1, rate / 10);
+    const int32_t probeFrames = std::clamp(rate / 50, 1024, 2048);
+    const int32_t postRollFrames = std::max(1, rate / 4);
+    const int32_t captureFrames =
+        preRollFrames + probeFrames + postRollFrames;
+    try {
+        measurement.probe.assign(
+            static_cast<size_t>(probeFrames), 0.0f);
+        measurement.capture.assign(
+            static_cast<size_t>(captureFrames), 0.0f);
+    } catch (const std::bad_alloc&) {
+        measurement.state.store(0, std::memory_order_release);
+        error = "Unable to allocate round-trip buffers";
+        return false;
+    }
+
+    uint32_t random = 0x9e3779b9u;
+    for (float& sample : measurement.probe) {
+        random ^= random << 13u;
+        random ^= random >> 17u;
+        random ^= random << 5u;
+        sample = (random & 1u) != 0u ? 0.25f : -0.25f;
+    }
+    measurement.sampleRate = rate;
+    measurement.preRollFrames = preRollFrames;
+    measurement.processedFrames.store(0, std::memory_order_relaxed);
+    measurement.capturedFrames.store(0, std::memory_order_relaxed);
+    measurement.inputPeak.store(0.0f, std::memory_order_relaxed);
+    measurement.outputPeak.store(0.0f, std::memory_order_relaxed);
+    activeRoundTripMeasurement_.store(
+        &measurement, std::memory_order_release);
+    int32_t preparing = 5;
+    if (!measurement.state.compare_exchange_strong(
+            preparing, 1, std::memory_order_acq_rel)) {
+        activeRoundTripMeasurement_.store(
+            nullptr, std::memory_order_release);
+        measurement.state.store(0, std::memory_order_release);
+        error = "Direct USB stopped before round-trip measurement started";
+        return false;
+    }
+
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(timeoutMs);
+    while (measurement.state.load(std::memory_order_acquire) == 1 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+
+    bool timedOut = false;
+    if (measurement.state.load(std::memory_order_acquire) == 1) {
+        int32_t armed = 1;
+        if (measurement.state.compare_exchange_strong(
+                armed, 3, std::memory_order_acq_rel)) {
+            timedOut = true;
+            const auto quiesceDeadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(100);
+            while (measurement.state.load(
+                       std::memory_order_acquire) == 3 &&
+                   std::chrono::steady_clock::now() <
+                       quiesceDeadline) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(1));
+            }
+        } else if (armed != 2) {
+            timedOut = true;
+        }
+    }
+    if (timedOut) {
+        if (measurement.state.load(
+                std::memory_order_acquire) == 4) {
+            activeRoundTripMeasurement_.store(
+                nullptr, std::memory_order_release);
+            measurement.state.store(
+                0, std::memory_order_release);
+        }
+        error = "Round-trip measurement timed out";
+        return false;
+    }
+
+    activeRoundTripMeasurement_.store(nullptr, std::memory_order_release);
+    if (measurement.state.load(std::memory_order_acquire) != 2) {
+        measurement.state.store(0, std::memory_order_release);
+        error = "Direct USB stopped during round-trip measurement";
+        return false;
+    }
+
+    const int32_t capturedFrames = std::min<int32_t>(
+        measurement.capturedFrames.load(std::memory_order_acquire),
+        static_cast<int32_t>(measurement.capture.size()));
+    const auto correlation = analyzeRoundTripCorrelation(
+        measurement.probe.data(),
+        static_cast<int32_t>(measurement.probe.size()),
+        measurement.capture.data(),
+        capturedFrames,
+        measurement.preRollFrames);
+    const int32_t latencyFrames = correlation.latencyFrames;
+    if (latencyFrames < 0 || correlation.correlation < 0.2) {
+        measurement.state.store(0, std::memory_order_release);
+        error = "Probe correlation is too weak; check the output 1 to input 1 cable and gain";
+        return false;
+    }
+
+    result[0] = static_cast<double>(latencyFrames);
+    result[1] =
+        static_cast<double>(latencyFrames) * 1000.0 /
+        static_cast<double>(measurement.sampleRate);
+    result[2] = correlation.correlation;
+    result[3] = measurement.inputPeak.load(std::memory_order_acquire);
+    result[4] = measurement.outputPeak.load(std::memory_order_acquire);
+    measurement.state.store(0, std::memory_order_release);
+    error.clear();
+    return true;
 }
 
 
@@ -790,26 +992,10 @@ void AudioEngine::directUsbRenderLoop() {
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(period);
     const uint32_t captureTransferFrames = std::max<uint32_t>(
         1, directCaptureTransferFrames_.load(std::memory_order_acquire));
-    const uint32_t captureDeadlineFrames =
-        ((static_cast<uint32_t>(frames) + captureTransferFrames - 1U) /
-         captureTransferFrames) * captureTransferFrames;
-    const auto captureWaitPeriod =
-        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-            std::chrono::duration<double>(
-                static_cast<double>(captureDeadlineFrames) /
-                static_cast<double>(sampleRate_)));
-    const uint32_t captureCapacityFrames = std::max<uint32_t>(
-        static_cast<uint32_t>(frames),
-        static_cast<uint32_t>(std::max(0, directUsbOutput_->captureCapacityFrames())));
-    const uint32_t captureHeadroomFrames = std::min(
-        captureTransferFrames,
-        captureCapacityFrames - static_cast<uint32_t>(frames));
-    const uint32_t desiredCaptureTarget =
-        static_cast<uint32_t>(frames) * 2U;
-    const uint32_t captureTargetFrames = std::min<uint32_t>(
-        desiredCaptureTarget,
-        captureCapacityFrames - static_cast<uint32_t>(frames) -
-            captureHeadroomFrames);
+    const uint32_t captureTargetFrames = static_cast<uint32_t>(
+        std::max(0, directUsbOutput_->captureTargetFrames()));
+    const uint32_t captureDeadlineSlackFrames = static_cast<uint32_t>(
+        std::max(0, directUsbOutput_->captureDeadlineSlackFrames()));
     const uint32_t captureRequiredFrames =
         static_cast<uint32_t>(frames) + captureTargetFrames;
     const float peakDecay = meterDecayForBlock(frames, sampleRate_);
@@ -818,8 +1004,26 @@ void AudioEngine::directUsbRenderLoop() {
         directUsbOutputLeft_.data(), directUsbOutputRight_.data()};
     int32_t failureCode = 0;
 
+
     while (directUsbSession_.load(std::memory_order_acquire)) {
         const auto began = std::chrono::steady_clock::now();
+        const uint32_t captureAvailableFrames = static_cast<uint32_t>(
+            std::max(0, directUsbOutput_->captureAvailableFrames()));
+        const uint64_t captureMissingFrames =
+            captureRequiredFrames > captureAvailableFrames
+                ? static_cast<uint64_t>(
+                    captureRequiredFrames - captureAvailableFrames)
+                : 0;
+        const uint64_t roundedMissingFrames =
+            ((captureMissingFrames + captureTransferFrames - 1U) /
+             captureTransferFrames) * captureTransferFrames;
+        const uint64_t captureDeadlineFrames =
+            roundedMissingFrames + captureDeadlineSlackFrames;
+        const auto captureWaitPeriod =
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(
+                    static_cast<double>(captureDeadlineFrames) /
+                    static_cast<double>(sampleRate_)));
         const auto deadline = began + captureWaitPeriod;
         directUsbDeadlineBudgetNs_.store(
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -828,24 +1032,130 @@ void AudioEngine::directUsbRenderLoop() {
             directUsbOutput_->waitForCaptureUntil(
                 static_cast<int>(captureRequiredFrames), deadline);
         if (!captureTargetReady) {
-            directUsbCaptureWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
-            const int available =
-                directUsbOutput_ ? directUsbOutput_->captureAvailableFrames() : 0;
+            directUsbCaptureWaitTimeouts_.fetch_add(
+                1, std::memory_order_relaxed);
+            const int available = directUsbOutput_
+                ? directUsbOutput_->captureAvailableFrames()
+                : 0;
             if (available < frames) {
-                directUsbDeadlineMisses_.fetch_add(1, std::memory_order_relaxed);
+                directUsbDeadlineMisses_.fetch_add(
+                    1, std::memory_order_relaxed);
             }
-            if (!directUsbOutput_ || !directUsbOutput_->driverStreaming()) {
+            if (!directUsbOutput_ ||
+                !directUsbOutput_->driverStreaming()) {
                 failureCode = usbFailureCode(
-                    monotrypt::usb::StartError::TransportStoppedUnexpectedly);
+                    monotrypt::usb::StartError::
+                        TransportStoppedUnexpectedly);
                 break;
             }
         }
         directUsbOutput_->readInputChannels(
-            directUsbInputPlanes_.data(), directUsbInputChannelCount_, frames);
+            directUsbInputPlanes_.data(),
+            directUsbInputChannelCount_,
+            frames);
 
         const auto dspBegan = std::chrono::steady_clock::now();
-        processRackBlock(renderInputPtrs, directUsbInputChannelCount_,
-                         renderOutputPtrs, frames);
+        processRackBlock(
+            renderInputPtrs,
+            directUsbInputChannelCount_,
+            renderOutputPtrs,
+            frames);
+
+        RoundTripMeasurement* measurement =
+            activeRoundTripMeasurement_.load(
+                std::memory_order_acquire);
+        if (measurement) {
+            const int32_t measurementState =
+                measurement->state.load(
+                    std::memory_order_acquire);
+            if (measurementState == 3) {
+                RoundTripMeasurement* expectedMeasurement =
+                    measurement;
+                activeRoundTripMeasurement_.compare_exchange_strong(
+                    expectedMeasurement,
+                    nullptr,
+                    std::memory_order_acq_rel);
+                measurement->state.store(
+                    4, std::memory_order_release);
+            } else if (measurementState == 1) {
+                const int32_t blockStart =
+                    measurement->processedFrames.fetch_add(
+                        frames, std::memory_order_relaxed);
+                const int32_t captured =
+                    measurement->capturedFrames.load(
+                        std::memory_order_relaxed);
+                const int32_t copyFrames = std::max(
+                    0,
+                    std::min(
+                        frames,
+                        static_cast<int32_t>(
+                            measurement->capture.size()) -
+                            captured));
+                float measuredInputPeak =
+                    measurement->inputPeak.load(
+                        std::memory_order_relaxed);
+                for (int32_t i = 0; i < copyFrames; ++i) {
+                    const float input =
+                        renderInputPtrs[0][i];
+                    measurement->capture[
+                        static_cast<size_t>(captured + i)] =
+                        input;
+                    measuredInputPeak = std::max(
+                        measuredInputPeak,
+                        std::fabs(input));
+                }
+                measurement->inputPeak.store(
+                    measuredInputPeak,
+                    std::memory_order_relaxed);
+                measurement->capturedFrames.store(
+                    captured + copyFrames,
+                    std::memory_order_release);
+
+                bool emittedProbe = false;
+                for (int32_t i = 0; i < frames; ++i) {
+                    const int32_t probeFrame =
+                        blockStart + i -
+                        measurement->preRollFrames;
+                    const bool inProbe =
+                        probeFrame >= 0 &&
+                        probeFrame <
+                            static_cast<int32_t>(
+                                measurement->probe.size());
+                    directUsbOutputLeft_[
+                        static_cast<size_t>(i)] =
+                        inProbe
+                            ? measurement->probe[
+                                static_cast<size_t>(
+                                    probeFrame)]
+                            : 0.0f;
+                    directUsbOutputRight_[
+                        static_cast<size_t>(i)] = 0.0f;
+                    emittedProbe = emittedProbe || inProbe;
+                }
+                if (emittedProbe) {
+                    measurement->outputPeak.store(
+                        0.25f, std::memory_order_relaxed);
+                }
+                if (captured + copyFrames >=
+                    static_cast<int32_t>(
+                        measurement->capture.size())) {
+                    int32_t armed = 1;
+                    if (!measurement->state.compare_exchange_strong(
+                            armed, 2,
+                            std::memory_order_acq_rel) &&
+                        armed == 3) {
+                        RoundTripMeasurement* expectedMeasurement =
+                            measurement;
+                        activeRoundTripMeasurement_.compare_exchange_strong(
+                            expectedMeasurement,
+                            nullptr,
+                            std::memory_order_acq_rel);
+                        measurement->state.store(
+                            4, std::memory_order_release);
+                    }
+                }
+            }
+        }
         const uint64_t dspNs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - dspBegan).count());
@@ -877,13 +1187,37 @@ void AudioEngine::directUsbRenderLoop() {
                 break;
             }
         }
+        const auto finished = std::chrono::steady_clock::now();
         const uint64_t cycleNs = static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - began).count());
+                finished - began).count());
         directUsbLastCycleNs_.store(cycleNs, std::memory_order_relaxed);
         peak = directUsbPeakCycleNs_.load(std::memory_order_relaxed);
         while (peak < cycleNs && !directUsbPeakCycleNs_.compare_exchange_weak(
                    peak, cycleNs, std::memory_order_relaxed)) {}
+        const auto cycleDeadline = began + quantumPeriod;
+        if (finished > cycleDeadline) {
+            directUsbSchedulerDeadlineMisses_.fetch_add(
+                1, std::memory_order_relaxed);
+            const uint64_t latenessNs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    finished - cycleDeadline).count());
+            uint64_t maxLateness = directUsbMaxSchedulerLatenessNs_.load(
+                std::memory_order_relaxed);
+            while (maxLateness < latenessNs &&
+                   !directUsbMaxSchedulerLatenessNs_.compare_exchange_weak(
+                       maxLateness, latenessNs, std::memory_order_relaxed)) {}
+        }
+    }
+    if (RoundTripMeasurement* measurement =
+            activeRoundTripMeasurement_.exchange(
+                nullptr, std::memory_order_acq_rel)) {
+        const int32_t state =
+            measurement->state.load(std::memory_order_acquire);
+        if (state == 1 || state == 3 || state == 5) {
+            measurement->state.store(
+                4, std::memory_order_release);
+        }
     }
     directUsbRenderTid_.store(0, std::memory_order_release);
     const bool sessionWasActive =
