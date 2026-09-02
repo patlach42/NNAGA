@@ -5,10 +5,30 @@ add_library(lv2_tiny_gain SHARED
     tiny_gain.c
 )
 target_include_directories(lv2_tiny_gain PRIVATE ${LV2_TEST_INCLUDE_DIR})
+
 set_target_properties(lv2_tiny_gain PROPERTIES
     PREFIX ""
     OUTPUT_NAME "tiny_gain"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bundles/tiny_gain.lv2"
+)
+add_library(lv2_unsupported_required SHARED
+    lv2_unsupported_required.c
+)
+target_include_directories(lv2_unsupported_required PRIVATE ${LV2_TEST_INCLUDE_DIR})
+set_target_properties(lv2_unsupported_required PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "lv2_unsupported_required"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_unsupported_required.lv2"
+)
+
+add_library(lv2_urid_fault SHARED
+    lv2_urid_fault.c
+)
+target_include_directories(lv2_urid_fault PRIVATE ${LV2_TEST_INCLUDE_DIR})
+set_target_properties(lv2_urid_fault PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "lv2_urid_fault"
+    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_urid_fault.lv2"
 )
 
 add_library(lv2_host_contract SHARED
@@ -50,13 +70,29 @@ configure_file(lv2_host_contract.ttl
 
 configure_file(manifest.ttl "${CMAKE_CURRENT_BINARY_DIR}/bundles/tiny_gain.lv2/manifest.ttl" COPYONLY)
 configure_file(tiny_gain.ttl "${CMAKE_CURRENT_BINARY_DIR}/bundles/tiny_gain.lv2/tiny_gain.ttl" COPYONLY)
+configure_file(lv2_unsupported_required_manifest.ttl
+    "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_unsupported_required.lv2/manifest.ttl"
+    COPYONLY)
+configure_file(lv2_unsupported_required.ttl
+    "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_unsupported_required.lv2/lv2_unsupported_required.ttl"
+    COPYONLY)
+configure_file(lv2_urid_fault_manifest.ttl
+    "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_urid_fault.lv2/manifest.ttl"
+    COPYONLY)
+configure_file(lv2_urid_fault.ttl
+    "${CMAKE_CURRENT_BINARY_DIR}/bundles/lv2_urid_fault.lv2/lv2_urid_fault.ttl"
+    COPYONLY)
 
 add_executable(lv2_process_tests
     TestLV2Process.cpp
+    ${LV2_TEST_APP_CPP_DIR}/plugin/PluginChain.cpp
     ${LV2_TEST_APP_CPP_DIR}/plugin/lv2/LV2Plugin.cpp
     ${LV2_TEST_APP_CPP_DIR}/plugin/lv2/LV2Utils.cpp
+    ${LV2_TEST_APP_CPP_DIR}/plugin/lv2/LV2PluginFactory.cpp
 )
-add_dependencies(lv2_process_tests lv2_tiny_gain lv2_host_contract lv2_worker_contract)
+add_dependencies(lv2_process_tests lv2_tiny_gain lv2_host_contract lv2_worker_contract
+    lv2_unsupported_required lv2_urid_fault)
+
 target_compile_definitions(lv2_process_tests PRIVATE
     HAVE_LV2=1
     LV2_FIXTURE_DIR="${CMAKE_CURRENT_BINARY_DIR}/bundles"

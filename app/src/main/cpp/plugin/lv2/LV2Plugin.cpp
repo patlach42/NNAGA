@@ -155,7 +155,11 @@ static bool checkRequiredFeatures(
     bool ok = true;
     LILV_FOREACH(nodes, i, required) {
         const LilvNode* feat = lilv_nodes_get(required, i);
-        const char* uri = lilv_node_as_uri(feat);
+        const char* uri = feat ? lilv_node_as_uri(feat) : nullptr;
+        if (!uri) {
+            ok = false;
+            continue;
+        }
         bool found = false;
         for (const char** s = supportedFeatures; *s; ++s) {
             if (strcmp(uri, *s) == 0) { found = true; break; }
@@ -275,6 +279,15 @@ LV2Plugin::LV2Plugin(const LilvPlugin* plugin,
         LOGE("Plugin has unsupported required features, skipping instantiation");
         return;
     }
+    if (LilvNodes* required = lilv_plugin_get_required_features(plugin_)) {
+        LILV_FOREACH(nodes, i, required) {
+            const LilvNode* feature = lilv_nodes_get(required, i);
+            const char* uri = feature ? lilv_node_as_uri(feature) : nullptr;
+            if (uri && std::strcmp(uri, LV2_WORKER__schedule) == 0)
+                requiredWorker_ = true;
+        }
+        lilv_nodes_free(required);
+    }
 
     buildFeatures();
 
@@ -290,6 +303,7 @@ LV2Plugin::LV2Plugin(const LilvPlugin* plugin,
         return;
     }
     connectPorts();
+    structuralValid_.store(true, std::memory_order_release);
 
     // Query state:interface extension
     const void* si = lilv_instance_get_extension_data(instance_, LV2_STATE__interface);
@@ -315,27 +329,22 @@ LV2Plugin::~LV2Plugin() {
 
 void LV2Plugin::activate(float sampleRate, uint32_t bufferSize) {
     LOGI("activate: sampleRate=%.0f bufferSize=%u", sampleRate, bufferSize);
-    if (bufferSize > kMaxLv2BufferFrames) {
-        LOGE("activate: bufferSize %u exceeds LV2 hard limit %zu", bufferSize, kMaxLv2BufferFrames);
-        deactivate();
+    structuralValid_.store(false, std::memory_order_release);
+    deactivate();
+    if (bufferSize > kMaxLv2BufferFrames || sampleRate <= 0.0f) {
+        LOGE("activate: invalid sample rate or buffer size");
         return;
     }
     const uint32_t effectiveBlock = bufferSize ? bufferSize : static_cast<uint32_t>(kMaxLv2BufferFrames);
-    if (isActive_.load(std::memory_order_acquire) && sampleRate_ == sampleRate &&
-        maxBlockLength_ == static_cast<int32_t>(effectiveBlock)) return;
     latencyFrames_.store(0, std::memory_order_relaxed);
-    deactivate();
     sampleRate_ = sampleRate;
     maxBlockLength_ = static_cast<int32_t>(effectiveBlock);
 
-    // Save state before destroying the old instance so it can be restored after
-    // re-instantiation (e.g. NAM model path is held inside the plugin instance).
     PluginState savedState;
     bool hasSavedState = false;
     if (instance_) {
         savedState = saveState();
         hasSavedState = !savedState.properties.empty() || !savedState.controlPortValues.empty();
-        isActive_.store(false, std::memory_order_release);
         uint8_t expected = 1;
         if (processState_.compare_exchange_strong(expected, 2, std::memory_order_acq_rel) &&
             !waitForProcessAcknowledgement()) return;
@@ -343,50 +352,30 @@ void LV2Plugin::activate(float sampleRate, uint32_t bufferSize) {
         lilv_instance_free(instance_);
         instance_ = nullptr;
     }
-
-    if (!checkRequiredFeatures(
-            plugin_, world_, workerSemInitialized_.load(std::memory_order_acquire))) {
-        LOGE("Plugin has unsupported required features, skipping re-instantiation");
-        return;
-    }
-
+    if (!checkRequiredFeatures(plugin_, world_,
+            workerSemInitialized_.load(std::memory_order_acquire))) return;
     buildFeatures();
-
     instance_ = lilv_plugin_instantiate(plugin_, sampleRate, instanceFeatures_.data());
-    if (!instance_) {
-        LOGE("Failed to re-instantiate LV2 plugin");
-        return;
-    }
+    if (!instance_) return;
     if (!initializePorts()) {
-        LOGE("Failed to initialize LV2 ports");
         lilv_instance_free(instance_);
         instance_ = nullptr;
         return;
     }
     connectPorts();
-
-    // Re-query state:interface after re-instantiation
-    const void* si = lilv_instance_get_extension_data(instance_, LV2_STATE__interface);
-    stateInterface_ = static_cast<const LV2_State_Interface*>(si);
-
-    LOGI("activate: ports control=%zu audioIn=%zu audioOut=%zu atom=%zu",
-         controlPorts_.size(), audioInputPorts_.size(), audioOutputPorts_.size(),
-         atomPorts_.size());
-
-    if (instance_) {
-        lilv_instance_activate(instance_);
-        startWorker();
+    stateInterface_ = static_cast<const LV2_State_Interface*>(
+        lilv_instance_get_extension_data(instance_, LV2_STATE__interface));
+    lilv_instance_activate(instance_);
+    if (!startWorker() && requiredWorker_) {
+        lilv_instance_deactivate(instance_);
+        lilv_instance_free(instance_);
+        instance_ = nullptr;
+        return;
     }
-
+    structuralValid_.store(true, std::memory_order_release);
     uridFaulted_.store(false, std::memory_order_release);
-    isActive_.store(true, std::memory_order_seq_cst);
-
-    // Restore state after re-instantiation (e.g. NAM model path).
-    // The worker thread is already running so the plugin can immediately
-    // schedule async work (model load) in response to restore().
-    if (hasSavedState && instance_) {
-        restoreState(savedState);
-    }
+    isActive_.store(true, std::memory_order_release);
+    if (hasSavedState) restoreState(savedState);
 }
 
 void LV2Plugin::deactivate() {
@@ -577,7 +566,6 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
         }
         break;
     }
-    // Run the DSP before inspecting output ports.  Worker responses are
     // delivered during this run and must be drained before end_run().
     const LV2_Handle workerHandle = lilv_instance_get_handle(instance_);
     gLv2RealtimeMapMiss = false;
@@ -590,7 +578,12 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
     }
     if (workerInterface_ && workerInterface_->end_run) workerInterface_->end_run(workerHandle);
     gLv2RealtimeMapContext = false;
-    if (gLv2RealtimeMapMiss) uridFaulted_.store(true, std::memory_order_release);
+    if (gLv2RealtimeMapMiss) {
+        uridFaulted_.store(true, std::memory_order_release);
+        passthrough();
+        finishProcess();
+        return passthroughMidi();
+    }
     if (latencyControlPosition_ >= 0 &&
         static_cast<size_t>(latencyControlPosition_) < controlPorts_.size() &&
         controlPorts_[static_cast<size_t>(latencyControlPosition_)]) {
@@ -692,7 +685,8 @@ PluginInfo LV2Plugin::getInfo() const {
     LilvNode* inputClass = lilv_new_uri(world_, LILV_URI_INPUT_PORT);
     LilvNode* outputClass = lilv_new_uri(world_, LILV_URI_OUTPUT_PORT);
     LilvNode* toggledClass = lilv_new_uri(world_, LV2_CORE__toggled);
-    
+    info.realtimeClass = (instance_ && structuralValid_.load(std::memory_order_acquire))
+        ? RealtimeClass::CertifiedInProcess : RealtimeClass::Unsupported;
     for (uint32_t i = 0; i < numPorts; ++i) {
         const LilvPort* port = lilv_plugin_get_port_by_index(plugin_, i);
         if (!port) continue;
@@ -995,14 +989,24 @@ bool LV2Plugin::initializePorts() {
     const uint32_t numPorts = lilv_plugin_get_num_ports(plugin_);
     LilvNode *audioClass=lilv_new_uri(world_,LILV_URI_AUDIO_PORT), *controlClass=lilv_new_uri(world_,LILV_URI_CONTROL_PORT);
     LilvNode *latencyDesignation=lilv_new_uri(world_,LV2_CORE__latency), *atomClass=lilv_new_uri(world_,LILV_URI_ATOM_PORT);
-    LilvNode *inputClass=lilv_new_uri(world_,LILV_URI_INPUT_PORT), *atomSupports=lilv_new_uri(world_,LV2_ATOM__supports);
+    LilvNode *inputClass=lilv_new_uri(world_,LILV_URI_INPUT_PORT), *outputClass=lilv_new_uri(world_,LILV_URI_OUTPUT_PORT);
+    LilvNode *optionalClass=lilv_new_uri(world_,LV2_CORE__connectionOptional), *atomSupports=lilv_new_uri(world_,LV2_ATOM__supports);
     LilvNode *midiEventNode=lilv_new_uri(world_,LV2_MIDI__MidiEvent), *minimumSizeNode=lilv_new_uri(world_,LV2_RESIZE_PORT__minimumSize);
     const LilvPort* designated=lilv_plugin_get_port_by_designation(plugin_,controlClass,latencyDesignation);
-    size_t maxCapacity=kAtomBufferSize; bool valid=true;
+    size_t maxCapacity=kAtomBufferSize; bool valid = numPorts != 0;
     for (uint32_t i=0;i<numPorts;++i) {
         const LilvPort* port=lilv_plugin_get_port_by_index(plugin_,i); if(!port) continue;
         const bool audio=lilv_port_is_a(plugin_,port,audioClass), control=lilv_port_is_a(plugin_,port,controlClass);
         const bool atom=lilv_port_is_a(plugin_,port,atomClass), input=lilv_port_is_a(plugin_,port,inputClass);
+        const bool output=lilv_port_is_a(plugin_,port,outputClass);
+        const bool optional=lilv_port_has_property(plugin_,port,optionalClass);
+        const unsigned typeCount = static_cast<unsigned>(audio) +
+            static_cast<unsigned>(control) + static_cast<unsigned>(atom);
+        if (typeCount != 1 || input == output) {
+            if (optional) continue;
+            valid = false;
+            break;
+        }
         if(control) {
             float value=0.0f; LilvNode *d=nullptr,*mn=nullptr,*mx=nullptr; lilv_port_get_range(plugin_,port,&d,&mn,&mx);
             if(d){value=static_cast<float>(lilv_node_as_float(d));lilv_node_free(d);} if(mn)lilv_node_free(mn);if(mx)lilv_node_free(mx);
@@ -1010,6 +1014,8 @@ bool LV2Plugin::initializePorts() {
             pendingControlPorts_.push_back(std::unique_ptr<std::atomic<float>>(new std::atomic<float>(value)));
             controlPortInputs_.push_back(input); controlPortIndices_.push_back(i); if(!input&&port==designated)latencyControlPosition_=static_cast<int32_t>(p);
         } else if(audio) {
+            if (input && audioInputPorts_.size() >= 2) { valid = false; break; }
+            if (!input && audioOutputPorts_.size() >= 2) { valid = false; break; }
             if(input){audioInputBuffers_.emplace_back(kMaxLv2BufferFrames,0.0f);audioInputPorts_.push_back(audioInputBuffers_.back().data());}
             else{audioOutputBuffers_.emplace_back(kMaxLv2BufferFrames,0.0f);audioOutputPorts_.push_back(audioOutputBuffers_.back().data());}
         } else if(atom) {
@@ -1027,13 +1033,15 @@ bool LV2Plugin::initializePorts() {
             const size_t idx=atomPortBuffers_.size(); atomPortBuffers_.emplace_back(cap,0); atomPorts_.push_back({i,input,midi,idx,cap}); maxCapacity=std::max(maxCapacity,cap);
         }
     }
-    lilv_node_free(minimumSizeNode);lilv_node_free(latencyDesignation);lilv_node_free(atomSupports);lilv_node_free(midiEventNode);lilv_node_free(controlClass);lilv_node_free(atomClass);lilv_node_free(inputClass);lilv_node_free(audioClass);
+    lilv_node_free(minimumSizeNode);lilv_node_free(latencyDesignation);lilv_node_free(optionalClass);lilv_node_free(atomSupports);lilv_node_free(midiEventNode);lilv_node_free(controlClass);lilv_node_free(atomClass);lilv_node_free(outputClass);lilv_node_free(inputClass);lilv_node_free(audioClass);
     if(!valid){atomPortBuffers_.clear();atomPorts_.clear();return false;}
     // Keep descriptor capacity independent of payload-byte storage.
     const size_t slots = std::max<size_t>(256, kUiQueueCapacity);
     pendingAtoms_.reset(slots, maxCapacity);
     pendingOutputAtoms_.reset(slots, maxCapacity + sizeof(uint64_t));
-    LOGI("initializePorts: control=%zu audioIn=%zu audioOut=%zu atom=%zu",controlPorts_.size(),audioInputPorts_.size(),audioOutputPorts_.size(),atomPorts_.size()); return true;
+    LOGI("initializePorts: control=%zu audioIn=%zu audioOut=%zu atom=%zu",
+         controlPorts_.size(), audioInputPorts_.size(), audioOutputPorts_.size(), atomPorts_.size());
+    return true;
 }
 
 // ---------- State path mapping ----------
@@ -1189,30 +1197,23 @@ bool LV2Plugin::waitForProcessAcknowledgement() noexcept {
     return true;
 }
 
-void LV2Plugin::startWorker() {
-    if (!instance_) return;
-
-    // Get worker interface from plugin via extension_data
+bool LV2Plugin::startWorker() {
+    if (!instance_) return false;
     const void* iface = lilv_instance_get_extension_data(instance_, LV2_WORKER__interface);
     workerInterface_ = static_cast<const LV2_Worker_Interface*>(iface);
-
-    if (!workerInterface_) {
-        LOGI("Plugin does not provide worker interface");
-        return;
-    }
-
+    if (!workerInterface_) return !requiredWorker_;
     LOGI("Starting worker thread (work=%p work_response=%p end_run=%p)",
-         (void*)workerInterface_->work,
-         (void*)workerInterface_->work_response,
+         (void*)workerInterface_->work, (void*)workerInterface_->work_response,
          (void*)workerInterface_->end_run);
-
-    if (!workerSemInitialized_.load(std::memory_order_acquire)) {
-        LOGE("LV2 worker semaphore is unavailable");
+    if (!workerInterface_->work || !workerInterface_->work_response ||
+        !workerInterface_->end_run ||
+        !workerSemInitialized_.load(std::memory_order_acquire)) {
         workerInterface_ = nullptr;
-        return;
+        return false;
     }
     workerRunning_.store(true, std::memory_order_release);
     workerThread_ = std::thread(&LV2Plugin::workerThreadFunc, this);
+    return true;
 }
 
 void LV2Plugin::stopWorker() {

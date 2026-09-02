@@ -1,0 +1,7 @@
+desc: Malformed Contract Fixture
+in_pin:L
+out_pin:L
+slider1:0<0,1,0.1>Broken
+
+@sample
+(

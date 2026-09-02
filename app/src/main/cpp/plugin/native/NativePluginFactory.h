@@ -19,6 +19,7 @@ private:
     std::string nativeLibDir_;
     std::string pluginLibDir_;
     std::vector<PluginInfo> plugins_;
+    // Descriptor IDs are the sole lookup identity; aliases remain metadata.
     std::unordered_map<std::string, std::pair<std::shared_ptr<NativePluginLibrary>, const NnagaPluginDescriptorV2*>> descriptors_;
 };
 

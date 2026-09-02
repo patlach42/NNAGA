@@ -122,11 +122,13 @@ std::vector<guitarrackcraft::PluginInfo> VstFactory::enumeratePlugins() {
     out.reserve(entries_.size());
     for (const auto& e : entries_) {
         guitarrackcraft::PluginInfo info;
-        // PluginRegistry::initializeAll prepends "<format>:" so id holds just
-        // the uuid. Mirrors LV2PluginFactory which puts the LV2 URI here.
+        // Factory previews use the same isolated Wine runtime contract as
+        // instances. PluginChain performs the separate activation readiness
+        // check before publication.
         info.id = e.uuid;
         info.name = e.displayName;
         info.format = e.format;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::Isolated;
         // Stereo I/O (no params yet — they get learned at activate time via
         // the shm handshake). Surfaces matching ports so RackManager can
         // connect us into the chain.

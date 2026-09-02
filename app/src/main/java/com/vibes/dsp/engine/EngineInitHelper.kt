@@ -99,6 +99,10 @@ object EngineInitHelper {
                 return false
             }
         }
+        // Load the APK baseline first: Android reuses the first image for a
+        // matching SONAME, so a stale installed filter must not shadow ABI v2.
+        runCatching { System.loadLibrary("nnaga_plugin_filter") }
+            .onFailure { Log.w(TAG, "Baseline native filter preload failed", it) }
         val nativeDir = File(context.applicationContext.filesDir, "plugin-repositories/installed/native")
         findNativePluginBinaries(nativeDir).forEach { library ->
             runCatching { System.load(library.absolutePath) }

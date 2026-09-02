@@ -241,6 +241,7 @@ int PluginChain::addPlugin(std::unique_ptr<IPlugin> plugin, int position) {
                                    std::memory_order_release);
                 if (sampleRate > 0.0f) pluginsActivated_ = true;
                 recomputeLatencyLocked();
+                realtimeDiagnostic_.clear();
                 result = index;
                 accepted = true;
             } else {
@@ -502,6 +503,11 @@ void PluginChain::deactivate() {
 std::string PluginChain::getRealtimeDiagnostic() const {
     std::lock_guard lock(controlMutex_);
     return realtimeDiagnostic_;
+}
+
+void PluginChain::setRealtimeDiagnostic(std::string diagnostic) {
+    std::lock_guard lock(controlMutex_);
+    realtimeDiagnostic_ = std::move(diagnostic);
 }
 
 size_t PluginChain::getSize() const {

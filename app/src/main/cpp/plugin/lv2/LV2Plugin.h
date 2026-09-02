@@ -88,6 +88,10 @@ public:
                      const MidiEvent* inputEvents, uint32_t inputCount,
                      MidiEvent* outputEvents, uint32_t outputCapacity) override;
     PluginInfo getInfo() const override;
+    bool isReadyForRealtime() const noexcept override {
+        return structuralValid_.load(std::memory_order_acquire) &&
+               isActive_.load(std::memory_order_acquire);
+    }
     uint32_t getLatencyFrames() const noexcept override { return latencyFrames_.load(std::memory_order_relaxed); }
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
@@ -125,6 +129,7 @@ private:
 #endif
     float sampleRate_;
     std::atomic<bool> isActive_{false};
+    std::atomic<bool> structuralValid_{false};
     std::atomic<uint32_t> latencyFrames_{0};
     // 0 idle, 1 process owns instance, 2 control requested stop.
     std::atomic<uint8_t> processState_{0};
@@ -150,7 +155,8 @@ private:
     void connectPorts();
     bool initializePorts();
 #if defined(HAVE_LV2) && HAVE_LV2 == 1
-    // Worker extension
+    bool requiredWorker_ = false;
+    bool startWorker();
     const LV2_Worker_Interface* workerInterface_ = nullptr;
     LV2_Worker_Schedule workerSchedule_{};
     LV2_Feature workerScheduleFeature_{};
@@ -243,7 +249,6 @@ private:
     static void freePathCallback(LV2_State_Free_Path_Handle handle, char* path);
 
     void buildFeatures();
-    void startWorker();
     void stopWorker();
     bool waitForProcessAcknowledgement() noexcept;
     void workerThreadFunc();

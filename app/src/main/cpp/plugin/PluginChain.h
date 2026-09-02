@@ -55,6 +55,7 @@ public:
         return latencyOverflow_.load(std::memory_order_relaxed);
     }
     std::string getRealtimeDiagnostic() const;
+    void setRealtimeDiagnostic(std::string diagnostic);
 
     size_t getSize() const;
     uint64_t getPluginInstanceId(int index) const;

@@ -4195,7 +4195,19 @@ private:
 class RestorableTestFactory final : public guitarrackcraft::IPluginFactory {
 public:
     std::string getFormat() const override { return "TEST"; }
-    std::vector<guitarrackcraft::PluginInfo> enumeratePlugins() override { return {}; }
+    std::vector<guitarrackcraft::PluginInfo> enumeratePlugins() override {
+        std::vector<guitarrackcraft::PluginInfo> plugins;
+        for (const char* id :
+             {"new", "replacement", "other", "master"}) {
+            guitarrackcraft::PluginInfo info;
+            info.id = id;
+            info.format = "TEST";
+            info.realtimeClass =
+                guitarrackcraft::RealtimeClass::CertifiedInProcess;
+            plugins.push_back(std::move(info));
+        }
+        return plugins;
+    }
     std::unique_ptr<guitarrackcraft::IPlugin> createPlugin(const std::string& pluginId) override {
         if (pluginId == "new" || pluginId == "replacement" ||
             pluginId == "other" || pluginId == "master") {
@@ -4277,6 +4289,7 @@ TEST(RackGraphStateRestoreTest,
 
     guitarrackcraft::PluginRegistry registry;
     registry.registerFactory(std::make_unique<RestorableTestFactory>());
+    ASSERT_TRUE(registry.initializeAll());
     std::string diagnostic;
     ASSERT_TRUE(graph.restoreState(saved, registry, diagnostic)) << diagnostic;
     ASSERT_EQ(graph.getChain(303)->getSize(), 1u);
@@ -4301,6 +4314,7 @@ TEST(RackGraphStateRestoreTest,
               0);
     guitarrackcraft::PluginRegistry registry;
     registry.registerFactory(std::make_unique<RestorableTestFactory>());
+    ASSERT_TRUE(registry.initializeAll());
 
     guitarrackcraft::PluginChain::ChainState exported;
     std::string diagnostic;

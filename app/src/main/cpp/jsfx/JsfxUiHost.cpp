@@ -41,6 +41,7 @@ struct JsfxUiHost::State {
     bool configured = false;
     bool effectPaused = false;
     bool effectCallActive = false;
+    std::atomic_flag effectGate = ATOMIC_FLAG_INIT;
     uint32_t width = 320;
     uint32_t height = 240;
     float scale = 1.0f;
@@ -169,6 +170,13 @@ void JsfxUiHost::resumeEffect() {
     }
     state_->condition.notify_all();
 }
+bool JsfxUiHost::tryAcquireEffect() noexcept {
+    return !state_->effectGate.test_and_set(std::memory_order_acquire);
+}
+
+void JsfxUiHost::releaseEffect() noexcept {
+    state_->effectGate.clear(std::memory_order_release);
+}
 
 void JsfxUiHost::pointer(uint32_t modifiers, int32_t x, int32_t y, uint32_t buttons,
                          double wheel, double horizontalWheel) {
@@ -296,6 +304,12 @@ void JsfxUiHost::run() {
             });
             if (state->stopping) break;
         }
+        // UI never waits for DSP ownership. Crucially, acquire before
+        // consuming dirty/input state so a skipped frame loses nothing.
+        if (state->effectGate.test_and_set(std::memory_order_acquire)) {
+            lock.unlock();
+            continue;
+        }
 
         ysfx_t* effect = state->effect;
         const uint32_t width = state->width;
@@ -381,6 +395,7 @@ void JsfxUiHost::run() {
         }
 
         if (window) ANativeWindow_release(window);
+        state->effectGate.clear(std::memory_order_release);
         lock.lock();
         state->effectCallActive = false;
         lock.unlock();

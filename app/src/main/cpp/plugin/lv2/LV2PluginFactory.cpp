@@ -87,8 +87,9 @@ bool LV2PluginFactory::initialize() {
         if (uri) info.id = lilv_node_as_string(uri);
         if (name) info.name = lilv_node_as_string(name);
         info.format = "LV2";
-        // Third-party LV2 payloads are not certified for in-process realtime execution.
-        info.realtimeClass = RealtimeClass::Unsupported;
+        // The host adapter is runtime-certified. Individual binaries are
+        // structurally validated when createPlugin() instantiates them.
+        info.realtimeClass = RealtimeClass::CertifiedInProcess;
         const LilvNode* bundleUri = lilv_plugin_get_bundle_uri(plugin);
         if (bundleUri) {
             char* bundlePath = lilv_file_uri_parse(lilv_node_as_string(bundleUri), nullptr);
@@ -148,8 +149,9 @@ std::unique_ptr<IPlugin> LV2PluginFactory::createPlugin(const std::string& plugi
     static constexpr float kDefaultSampleRate = 48000.0f;
     auto lv2Plugin = std::make_unique<LV2Plugin>(
         plugin, std::move(generation), kDefaultSampleRate, filesDir_);
-    if (!lv2Plugin->hasInstance()) {
-        LOGE("LV2 plugin could not be instantiated (binary missing or load failed): %s", pluginId.c_str());
+    if (!lv2Plugin->hasInstance() ||
+        lv2Plugin->getInfo().realtimeClass != RealtimeClass::CertifiedInProcess) {
+        LOGE("LV2 plugin failed runtime admission: %s", pluginId.c_str());
         return nullptr;
     }
     return lv2Plugin;

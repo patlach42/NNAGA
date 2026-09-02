@@ -1,0 +1,17 @@
+desc: Sparse Slider Contract
+in_pin:L
+in_pin:R
+out_pin:L
+out_pin:R
+slider1:0<0,1,0.01>First control
+slider3:0<0,1,0.01>Third control
+
+@init
+amp = 0;
+
+@slider
+amp = slider1 + slider3;
+
+@sample
+spl0 *= amp;
+spl1 *= amp;

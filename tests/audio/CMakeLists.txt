@@ -39,6 +39,7 @@ target_link_libraries(plugin_chain_lifecycle_tests PRIVATE GTest::gtest_main pth
 gtest_discover_tests(plugin_chain_lifecycle_tests)
 add_executable(native_plugin_host_tests
     TestNativePluginHost.cpp
+    ${AUDIO_APP_CPP_DIR}/plugin/PluginChain.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/native/NativePlugin.cpp
 )
 

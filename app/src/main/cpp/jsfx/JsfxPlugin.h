@@ -23,6 +23,7 @@ public:
     bool loaded() const noexcept { return fx_ != nullptr; }
     void prepare() override {}
     void activate(float sampleRate, uint32_t bufferSize = 0) override;
+    bool isReadyForRealtime() const noexcept override { return ready_.load(std::memory_order_acquire); }
     void deactivate() override;
     uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
                      const AudioProcessContext& context, const MidiEvent* inputEvents,
@@ -40,6 +41,9 @@ public:
 
 private:
     static constexpr uint32_t kMaxSliders = ysfx_max_sliders;
+    static constexpr uint32_t kMaxQuantum = 8192;
+    static constexpr uint32_t kMaxMidiEvents = 128;
+    static constexpr uint32_t kMidiCapacityBytes = 4096;
     std::shared_ptr<ysfx_config_t> config_;
     ysfx_t* fx_ = nullptr;
     std::unique_ptr<JsfxUiHost> uiHost_;
@@ -49,6 +53,9 @@ private:
     std::array<std::atomic<float>, kMaxSliders> pending_{};
     std::array<std::atomic<bool>, kMaxSliders> dirty_{};
     std::atomic<bool> active_{false};
+    std::atomic<bool> ready_{false};
+    std::atomic<bool> callbackFaulted_{false};
+    std::atomic<uint32_t> quantum_{0};
     std::atomic<uint32_t> latencyFrames_{0};
     mutable std::mutex controlMutex_;
 };

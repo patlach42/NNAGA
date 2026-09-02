@@ -90,6 +90,12 @@ struct PortInfo {
     int32_t stepCount = 0;
     bool isReadOnly = false;
 };
+/**
+ * Admission class of the validated host runtime used for this instance.
+ * CertifiedInProcess means the format adapter, activation handshake, and
+ * callback handoffs satisfy the host realtime contract. It is not a
+ * per-plugin quality or deadline certification of arbitrary DSP code.
+ */
 enum class RealtimeClass : uint8_t {
     CertifiedInProcess,
     Isolated,

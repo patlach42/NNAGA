@@ -162,6 +162,7 @@ WineVstPlugin::~WineVstPlugin() {
 
 void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     lastStableLatencyFrames_.store(0, std::memory_order_release);
+    realtimeReady_.store(false, std::memory_order_release);
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize;
     dryRampSamples_ = 0;
@@ -170,12 +171,27 @@ void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     lastOutputLeft_ = 0.0f;
     lastOutputRight_ = 0.0f;
     haveLastOutput_ = false;
+
+    // The transport and guest host only support a bounded, nonzero quantum.
+    // Keep admission false for invalid activation rather than publishing a
+    // plugin that can only remain on the dry fallback path.
+    if (!std::isfinite(sampleRate) || sampleRate <= 0.0f ||
+        bufferSize == 0 || bufferSize > VSTPOC_MAX_BLOCK_FRAMES) {
+        return;
+    }
     prepare();
+    realtimeReady_.store(
+        prepared_.load(std::memory_order_acquire) &&
+        guestReadyForActivation_.load(std::memory_order_acquire) &&
+        ring_ && ring_->valid(),
+        std::memory_order_release);
 }
 
 void WineVstPlugin::prepare() {
-    lastStableLatencyFrames_.store(0, std::memory_order_release);
     if (prepared_.load()) return;
+    lastStableLatencyFrames_.store(0, std::memory_order_release);
+    realtimeReady_.store(false, std::memory_order_release);
+    guestReadyForActivation_.store(false, std::memory_order_release);
 
     // Per-plugin shm + picker files. Naming matches vstpoc convention so
     // wine-side env vars + tmpfs lookups behave the same. The "_v" + uuid
@@ -288,9 +304,8 @@ void WineVstPlugin::prepare() {
     // remember(pluginIndex) — if getInfo() returns no control ports at that
     // moment, the sliders panel stays empty for the lifetime of the rack
     // row. Worth a short wait here so the slider list is correct on first
-    // render. Timeout = 5s; if the guest hasn't reported by then it
-    // probably never will, but the rest of the chain still works (audio
-    // path doesn't depend on params).
+    // render. Timeout = 5s; a timeout is a failed runtime admission, so
+    // PluginChain rejects publication rather than retaining a dry-only guest.
     {
         auto* shared = ring_->raw();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -299,9 +314,11 @@ void WineVstPlugin::prepare() {
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
         if (shared && shared->guest_ready == 0) {
-            LOGW("WineVstPlugin[%s] guest_ready timeout after 5s — sliders won't render",
+            guestReadyForActivation_.store(false, std::memory_order_release);
+            LOGW("WineVstPlugin[%s] guest_ready timeout after 5s — realtime admission failed",
                  entry_.displayName.c_str());
         } else if (shared) {
+            guestReadyForActivation_.store(true, std::memory_order_release);
             paramMirror_.assign(static_cast<size_t>(std::max(0, shared->param_count)), 0.5f);
             std::vector<float> guestValues;
             if (readGuestParamSnapshot(ring_.get(), guestValues)) {
@@ -316,10 +333,11 @@ void WineVstPlugin::prepare() {
     LOGI("WineVstPlugin[%s] prepared pid=%d sr=%.0f bs=%u",
          entry_.displayName.c_str(), guest_->pid(), sampleRate_, bufferSize_);
 }
-
 void WineVstPlugin::deactivate() {
-    // Clear before tearing down the ring so readers cannot observe a dead
-    // guest's last stable value as current latency.
+    // Clear admission before tearing down the ring so readers cannot observe
+    // a dead guest as realtime-capable.
+    realtimeReady_.store(false, std::memory_order_release);
+    guestReadyForActivation_.store(false, std::memory_order_release);
     lastStableLatencyFrames_.store(0, std::memory_order_release);
     if (!prepared_.exchange(false)) return;
     if (guest_) {
@@ -533,10 +551,9 @@ void WineVstPlugin::respondNativeFilePicker(uint32_t sequence,
     if (!picker_) return;
     picker_->writeResponse(sequence, cancelled, windowsPath.c_str());
 }
-
 guitarrackcraft::PluginInfo WineVstPlugin::getInfo() const {
     guitarrackcraft::PluginInfo info;
-    info.id = entry_.format + ":" + entry_.uuid;
+    info.id = entry_.uuid;
     info.name = entry_.displayName;
     info.format = entry_.format;
     info.realtimeClass = guitarrackcraft::RealtimeClass::Isolated;

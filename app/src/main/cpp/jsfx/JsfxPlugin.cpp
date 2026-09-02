@@ -37,9 +37,10 @@ JsfxPlugin::JsfxPlugin(std::shared_ptr<ysfx_config_t> config, std::string path, 
     info_.id = id_;
     info_.name = ysfx_get_name(fx_) ? ysfx_get_name(fx_) : path_;
     info_.format = "JSFX";
-    for (uint32_t index = 0;
-         index < kMaxSliders && ysfx_slider_exists(fx_, index);
-         ++index) {
+    info_.realtimeClass = RealtimeClass::CertifiedInProcess;
+    info_.originPath = path_;
+    for (uint32_t index = 0; index < kMaxSliders; ++index) {
+        if (!ysfx_slider_exists(fx_, index)) continue;
         ysfx_slider_curve_t curve{};
         if (!ysfx_slider_get_curve(fx_, index, &curve)) continue;
         PortInfo port{};
@@ -53,25 +54,18 @@ JsfxPlugin::JsfxPlugin(std::shared_ptr<ysfx_config_t> config, std::string path, 
         port.minValue = static_cast<float>(curve.min);
         port.maxValue = static_cast<float>(curve.max);
         port.stepCount = curve.inc > 0
-            ? static_cast<int32_t>((curve.max - curve.min) / curve.inc)
-            : 0;
-        port.isToggle = port.stepCount == 1 &&
-            curve.min == 0.0 && curve.max == 1.0;
+            ? static_cast<int32_t>((curve.max - curve.min) / curve.inc) : 0;
+        port.isToggle = port.stepCount == 1 && curve.min == 0.0 && curve.max == 1.0;
         if (ysfx_slider_is_enum(fx_, index)) {
             const uint32_t count = ysfx_slider_get_enum_size(fx_, index);
             std::vector<const char*> names(count);
-            const uint32_t received = ysfx_slider_get_enum_names(
-                fx_, index, names.data(), count);
+            const uint32_t received = ysfx_slider_get_enum_names(fx_, index, names.data(), count);
             port.scalePoints.reserve(received);
             const double increment = curve.inc > 0.0 ? curve.inc : 1.0;
-            for (uint32_t item = 0; item < received; ++item) {
-                port.scalePoints.push_back({
-                    names[item] ? names[item] : std::to_string(item),
-                    static_cast<float>(curve.min + increment * item),
-                });
-            }
-            port.isToggle = received == 2 &&
-                curve.min == 0.0 && curve.max == 1.0;
+            for (uint32_t item = 0; item < received; ++item)
+                port.scalePoints.push_back({names[item] ? names[item] : std::to_string(item),
+                    static_cast<float>(curve.min + increment * item)});
+            port.isToggle = received == 2 && curve.min == 0.0 && curve.max == 1.0;
         }
         info_.ports.push_back(std::move(port));
         pending_[index].store(static_cast<float>(curve.def), std::memory_order_relaxed);
@@ -85,62 +79,101 @@ JsfxPlugin::~JsfxPlugin() {
 
 void JsfxPlugin::activate(float sampleRate, uint32_t bufferSize) {
     std::lock_guard lock(controlMutex_);
+    active_.store(false, std::memory_order_release);
+    ready_.store(false, std::memory_order_release);
+    callbackFaulted_.store(false, std::memory_order_release);
+    quantum_.store(0, std::memory_order_release);
     latencyFrames_.store(0, std::memory_order_relaxed);
-    if (!fx_) return;
-    UiPauseGuard pause(uiHost_.get());
-    ysfx_set_sample_rate(fx_, sampleRate);
-    ysfx_set_block_size(fx_, bufferSize);
-    ysfx_set_midi_capacity(fx_, 256, false);
-    ysfx_init(fx_);
-    active_.store(true, std::memory_order_release);
+    if (!fx_ || !std::isfinite(sampleRate) || sampleRate <= 0.0f ||
+        bufferSize == 0 || bufferSize > kMaxQuantum) return;
+    try {
+        UiPauseGuard pause(uiHost_.get());
+        ysfx_set_sample_rate(fx_, sampleRate);
+        ysfx_set_block_size(fx_, bufferSize);
+        ysfx_set_midi_capacity(fx_, kMidiCapacityBytes, false);
+        ysfx_init(fx_);
+        quantum_.store(bufferSize, std::memory_order_release);
+        ready_.store(true, std::memory_order_release);
+        active_.store(true, std::memory_order_release);
+    } catch (...) {}
 }
 
 void JsfxPlugin::deactivate() {
     active_.store(false, std::memory_order_release);
+    ready_.store(false, std::memory_order_release);
+    quantum_.store(0, std::memory_order_release);
     latencyFrames_.store(0, std::memory_order_release);
 }
 
 uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, uint32_t frames,
                              const AudioProcessContext& context, const MidiEvent* inputEvents,
                              uint32_t inputCount, MidiEvent* outputEvents, uint32_t outputCapacity) {
-    if (!fx_ || !active_.load(std::memory_order_acquire)) return 0;
-    for (uint32_t i = 0; i < kMaxSliders; ++i)
-        if (dirty_[i].exchange(false, std::memory_order_acq_rel))
-            ysfx_slider_set_value(fx_, i, pending_[i].load(std::memory_order_relaxed), true);
-    ysfx_time_info_t ti{}; ti.tempo = context.beatsPerMinute; ti.beat_position = context.beatPosition;
-    ti.time_position = context.sampleRate > 0 ? context.samplePosition / context.sampleRate : 0;
-    ti.playback_state = context.playing ? ysfx_playback_playing : ysfx_playback_stopped;
-    ysfx_set_time_info(fx_, &ti);
-    for (uint32_t i = 0; i < inputCount; ++i) {
-        uint8_t bytes[3] = {inputEvents[i].status, inputEvents[i].data1, inputEvents[i].data2};
-        ysfx_midi_event_t ev{0, inputEvents[i].frameOffset, 3, bytes}; ysfx_send_midi(fx_, &ev);
+    auto passthrough = [&] {
+        if (outputs) for (uint32_t ch = 0; ch < 2; ++ch) if (outputs[ch]) {
+            if (inputs && inputs[ch]) std::copy_n(inputs[ch], frames, outputs[ch]);
+            else std::fill_n(outputs[ch], frames, 0.0f);
+        }
+        if (outputEvents && inputEvents) {
+            const uint32_t count =
+                std::min({inputCount, outputCapacity, kMaxMidiEvents});
+            std::copy_n(inputEvents, count, outputEvents);
+            return count;
+        }
+        return 0u;
+    };
+    if (!fx_ || !active_.load(std::memory_order_acquire) ||
+        callbackFaulted_.load(std::memory_order_acquire) || frames == 0 ||
+        frames > quantum_.load(std::memory_order_acquire) ||
+        frames > kMaxQuantum || !inputs || !inputs[0] || !inputs[1] ||
+        !outputs || !outputs[0] || !outputs[1])
+        return passthrough();
+    if (uiHost_ && !uiHost_->tryAcquireEffect()) return passthrough();
+    try {
+        for (uint32_t i = 0; i < kMaxSliders; ++i)
+            if (dirty_[i].exchange(false, std::memory_order_acq_rel))
+                ysfx_slider_set_value(fx_, i, pending_[i].load(std::memory_order_relaxed), true);
+        ysfx_time_info_t ti{};
+        ti.tempo = context.beatsPerMinute;
+        ti.beat_position = context.beatPosition;
+        ti.time_position = context.sampleRate > 0 ? context.samplePosition / context.sampleRate : 0;
+        ti.playback_state = context.playing ? ysfx_playback_playing : ysfx_playback_stopped;
+        ysfx_set_time_info(fx_, &ti);
+        const uint32_t count = std::min(inputCount, kMaxMidiEvents);
+        if (inputEvents) for (uint32_t i = 0; i < count; ++i) {
+            uint8_t bytes[3] = {inputEvents[i].status, inputEvents[i].data1, inputEvents[i].data2};
+            ysfx_midi_event_t ev{0, std::min(inputEvents[i].frameOffset, frames - 1), 3, bytes};
+            ysfx_send_midi(fx_, &ev);
+        }
+        ysfx_process_float(fx_, inputs, outputs, 2, 2, frames);
+        const ysfx_real pdc = ysfx_get_pdc_delay(fx_);
+        uint32_t channels[2] = {0, 0};
+        ysfx_get_pdc_channels(fx_, channels);
+        const bool defaultChannels = channels[0] == 0 && channels[1] == 0;
+        const bool stereoChannels = channels[0] == 0 && channels[1] >= 2;
+        if (std::isfinite(static_cast<double>(pdc)) && pdc >= 0 &&
+            (defaultChannels || stereoChannels))
+            latencyFrames_.store(static_cast<uint32_t>(
+                std::min(static_cast<double>(pdc), 65535.0)), std::memory_order_relaxed);
+        else latencyFrames_.store(0, std::memory_order_relaxed);
+        uint32_t countOut = 0;
+        ysfx_midi_event_t ev{};
+        while (outputEvents && countOut < outputCapacity && ysfx_receive_midi(fx_, &ev))
+            if (ev.size >= 3 && ev.data)
+                outputEvents[countOut++] = {ev.offset, ev.data[0], ev.data[1], ev.data[2]};
+        if (uiHost_) uiHost_->releaseEffect();
+        return countOut;
+    } catch (...) {
+        callbackFaulted_.store(true, std::memory_order_release);
+        if (uiHost_) uiHost_->releaseEffect();
+        return passthrough();
     }
-    ysfx_process_float(fx_, inputs, outputs, 2, 2, frames);
-    const ysfx_real pdc = ysfx_get_pdc_delay(fx_);
-    uint32_t channels[2] = {0, 0};
-    ysfx_get_pdc_channels(fx_, channels);
-    const bool defaultChannels = channels[0] == 0 && channels[1] == 0;
-    const bool stereoChannels = channels[0] == 0 && channels[1] >= 2;
-    if (std::isfinite(static_cast<double>(pdc)) && pdc >= 0 &&
-        (defaultChannels || stereoChannels)) {
-        constexpr double kMaxPdcFrames = 65535.0;
-        const double bounded = std::min(static_cast<double>(pdc), kMaxPdcFrames);
-        latencyFrames_.store(static_cast<uint32_t>(bounded), std::memory_order_relaxed);
-    } else {
-        // PDC is scoped to stereo output processing.  Do not retain a value
-        // from an earlier layout or invalid @pdc declaration.
-        latencyFrames_.store(0, std::memory_order_relaxed);
-    }
-    uint32_t count = 0; ysfx_midi_event_t ev{};
-    while (count < outputCapacity && ysfx_receive_midi(fx_, &ev)) {
-        if (ev.size >= 3 && ev.data) outputEvents[count++] = {ev.offset, ev.data[0], ev.data[1], ev.data[2]};
-    }
-    return count;
 }
 
 PluginInfo JsfxPlugin::getInfo() const { return info_; }
 void JsfxPlugin::setParameter(uint32_t i, float v) { if (i < kMaxSliders) { pending_[i].store(v, std::memory_order_relaxed); dirty_[i].store(true, std::memory_order_release); } }
-float JsfxPlugin::getParameter(uint32_t i) const { return fx_ && i < kMaxSliders ? static_cast<float>(ysfx_slider_get_value(fx_, i)) : 0.f; }
+float JsfxPlugin::getParameter(uint32_t i) const {
+    return i < kMaxSliders ? pending_[i].load(std::memory_order_relaxed) : 0.0f;
+}
 uint32_t JsfxPlugin::getNumInputPorts() const { return fx_ ? std::min(ysfx_get_num_inputs(fx_), 2u) : 0; }
 uint32_t JsfxPlugin::getNumOutputPorts() const { return fx_ ? std::min(ysfx_get_num_outputs(fx_), 2u) : 0; }
 

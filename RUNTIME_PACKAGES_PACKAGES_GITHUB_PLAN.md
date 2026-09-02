@@ -50,7 +50,7 @@
 ### 4. Сначала доказать обновляемый Native runtime без потери встроенного fallback
 
 1. Вынести `NativePluginFactory`/`NativePlugin` в общие sources, чтобы app собирал embedded `libnnaga_runtime_native_builtin.so` через runtime C ABI, а `:runtime_native` — ту же implementation как package runtime. Core `libguitarrackcraft.so` оставляет registry/adapters, но не дублирует Native factory implementation.
-2. Embedded runtime сканирует текущие `filesDir/plugin-repositories/installed/native` и APK baseline `libnnaga_plugin_filter.so`; package runtime получает те же host-owned roots, поскольку local runtime исполняется в NNAGA UID. Сохранить существующую ABI-v1 validation, single-library archive rule и FD-based plugin loading.
+2. Embedded runtime сканирует текущие `filesDir/plugin-repositories/installed/native` и APK baseline `libnnaga_plugin_filter.so`; package runtime получает те же host-owned roots, поскольку local runtime исполняется в NNAGA UID. Сохранить существующую ABI-v2 validation, single-library archive rule и FD-based plugin loading.
 3. При package activation перечислить embedded и package factories с priorities `100/200`; проверить exact owner route для одинакового `NATIVE:<id>`. Не менять уже запущенные instances в callback; runtime switch возможен только на cold start, затем rack state восстанавливается новым owner. Failed package init оставляет embedded filter и все embedded routes.
 
 ### 5. Перенести JSFX и LV2 runtimes из base в local runtime APK

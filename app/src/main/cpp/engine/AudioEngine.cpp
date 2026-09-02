@@ -1037,16 +1037,33 @@ void AudioEngine::directUsbRenderLoop() {
             const int available = directUsbOutput_
                 ? directUsbOutput_->captureAvailableFrames()
                 : 0;
-            if (available < frames) {
-                directUsbDeadlineMisses_.fetch_add(
-                    1, std::memory_order_relaxed);
-            }
             if (!directUsbOutput_ ||
                 !directUsbOutput_->driverStreaming()) {
                 failureCode = usbFailureCode(
                     monotrypt::usb::StartError::
                         TransportStoppedUnexpectedly);
                 break;
+            }
+            if (!monotrypt::usb::isCompleteCaptureQuantum(
+                    available, frames)) {
+                directUsbDeadlineMisses_.fetch_add(
+                    1, std::memory_order_relaxed);
+                // Preserve the capture timeline. The working main path
+                // skipped incomplete reads; rendering here would inject a
+                // zero-filled tail into guitar/NAM input.
+                // A stalled capture must still acknowledge a timed-out
+                // round-trip request; otherwise the measurement stays armed
+                // until some future complete quantum arrives.
+                RoundTripMeasurement* pendingMeasurement =
+                    activeRoundTripMeasurement_.load(std::memory_order_acquire);
+                if (pendingMeasurement &&
+                    pendingMeasurement->state.load(std::memory_order_acquire) == 3) {
+                    RoundTripMeasurement* expected = pendingMeasurement;
+                    activeRoundTripMeasurement_.compare_exchange_strong(
+                        expected, nullptr, std::memory_order_acq_rel);
+                    pendingMeasurement->state.store(4, std::memory_order_release);
+                }
+                continue;
             }
         }
         directUsbOutput_->readInputChannels(

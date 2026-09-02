@@ -47,6 +47,9 @@ public:
                      uint32_t outputCapacity) override;
 
     guitarrackcraft::PluginInfo getInfo() const override;
+    bool isReadyForRealtime() const noexcept override {
+        return realtimeReady_.load(std::memory_order_acquire);
+    }
     uint32_t getLatencyFrames() const noexcept override;
     guitarrackcraft::PluginRealtimeCounters getRealtimeCounters() const noexcept override {
         guitarrackcraft::PluginRealtimeCounters counters;
@@ -96,7 +99,11 @@ private:
     float sampleRate_ = 48000.0f;
     uint32_t bufferSize_ = 0;
     std::atomic<bool> prepared_{false};
-
+    // Admission is separate from preparation: a started guest is not
+    // publishable until activation accepted a bounded nonzero quantum and the
+    // guest completed its startup handshake.
+    std::atomic<bool> guestReadyForActivation_{false};
+    std::atomic<bool> realtimeReady_{false};
     std::unique_ptr<SharedRing>      ring_;
     std::unique_ptr<PickerChannel>   picker_;
     std::unique_ptr<WineHostProcess> guest_;

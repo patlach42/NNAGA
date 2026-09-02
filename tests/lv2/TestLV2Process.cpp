@@ -1,11 +1,14 @@
 #include <gtest/gtest.h>
 
 #include "plugin/lv2/LV2Plugin.h"
+#include "plugin/lv2/LV2PluginFactory.h"
+#include "plugin/PluginChain.h"
 
 #include <lilv/lilv.h>
 #include <lv2/atom/atom.h>
 
 
+#include <chrono>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -15,6 +18,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <thread>
 #include <vector>
 namespace guitarrackcraft {
@@ -291,6 +295,194 @@ bool contains(const std::vector<int32_t>& values, int32_t expected) {
 
 }  // namespace
 
+TEST(LV2PluginProcessTest, ValidFixtureAdmissionAndActivationReadiness) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/tiny-gain");
+    ASSERT_NE(fixture.plugin, nullptr);
+
+    guitarrackcraft::LV2Plugin instance(
+        fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    EXPECT_FALSE(instance.isReadyForRealtime());
+    EXPECT_EQ(instance.getInfo().realtimeClass,
+              guitarrackcraft::RealtimeClass::CertifiedInProcess);
+
+    instance.activate(48000.0f, 64);
+    EXPECT_TRUE(instance.isReadyForRealtime());
+    EXPECT_EQ(instance.getInfo().realtimeClass,
+              guitarrackcraft::RealtimeClass::CertifiedInProcess);
+
+    instance.deactivate();
+    EXPECT_FALSE(instance.isReadyForRealtime());
+}
+
+TEST(LV2PluginProcessTest, FactoryEnumerationAndCreationPreserveAdmissionMetadata) {
+    guitarrackcraft::LV2PluginFactory factory(LV2_FIXTURE_DIR);
+    ASSERT_TRUE(factory.initialize());
+
+    const auto enumerated = factory.enumeratePlugins();
+    const auto found = std::find_if(
+        enumerated.begin(), enumerated.end(), [](const guitarrackcraft::PluginInfo& info) {
+            return info.id == "https://guitarrackcraft.test/lv2/tiny-gain";
+        });
+    ASSERT_NE(found, enumerated.end());
+    EXPECT_EQ(found->format, "LV2");
+    EXPECT_EQ(found->realtimeClass,
+              guitarrackcraft::RealtimeClass::CertifiedInProcess);
+
+    auto created = factory.createPlugin(found->id);
+    ASSERT_NE(created, nullptr);
+    const auto createdInfo = created->getInfo();
+    EXPECT_EQ(createdInfo.id, found->id);
+    EXPECT_EQ(createdInfo.format, found->format);
+    EXPECT_EQ(createdInfo.realtimeClass, found->realtimeClass);
+    EXPECT_FALSE(created->isReadyForRealtime());
+
+    created->activate(48000.0f, 64);
+    EXPECT_TRUE(created->isReadyForRealtime());
+    EXPECT_EQ(created->getInfo().realtimeClass,
+              guitarrackcraft::RealtimeClass::CertifiedInProcess);
+    created->deactivate();
+}
+
+TEST(LV2PluginProcessTest, InvalidActivationStaysUnreadyAndBypassesAudio) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/tiny-gain");
+    ASSERT_NE(fixture.plugin, nullptr);
+    guitarrackcraft::LV2Plugin instance(
+        fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+
+    constexpr std::array<std::pair<float, uint32_t>, 2> invalidActivations{{
+        {0.0f, 64u},
+        {48000.0f, 8193u},
+    }};
+    constexpr uint32_t kFrames = 4;
+    const float inputLeft[kFrames] = {0.25f, 0.5f, 0.75f, 1.0f};
+    const float inputRight[kFrames] = {1.0f, 0.75f, 0.5f, 0.25f};
+    const float* inputs[2] = {inputLeft, inputRight};
+    float outputLeft[kFrames];
+    float outputRight[kFrames];
+    float* outputs[2] = {outputLeft, outputRight};
+
+    for (const auto [sampleRate, bufferSize] : invalidActivations) {
+        instance.activate(sampleRate, bufferSize);
+        EXPECT_FALSE(instance.isReadyForRealtime());
+        EXPECT_EQ(instance.getInfo().realtimeClass,
+                  guitarrackcraft::RealtimeClass::Unsupported);
+        std::fill(outputLeft, outputLeft + kFrames, -9.0f);
+        std::fill(outputRight, outputRight + kFrames, -9.0f);
+        ASSERT_EQ(instance.process(inputs, outputs, kFrames,
+                                   guitarrackcraft::AudioProcessContext{},
+                                   nullptr, 0, nullptr, 0), 0u);
+        for (uint32_t frame = 0; frame < kFrames; ++frame) {
+            EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
+            EXPECT_FLOAT_EQ(outputRight[frame], inputRight[frame]);
+        }
+    }
+}
+
+TEST(LV2PluginProcessTest, UnsupportedRequiredFeatureFailsCleanly) {
+    LilvFixture fixture(
+        "https://guitarrackcraft.test/lv2/unsupported-required");
+    ASSERT_NE(fixture.plugin, nullptr);
+
+    guitarrackcraft::LV2Plugin instance(
+        fixture.plugin, fixture.generation, 48000.0f);
+    EXPECT_FALSE(instance.hasInstance());
+    EXPECT_FALSE(instance.isReadyForRealtime());
+    EXPECT_EQ(instance.getInfo().realtimeClass,
+              guitarrackcraft::RealtimeClass::Unsupported);
+
+    instance.activate(48000.0f, 64);
+    EXPECT_FALSE(instance.isReadyForRealtime());
+    EXPECT_FALSE(instance.hasInstance());
+
+    constexpr uint32_t kFrames = 4;
+    const float inputLeft[kFrames] = {0.1f, 0.2f, 0.3f, 0.4f};
+    const float inputRight[kFrames] = {0.4f, 0.3f, 0.2f, 0.1f};
+    const float* inputs[2] = {inputLeft, inputRight};
+    float outputLeft[kFrames];
+    float outputRight[kFrames];
+    float* outputs[2] = {outputLeft, outputRight};
+    ASSERT_EQ(instance.process(inputs, outputs, kFrames,
+                               guitarrackcraft::AudioProcessContext{},
+                               nullptr, 0, nullptr, 0), 0u);
+    for (uint32_t frame = 0; frame < kFrames; ++frame) {
+        EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
+        EXPECT_FLOAT_EQ(outputRight[frame], inputRight[frame]);
+    }
+}
+
+TEST(LV2PluginProcessTest, PluginChainPublishesActivatedFixture) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/tiny-gain");
+    ASSERT_NE(fixture.plugin, nullptr);
+    auto plugin = std::make_unique<guitarrackcraft::LV2Plugin>(
+        fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(plugin->hasInstance());
+
+    guitarrackcraft::PluginChain chain;
+    ASSERT_EQ(chain.addPlugin(std::move(plugin)), 0);
+    ASSERT_EQ(chain.getSize(), 1u);
+    ASSERT_TRUE(chain.visitPlugin(0, [](guitarrackcraft::IPlugin& admitted) {
+        const auto info = admitted.getInfo();
+        return info.id == "https://guitarrackcraft.test/lv2/tiny-gain" &&
+               info.format == "LV2" &&
+               info.realtimeClass ==
+                   guitarrackcraft::RealtimeClass::CertifiedInProcess;
+    }));
+
+    chain.setSampleRate(48000.0f, 64);
+    EXPECT_TRUE(chain.getRealtimeDiagnostic().empty());
+    chain.activate();
+    EXPECT_TRUE(chain.getRealtimeDiagnostic().empty());
+
+    constexpr uint32_t kFrames = 4;
+    const float inputLeft[kFrames] = {0.125f, 0.25f, 0.5f, 1.0f};
+    const float inputRight[kFrames] = {1.0f, 0.5f, 0.25f, 0.125f};
+    const float* inputs[2] = {inputLeft, inputRight};
+    float outputLeft[kFrames] = {};
+    float outputRight[kFrames] = {};
+    float* outputs[2] = {outputLeft, outputRight};
+    ASSERT_EQ(chain.process(inputs, outputs, kFrames,
+                            guitarrackcraft::AudioProcessContext{},
+                            nullptr, 0, nullptr, 0), 0u);
+    for (uint32_t frame = 0; frame < kFrames; ++frame) {
+        EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame] * 2.0f);
+        EXPECT_FLOAT_EQ(outputRight[frame], inputLeft[frame] * 2.0f);
+    }
+    chain.deactivate();
+}
+
+TEST(LV2PluginProcessTest, RuntimeUridFaultEnablesPersistentPassthrough) {
+    LilvFixture fixture("https://guitarrackcraft.test/lv2/urid-fault");
+    ASSERT_NE(fixture.plugin, nullptr);
+    guitarrackcraft::LV2Plugin instance(
+        fixture.plugin, fixture.generation, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    instance.activate(48000.0f, 64);
+    ASSERT_TRUE(instance.isReadyForRealtime());
+
+    constexpr uint32_t kFrames = 4;
+    const float inputLeft[kFrames] = {0.2f, 0.4f, 0.6f, 0.8f};
+    const float inputRight[kFrames] = {0.8f, 0.6f, 0.4f, 0.2f};
+    const float* inputs[2] = {inputLeft, inputRight};
+    float outputLeft[kFrames];
+    float outputRight[kFrames];
+    float* outputs[2] = {outputLeft, outputRight};
+
+    for (int block = 0; block < 2; ++block) {
+        std::fill(outputLeft, outputLeft + kFrames, -9.0f);
+        std::fill(outputRight, outputRight + kFrames, -9.0f);
+        ASSERT_EQ(instance.process(inputs, outputs, kFrames,
+                                   guitarrackcraft::AudioProcessContext{},
+                                   nullptr, 0, nullptr, 0), 0u);
+        for (uint32_t frame = 0; frame < kFrames; ++frame) {
+            EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
+            EXPECT_FLOAT_EQ(outputRight[frame], inputRight[frame]);
+        }
+    }
+    instance.deactivate();
+}
+
 TEST(LV2PluginProcessTest, ActivatedQuantumIsExactAndOversizedCallbacksDoNotProcessPartialTail) {
     LilvFixture fixture("https://guitarrackcraft.test/lv2/tiny-gain");
     ASSERT_NE(fixture.plugin, nullptr);
@@ -326,7 +518,8 @@ TEST(LV2PluginProcessTest, ActivatedQuantumIsExactAndOversizedCallbacksDoNotProc
 TEST(LV2PluginProcessTest, ActivationAndDeactivationAreAcknowledgedBeforeNextProcess) {
     LilvFixture fixture("https://guitarrackcraft.test/lv2/tiny-gain");
     ASSERT_NE(fixture.plugin, nullptr);
-    guitarrackcraft::LV2Plugin instance(fixture.plugin, fixture.generation, 48000.0f);
+    guitarrackcraft::LV2Plugin instance(
+        fixture.plugin, fixture.generation, 48000.0f);
     ASSERT_TRUE(instance.hasInstance());
     const float* inputs[2];
     float* outputs[2];
@@ -527,7 +720,11 @@ TEST(LV2WorkerContractTest, ResponseQueueAndPayloadBoundariesReturnNoSpaceWithDr
     instance.setParameter(0, 2.0f);
     std::vector<int32_t> responseValues;
     bool sawResponseDrop = false;
-    for (uint32_t tick = 0; tick < 128; ++tick) {
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(250);
+    uint32_t tick = 0;
+    while (std::chrono::steady_clock::now() < deadline &&
+           (responseValues.empty() || !sawResponseDrop)) {
         ASSERT_EQ(instance.process(nullptr, nullptr, 64,
                                    guitarrackcraft::AudioProcessContext{},
                                    nullptr, 0, nullptr, 0), 0u);
@@ -535,8 +732,9 @@ TEST(LV2WorkerContractTest, ResponseQueueAndPayloadBoundariesReturnNoSpaceWithDr
             if (value >= 12000 && value < 12200) responseValues.push_back(value);
             if (value > 3200) sawResponseDrop = true;
         }
-        if (tick == 0) instance.setParameter(0, 0.0f);
-        std::this_thread::yield();
+        if (tick++ == 0) instance.setParameter(0, 0.0f);
+        if (responseValues.empty() || !sawResponseDrop)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_FALSE(responseValues.empty());
     for (int32_t value : responseValues) {

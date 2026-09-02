@@ -172,6 +172,7 @@ static struct {
     jfieldID piX11UiBinaryPath = nullptr;
     jfieldID piParameterMetadataRevision = nullptr;
     jfieldID piX11UiUri = nullptr;
+    jfieldID piRealtimeClassOrdinal = nullptr;
 
     jclass portInfoClass = nullptr;
     jmethodID portInfoCtor = nullptr;
@@ -221,6 +222,8 @@ static bool ensureJniCache(JNIEnv* env) {
     g_jni.piParameterMetadataRevision = env->GetFieldID(
         g_jni.pluginInfoClass, "parameterMetadataRevision", "J");
     g_jni.piX11UiUri = env->GetFieldID(g_jni.pluginInfoClass, "x11UiUri", "Ljava/lang/String;");
+    g_jni.piRealtimeClassOrdinal =
+        env->GetFieldID(g_jni.pluginInfoClass, "realtimeClassOrdinal", "I");
 
     return true;
 }
@@ -990,6 +993,11 @@ jobject createPluginInfoObject(JNIEnv* env, const PluginInfo& info) {
     if (g_jni.piParameterMetadataRevision)
         env->SetLongField(obj, g_jni.piParameterMetadataRevision,
                           static_cast<jlong>(info.parameterMetadataRevision));
+    if (g_jni.piRealtimeClassOrdinal) {
+        env->SetIntField(
+            obj, g_jni.piRealtimeClassOrdinal,
+            static_cast<jint>(info.realtimeClass));
+    }
 
     // Create ports list
     if (g_jni.piPorts && !info.ports.empty()) {
@@ -1043,10 +1051,19 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeAddPluginToRack(
     std::string fullId(id);
     env->ReleaseStringUTFChars(pluginId, id);
     auto plugin = g_ctx->pluginRegistry->createPlugin(fullId);
-    if (!plugin) return -1;
     std::lock_guard lock(g_ctx->rackControlMutex);
-    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
-    return chain ? chain->addPlugin(std::move(plugin), position) : -1;
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(
+        static_cast<RackPathId>(pathId));
+    if (!chain) return -1;
+    if (!plugin) {
+        chain->setRealtimeDiagnostic("plugin-create-failed:" + fullId);
+        return -1;
+    }
+    const int result = chain->addPlugin(std::move(plugin), position);
+    if (result < 0 && chain->getRealtimeDiagnostic().empty()) {
+        chain->setRealtimeDiagnostic("plugin-activation-failed:" + fullId);
+    }
+    return result;
 }
 
 JNIEXPORT jboolean JNICALL

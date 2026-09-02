@@ -64,6 +64,17 @@ enum class UiType(val displayName: String) {
     SLIDERS("Sliders")
 }
 
+enum class PluginRuntimeClass(val ordinalValue: Int) {
+    CERTIFIED_IN_PROCESS(0),
+    ISOLATED(1),
+    UNSUPPORTED(2);
+
+    companion object {
+        fun fromOrdinal(value: Int): PluginRuntimeClass =
+            entries.firstOrNull { it.ordinalValue == value } ?: UNSUPPORTED
+    }
+}
+
 data class PluginInfo(
     val id: String = "",
     val name: String = "",
@@ -78,10 +89,14 @@ data class PluginInfo(
     val thumbnailPath: String = "",
     val description: String = "",
     val arch: String = "",
-    val parameterMetadataRevision: Long = 1L
+    val parameterMetadataRevision: Long = 1L,
+    val realtimeClassOrdinal: Int = PluginRuntimeClass.UNSUPPORTED.ordinalValue
 ) {
     val fullId: String
         get() = "$format:$id"
+
+    val runtimeClass: PluginRuntimeClass
+        get() = PluginRuntimeClass.fromOrdinal(realtimeClassOrdinal)
     
     val controlPorts: List<PortInfo>
         get() = ports.filter { it.isControl && !it.isAudio }
