@@ -623,6 +623,17 @@ class NativeEngine private constructor() {
     external fun nativeSetDirectUsbFlightRecorderEnabled(enabled: Boolean)
 
     /**
+     * Freezes the recorder when [event] (a `FlightRecord.EVENT_*` value) first
+     * occurs, preserving the events leading up to it. Without a trigger the
+     * buffer keeps only the newest records, and a rare event is evicted by the
+     * ordinary traffic that follows it.
+     */
+    external fun nativeSetDirectUsbFlightRecorderFreezeTrigger(event: Int)
+
+    /** True once the freeze trigger has fired. */
+    external fun nativeIsDirectUsbFlightRecorderFrozen(): Boolean
+
+    /**
      * Newest flight-recorder records, flattened: two header slots (total events
      * offered, events lost to wrap) followed by [FlightRecord.FIELDS] longs per
      * record. Call from a control thread once production has stopped.

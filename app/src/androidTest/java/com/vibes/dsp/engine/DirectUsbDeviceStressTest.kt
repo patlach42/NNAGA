@@ -289,6 +289,15 @@ class DirectUsbDeviceStressTest {
             // Enable before the session starts so the first admission and the
             // first completion are both recorded; enabling clears the history.
             runCatching {
+                // Arm before enabling: the trigger keeps the run-up to the
+                // first refusal, which is the event the recorder exists for.
+                // Keeping only the newest records loses it - one cycle offers
+                // about 143000 events into a 4096 slot buffer.
+                if (flightRecorder) {
+                    engine.nativeSetDirectUsbFlightRecorderFreezeTrigger(
+                        FlightRecord.EVENT_QUANTUM_REFUSED
+                    )
+                }
                 engine.nativeSetDirectUsbFlightRecorderEnabled(flightRecorder)
             }.onFailure { error ->
                 Log.i(
@@ -634,10 +643,16 @@ class DirectUsbDeviceStressTest {
             return
         }
         val prefix = "rate=${format.sampleRate} buffer=$buffer multiplier=$multiplier cycle=$cycle"
+        // A frozen buffer means the trigger fired and the tail is the run-up to
+        // it; an unfrozen one means no refusal occurred during this cycle.
+        val frozen = runCatching {
+            engine.nativeIsDirectUsbFlightRecorderFrozen()
+        }.getOrDefault(false)
         Log.i(
             tag,
             "FLIGHT_SUMMARY $prefix recorded=${snapshot.recorded} " +
-                "dropped=${snapshot.dropped} emitted=${snapshot.records.size}"
+                "dropped=${snapshot.dropped} emitted=${snapshot.records.size} " +
+                "frozen=${if (frozen) 1 else 0}"
         )
         for (record in snapshot.records) {
             Log.i(

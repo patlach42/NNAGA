@@ -677,6 +677,26 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderEnabled(
     }
 }
 
+// Freeze the recorder when `event` first occurs so its run-up survives. Without
+// it a rare event is evicted by the steady-state traffic that follows: one
+// device cycle offered 143329 events into a 4096 slot buffer.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderFreezeTrigger(
+        JNIEnv* env, jobject thiz, jint event) {
+    if (!g_ctx || !g_ctx->directUsbOutput) return;
+    using Event = monotrypt::usb::PacketFlightRecorder::Event;
+    if (event < 0 || event > static_cast<jint>(Event::TransferDeferred)) return;
+    g_ctx->directUsbOutput->setFlightRecorderFreezeTrigger(
+        static_cast<Event>(event));
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbFlightRecorderFrozen(
+        JNIEnv* env, jobject thiz) {
+    return g_ctx && g_ctx->directUsbOutput &&
+        g_ctx->directUsbOutput->flightRecorderFrozen() ? JNI_TRUE : JNI_FALSE;
+}
+
 // Returns the newest records as a flat long array, seven fields each, so the
 // caller can page through a long history without a per-record object. Slot 0
 // of the header carries the total offered and slot 1 what wrap-around lost, so
