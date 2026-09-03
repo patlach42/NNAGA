@@ -37,11 +37,12 @@ class PerformanceTweaksTest {
     }
 
     @Test
-    fun `falls back to every cpu when the topology is unreadable`() {
-        // The kernel default, and therefore harmless: better to change nothing
-        // than to pin an interrupt somewhere guessed.
-        assertEquals("ff", PerformanceTweaks.bigCoreMaskOf(""))
-        assertEquals("ff", PerformanceTweaks.bigCoreMaskOf("garbage\nlines"))
-        assertEquals("ff", PerformanceTweaks.bigCoreMaskOf("0 0\n1 0"))
+    fun `refuses to guess when the topology is unreadable`() {
+        // Returning a mask covering every CPU would claim they are all fast
+        // and pin an interrupt on that basis. An empty mask means "do not
+        // apply", which is the only honest answer without capacities.
+        assertEquals("", PerformanceTweaks.bigCoreMaskOf(""))
+        assertEquals("", PerformanceTweaks.bigCoreMaskOf("garbage\nlines"))
+        assertEquals("", PerformanceTweaks.bigCoreMaskOf("0 0\n1 0"))
     }
 }

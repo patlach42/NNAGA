@@ -46,6 +46,10 @@ object PerformanceTweaks {
 
     enum class State { Unknown, Applied, NotApplied, Unavailable }
 
+    private const val STORE = "performance_tweaks"
+    private const val KEY_IRQ_AFFINITY = "original_irq_affinity"
+    private const val KEY_MIN_FREQ = "original_scaling_min_freq"
+
     data class Tweak(
         val id: String,
         val title: String,
@@ -80,9 +84,10 @@ object PerformanceTweaks {
                 "ordinary priority.",
             caution = "A real-time thread that misbehaves can starve the rest " +
                 "of the system. The priority used here is the lowest real-time " +
-                "level and applies only to this app's audio threads.",
+                "level and applies only to this app's audio threads, but a " +
+                "real-time thread competes with the whole device.",
             requirement = Requirement.Root,
-            risk = Risk.Safe,
+            risk = Risk.SystemWide,
         ),
         Tweak(
             id = "timer_slack",
@@ -195,9 +200,24 @@ object PerformanceTweaks {
             "usb_irq_affinity" -> {
                 val irq = usbInterruptNumber()
                     ?: return Outcome(State.Unavailable, "no USB interrupt found")
+                // Remember what the system had before touching it. Reverting to
+                // a guessed "all CPUs" would discard the vendor's own choice
+                // and is wrong outright on a machine with more than eight cores.
+                val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                if (enable && !prefs.contains(KEY_IRQ_AFFINITY)) {
+                    PrivilegedShell.readPrivileged("/proc/irq/$irq/smp_affinity")
+                        ?.trim()?.let { prefs.edit().putString(KEY_IRQ_AFFINITY, it).apply() }
+                }
                 // Highest CPU is the fastest on every big.LITTLE layout seen
                 // here; the mask is a bitmask, so CPU n is 1 << n.
-                val target = if (enable) bigCoreMask() else "ff"
+                val target = if (enable) {
+                    bigCoreMask().ifEmpty {
+                        return Outcome(State.Unavailable, "CPU capacities unreadable")
+                    }
+                } else {
+                    prefs.getString(KEY_IRQ_AFFINITY, null)
+                        ?: return Outcome(State.Unavailable, "no saved affinity to restore")
+                }
                 val result = PrivilegedShell.writePrivilegedAndVerify(
                     "/proc/irq/$irq/smp_affinity", target
                 )
@@ -217,15 +237,27 @@ object PerformanceTweaks {
                 val available = PrivilegedShell.readPrivileged(
                     "$policy/scaling_available_frequencies"
                 )?.trim()?.split(Regex("\\s+"))?.mapNotNull { it.toLongOrNull() }?.sorted()
-                val min = PrivilegedShell.readPrivileged("$policy/cpuinfo_min_freq")
-                    ?.trim()
+                val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                if (enable && !prefs.contains(KEY_MIN_FREQ)) {
+                    PrivilegedShell.readPrivileged("$policy/scaling_min_freq")
+                        ?.trim()?.let { prefs.edit().putString(KEY_MIN_FREQ, it).apply() }
+                }
                 val target = if (!enable) {
-                    min ?: return Outcome(State.Unavailable, "no minimum to restore")
+                    // The value that was there, not the hardware floor: the
+                    // vendor or the user may have set something deliberately.
+                    prefs.getString(KEY_MIN_FREQ, null)
+                        ?: return Outcome(State.Unavailable, "no saved minimum to restore")
                 } else {
-                    // A middle step, not the maximum: pinning to the top runs
-                    // hot, and sustained throttling costs more than the ramp.
-                    available?.getOrNull(available.size / 2)?.toString()
-                        ?: return Outcome(State.Unavailable, "no frequency table")
+                    // Strictly between the lowest and the highest. With only
+                    // two steps there is no middle, and taking the top would
+                    // contradict what this tweak promises.
+                    val middle = available?.takeIf { it.size >= 3 }
+                        ?.get(available.size / 2)
+                    middle?.toString()
+                        ?: return Outcome(
+                            State.Unavailable,
+                            "no intermediate frequency between the extremes",
+                        )
                 }
                 val result = PrivilegedShell.writePrivilegedAndVerify(
                     "$policy/scaling_min_freq", target
@@ -285,8 +317,12 @@ object PerformanceTweaks {
                 if (cpu != null && capacity != null && capacity > 0) cpu to capacity else null
             }
             .toList()
-        if (entries.isEmpty()) return "ff"
+        // No capacities means no way to tell clusters apart. Returning a
+        // mask covering everything would claim every core is fast and pin an
+        // interrupt on that basis, so refuse instead.
+        if (entries.isEmpty()) return ""
         val best = entries.maxOf { it.second }
+        if (best <= 0) return ""
         var mask = 0L
         entries.filter { it.second == best }.forEach { mask = mask or (1L shl it.first) }
         return java.lang.Long.toHexString(mask)

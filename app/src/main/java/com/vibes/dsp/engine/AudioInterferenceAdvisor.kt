@@ -53,10 +53,22 @@ object AudioInterferenceAdvisor {
         // Measured, not assumed: background Wi-Fi activity produced a dropout
         // every thirty seconds on the reference device, and no software
         // counter saw it because the fault was not in the data path.
+        // Not fail-open: without ACCESS_WIFI_STATE this throws, and swallowing
+        // that would report "nothing in the way" on a device where Wi-Fi is
+        // interrupting audio. An unknown state is reported as unknown.
+        val wifiEnabled: Boolean? = runCatching {
+            context.applicationContext
+                .getSystemService(WifiManager::class.java)?.isWifiEnabled
+        }.getOrNull()
+        if (wifiEnabled == null) {
+            advice += Advice(
+                Kind.WifiActive,
+                "Wi-Fi state could not be read, so interference from it cannot " +
+                    "be ruled out.",
+            )
+        }
         runCatching {
-            val wifi = context.applicationContext
-                .getSystemService(WifiManager::class.java)
-            if (wifi?.isWifiEnabled == true) {
+            if (wifiEnabled == true) {
                 advice += Advice(
                     Kind.WifiActive,
                     "Wi-Fi is on. Its periodic background activity has been " +
@@ -75,9 +87,10 @@ object AudioInterferenceAdvisor {
             if (power != null && !power.isIgnoringBatteryOptimizations(packageName)) {
                 advice += Advice(
                     Kind.BatteryOptimised,
-                    "Battery optimisation is active for this app, which lets " +
-                        "the system throttle it in the background. Exempting " +
-                        "it keeps the audio engine at full speed.",
+                    "Battery optimisation is active for this app, so Doze " +
+                        "and App Standby may restrict it in the background. " +
+                        "Exempting it lifts those restrictions. It does not " +
+                        "fix CPU frequency or thermal policy.",
                 )
             }
         }
@@ -104,7 +117,7 @@ object AudioInterferenceAdvisor {
             val intent = android.content.Intent(
                 android.provider.Settings
                     .ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                android.net.Uri.parse("package:${'$'}{context.packageName}"),
+                android.net.Uri.parse("package:" + context.packageName),
             ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
             true

@@ -32,6 +32,9 @@
     <!-- Keeping the CPU out of deep idle while audio runs. A normal permission,
          granted at install, so this needs nothing from the user. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Reading whether Wi-Fi is on. Without it the check throws and the app
+         would report no interference on a device that has it. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Keeps the process out of the cached state while audio runs. Both are
          normal permissions, granted at install. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />

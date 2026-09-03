@@ -96,6 +96,7 @@ fun SettingsScreen(
             if (BuildConfig.HAS_VST_HOST) add(SettingsTab.Vst)
             add(SettingsTab.Interface)
             add(SettingsTab.ClipLauncher)
+            add(SettingsTab.Tweaks)
         }
     }
     var selectedTab by rememberSaveable(initialTab, availableTabs) {
