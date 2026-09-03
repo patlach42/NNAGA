@@ -131,6 +131,47 @@ fun TweaksSettingsScreen() {
             }
         }
 
+        item {
+            val drift = remember(busy) { PerformanceTweaks.profileDrift(context) }
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(
+                        "Measured configuration",
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    Text(
+                        "Quantum 64, multiplier 3, automatic geometry. A grid " +
+                            "of three ninety-second runs per point found this " +
+                            "the only one passing all three with no break in " +
+                            "the software path, at a 9.00 ms host queue. The " +
+                            "narrower geometry claims less latency and passed " +
+                            "none of six.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (drift.isEmpty()) {
+                        Text(
+                            "Current settings match it.",
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                    } else {
+                        Text(
+                            "Differs: " + drift.joinToString("; "),
+                            style = MaterialTheme.typography.labelSmall,
+                        )
+                        OutlinedButton(
+                            enabled = !busy,
+                            onClick = {
+                                PerformanceTweaks.restoreMeasuredProfile(context)
+                                lastResult = "Restored the measured configuration. " +
+                                    "It applies when audio next starts."
+                                busy = true
+                            },
+                        ) { Text("Restore") }
+                    }
+                }
+            }
+        }
+
         if (advice.isNotEmpty()) {
             item {
                 Card(modifier = Modifier.fillMaxWidth()) {

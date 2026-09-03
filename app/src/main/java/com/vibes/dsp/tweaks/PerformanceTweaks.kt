@@ -306,6 +306,69 @@ object PerformanceTweaks {
     }
 
     /**
+     * The configuration measured to run clean, and how far the device is from
+     * it right now.
+     *
+     * A grid of quantum by multiplier by geometry, three runs of ninety
+     * seconds each, found exactly one point passing three of three with no
+     * discontinuity in the software path: quantum 64, multiplier 3, four
+     * transfers of eight packets, at a 9.00 ms host queue. The narrower 4x4
+     * geometry claims less latency and passes none of six, carrying a
+     * reproducible mid-run break the wider one never shows.
+     *
+     * These are also the shipped defaults, so this is a way back rather than a
+     * new profile - which matters because expert settings are easy to wander
+     * away from and hard to remember returning.
+     */
+    data class Profile(
+        val bufferFrames: Int,
+        val periodMultiplier: Int,
+        val transferCount: Int,
+        val packetsPerTransfer: Int,
+    )
+
+    val measuredGoodProfile = Profile(
+        bufferFrames = 64,
+        periodMultiplier = 3,
+        transferCount = 0,
+        packetsPerTransfer = 0,
+    )
+
+    /** Human-readable difference between the current settings and the above. */
+    fun profileDrift(context: Context): List<String> {
+        val drift = mutableListOf<String>()
+        val settings = com.vibes.dsp.engine.AudioSettingsManager
+        if (settings.getBufferSize(context) != measuredGoodProfile.bufferFrames) {
+            drift += "quantum ${settings.getBufferSize(context)} " +
+                "(measured good: ${measuredGoodProfile.bufferFrames})"
+        }
+        if (settings.getDirectUsbPeriodMultiplier(context) !=
+            measuredGoodProfile.periodMultiplier
+        ) {
+            drift += "multiplier ${settings.getDirectUsbPeriodMultiplier(context)} " +
+                "(measured good: ${measuredGoodProfile.periodMultiplier})"
+        }
+        val transfers = settings.getDirectUsbTransferCount(context)
+        val packets = settings.getDirectUsbPacketsPerTransfer(context)
+        // Zero means the automatic policy, which resolves to the measured
+        // point on this hardware; a positive value overrides it.
+        if (transfers != 0 || packets != 0) {
+            drift += "geometry ${transfers}x${packets} set by hand " +
+                "(measured good: automatic, which resolves to 4x8 here)"
+        }
+        return drift
+    }
+
+    /** Puts the four settings back to the measured configuration. */
+    fun restoreMeasuredProfile(context: Context) {
+        val settings = com.vibes.dsp.engine.AudioSettingsManager
+        settings.setBufferSize(context, measuredGoodProfile.bufferFrames)
+        settings.setDirectUsbPeriodMultiplier(context, measuredGoodProfile.periodMultiplier)
+        settings.setDirectUsbTransferCount(context, measuredGoodProfile.transferCount)
+        settings.setDirectUsbPacketsPerTransfer(context, measuredGoodProfile.packetsPerTransfer)
+    }
+
+    /**
      * The interrupt number the USB controller uses, or null.
      *
      * Matched by name rather than assumed: the controller appears as xhci on
