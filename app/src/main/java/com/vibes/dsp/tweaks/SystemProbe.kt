@@ -130,11 +130,43 @@ object SystemProbe {
         )
     }
 
+    /**
+     * What in the Wi-Fi stack repeats on a period.
+     *
+     * The dropouts that cost this campaign an afternoon arrived every thirty
+     * seconds and vanished when the radio was switched off, but background
+     * scanning was already disabled, so the mechanism is still unnamed.
+     * Connectivity validation and health monitoring are the remaining
+     * candidates with a period of that order; this reports their settings
+     * rather than guessing between them.
+     */
+    fun wifiPeriodics(): Report {
+        val settings = listOf(
+            "wifi_scan_always_enabled",
+            "captive_portal_mode",
+            "wifi_watchdog_poor_network_test_enabled",
+            "network_recommendations_enabled",
+            "wifi_networks_available_notification_on",
+        )
+        val body = settings.joinToString("\n") { key ->
+            val value = PrivilegedShell.runAsRoot("settings get global $key")
+            "$key = ${value.stdout.trim().ifBlank { "?" }}"
+        }
+        val power = PrivilegedShell.runAsRoot(
+            "dumpsys wifi 2>/dev/null | grep -iE 'power save|screen off|dtim' | head -4"
+        )
+        return Report(
+            "Wi-Fi periodic behaviour",
+            body + "\n" + power.stdout.trimEnd().ifBlank { "(no power-save detail)" },
+        )
+    }
+
     fun all(): List<Report> = listOf(
         cpuTopology(),
         usbInterrupts(),
         interruptRate(),
         audioThreadPolicies(),
         thermal(),
+        wifiPeriodics(),
     )
 }
