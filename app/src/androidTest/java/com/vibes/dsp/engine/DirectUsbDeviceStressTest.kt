@@ -409,6 +409,9 @@ class DirectUsbDeviceStressTest {
             }
 
             if (reason == null && transport != null && track != null) {
+                var pollCount = 0L
+                var lastTransport: TransportInfo? = null
+                var lastTrack: RackTrackInfo? = null
                 val start = SystemClock.elapsedRealtime()
                 val deadline = start + durationMs
                 val warmupDeadline = start + warmupMs
@@ -422,13 +425,33 @@ class DirectUsbDeviceStressTest {
                     if (inputLevel.isFinite()) maxInputPeak = maxOf(maxInputPeak, inputLevel)
                     val outputLevel = engine.getOutputLevel()
                     if (outputLevel.isFinite()) maxOutputPeak = maxOf(maxOutputPeak, outputLevel)
-                    val stats = engine.getDirectUsbStats()
+                    // One array per iteration, not two: getDirectUsbStats()
+                    // decodes the same JNI array this call returns.
                     val raw = engine.nativeGetDirectUsbStats()
+                    val stats = DirectUsbStats.fromRaw(raw)
                     reason = validateRunningStats(stats, raw, format, buffer, multiplier)
                     if (reason == null && stats.sequence < previousSequence) reason = "capture-sequence-regressed"
                     previousSequence = stats.sequence
-                    val current = engine.getTransportInfo()
-                    val currentTrack = engine.getTracks().firstOrNull { it.id == temporaryTrackId }
+                    // Transport and track state change at human speed, and
+                    // getTracks() builds an array of objects. Sampling it every
+                    // iteration was the harness's largest single allocation and
+                    // it produced audible artefacts in a driver that is clean
+                    // when the same configuration is used by hand.
+                    val sampleTransport =
+                        pollCount % TRANSPORT_POLL_DIVISOR == 0L || reason != null
+                    ++pollCount
+                    val current = if (sampleTransport) {
+                        lastTransport = engine.getTransportInfo()
+                        lastTransport
+                    } else {
+                        lastTransport
+                    } ?: engine.getTransportInfo()
+                    val currentTrack = if (sampleTransport) {
+                        engine.getTracks().firstOrNull { it.id == temporaryTrackId }
+                            .also { lastTrack = it }
+                    } else {
+                        lastTrack
+                    }
                     finalTrack = currentTrack ?: finalTrack
                     val durationFrames =
                         ceil((currentTrack?.wavDurationSec ?: 0.0) * format.sampleRate.toDouble()).toLong().coerceAtLeast(1L)
@@ -836,6 +859,10 @@ class DirectUsbDeviceStressTest {
         // One 30 s cycle at a 64-frame quantum offers about 22500 quanta, so a
         // full history does not fit a log dump. The recorder keeps the newest
         // records, which is the tail leading up to whatever went wrong.
+        // Transport and track state are sampled at this fraction of the stats
+        // rate. Driver statistics stay at full resolution; the object-building
+        // accessors do not.
+        const val TRANSPORT_POLL_DIVISOR = 20L
         const val MAX_FLIGHT_RECORDS = 4096
         const val LOOPBACK_OUTPUT_MIN_PEAK = 0.05f
         const val LOOPBACK_INPUT_MIN_PEAK = 0.005f
