@@ -666,6 +666,59 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
         g_ctx->directUsbOutput->isStreaming() ? JNI_TRUE : JNI_FALSE;
 }
 
+// Diagnostics: step 1 of the ladder in docs/measurement.md. Enable before a
+// session starts; the recorder clears its history on enable so a run never
+// inherits records from the previous one.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderEnabled(
+        JNIEnv* env, jobject thiz, jboolean enabled) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setFlightRecorderEnabled(enabled == JNI_TRUE);
+    }
+}
+
+// Returns the newest records as a flat long array, seven fields each, so the
+// caller can page through a long history without a per-record object. Slot 0
+// of the header carries the total offered and slot 1 what wrap-around lost, so
+// a truncated snapshot is never mistaken for the whole run.
+JNIEXPORT jlongArray JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
+        JNIEnv* env, jobject thiz, jint maxRecords) {
+    constexpr jsize kHeader = 2;
+    constexpr jsize kFieldsPerRecord = 7;
+    if (!g_ctx || !g_ctx->directUsbOutput || maxRecords <= 0) {
+        return env->NewLongArray(0);
+    }
+    const size_t wanted = std::min<size_t>(
+        static_cast<size_t>(maxRecords), size_t{1} << 16);
+    std::vector<monotrypt::usb::PacketFlightRecorder::Record> records(wanted);
+    const size_t count =
+        g_ctx->directUsbOutput->flightRecorderSnapshot(records.data(), wanted);
+
+    const jsize total = kHeader +
+        static_cast<jsize>(count) * kFieldsPerRecord;
+    jlongArray out = env->NewLongArray(total);
+    if (!out) return nullptr;
+    std::vector<jlong> values(static_cast<size_t>(total));
+    values[0] = static_cast<jlong>(
+        g_ctx->directUsbOutput->flightRecorderRecorded());
+    values[1] = static_cast<jlong>(
+        g_ctx->directUsbOutput->flightRecorderDropped());
+    for (size_t i = 0; i < count; ++i) {
+        const auto& record = records[i];
+        jlong* slot = values.data() + kHeader + i * kFieldsPerRecord;
+        slot[0] = static_cast<jlong>(record.sequence);
+        slot[1] = static_cast<jlong>(record.timestampNs);
+        slot[2] = static_cast<jlong>(static_cast<uint16_t>(record.event));
+        slot[3] = static_cast<jlong>(record.a);
+        slot[4] = static_cast<jlong>(record.b);
+        slot[5] = static_cast<jlong>(record.ringFrames);
+        slot[6] = static_cast<jlong>(record.queuedFrames);
+    }
+    env->SetLongArrayRegion(out, 0, total, values.data());
+    return out;
+}
+
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {

@@ -44,6 +44,81 @@ enum class DirectUsbFailure {
 
 
 
+/**
+ * One packet-event flight recorder entry.
+ *
+ * The recorder answers "what did the ring look like when this happened",
+ * which aggregate counters cannot: the same configuration reported twelve
+ * producer quantum drops in one campaign and four in the next.
+ *
+ * [a] and [b] are event specific. For [Event.QUANTUM_REFUSED] and
+ * [Event.QUANTUM_OFFERED] they are the writable and the requested frames;
+ * for [Event.PLAYBACK_UNDERRUN] the frames served and the frames requested;
+ * for the completion events the frames carried by that transfer.
+ */
+data class FlightRecord(
+    val sequence: Long,
+    val timestampNs: Long,
+    val event: Int,
+    val a: Long,
+    val b: Long,
+    val ringFrames: Long,
+    val queuedFrames: Long,
+) {
+    companion object {
+        const val FIELDS = 7
+
+        const val EVENT_UNKNOWN = 0
+        const val EVENT_PLAYBACK_COMPLETE = 1
+        const val EVENT_QUANTUM_OFFERED = 2
+        const val EVENT_QUANTUM_REFUSED = 3
+        const val EVENT_CAPTURE_COMPLETE = 4
+        const val EVENT_PLAYBACK_UNDERRUN = 5
+        const val EVENT_TRANSFER_DEFERRED = 6
+
+        fun eventName(event: Int): String = when (event) {
+            EVENT_PLAYBACK_COMPLETE -> "playback-complete"
+            EVENT_QUANTUM_OFFERED -> "quantum-offered"
+            EVENT_QUANTUM_REFUSED -> "quantum-refused"
+            EVENT_CAPTURE_COMPLETE -> "capture-complete"
+            EVENT_PLAYBACK_UNDERRUN -> "playback-underrun"
+            EVENT_TRANSFER_DEFERRED -> "transfer-deferred"
+            else -> "unknown"
+        }
+    }
+}
+
+/** A decoded snapshot; [dropped] is non-zero when the history outran the buffer. */
+data class FlightRecorderSnapshot(
+    val recorded: Long = 0,
+    val dropped: Long = 0,
+    val records: List<FlightRecord> = emptyList(),
+) {
+    companion object {
+        fun decode(raw: LongArray): FlightRecorderSnapshot {
+            if (raw.size < 2) return FlightRecorderSnapshot()
+            val fields = FlightRecord.FIELDS
+            val count = (raw.size - 2) / fields
+            val records = ArrayList<FlightRecord>(count)
+            for (i in 0 until count) {
+                val base = 2 + i * fields
+                records.add(
+                    FlightRecord(
+                        sequence = raw[base],
+                        timestampNs = raw[base + 1],
+                        event = raw[base + 2].toInt(),
+                        a = raw[base + 3],
+                        b = raw[base + 4],
+                        ringFrames = raw[base + 5],
+                        queuedFrames = raw[base + 6],
+                    )
+                )
+            }
+            return FlightRecorderSnapshot(raw[0], raw[1], records)
+        }
+    }
+}
+
 data class DirectUsbStats(
     val sequence: Long = 0,
     val captureOverruns: Long = 0,
@@ -538,6 +613,21 @@ class NativeEngine private constructor() {
      */
     fun getDirectUsbStats(): DirectUsbStats = DirectUsbStats.fromRaw(nativeGetDirectUsbStats())
     external fun nativeGetDirectUsbStats(): LongArray
+
+    /**
+     * Diagnostics: step 1 of the ladder in liblowlatencyaudio/docs/measurement.md.
+     * Enable before starting a session; the recorder clears its history on
+     * enable. Recording is a bounded store on the realtime path and is off in
+     * ordinary use.
+     */
+    external fun nativeSetDirectUsbFlightRecorderEnabled(enabled: Boolean)
+
+    /**
+     * Newest flight-recorder records, flattened: two header slots (total events
+     * offered, events lost to wrap) followed by [FlightRecord.FIELDS] longs per
+     * record. Call from a control thread once production has stopped.
+     */
+    external fun nativeGetDirectUsbFlightRecorderSnapshot(maxRecords: Int): LongArray
     external fun nativeGetDirectUsbErrorDetail(): String
     external fun nativeMeasureRoundTrip(): DoubleArray
     external fun nativeGetRoundTripError(): String

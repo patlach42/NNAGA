@@ -47,6 +47,9 @@ class DirectUsbDeviceStressTest {
         val selectedBuffers = argumentCsv(args, "direct_usb_buffers", defaultBuffers, allowedBuffers)
         val selectedMultipliers = argumentCsv(args, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
         val requireLoopback = argumentBoolean(args, "direct_usb_require_loopback")
+        // Step 1 of the diagnostics ladder. Off by default: recording is cheap
+        // but the dump is verbose, and ordinary audit runs do not need it.
+        val flightRecorder = argumentBoolean(args, "direct_usb_flight_recorder")
         val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 1, 8)
         val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 600_000L)
         val warmupMs = minOf(1_000L, (durationMs / 3L).coerceAtLeast(250L))
@@ -140,7 +143,8 @@ class DirectUsbDeviceStressTest {
                                 cycle,
                                 durationMs,
                                 warmupMs,
-                                requireLoopback
+                                requireLoopback,
+                                flightRecorder
                             )
                         }
                     }
@@ -265,6 +269,7 @@ class DirectUsbDeviceStressTest {
         durationMs: Long,
         warmupMs: Long,
         requireLoopback: Boolean,
+        flightRecorder: Boolean,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -281,6 +286,11 @@ class DirectUsbDeviceStressTest {
         var maxOutputPeak = 0.0f
         try {
             AudioSettingsManager.setBufferSize(context, buffer)
+            // Enable before the session starts so the first admission and the
+            // first completion are both recorded; enabling clears the history.
+            runCatching {
+                engine.nativeSetDirectUsbFlightRecorderEnabled(flightRecorder)
+            }
             DirectUsbAudioManager.startSelected(context, format)
             val started = runBlocking {
                 DirectUsbAudioManager.startConfigured(context)
@@ -491,6 +501,9 @@ class DirectUsbDeviceStressTest {
             wav?.delete()
             runCatching { DirectUsbAudioManager.disable(context) }
         }
+        // Dump before anything else touches the engine: the records describe the
+        // run that just ended, and the recorder is cleared on the next enable.
+        if (flightRecorder) dumpFlightRecorder(engine, format, buffer, multiplier, cycle)
         val lifecycleStats = runCatching { engine.getDirectUsbStats() }.getOrDefault(finalStats)
         val lifecycleRaw = runCatching { engine.nativeGetDirectUsbStats() }.getOrDefault(finalRaw)
         val lifecycleOk = lifecycleStats.state == DirectUsbSessionState.Stopped &&
@@ -578,6 +591,43 @@ class DirectUsbDeviceStressTest {
             return "invalid-pending-telemetry"
         }
         return null
+    }
+
+    /**
+     * Dumps the flight recorder as one FLIGHT line per event.
+     *
+     * This exists because aggregate counters could not settle the questions
+     * the campaigns kept raising: the same configuration reported twelve
+     * producer quantum drops in one run and four in the next. A refusal is
+     * only interpretable next to the accepted blocks around it, so every
+     * admission is emitted, not just the failures.
+     */
+    private fun dumpFlightRecorder(
+        engine: NativeEngine,
+        format: DirectUsbFormat,
+        buffer: Int,
+        multiplier: Int,
+        cycle: Int,
+    ) {
+        val snapshot = runCatching {
+            FlightRecorderSnapshot.decode(
+                engine.nativeGetDirectUsbFlightRecorderSnapshot(MAX_FLIGHT_RECORDS)
+            )
+        }.getOrNull() ?: return
+        val prefix = "rate=${format.sampleRate} buffer=$buffer multiplier=$multiplier cycle=$cycle"
+        Log.i(
+            tag,
+            "FLIGHT_SUMMARY $prefix recorded=${snapshot.recorded} " +
+                "dropped=${snapshot.dropped} emitted=${snapshot.records.size}"
+        )
+        for (record in snapshot.records) {
+            Log.i(
+                tag,
+                "FLIGHT $prefix seq=${record.sequence} t_ns=${record.timestampNs} " +
+                    "event=${FlightRecord.eventName(record.event)} a=${record.a} b=${record.b} " +
+                    "ring_frames=${record.ringFrames} queued_frames=${record.queuedFrames}"
+            )
+        }
     }
 
     private fun telemetry(
@@ -722,6 +772,10 @@ class DirectUsbDeviceStressTest {
         const val TELEMETRY_SCHEMA_VERSION = 8L
         const val RAW_STAT_COUNT = 55
         const val MAX_IMPLICIT_FIFO = 256L
+        // One 30 s cycle at a 64-frame quantum offers about 22500 quanta, so a
+        // full history does not fit a log dump. The recorder keeps the newest
+        // records, which is the tail leading up to whatever went wrong.
+        const val MAX_FLIGHT_RECORDS = 4096
         const val LOOPBACK_OUTPUT_MIN_PEAK = 0.05f
         const val LOOPBACK_INPUT_MIN_PEAK = 0.005f
         const val CAPTURE_OVERRUNS = 1
