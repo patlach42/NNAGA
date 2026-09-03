@@ -1177,6 +1177,18 @@ void AudioEngine::directUsbRenderLoop() {
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - dspBegan).count());
         directUsbLastDspNs_.store(dspNs, std::memory_order_relaxed);
+        // ADPF must describe CPU work, not USB wait: dspNs excludes the
+        // capture deadline wait and the nonblocking playback submission.
+        // The session is owned by the thermal/ADPF policy thread; both stop
+        // paths join this render thread before that thread returns, so the
+        // published pointer stays valid for the whole render lifetime.
+        // If profiling shows the report itself costs render budget, rate-limit
+        // it or route it through an atomic mailbox rather than dropping it.
+        if (auto* hintSession = static_cast<PerformanceHintSession*>(
+                directUsbPerformanceHintSession_.load(
+                    std::memory_order_acquire))) {
+            hintSession->reportActualWorkDuration(dspNs);
+        }
         uint64_t peak = directUsbPeakDspNs_.load(std::memory_order_relaxed);
         while (peak < dspNs && !directUsbPeakDspNs_.compare_exchange_weak(
                    peak, dspNs, std::memory_order_relaxed)) {}
