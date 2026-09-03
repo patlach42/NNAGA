@@ -60,16 +60,37 @@ object PrivilegedShell {
     @Volatile
     private var cachedAccess: Access? = null
 
+    @Volatile
+    private var lastDenialAt: Long = 0L
+
+    /** How long a refusal is trusted before asking again. */
+    private const val DENIAL_TTL_MS = 30_000L
+
     /**
-     * Whether elevation is available. Probed once and remembered: asking costs
-     * a process launch, and on a manager that prompts, asking repeatedly would
-     * pester the user.
+     * Whether elevation is available.
+     *
+     * A grant is cached for good, since it cannot be withdrawn without the app
+     * restarting. A refusal is not: KernelSU shows a permission dialog, and
+     * the first probe can be denied simply because nobody had answered yet.
+     * Caching that forever would leave the tab claiming no root on a device
+     * where the user granted it a second later. So a refusal expires, while
+     * still not launching a process on every recomposition.
      */
-    fun access(): Access = cachedAccess ?: probe().also { cachedAccess = it }
+    fun access(): Access {
+        cachedAccess?.let { cached ->
+            if (cached == Access.Root) return cached
+            if (System.currentTimeMillis() - lastDenialAt < DENIAL_TTL_MS) return cached
+        }
+        val probed = probe()
+        cachedAccess = probed
+        if (probed == Access.None) lastDenialAt = System.currentTimeMillis()
+        return probed
+    }
 
     /** Forget the probe, so a permission granted since is picked up. */
     fun invalidate() {
         cachedAccess = null
+        lastDenialAt = 0L
     }
 
     private fun probe(): Access {
@@ -112,25 +133,43 @@ object PrivilegedShell {
         )
     }
 
-    private fun exec(command: Array<String>): Result = try {
+    private fun exec(command: Array<String>): Result {
+      return try {
         val process = ProcessBuilder(*command).redirectErrorStream(false).start()
+        // Both pipes must be drained at once. Reading stdout to completion and
+        // only then stderr deadlocks as soon as the child fills the stderr
+        // buffer, because it blocks writing while we block reading the other
+        // pipe. The streams are kept separate on purpose - a refusal from the
+        // root manager arrives on stderr and is worth showing - so merging
+        // them is not the fix; a second reader is.
         val out = StringBuilder()
         val err = StringBuilder()
-        BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-            reader.forEachLine { out.appendLine(it) }
+        val errReader = Thread {
+            runCatching {
+                BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
+                    reader.forEachLine { synchronized(err) { err.appendLine(it) } }
+                }
+            }
         }
-        BufferedReader(InputStreamReader(process.errorStream)).use { reader ->
-            reader.forEachLine { err.appendLine(it) }
+        errReader.isDaemon = true
+        errReader.start()
+        runCatching {
+            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
+                reader.forEachLine { out.appendLine(it) }
+            }
         }
         val finished = process.waitFor(TIMEOUT_SECONDS, TimeUnit.SECONDS)
         if (!finished) {
             process.destroyForcibly()
-            Result(false, stderr = "timed out after ${TIMEOUT_SECONDS}s")
-        } else {
-            Result(process.exitValue() == 0, out.toString(), err.toString())
+            errReader.join(500)
+            return Result(false, stderr = "timed out after ${TIMEOUT_SECONDS}s")
         }
-    } catch (t: Throwable) {
+        errReader.join(1000)
+        val stderrText = synchronized(err) { err.toString() }
+        Result(process.exitValue() == 0, out.toString(), stderrText)
+      } catch (t: Throwable) {
         Log.d(TAG, "exec failed: ${t.message}")
         Result(false, stderr = t.message ?: t.javaClass.simpleName)
+      }
     }
 }

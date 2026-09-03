@@ -66,6 +66,10 @@ fun TweaksSettingsScreen() {
         mutableStateOf<List<AudioInterferenceAdvisor.Advice>>(emptyList())
     }
     var busy by remember { mutableStateOf(false) }
+    var pending by remember {
+        mutableStateOf<Pair<PerformanceTweaks.Tweak, Boolean>?>(null)
+    }
+    var lastResult by remember { mutableStateOf<String?>(null) }
 
     suspend fun refresh() {
         withContext(Dispatchers.IO) {
@@ -147,6 +151,19 @@ fun TweaksSettingsScreen() {
                             "Needs root, which is not available.",
                             style = MaterialTheme.typography.labelSmall,
                         )
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button(
+                                enabled = !busy &&
+                                    outcome?.state != PerformanceTweaks.State.Applied,
+                                onClick = { pending = tweak to true },
+                            ) { Text("Apply") }
+                            OutlinedButton(
+                                enabled = !busy &&
+                                    outcome?.state == PerformanceTweaks.State.Applied,
+                                onClick = { pending = tweak to false },
+                            ) { Text("Revert") }
+                        }
                     }
                 }
             }
@@ -170,6 +187,18 @@ fun TweaksSettingsScreen() {
                 ) { Text("Battery exemption") }
             }
         }
+
+        lastResult?.let { message ->
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        message,
+                        modifier = Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
     }
 
     LaunchedEffect(busy) {
@@ -177,5 +206,22 @@ fun TweaksSettingsScreen() {
             refresh()
             busy = false
         }
+    }
+
+    // Applying reports what the device says afterwards, not what was asked
+    // for: a sysfs write can succeed and be reverted by a vendor daemon, and
+    // a tweak that only looks applied is worse than one that is absent.
+    LaunchedEffect(pending) {
+        val request = pending ?: return@LaunchedEffect
+        val (tweak, enable) = request
+        val outcome = withContext(Dispatchers.IO) {
+            PerformanceTweaks.apply(context, tweak, enable)
+        }
+        states = states + (tweak.id to outcome)
+        lastResult = "${tweak.title}: ${outcome.state} — ${outcome.detail}"
+        advice = withContext(Dispatchers.IO) {
+            AudioInterferenceAdvisor.inspect(context)
+        }
+        pending = null
     }
 }

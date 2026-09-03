@@ -88,8 +88,10 @@ object PerformanceTweaks {
             id = "timer_slack",
             title = "Tighten timer slack",
             summary = "Android lets the kernel batch wakeups by delaying them " +
-                "slightly, which saves power and costs precision. This asks " +
-                "for no such delay on this process.",
+                "slightly, which saves power and costs precision. Expect " +
+                "little from it here: this engine is woken by eventfd, and " +
+                "those wakeups do not wait for timer slack. Offered for the " +
+                "timeout paths and for measurement, not as a fix.",
             caution = "Slightly higher battery use while the app runs. Scoped " +
                 "to this process and reset when it exits.",
             requirement = Requirement.Root,
@@ -105,6 +107,69 @@ object PerformanceTweaks {
             risk = Risk.Safe,
         ),
     )
+
+    /**
+     * Applies or reverts a tweak and reports what the device says afterwards,
+     * never what was intended. Returns the fresh inspection so a caller cannot
+     * show success for a write that did not take.
+     */
+    fun apply(context: Context, tweak: Tweak, enable: Boolean): Outcome {
+        when (tweak.id) {
+            "wifi_off" -> {
+                val result = PrivilegedShell.runAsRoot(
+                    if (enable) "svc wifi disable" else "svc wifi enable"
+                )
+                if (!result.ok) {
+                    return Outcome(State.Unavailable, result.output.trim().ifBlank {
+                        "could not change Wi-Fi state"
+                    })
+                }
+            }
+
+            "rt_priority" -> {
+                // Raising the limit does not promote threads that already
+                // exist: each asks for its policy once, when it starts. So
+                // this only takes effect for an audio session started after
+                // it, and saying so is more useful than appearing to work.
+                val pid = android.os.Process.myPid()
+                val result = PrivilegedShell.runAsRoot(
+                    if (enable) "prlimit --rtprio=1:1 --pid $pid"
+                    else "prlimit --rtprio=0:0 --pid $pid"
+                )
+                if (!result.ok) {
+                    return Outcome(State.Unavailable, result.output.trim().ifBlank {
+                        "prlimit unavailable on this device"
+                    })
+                }
+            }
+
+            "timer_slack" -> {
+                val pid = android.os.Process.myPid()
+                val target = if (enable) "0" else "50000"
+                val result = PrivilegedShell.writePrivilegedAndVerify(
+                    "/proc/$pid/timerslack_ns", target
+                )
+                if (!result.ok) {
+                    return Outcome(State.Unavailable, result.output.trim().ifBlank {
+                        "could not set timer slack"
+                    })
+                }
+            }
+
+            "battery_exemption" -> {
+                // The system decides this one; all the app can do is ask.
+                val shown = com.vibes.dsp.engine.AudioInterferenceAdvisor
+                    .requestBatteryOptimisationExemption(context)
+                if (!shown) {
+                    return inspect(context, tweak)
+                }
+                return Outcome(State.Unknown, "system dialog opened")
+            }
+
+            else -> return Outcome(State.Unknown, "unknown tweak")
+        }
+        return inspect(context, tweak)
+    }
 
     /** Everything the device currently reports about a tweak's state. */
     fun inspect(context: Context, tweak: Tweak): Outcome = when (tweak.id) {
