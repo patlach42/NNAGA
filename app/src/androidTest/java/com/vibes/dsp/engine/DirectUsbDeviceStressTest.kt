@@ -427,6 +427,15 @@ class DirectUsbDeviceStressTest {
                 val baseline = warmupStats ?: finalStats
                 val baselineRaw = warmupRaw ?: finalRaw
                 val actualXrunGrowth = (finalStats.actualXruns - baseline.actualXruns).coerceAtLeast(0L)
+                // The aggregate folds producer backpressure in with consumer
+                // starvation, so a run that only ran the playback ring up to
+                // its watermark reported the same verdict as one that starved
+                // the DAC. Split them: quantum drops mean the render block was
+                // refused because the ring was already at its target, while
+                // the remainder is transport loss and starvation.
+                val quantumDropGrowth =
+                    (finalStats.playbackQuantumDrops - baseline.playbackQuantumDrops).coerceAtLeast(0L)
+                val starvationGrowth = (actualXrunGrowth - quantumDropGrowth).coerceAtLeast(0L)
                 val deadlineMissGrowth = (finalStats.deadlineMisses - baseline.deadlineMisses).coerceAtLeast(0L)
                 val silentPacketGrowth = (finalStats.playbackSilentPackets - baseline.playbackSilentPackets).coerceAtLeast(0L)
                 val silentFrameGrowth = (finalStats.playbackSilentFrames - baseline.playbackSilentFrames).coerceAtLeast(0L)
@@ -436,7 +445,9 @@ class DirectUsbDeviceStressTest {
                     (finalRaw.getOrZero(ZERO_RUNWAY_EVENTS) - baselineRaw.getOrZero(ZERO_RUNWAY_EVENTS)).coerceAtLeast(0L)
                 if (reason == null && !samplePositionProgressed) reason = "sample-position-did-not-advance"
                 if (reason == null && !trackFrameProgressed) reason = "track-frame-did-not-advance"
-                if (reason == null && actualXrunGrowth > 0L) reason = "actual-xrun-growth-exceeded"
+                if (reason == null && starvationGrowth > 0L) {
+                    reason = "consumer-starvation-growth-exceeded-$starvationGrowth"
+                }
                 if (reason == null && deadlineMissGrowth > 0L) reason = "deadline-miss-growth-exceeded"
                 if (reason == null && (silentPacketGrowth > 0L || silentFrameGrowth > 0L)) {
                     reason = "playback-silence-padding-growth-exceeded-packets=$silentPacketGrowth-frames=$silentFrameGrowth"
@@ -446,6 +457,12 @@ class DirectUsbDeviceStressTest {
                 }
                 if (reason == null && zeroRunwayGrowth > 0L) {
                     reason = "zero-runway-growth-exceeded-$zeroRunwayGrowth"
+                }
+                // Reported last: backpressure is a real defect but a different
+                // one, and naming it separately keeps it from masquerading as
+                // an audible dropout when ranking configurations.
+                if (reason == null && quantumDropGrowth > 0L) {
+                    reason = "producer-quantum-drop-growth-exceeded-$quantumDropGrowth"
                 }
                 if (reason == null) reason = validateRunningStats(finalStats, finalRaw, format, buffer, multiplier)
             }
@@ -584,6 +601,10 @@ class DirectUsbDeviceStressTest {
             if (stats.sampleRateHz > 0L) stats.knownHostLatencyFrames * 1_000.0 / stats.sampleRateHz else 0.0
         val actualXrunGrowth =
             (stats.actualXruns - (warmup?.actualXruns ?: stats.actualXruns)).coerceAtLeast(0L)
+        val quantumDropGrowth =
+            (stats.playbackQuantumDrops -
+                (warmup?.playbackQuantumDrops ?: stats.playbackQuantumDrops)).coerceAtLeast(0L)
+        val starvationGrowth = (actualXrunGrowth - quantumDropGrowth).coerceAtLeast(0L)
         val deadlineMissGrowth =
             (stats.deadlineMisses - (warmup?.deadlineMisses ?: stats.deadlineMisses)).coerceAtLeast(0L)
         val silentPacketGrowth =
@@ -618,6 +639,7 @@ class DirectUsbDeviceStressTest {
             "capture_packet_drops=${stats.capturePacketDrops} capture_wait_pressure=${stats.captureWaitPressure} " +
             "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} " +
             "playback_quantum_drops=${stats.playbackQuantumDrops} aggregate_xruns=${stats.actualXruns} " +
+            "starvation_growth=$starvationGrowth quantum_drop_growth=$quantumDropGrowth " +
             "playback_backpressure=${stats.playbackBackpressure} playback_silent_packets=${stats.playbackSilentPackets} " +
             "playback_silent_frames=${stats.playbackSilentFrames} playback_silent_packets_growth=$silentPacketGrowth " +
             "playback_silent_frames_growth=$silentFrameGrowth performance_hint_active=${if (stats.performanceHintActive) 1 else 0} " +
