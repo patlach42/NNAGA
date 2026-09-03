@@ -677,6 +677,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderEnabled(
     }
 }
 
+// Record only the selected event types (a bitfield of 1 << event); zero records
+// everything. Without it the anomalies drown: a 240 second run offers 186675
+// events into a 4096 slot buffer, nearly all routine completions.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderEventMask(
+        JNIEnv* env, jobject thiz, jint mask) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setFlightRecorderEventMask(
+            static_cast<uint32_t>(mask));
+    }
+}
+
 // Freeze the recorder when `event` first occurs so its run-up survives. Without
 // it a rare event is evicted by the steady-state traffic that follows: one
 // device cycle offered 143329 events into a 4096 slot buffer.

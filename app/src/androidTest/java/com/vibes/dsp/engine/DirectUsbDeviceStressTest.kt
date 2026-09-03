@@ -294,8 +294,18 @@ class DirectUsbDeviceStressTest {
                 // Keeping only the newest records loses it - one cycle offers
                 // about 143000 events into a 4096 slot buffer.
                 if (flightRecorder) {
+                    // Keep only the anomalies. A four minute run offers about
+                    // 186000 events into a 4096 slot buffer, so recording the
+                    // routine completions leaves room for a few seconds of
+                    // history instead of a whole run's worth of faults.
+                    engine.nativeSetDirectUsbFlightRecorderEventMask(
+                        FlightRecord.ANOMALY_MASK
+                    )
+                    // No freeze trigger: with the filter in place the whole run
+                    // fits, and freezing on the first refusal would hide every
+                    // deferral that followed it.
                     engine.nativeSetDirectUsbFlightRecorderFreezeTrigger(
-                        FlightRecord.EVENT_QUANTUM_REFUSED
+                        FlightRecord.EVENT_UNKNOWN
                     )
                 }
                 engine.nativeSetDirectUsbFlightRecorderEnabled(flightRecorder)

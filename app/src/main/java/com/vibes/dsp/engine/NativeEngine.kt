@@ -76,6 +76,12 @@ data class FlightRecord(
         const val EVENT_PLAYBACK_UNDERRUN = 5
         const val EVENT_TRANSFER_DEFERRED = 6
 
+        /** Events that mean something went wrong, rather than steady traffic. */
+        const val ANOMALY_MASK =
+            (1 shl EVENT_QUANTUM_REFUSED) or
+                (1 shl EVENT_PLAYBACK_UNDERRUN) or
+                (1 shl EVENT_TRANSFER_DEFERRED)
+
         fun eventName(event: Int): String = when (event) {
             EVENT_PLAYBACK_COMPLETE -> "playback-complete"
             EVENT_QUANTUM_OFFERED -> "quantum-offered"
@@ -628,6 +634,14 @@ class NativeEngine private constructor() {
      * buffer keeps only the newest records, and a rare event is evicted by the
      * ordinary traffic that follows it.
      */
+    /**
+     * Records only the selected event types, as a bitfield of
+     * `1 shl FlightRecord.EVENT_*`; zero records everything. Use
+     * [FlightRecord.ANOMALY_MASK] to keep a whole run's anomalies rather than
+     * a few seconds of routine traffic.
+     */
+    external fun nativeSetDirectUsbFlightRecorderEventMask(mask: Int)
+
     external fun nativeSetDirectUsbFlightRecorderFreezeTrigger(event: Int)
 
     /** True once the freeze trigger has fired. */
