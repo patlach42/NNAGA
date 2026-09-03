@@ -167,14 +167,38 @@ object PerformanceTweaks {
                 // this only takes effect for an audio session started after
                 // it, and saying so is more useful than appearing to work.
                 val pid = android.os.Process.myPid()
+                // prlimit is not in every Android toybox. Say which is missing
+                // rather than reporting a bare failure, because the two need
+                // different answers: an absent tool is a device limitation,
+                // a refused call is a permission problem.
+                val available = PrivilegedShell.runAsRoot("command -v prlimit")
+                if (!available.ok || available.stdout.isBlank()) {
+                    return Outcome(
+                        State.Unavailable,
+                        "prlimit is not present on this device, so the limit " +
+                            "cannot be raised from here",
+                    )
+                }
                 val result = PrivilegedShell.runAsRoot(
                     if (enable) "prlimit --rtprio=1:1 --pid $pid"
                     else "prlimit --rtprio=0:0 --pid $pid"
                 )
                 if (!result.ok) {
-                    return Outcome(State.Unavailable, result.output.trim().ifBlank {
-                        "prlimit unavailable on this device"
+                    return Outcome(State.NotApplied, result.output.trim().ifBlank {
+                        "prlimit refused the change"
                     })
+                }
+                // Raising the limit promotes nothing by itself: each audio
+                // thread asks for its policy once, at startup. Say so instead
+                // of reporting success for something that takes effect later.
+                val soft = PrivilegedShell.readPrivileged("/proc/$pid/limits")
+                    ?.let { realtimeLimitOf(it) } ?: 0
+                if (enable && soft > 0) {
+                    return Outcome(
+                        State.Applied,
+                        "limit raised to $soft; audio threads take it up when " +
+                            "the next session starts",
+                    )
                 }
             }
 
