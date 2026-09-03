@@ -100,17 +100,30 @@ object SystemProbe {
      */
     fun audioThreadPolicies(): Report {
         val pid = android.os.Process.myPid()
+        // /proc/pid/stat is read through its own fields rather than awk on
+        // whitespace: the second field is the thread name in parentheses and
+        // may itself contain spaces, which shifts every column after it.
+        // Reading sched instead avoids the question entirely and names the
+        // policy rather than leaving a number to be looked up.
         val result = PrivilegedShell.runAsRoot(
             "for t in /proc/$pid/task/*; do " +
                 "n=\$(cat \$t/comm 2>/dev/null); " +
                 "case \"\$n\" in *Usb*|*udio*|*ender*) " +
-                "echo \"\$n \$(cat \$t/stat 2>/dev/null | awk '{print \"policy_prio=\" \$18 \" rt_prio=\" \$40}')\";; " +
+                "p=\$(grep -m1 policy \$t/sched 2>/dev/null | tr -s ' ' | cut -d' ' -f3); " +
+                "pr=\$(grep -m1 prio \$t/sched 2>/dev/null | tr -s ' ' | cut -d' ' -f3); " +
+                "echo \"\$n policy=\$p prio=\$pr\";; " +
                 "esac; done"
         )
         return Report(
             "Audio thread scheduling",
-            if (result.ok && result.stdout.isNotBlank()) result.stdout.trimEnd()
-            else "Unavailable: ${result.output.trim()}",
+            if (result.ok && result.stdout.isNotBlank()) {
+                // policy 0 is the ordinary scheduler, 1 is SCHED_FIFO. The app
+                // asks for FIFO at thread start and falls back silently, so
+                // this is the only place the answer appears.
+                result.stdout.trimEnd() + "\n(policy 0 = normal, 1 = FIFO)"
+            } else {
+                "Unavailable: ${result.output.trim()} — is audio running?"
+            },
         )
     }
 
