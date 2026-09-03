@@ -78,6 +78,8 @@ data class FlightRecord(
         const val EVENT_DEFERRED_NO_METADATA = 7
         const val EVENT_DEFERRED_NO_PCM = 8
         const val EVENT_SIGNAL_DISCONTINUITY = 9
+        const val EVENT_TRANSFER_DISCONTINUITY = 10
+        const val EVENT_CAPTURE_DISCONTINUITY = 11
 
         /** Events that mean something went wrong, rather than steady traffic. */
         const val ANOMALY_MASK =
@@ -86,7 +88,9 @@ data class FlightRecord(
                 (1 shl EVENT_TRANSFER_DEFERRED) or
                 (1 shl EVENT_DEFERRED_NO_METADATA) or
                 (1 shl EVENT_DEFERRED_NO_PCM) or
-                (1 shl EVENT_SIGNAL_DISCONTINUITY)
+                (1 shl EVENT_SIGNAL_DISCONTINUITY) or
+                (1 shl EVENT_TRANSFER_DISCONTINUITY) or
+                (1 shl EVENT_CAPTURE_DISCONTINUITY)
 
         fun eventName(event: Int): String = when (event) {
             EVENT_PLAYBACK_COMPLETE -> "playback-complete"
@@ -98,6 +102,8 @@ data class FlightRecord(
             EVENT_DEFERRED_NO_METADATA -> "deferred-no-metadata"
             EVENT_DEFERRED_NO_PCM -> "deferred-no-pcm"
             EVENT_SIGNAL_DISCONTINUITY -> "signal-discontinuity"
+            EVENT_TRANSFER_DISCONTINUITY -> "transfer-discontinuity"
+            EVENT_CAPTURE_DISCONTINUITY -> "capture-discontinuity"
             else -> "unknown"
         }
     }
@@ -658,6 +664,16 @@ class NativeEngine private constructor() {
      * anyone listening. Zero disables the check.
      */
     external fun nativeSetDirectUsbDiscontinuityThreshold(threshold: Float)
+
+    /** The same check on the packed PCM leaving the ring, just before the wire. */
+    external fun nativeSetDirectUsbTransferDiscontinuityThreshold(threshold: Float)
+
+    /**
+     * The same check on captured input, as a fraction of the signal's own peak
+     * so it does not depend on input gain. With a loopback from output one to
+     * input one it covers the DAC, the cable and the ADC.
+     */
+    external fun nativeSetDirectUsbCaptureDiscontinuityThreshold(threshold: Float)
 
     external fun nativeSetDirectUsbFlightRecorderFreezeTrigger(event: Int)
 

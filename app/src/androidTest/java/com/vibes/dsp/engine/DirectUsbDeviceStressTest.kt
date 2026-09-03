@@ -325,6 +325,13 @@ class DirectUsbDeviceStressTest {
                     engine.nativeSetDirectUsbDiscontinuityThreshold(
                         discontinuityThreshold
                     )
+                    engine.nativeSetDirectUsbTransferDiscontinuityThreshold(
+                        discontinuityThreshold
+                    )
+                    // Relative to the loopback signal's own peak, so gain does
+                    // not matter. A 440 Hz tone steps by 5.8% of its peak
+                    // between samples; 30% is unambiguous.
+                    engine.nativeSetDirectUsbCaptureDiscontinuityThreshold(0.30f)
                     // No freeze trigger: with the filter in place the whole run
                     // fits, and freezing on the first refusal would hide every
                     // deferral that followed it.

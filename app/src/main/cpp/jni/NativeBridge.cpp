@@ -701,6 +701,29 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbDiscontinuityThreshold(
     }
 }
 
+// The same continuity check on the packed PCM leaving the ring. With the one
+// above it brackets the packing and the two-span ring copy.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbTransferDiscontinuityThreshold(
+        JNIEnv* env, jobject thiz, jfloat threshold) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setTransferDiscontinuityThreshold(
+            static_cast<float>(threshold));
+    }
+}
+
+// The same check on captured input, relative to the signal's own peak. With a
+// loopback from output one to input one it covers the DAC, cable and ADC - the
+// one stretch the playback checks cannot reach.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCaptureDiscontinuityThreshold(
+        JNIEnv* env, jobject thiz, jfloat threshold) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setCaptureDiscontinuityThreshold(
+            static_cast<float>(threshold));
+    }
+}
+
 // Freeze the recorder when `event` first occurs so its run-up survives. Without
 // it a rare event is evicted by the steady-state traffic that follows: one
 // device cycle offered 143329 events into a 4096 slot buffer.
@@ -709,7 +732,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderFreezeTri
         JNIEnv* env, jobject thiz, jint event) {
     if (!g_ctx || !g_ctx->directUsbOutput) return;
     using Event = monotrypt::usb::PacketFlightRecorder::Event;
-    if (event < 0 || event > static_cast<jint>(Event::SignalDiscontinuity)) return;
+    if (event < 0 || event > static_cast<jint>(Event::CaptureDiscontinuity)) return;
     g_ctx->directUsbOutput->setFlightRecorderFreezeTrigger(
         static_cast<Event>(event));
 }
