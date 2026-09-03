@@ -98,6 +98,32 @@ object PerformanceTweaks {
             risk = Risk.Safe,
         ),
         Tweak(
+            id = "usb_irq_affinity",
+            title = "Pin the USB interrupt to a big core",
+            summary = "Moves the USB controller's interrupt onto a fast core, " +
+                "so servicing it does not wait behind work on a small one. " +
+                "The interrupt is found by name, not assumed: use Investigate " +
+                "first to see which one it is and how busy.",
+            caution = "The vendor's power service may move it back, which is " +
+                "why the new value is read back and reported. Reverts on " +
+                "reboot regardless.",
+            requirement = Requirement.Root,
+            risk = Risk.SystemWide,
+        ),
+        Tweak(
+            id = "big_cluster_floor",
+            title = "Raise the big cluster's minimum frequency",
+            summary = "Stops the fast cores dropping to their lowest clock " +
+                "between audio blocks, so a block does not begin on a core " +
+                "that is still ramping up.",
+            caution = "Runs warmer and uses more battery, and sustained heat " +
+                "eventually causes throttling that costs more than it gains. " +
+                "Raises the floor to a mid point, never to the maximum. " +
+                "Reverts on reboot.",
+            requirement = Requirement.Root,
+            risk = Risk.SystemWide,
+        ),
+        Tweak(
             id = "battery_exemption",
             title = "Exempt from battery optimisation",
             summary = "Stops the system throttling the app in the background. " +
@@ -166,9 +192,102 @@ object PerformanceTweaks {
                 return Outcome(State.Unknown, "system dialog opened")
             }
 
+            "usb_irq_affinity" -> {
+                val irq = usbInterruptNumber()
+                    ?: return Outcome(State.Unavailable, "no USB interrupt found")
+                // Highest CPU is the fastest on every big.LITTLE layout seen
+                // here; the mask is a bitmask, so CPU n is 1 << n.
+                val target = if (enable) bigCoreMask() else "ff"
+                val result = PrivilegedShell.writePrivilegedAndVerify(
+                    "/proc/irq/$irq/smp_affinity", target
+                )
+                if (!result.ok) {
+                    // A vendor balancer that reverts the write is the expected
+                    // failure here, and saying so is more useful than "failed".
+                    return Outcome(
+                        State.NotApplied,
+                        result.output.trim().ifBlank { "the system did not keep the value" },
+                    )
+                }
+            }
+
+            "big_cluster_floor" -> {
+                val policy = bigClusterPolicyPath()
+                    ?: return Outcome(State.Unavailable, "no cpufreq policy found")
+                val available = PrivilegedShell.readPrivileged(
+                    "$policy/scaling_available_frequencies"
+                )?.trim()?.split(Regex("\\s+"))?.mapNotNull { it.toLongOrNull() }?.sorted()
+                val min = PrivilegedShell.readPrivileged("$policy/cpuinfo_min_freq")
+                    ?.trim()
+                val target = if (!enable) {
+                    min ?: return Outcome(State.Unavailable, "no minimum to restore")
+                } else {
+                    // A middle step, not the maximum: pinning to the top runs
+                    // hot, and sustained throttling costs more than the ramp.
+                    available?.getOrNull(available.size / 2)?.toString()
+                        ?: return Outcome(State.Unavailable, "no frequency table")
+                }
+                val result = PrivilegedShell.writePrivilegedAndVerify(
+                    "$policy/scaling_min_freq", target
+                )
+                if (!result.ok) {
+                    return Outcome(
+                        State.NotApplied,
+                        result.output.trim().ifBlank { "the system did not keep the value" },
+                    )
+                }
+            }
+
             else -> return Outcome(State.Unknown, "unknown tweak")
         }
         return inspect(context, tweak)
+    }
+
+    /**
+     * The interrupt number the USB controller uses, or null.
+     *
+     * Matched by name rather than assumed: the controller appears as xhci on
+     * some devices, dwc3 on others, and under a vendor string on a few.
+     */
+    private fun usbInterruptNumber(): String? {
+        val result = PrivilegedShell.runAsRoot(
+            "grep -iE 'xhci|dwc3' /proc/interrupts | head -1 | cut -d: -f1"
+        )
+        return result.stdout.trim().takeIf { result.ok && it.isNotEmpty() }
+    }
+
+    /** Bitmask of the highest-capacity CPUs, as an affinity mask expects. */
+    private fun bigCoreMask(): String {
+        val caps = PrivilegedShell.runAsRoot(
+            "for c in /sys/devices/system/cpu/cpu[0-9]*; do " +
+                "printf \"%s %s\n\" \${c##*/cpu} \$(cat \$c/cpu_capacity 2>/dev/null || echo 0); done"
+        )
+        val entries = caps.stdout.lineSequence()
+            .mapNotNull { line ->
+                val parts = line.trim().split(" ")
+                val cpu = parts.getOrNull(0)?.toIntOrNull()
+                val capacity = parts.getOrNull(1)?.toIntOrNull()
+                if (cpu != null && capacity != null) cpu to capacity else null
+            }
+            .toList()
+        if (entries.isEmpty()) return "ff"
+        val best = entries.maxOf { it.second }
+        var mask = 0L
+        entries.filter { it.second == best }.forEach { mask = mask or (1L shl it.first) }
+        return java.lang.Long.toHexString(mask)
+    }
+
+    /** cpufreq policy directory governing the highest-capacity cluster. */
+    private fun bigClusterPolicyPath(): String? {
+        val result = PrivilegedShell.runAsRoot(
+            "for c in /sys/devices/system/cpu/cpu[0-9]*; do " +
+                "cap=\$(cat \$c/cpu_capacity 2>/dev/null || echo 0); " +
+                "printf \"%s %s\n\" \$cap \$c; done | sort -rn | head -1 | cut -d' ' -f2"
+        )
+        val cpu = result.stdout.trim().takeIf { result.ok && it.isNotEmpty() }
+            ?: return null
+        val related = PrivilegedShell.runAsRoot("readlink -f $cpu/cpufreq")
+        return related.stdout.trim().takeIf { related.ok && it.isNotEmpty() }
     }
 
     /** Everything the device currently reports about a tweak's state. */
@@ -200,6 +319,32 @@ object PerformanceTweaks {
                 slack == null -> Outcome(State.Unavailable, "needs root")
                 slack.toLongOrNull() == 0L -> Outcome(State.Applied, "slack is 0 ns")
                 else -> Outcome(State.NotApplied, "slack is $slack ns")
+            }
+        }
+
+        "usb_irq_affinity" -> {
+            val irq = usbInterruptNumber()
+            val current = irq?.let {
+                PrivilegedShell.readPrivileged("/proc/irq/$it/smp_affinity")
+            }?.trim()
+            when {
+                irq == null -> Outcome(State.Unavailable, "no USB interrupt found")
+                current == null -> Outcome(State.Unavailable, "needs root")
+                current.trimStart('0').equals(bigCoreMask().trimStart('0'), true) ->
+                    Outcome(State.Applied, "IRQ $irq on mask $current")
+                else -> Outcome(State.NotApplied, "IRQ $irq on mask $current")
+            }
+        }
+
+        "big_cluster_floor" -> {
+            val policy = bigClusterPolicyPath()
+            val min = policy?.let { PrivilegedShell.readPrivileged("$it/scaling_min_freq") }
+            val hwMin = policy?.let { PrivilegedShell.readPrivileged("$it/cpuinfo_min_freq") }
+            when {
+                policy == null || min == null -> Outcome(State.Unavailable, "needs root")
+                hwMin != null && min.trim() != hwMin.trim() ->
+                    Outcome(State.Applied, "floor ${min.trim()} kHz")
+                else -> Outcome(State.NotApplied, "floor at hardware minimum ${min.trim()}")
             }
         }
 
