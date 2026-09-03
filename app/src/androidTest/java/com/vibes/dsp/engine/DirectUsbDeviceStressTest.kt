@@ -58,6 +58,8 @@ class DirectUsbDeviceStressTest {
         // rate unrelated to any driver counter. Raising this trades validation
         // resolution for harness quiet.
         val pollIntervalMs = argumentLong(args, "direct_usb_poll_ms", "poll_ms", 10L, 1L, 1_000L)
+        val discontinuityThreshold =
+            argumentDouble(args, "direct_usb_discontinuity", 0.05).toFloat()
         val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 1, 8)
         val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 600_000L)
         val warmupMs = minOf(1_000L, (durationMs / 3L).coerceAtLeast(250L))
@@ -153,7 +155,8 @@ class DirectUsbDeviceStressTest {
                                 warmupMs,
                                 requireLoopback,
                                 flightRecorder,
-                                pollIntervalMs
+                                pollIntervalMs,
+                                discontinuityThreshold
                             )
                         }
                     }
@@ -280,6 +283,7 @@ class DirectUsbDeviceStressTest {
         requireLoopback: Boolean,
         flightRecorder: Boolean,
         pollIntervalMs: Long,
+        discontinuityThreshold: Float,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -311,11 +315,16 @@ class DirectUsbDeviceStressTest {
                     engine.nativeSetDirectUsbFlightRecorderEventMask(
                         FlightRecord.ANOMALY_MASK
                     )
-                    // A click is a discontinuity in the signal. The probe tone
-                    // steps by at most 0.058 between samples at 440 Hz, so a
-                    // quarter of full scale is far above anything it can
-                    // produce and far below a full break.
-                    engine.nativeSetDirectUsbDiscontinuityThreshold(0.25f)
+                    // A click is a discontinuity in the signal. At 440 Hz and
+                    // 48 kHz consecutive samples differ by at most 0.058 of
+                    // the tone's amplitude, so anything well above that is a
+                    // break. A quarter of full scale proved far too coarse:
+                    // it caught only the stop transient and missed the breaks
+                    // a listener reported, because a jump of ten samples of
+                    // phase still lands under it.
+                    engine.nativeSetDirectUsbDiscontinuityThreshold(
+                        discontinuityThreshold
+                    )
                     // No freeze trigger: with the filter in place the whole run
                     // fits, and freezing on the first refusal would hide every
                     // deferral that followed it.
@@ -832,6 +841,12 @@ class DirectUsbDeviceStressTest {
         }
         return allowed.filter { it in requested }.toIntArray()
     }
+    private fun argumentDouble(args: Bundle, key: String, default: Double): Double {
+        val raw = args.getString(key)?.trim() ?: return default
+        return raw.toDoubleOrNull()?.takeIf { it > 0.0 && it.isFinite() }
+            ?: throw IllegalArgumentException("$key must be a positive number: '$raw'")
+    }
+
     private fun argumentBoolean(args: Bundle, key: String, default: Boolean = false): Boolean {
         val raw = args.getString(key)?.trim() ?: return default
         return when (raw) {
