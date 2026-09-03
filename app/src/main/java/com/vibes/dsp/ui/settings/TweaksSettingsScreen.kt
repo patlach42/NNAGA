@@ -75,14 +75,26 @@ fun TweaksSettingsScreen() {
     }
     var probing by remember { mutableStateOf(false) }
 
+    // Compute off the main thread, assign on it. Mutating Compose state from
+    // a background dispatcher is a data race even when it appears to work.
     suspend fun refresh() {
-        withContext(Dispatchers.IO) {
-            access = PrivilegedShell.access()
-            states = PerformanceTweaks.catalogue.associate {
-                it.id to PerformanceTweaks.inspect(context, it)
-            }
-            advice = AudioInterferenceAdvisor.inspect(context)
+        data class Snapshot(
+            val access: PrivilegedShell.Access,
+            val states: Map<String, PerformanceTweaks.Outcome>,
+            val advice: List<AudioInterferenceAdvisor.Advice>,
+        )
+        val snapshot = withContext(Dispatchers.IO) {
+            Snapshot(
+                access = PrivilegedShell.access(),
+                states = PerformanceTweaks.catalogue.associate {
+                    it.id to PerformanceTweaks.inspect(context, it)
+                },
+                advice = AudioInterferenceAdvisor.inspect(context),
+            )
         }
+        access = snapshot.access
+        states = snapshot.states
+        advice = snapshot.advice
     }
 
     LaunchedEffect(Unit) { refresh() }
@@ -158,14 +170,21 @@ fun TweaksSettingsScreen() {
                     } else {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             Button(
-                                enabled = !busy &&
+                                enabled = !busy && pending == null &&
                                     outcome?.state != PerformanceTweaks.State.Applied,
-                                onClick = { pending = tweak to true },
+                                onClick = {
+                                    busy = true
+                                    pending = tweak to true
+                                },
                             ) { Text("Apply") }
                             OutlinedButton(
-                                enabled = !busy &&
+                                enabled = !busy && pending == null &&
+                                    tweak.supportsRevert &&
                                     outcome?.state == PerformanceTweaks.State.Applied,
-                                onClick = { pending = tweak to false },
+                                onClick = {
+                                    busy = true
+                                    pending = tweak to false
+                                },
                             ) { Text("Revert") }
                         }
                     }
@@ -185,8 +204,15 @@ fun TweaksSettingsScreen() {
                 Button(
                     enabled = !busy,
                     onClick = {
-                        AudioInterferenceAdvisor
+                        val shown = AudioInterferenceAdvisor
                             .requestBatteryOptimisationExemption(context)
+                        lastResult = if (shown) {
+                            "Battery exemption: system dialog opened"
+                        } else {
+                            "Battery exemption: already exempt, or the dialog " +
+                                "could not be opened — grant it in Settings " +
+                                "under Battery."
+                        }
                     },
                 ) { Text("Battery exemption") }
                 OutlinedButton(
@@ -240,14 +266,20 @@ fun TweaksSettingsScreen() {
     LaunchedEffect(pending) {
         val request = pending ?: return@LaunchedEffect
         val (tweak, enable) = request
+        // A second tap while this ran used to change the key and cancel the
+        // effect, but the blocking su call kept changing the device and its
+        // result was lost. Both buttons now gate on busy and on a pending
+        // request, so only one operation is ever in flight.
         val outcome = withContext(Dispatchers.IO) {
             PerformanceTweaks.apply(context, tweak, enable)
         }
-        states = states + (tweak.id to outcome)
-        lastResult = "${tweak.title}: ${outcome.state} — ${outcome.detail}"
-        advice = withContext(Dispatchers.IO) {
+        val freshAdvice = withContext(Dispatchers.IO) {
             AudioInterferenceAdvisor.inspect(context)
         }
+        states = states + (tweak.id to outcome)
+        advice = freshAdvice
+        lastResult = "${tweak.title}: ${outcome.state} — ${outcome.detail}"
         pending = null
+        busy = false
     }
 }

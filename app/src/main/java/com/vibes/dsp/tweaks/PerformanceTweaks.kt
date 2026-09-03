@@ -59,6 +59,8 @@ object PerformanceTweaks {
         val caution: String,
         val requirement: Requirement,
         val risk: Risk,
+        /** False when the system owns the state and the app can only ask. */
+        val supportsRevert: Boolean = true,
     )
 
     data class Outcome(val state: State, val detail: String)
@@ -136,6 +138,7 @@ object PerformanceTweaks {
             caution = "None beyond slightly higher battery use.",
             requirement = Requirement.None,
             risk = Risk.Safe,
+            supportsRevert = false,
         ),
     )
 
