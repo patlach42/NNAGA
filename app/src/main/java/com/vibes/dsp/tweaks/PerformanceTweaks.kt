@@ -312,10 +312,52 @@ object PerformanceTweaks {
      * some devices, dwc3 on others, and under a vendor string on a few.
      */
     private fun usbInterruptNumber(): String? {
-        val result = PrivilegedShell.runAsRoot(
-            "grep -iE 'xhci|dwc3' /proc/interrupts | head -1 | cut -d: -f1"
+        // Not the first line that matches. A device can expose several USB
+        // interrupts, and some are shared or belong to a controller nothing is
+        // plugged into; pinning one of those achieves nothing while looking
+        // like it worked. Take two samples a second apart and pick whichever
+        // is actually firing, which during playback is the one carrying audio.
+        val sampled = PrivilegedShell.runAsRoot(
+            "grep -iE 'xhci|dwc3|usb' /proc/interrupts > /data/local/tmp/.nnaga_irq1; " +
+                "sleep 1; " +
+                "grep -iE 'xhci|dwc3|usb' /proc/interrupts > /data/local/tmp/.nnaga_irq2; " +
+                "cat /data/local/tmp/.nnaga_irq1; echo ---; cat /data/local/tmp/.nnaga_irq2; " +
+                "rm -f /data/local/tmp/.nnaga_irq1 /data/local/tmp/.nnaga_irq2"
         )
-        return result.stdout.trim().takeIf { result.ok && it.isNotEmpty() }
+        if (!sampled.ok) return null
+        return busiestInterruptOf(sampled.stdout)
+    }
+
+    /**
+     * The interrupt whose count grew most between two samples of
+     * /proc/interrupts, separated by a line containing only dashes.
+     *
+     * Split out to be testable: the file is column-aligned, one column per
+     * CPU, and picking the wrong column or forgetting that a line may name a
+     * shared interrupt would silently choose the wrong one.
+     */
+    internal fun busiestInterruptOf(sampled: String): String? {
+        val halves = sampled.split(Regex("(?m)^---$"))
+        if (halves.size != 2) return null
+        fun totals(text: String): Map<String, Long> = text.lineSequence()
+            .mapNotNull { line ->
+                val irq = line.substringBefore(':', "").trim()
+                if (irq.isEmpty() || irq.toIntOrNull() == null) return@mapNotNull null
+                val counts = line.substringAfter(':').trim()
+                    .split(Regex("\\s+"))
+                    .mapNotNull { it.toLongOrNull() }
+                if (counts.isEmpty()) null else irq to counts.sum()
+            }
+            .toMap()
+
+        val before = totals(halves[0])
+        val after = totals(halves[1])
+        val growth = after.mapNotNull { (irq, later) ->
+            val earlier = before[irq] ?: return@mapNotNull null
+            val delta = later - earlier
+            if (delta > 0) irq to delta else null
+        }
+        return growth.maxByOrNull { it.second }?.first
     }
 
     /** Bitmask of the highest-capacity CPUs, as an affinity mask expects. */

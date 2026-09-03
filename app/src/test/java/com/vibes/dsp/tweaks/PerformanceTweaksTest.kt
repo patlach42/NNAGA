@@ -71,4 +71,39 @@ class PerformanceTweaksTest {
         assertEquals(null, PerformanceTweaks.realtimeLimitOf("Max nice priority 40 40"))
         assertEquals(null, PerformanceTweaks.realtimeLimitOf(""))
     }
+
+    @Test
+    fun `picks the interrupt that is actually firing`() {
+        // Two controllers present, only one carrying traffic. Taking the first
+        // line that matches would pin the idle one and look like it worked.
+        val sampled = """
+            123: 1000 0 0 0  GIC 100 Level xhci-hcd:usb1
+            124: 5000 0 0 0  GIC 101 Level dwc3
+            ---
+            123: 1000 0 0 0  GIC 100 Level xhci-hcd:usb1
+            124: 9000 0 0 0  GIC 101 Level dwc3
+        """.trimIndent()
+        assertEquals("124", PerformanceTweaks.busiestInterruptOf(sampled))
+    }
+
+    @Test
+    fun `sums the per cpu columns`() {
+        // The count is spread across CPUs; reading only the first column would
+        // miss an interrupt serviced elsewhere.
+        val sampled = """
+            10: 0 0 5 0  GIC 1 Level xhci-hcd
+            11: 1 0 0 0  GIC 2 Level usb-other
+            ---
+            10: 0 0 95 0  GIC 1 Level xhci-hcd
+            11: 2 0 0 0  GIC 2 Level usb-other
+        """.trimIndent()
+        assertEquals("10", PerformanceTweaks.busiestInterruptOf(sampled))
+    }
+
+    @Test
+    fun `reports nothing when no interrupt moved`() {
+        val idle = "10: 5 0  GIC xhci\n---\n10: 5 0  GIC xhci"
+        assertEquals(null, PerformanceTweaks.busiestInterruptOf(idle))
+        assertEquals(null, PerformanceTweaks.busiestInterruptOf("no separator here"))
+    }
 }
