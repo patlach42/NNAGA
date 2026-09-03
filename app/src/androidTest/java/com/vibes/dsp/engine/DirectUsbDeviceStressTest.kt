@@ -311,6 +311,11 @@ class DirectUsbDeviceStressTest {
                     engine.nativeSetDirectUsbFlightRecorderEventMask(
                         FlightRecord.ANOMALY_MASK
                     )
+                    // A click is a discontinuity in the signal. The probe tone
+                    // steps by at most 0.058 between samples at 440 Hz, so a
+                    // quarter of full scale is far above anything it can
+                    // produce and far below a full break.
+                    engine.nativeSetDirectUsbDiscontinuityThreshold(0.25f)
                     // No freeze trigger: with the filter in place the whole run
                     // fits, and freezing on the first refusal would hide every
                     // deferral that followed it.

@@ -689,6 +689,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderEventMask
     }
 }
 
+// Flag steps between consecutive output samples above this fraction of full
+// scale. A click is a signal discontinuity, so this finds one without a
+// listener; a 440 Hz tone at 48 kHz steps by at most 0.058 between samples.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbDiscontinuityThreshold(
+        JNIEnv* env, jobject thiz, jfloat threshold) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setDiscontinuityThreshold(
+            static_cast<float>(threshold));
+    }
+}
+
 // Freeze the recorder when `event` first occurs so its run-up survives. Without
 // it a rare event is evicted by the steady-state traffic that follows: one
 // device cycle offered 143329 events into a 4096 slot buffer.
@@ -697,7 +709,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderFreezeTri
         JNIEnv* env, jobject thiz, jint event) {
     if (!g_ctx || !g_ctx->directUsbOutput) return;
     using Event = monotrypt::usb::PacketFlightRecorder::Event;
-    if (event < 0 || event > static_cast<jint>(Event::DeferredNoPcm)) return;
+    if (event < 0 || event > static_cast<jint>(Event::SignalDiscontinuity)) return;
     g_ctx->directUsbOutput->setFlightRecorderFreezeTrigger(
         static_cast<Event>(event));
 }

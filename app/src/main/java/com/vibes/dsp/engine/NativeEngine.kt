@@ -77,6 +77,7 @@ data class FlightRecord(
         const val EVENT_TRANSFER_DEFERRED = 6
         const val EVENT_DEFERRED_NO_METADATA = 7
         const val EVENT_DEFERRED_NO_PCM = 8
+        const val EVENT_SIGNAL_DISCONTINUITY = 9
 
         /** Events that mean something went wrong, rather than steady traffic. */
         const val ANOMALY_MASK =
@@ -84,7 +85,8 @@ data class FlightRecord(
                 (1 shl EVENT_PLAYBACK_UNDERRUN) or
                 (1 shl EVENT_TRANSFER_DEFERRED) or
                 (1 shl EVENT_DEFERRED_NO_METADATA) or
-                (1 shl EVENT_DEFERRED_NO_PCM)
+                (1 shl EVENT_DEFERRED_NO_PCM) or
+                (1 shl EVENT_SIGNAL_DISCONTINUITY)
 
         fun eventName(event: Int): String = when (event) {
             EVENT_PLAYBACK_COMPLETE -> "playback-complete"
@@ -95,6 +97,7 @@ data class FlightRecord(
             EVENT_TRANSFER_DEFERRED -> "transfer-deferred"
             EVENT_DEFERRED_NO_METADATA -> "deferred-no-metadata"
             EVENT_DEFERRED_NO_PCM -> "deferred-no-pcm"
+            EVENT_SIGNAL_DISCONTINUITY -> "signal-discontinuity"
             else -> "unknown"
         }
     }
@@ -647,6 +650,14 @@ class NativeEngine private constructor() {
      * a few seconds of routine traffic.
      */
     external fun nativeSetDirectUsbFlightRecorderEventMask(mask: Int)
+
+    /**
+     * Flags a step between consecutive output samples above this fraction of
+     * full scale, recording it as [FlightRecord.EVENT_SIGNAL_DISCONTINUITY].
+     * A click is a discontinuity in the signal, so this finds one without
+     * anyone listening. Zero disables the check.
+     */
+    external fun nativeSetDirectUsbDiscontinuityThreshold(threshold: Float)
 
     external fun nativeSetDirectUsbFlightRecorderFreezeTrigger(event: Int)
 
