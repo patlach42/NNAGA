@@ -19,6 +19,7 @@
 
 package com.vibes.dsp.engine
 
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -48,8 +49,23 @@ class AudioSessionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        runCatching { startForegroundCompat() }.onFailure {
-            Log.w(TAG, "Audio foreground service could not start: ${it.message}")
+        // Once startForegroundService() has been accepted the platform demands
+        // a startForeground() from here within a few seconds, and stopping
+        // instead does NOT lift that obligation - it kills the process with
+        // ForegroundServiceDidNotStartInTimeException. So every path through
+        // this method has to end in a real startForeground() call.
+        //
+        // The typed call is the one we want, but it is also the one the system
+        // can refuse: on recent releases a media-playback type is checked
+        // against whether the app is currently allowed to hold one. An untyped
+        // notification keeps the process out of the cached state just as well,
+        // so it is tried next rather than giving up.
+        val promoted = runCatching { startForegroundCompat(typed = true) }.isSuccess ||
+            runCatching { startForegroundCompat(typed = false) }.isSuccess
+        if (!promoted) {
+            // Nothing left to try. Stopping now may still cost us the process,
+            // but staying started without a notification certainly would.
+            Log.w(TAG, "Audio foreground service could not be promoted")
             stopSelf()
         }
         // The session is owned by DirectUsbAudioManager, not by this service:
@@ -58,7 +74,7 @@ class AudioSessionService : Service() {
         return START_NOT_STICKY
     }
 
-    private fun startForegroundCompat() {
+    private fun startForegroundCompat(typed: Boolean) {
         val manager = getSystemService(NotificationManager::class.java)
         if (manager?.getNotificationChannel(CHANNEL_ID) == null) {
             manager?.createNotificationChannel(
@@ -78,7 +94,7 @@ class AudioSessionService : Service() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setOngoing(true)
             .build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (typed && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
                 notification,
@@ -96,10 +112,29 @@ class AudioSessionService : Service() {
 
         /** Failures are logged, never fatal: audio must still run without it. */
         fun start(context: Context) {
+            // A background process is not allowed to start a foreground
+            // service, and asking anyway is worse than not asking: the call is
+            // what creates the obligation the platform later kills us over.
+            // Checking our own importance first keeps that out of the picture
+            // when the engine is started from a test or from a receiver.
+            if (!canStartForegroundService(context)) {
+                Log.i(TAG, "not in the foreground; leaving the process unpromoted")
+                return
+            }
             runCatching {
                 val intent = Intent(context, AudioSessionService::class.java)
                 context.startForegroundService(intent)
             }.onFailure { Log.w(TAG, "start failed: ${it.message}") }
+        }
+
+        private fun canStartForegroundService(context: Context): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+            return runCatching {
+                val state = ActivityManager.RunningAppProcessInfo()
+                ActivityManager.getMyMemoryState(state)
+                state.importance <=
+                    ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND_SERVICE
+            }.getOrDefault(true)
         }
 
         fun stop(context: Context) {
