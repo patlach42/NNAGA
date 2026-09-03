@@ -49,6 +49,7 @@ object PerformanceTweaks {
     private const val STORE = "performance_tweaks"
     private const val KEY_IRQ_AFFINITY = "original_irq_affinity"
     private const val KEY_MIN_FREQ = "original_scaling_min_freq"
+    private const val KEY_SLACK = "original_timerslack_ns"
 
     data class Tweak(
         val id: String,
@@ -178,15 +179,41 @@ object PerformanceTweaks {
             }
 
             "timer_slack" -> {
+                // Per thread, not per process: writing to the group leader
+                // leaves the render and event threads untouched, which is
+                // where it would have to matter. And 0 is not "no slack" - the
+                // kernel reads it as "reset to the default" - so a tight value
+                // is 1, and reverting restores what was saved.
                 val pid = android.os.Process.myPid()
-                val target = if (enable) "0" else "50000"
-                val result = PrivilegedShell.writePrivilegedAndVerify(
-                    "/proc/$pid/timerslack_ns", target
-                )
-                if (!result.ok) {
-                    return Outcome(State.Unavailable, result.output.trim().ifBlank {
-                        "could not set timer slack"
-                    })
+                val tids = PrivilegedShell.runAsRoot(
+                    "for t in /proc/$pid/task/*; do " +
+                        "n=\$(cat \$t/comm 2>/dev/null); " +
+                        "case \"\$n\" in *Usb*|*udio*|*ender*) echo \${t##*/};; esac; done"
+                ).stdout.lines().mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+                if (tids.isEmpty()) {
+                    return Outcome(
+                        State.Unavailable,
+                        "no audio threads found; start audio first",
+                    )
+                }
+                val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                var failure: String? = null
+                tids.forEach { tid ->
+                    val path = "/proc/$pid/task/$tid/timerslack_ns"
+                    if (enable && !prefs.contains(KEY_SLACK)) {
+                        PrivilegedShell.readPrivileged(path)?.trim()
+                            ?.let { prefs.edit().putString(KEY_SLACK, it).apply() }
+                    }
+                    val target = if (enable) {
+                        "1"
+                    } else {
+                        prefs.getString(KEY_SLACK, null) ?: "50000"
+                    }
+                    val result = PrivilegedShell.writePrivilegedAndVerify(path, target)
+                    if (!result.ok && failure == null) failure = result.output.trim()
+                }
+                failure?.let {
+                    return Outcome(State.NotApplied, it.ifBlank { "could not set timer slack" })
                 }
             }
 
@@ -357,22 +384,39 @@ object PerformanceTweaks {
         }
 
         "rt_priority" -> {
-            val limit = PrivilegedShell.runAsRoot("ulimit -r 2>/dev/null")
-            val value = limit.stdout.trim().toIntOrNull()
+            // Read this process's own limit. `ulimit` inside `su -c` reports
+            // the root shell's limit, which is not the one that governs our
+            // audio threads and would have shown success regardless.
+            val pid = android.os.Process.myPid()
+            val limits = PrivilegedShell.readPrivileged("/proc/$pid/limits")
+            val line = limits?.lineSequence()
+                ?.firstOrNull { it.contains("realtime priority", ignoreCase = true) }
+            val soft = line?.trim()?.split(Regex("\\s{2,}"))?.getOrNull(1)?.trim()
             when {
-                !limit.ok -> Outcome(State.Unavailable, "needs root")
-                value == null -> Outcome(State.Unknown, "limit not reported")
-                value > 0 -> Outcome(State.Applied, "real-time priority up to $value")
+                limits == null -> Outcome(State.Unavailable, "needs root")
+                soft == null -> Outcome(State.Unknown, "limit not reported")
+                (soft.toIntOrNull() ?: 0) > 0 ->
+                    Outcome(State.Applied, "real-time priority up to $soft")
                 else -> Outcome(State.NotApplied, "real-time priority not permitted")
             }
         }
 
         "timer_slack" -> {
-            val slack = PrivilegedShell.readPrivileged("/proc/self/timerslack_ns")
+            // Report an audio thread's slack, not the group leader's: they are
+            // different values and only the former matters here.
+            val pid = android.os.Process.myPid()
+            val slack = PrivilegedShell.runAsRoot(
+                "for t in /proc/$pid/task/*; do " +
+                    "n=\$(cat \$t/comm 2>/dev/null); " +
+                    "case \"\$n\" in *Usb*|*udio*|*ender*) " +
+                    "cat \$t/timerslack_ns 2>/dev/null; break;; esac; done"
+            )
+            val value = slack.stdout.trim().toLongOrNull()
             when {
-                slack == null -> Outcome(State.Unavailable, "needs root")
-                slack.toLongOrNull() == 0L -> Outcome(State.Applied, "slack is 0 ns")
-                else -> Outcome(State.NotApplied, "slack is $slack ns")
+                !slack.ok -> Outcome(State.Unavailable, "needs root")
+                value == null -> Outcome(State.Unknown, "no audio thread running")
+                value <= 1L -> Outcome(State.Applied, "slack is $value ns")
+                else -> Outcome(State.NotApplied, "slack is $value ns")
             }
         }
 
