@@ -174,6 +174,46 @@ object SystemProbe {
         )
     }
 
+    /**
+     * What the app already does for itself, and whether it took.
+     *
+     * These need no permission and no root: they are the app's own doing. They
+     * belong next to the tweaks because a user looking at a list of knobs
+     * should see what is already on before turning anything, and because each
+     * of them can fail silently on a device that declines it.
+     */
+    fun appSideMeasures(context: android.content.Context): Report {
+        val lines = mutableListOf<String>()
+
+        val power = context.getSystemService(android.os.PowerManager::class.java)
+        lines += "sustained performance supported: " +
+            (power?.isSustainedPerformanceModeSupported?.toString() ?: "?")
+        lines += "battery optimisation exempt: " +
+            (power?.isIgnoringBatteryOptimizations(context.packageName)?.toString() ?: "?")
+
+        // A foreground service is what keeps the process out of the cached
+        // state, so its absence explains far more than any tuning knob.
+        val services = runCatching {
+            val manager = context.getSystemService(android.app.ActivityManager::class.java)
+            @Suppress("DEPRECATION")
+            manager?.getRunningServices(64)
+                ?.count { it.service.className.contains("AudioSessionService") } ?: 0
+        }.getOrDefault(-1)
+        lines += "audio foreground service running: " + when (services) {
+            -1 -> "unknown"
+            0 -> "no"
+            else -> "yes"
+        }
+
+        val stats = runCatching {
+            com.vibes.dsp.engine.NativeEngine.getInstance().getDirectUsbStats()
+        }.getOrNull()
+        lines += "ADPF hint session active: " +
+            (stats?.performanceHintActive?.toString() ?: "unknown (audio not running)")
+
+        return Report("App-side measures", lines.joinToString("\n"))
+    }
+
     fun all(): List<Report> = listOf(
         cpuTopology(),
         usbInterrupts(),

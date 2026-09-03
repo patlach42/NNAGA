@@ -216,7 +216,7 @@ fun TweaksSettingsScreen() {
                     },
                 ) { Text("Battery exemption") }
                 OutlinedButton(
-                    enabled = !probing && access == PrivilegedShell.Access.Root,
+                    enabled = !probing,
                     onClick = { probing = true },
                 ) { Text(if (probing) "Probing…" else "Investigate") }
             }
@@ -257,9 +257,17 @@ fun TweaksSettingsScreen() {
     // Read-only, so it needs no confirmation and changes nothing if it fails.
     LaunchedEffect(probing) {
         if (!probing) return@LaunchedEffect
-        probes = withContext(Dispatchers.IO) {
-            com.vibes.dsp.tweaks.SystemProbe.all()
+        val gathered = withContext(Dispatchers.IO) {
+            // The app-side report needs no root, so it is worth showing even
+            // when the privileged probes come back empty.
+            listOf(com.vibes.dsp.tweaks.SystemProbe.appSideMeasures(context)) +
+                if (access == PrivilegedShell.Access.Root) {
+                    com.vibes.dsp.tweaks.SystemProbe.all()
+                } else {
+                    emptyList()
+                }
         }
+        probes = gathered
         probing = false
     }
 
