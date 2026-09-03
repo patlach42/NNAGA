@@ -697,7 +697,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderFreezeTri
         JNIEnv* env, jobject thiz, jint event) {
     if (!g_ctx || !g_ctx->directUsbOutput) return;
     using Event = monotrypt::usb::PacketFlightRecorder::Event;
-    if (event < 0 || event > static_cast<jint>(Event::TransferDeferred)) return;
+    if (event < 0 || event > static_cast<jint>(Event::DeferredNoPcm)) return;
     g_ctx->directUsbOutput->setFlightRecorderFreezeTrigger(
         static_cast<Event>(event));
 }

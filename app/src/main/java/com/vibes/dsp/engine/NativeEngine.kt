@@ -75,12 +75,16 @@ data class FlightRecord(
         const val EVENT_CAPTURE_COMPLETE = 4
         const val EVENT_PLAYBACK_UNDERRUN = 5
         const val EVENT_TRANSFER_DEFERRED = 6
+        const val EVENT_DEFERRED_NO_METADATA = 7
+        const val EVENT_DEFERRED_NO_PCM = 8
 
         /** Events that mean something went wrong, rather than steady traffic. */
         const val ANOMALY_MASK =
             (1 shl EVENT_QUANTUM_REFUSED) or
                 (1 shl EVENT_PLAYBACK_UNDERRUN) or
-                (1 shl EVENT_TRANSFER_DEFERRED)
+                (1 shl EVENT_TRANSFER_DEFERRED) or
+                (1 shl EVENT_DEFERRED_NO_METADATA) or
+                (1 shl EVENT_DEFERRED_NO_PCM)
 
         fun eventName(event: Int): String = when (event) {
             EVENT_PLAYBACK_COMPLETE -> "playback-complete"
@@ -89,6 +93,8 @@ data class FlightRecord(
             EVENT_CAPTURE_COMPLETE -> "capture-complete"
             EVENT_PLAYBACK_UNDERRUN -> "playback-underrun"
             EVENT_TRANSFER_DEFERRED -> "transfer-deferred"
+            EVENT_DEFERRED_NO_METADATA -> "deferred-no-metadata"
+            EVENT_DEFERRED_NO_PCM -> "deferred-no-pcm"
             else -> "unknown"
         }
     }

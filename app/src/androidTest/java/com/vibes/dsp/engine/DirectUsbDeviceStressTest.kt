@@ -50,6 +50,14 @@ class DirectUsbDeviceStressTest {
         // Step 1 of the diagnostics ladder. Off by default: recording is cheap
         // but the dump is verbose, and ordinary audit runs do not need it.
         val flightRecorder = argumentBoolean(args, "direct_usb_flight_recorder")
+        // The validation loop allocates on every iteration - a stats object, a
+        // 57-long array from JNI, transport info and the track list - so at the
+        // default 10 ms it produces a steady stream of garbage in the process
+        // that owns the render thread. A collection pause deschedules that
+        // thread, which is a candidate for the clicks a listener reports at a
+        // rate unrelated to any driver counter. Raising this trades validation
+        // resolution for harness quiet.
+        val pollIntervalMs = argumentLong(args, "direct_usb_poll_ms", "poll_ms", 10L, 1L, 1_000L)
         val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 1, 8)
         val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 600_000L)
         val warmupMs = minOf(1_000L, (durationMs / 3L).coerceAtLeast(250L))
@@ -144,7 +152,8 @@ class DirectUsbDeviceStressTest {
                                 durationMs,
                                 warmupMs,
                                 requireLoopback,
-                                flightRecorder
+                                flightRecorder,
+                                pollIntervalMs
                             )
                         }
                     }
@@ -270,6 +279,7 @@ class DirectUsbDeviceStressTest {
         warmupMs: Long,
         requireLoopback: Boolean,
         flightRecorder: Boolean,
+        pollIntervalMs: Long,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -453,7 +463,7 @@ class DirectUsbDeviceStressTest {
                             reason = "urgent-audio-thread-not-enabled"
                         }
                     }
-                    SystemClock.sleep(10)
+                    SystemClock.sleep(pollIntervalMs)
                 }
                 finalStats = engine.getDirectUsbStats()
                 finalRaw = engine.nativeGetDirectUsbStats()
@@ -478,15 +488,12 @@ class DirectUsbDeviceStressTest {
                     (finalRaw.getOrZero(METADATA_FIFO_OVERRUNS) - baselineRaw.getOrZero(METADATA_FIFO_OVERRUNS)).coerceAtLeast(0L)
                 val zeroRunwayGrowth =
                     (finalRaw.getOrZero(ZERO_RUNWAY_EVENTS) - baselineRaw.getOrZero(ZERO_RUNWAY_EVENTS)).coerceAtLeast(0L)
-                // A deferred OUT transfer is the documented response to missing
-                // capture metadata or PCM - the driver must not fabricate a
-                // layout - but the device still loses that service slot, and
-                // deferrals track what a listener reports hearing. Two runs of
-                // this profile: six deferrals and one drop against eight clicks
-                // heard, then two anomalies against one. It has to be gated.
-                val deferredTransferGrowth =
-                    (finalRaw.getOrZero(DEFERRED_TRANSFERS) -
-                        baselineRaw.getOrZero(DEFERRED_TRANSFERS)).coerceAtLeast(0L)
+                // Deferral growth is deliberately NOT gated. It looked like the
+                // audible fault on two runs, but across four it varies by three
+                // orders of magnitude - 5 to 70855 - while a listener reports
+                // seven to nine clicks regardless, and most of it tracks how
+                // often this harness polls rather than anything the device
+                // hears. It stays in telemetry as a pressure indicator.
                 if (reason == null && !samplePositionProgressed) reason = "sample-position-did-not-advance"
                 if (reason == null && !trackFrameProgressed) reason = "track-frame-did-not-advance"
                 if (reason == null && starvationGrowth > 0L) {
@@ -502,9 +509,7 @@ class DirectUsbDeviceStressTest {
                 if (reason == null && zeroRunwayGrowth > 0L) {
                     reason = "zero-runway-growth-exceeded-$zeroRunwayGrowth"
                 }
-                if (reason == null && deferredTransferGrowth > 0L) {
-                    reason = "transfer-deferral-growth-exceeded-$deferredTransferGrowth"
-                }
+
                 // Reported last: backpressure is a real defect but a different
                 // one, and naming it separately keeps it from masquerading as
                 // an audible dropout when ranking configurations.
