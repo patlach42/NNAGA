@@ -99,6 +99,18 @@ fun TweaksSettingsScreen() {
 
     LaunchedEffect(Unit) { refresh() }
 
+    // The battery exemption is answered in a system dialog, so the state read
+    // straight after opening it is always the old one. Re-read when the screen
+    // comes back, which is when the user has finished with that dialog.
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) busy = true
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     LazyColumn(
         modifier = Modifier.fillMaxWidth().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -219,6 +231,25 @@ fun TweaksSettingsScreen() {
                     enabled = !probing,
                     onClick = { probing = true },
                 ) { Text(if (probing) "Probing…" else "Investigate") }
+            }
+        }
+
+        if (probes.isNotEmpty()) {
+            item {
+                OutlinedButton(onClick = {
+                    // Findings that cannot leave the device are findings
+                    // nobody else can act on.
+                    val text = probes.joinToString("\n\n") { "== ${it.title}\n${it.body}" }
+                    runCatching {
+                        val clipboard = context.getSystemService(
+                            android.content.ClipboardManager::class.java
+                        )
+                        clipboard?.setPrimaryClip(
+                            android.content.ClipData.newPlainText("NNAGA probe", text)
+                        )
+                        lastResult = "Report copied to the clipboard"
+                    }.onFailure { lastResult = "Could not copy: ${it.message}" }
+                }) { Text("Copy report") }
             }
         }
 
