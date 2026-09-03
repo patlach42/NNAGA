@@ -358,6 +358,23 @@ object PerformanceTweaks {
         return java.lang.Long.toHexString(mask)
     }
 
+    /**
+     * Soft real-time priority limit from the text of /proc/pid/limits.
+     *
+     * Split out so it can be tested: the file is column-aligned with variable
+     * spacing and the units column is absent for this row, so a naive split
+     * picks up the wrong field and would report a limit that is not there.
+     */
+    internal fun realtimeLimitOf(limits: String): Int? {
+        val line = limits.lineSequence()
+            .firstOrNull { it.contains("realtime priority", ignoreCase = true) }
+            ?: return null
+        // "Max realtime priority        0          0"
+        val tail = line.substringAfter("priority", "").trim()
+        val soft = tail.split(Regex("\\s+")).firstOrNull() ?: return null
+        return soft.toIntOrNull() ?: if (soft == "unlimited") Int.MAX_VALUE else null
+    }
+
     /** cpufreq policy directory governing the highest-capacity cluster. */
     private fun bigClusterPolicyPath(): String? {
         val result = PrivilegedShell.runAsRoot(
@@ -389,14 +406,11 @@ object PerformanceTweaks {
             // audio threads and would have shown success regardless.
             val pid = android.os.Process.myPid()
             val limits = PrivilegedShell.readPrivileged("/proc/$pid/limits")
-            val line = limits?.lineSequence()
-                ?.firstOrNull { it.contains("realtime priority", ignoreCase = true) }
-            val soft = line?.trim()?.split(Regex("\\s{2,}"))?.getOrNull(1)?.trim()
+            val soft = limits?.let { realtimeLimitOf(it) }
             when {
                 limits == null -> Outcome(State.Unavailable, "needs root")
                 soft == null -> Outcome(State.Unknown, "limit not reported")
-                (soft.toIntOrNull() ?: 0) > 0 ->
-                    Outcome(State.Applied, "real-time priority up to $soft")
+                soft > 0 -> Outcome(State.Applied, "real-time priority up to $soft")
                 else -> Outcome(State.NotApplied, "real-time priority not permitted")
             }
         }

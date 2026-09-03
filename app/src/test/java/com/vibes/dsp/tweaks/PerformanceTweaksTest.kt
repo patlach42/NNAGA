@@ -45,4 +45,30 @@ class PerformanceTweaksTest {
         assertEquals("", PerformanceTweaks.bigCoreMaskOf("garbage\nlines"))
         assertEquals("", PerformanceTweaks.bigCoreMaskOf("0 0\n1 0"))
     }
+
+    @Test
+    fun `reads the soft realtime limit from proc limits`() {
+        // The real layout: column-aligned, variable spacing, and this row has
+        // no units column, so splitting on runs of spaces picks the wrong
+        // field and reports a limit that is not there.
+        val limits = """
+            Limit                     Soft Limit  Hard Limit  Units
+            Max cpu time              unlimited   unlimited   seconds
+            Max realtime priority     0           0
+            Max nice priority         40          40
+        """.trimIndent()
+        assertEquals(0, PerformanceTweaks.realtimeLimitOf(limits))
+    }
+
+    @Test
+    fun `sees a granted realtime limit`() {
+        val limits = "Max realtime priority     1           1"
+        assertEquals(1, PerformanceTweaks.realtimeLimitOf(limits))
+    }
+
+    @Test
+    fun `reports nothing when the row is absent`() {
+        assertEquals(null, PerformanceTweaks.realtimeLimitOf("Max nice priority 40 40"))
+        assertEquals(null, PerformanceTweaks.realtimeLimitOf(""))
+    }
 }
