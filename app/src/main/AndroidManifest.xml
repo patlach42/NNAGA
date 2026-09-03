@@ -36,6 +36,10 @@
          normal permissions, granted at install. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Lets the app show the exemption dialog. The user still decides; this
+         only makes the request possible without sending them into Settings to
+         find it themselves. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
