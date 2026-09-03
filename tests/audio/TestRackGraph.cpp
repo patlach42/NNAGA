@@ -834,6 +834,37 @@ TEST(RackGraphTransportTest, LoopStartOnlyAffectsLoopingAndQuarterNoteMinimumIsE
     EXPECT_FLOAT_EQ(buffers.outputLeft[0], 1.0f);
 }
 
+// A loop length in quarter notes and a clip in frames are two descriptions of
+// the same span, and rounding between them leaves a few frames of mismatch.
+// Reading past the end renders silence, so every wrap of a short loop clicked:
+// a listener heard breaks on a two second loop of a phase-continuous tone and
+// none on a thirty-two second loop of the same tone. Snap to the frame count
+// when the difference is rounding width rather than a musical choice.
+TEST(RackGraphTransportTest, LoopLengthSnapsToTheClipWhenTheyDescribeTheSameSpan) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    // 0.25 quarter notes is exactly 60 frames here; the clip is one short, the
+    // kind of gap tempo rounding produces.
+    ASSERT_TRUE(graph.attachTrackWavSlot(track, 0, makeRampClip(59)));
+    ASSERT_TRUE(graph.setClipLoopLength(track, 0, 0.25));
+    ASSERT_TRUE(graph.setClipLooping(track, 0, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 61);
+    for (uint32_t frame = 0; frame < 59; ++frame) {
+        EXPECT_FLOAT_EQ(buffers.outputLeft[frame], 1.0f + static_cast<float>(frame))
+            << "frame " << frame;
+    }
+    EXPECT_FLOAT_EQ(buffers.outputLeft[59], 1.0f)
+        << "the seam rendered silence instead of wrapping to the clip";
+    EXPECT_FLOAT_EQ(buffers.outputLeft[60], 2.0f);
+}
+
 TEST(RackGraphTransportTest, LoopingLongerThanEofLeavesSilenceUntilNextBoundary) {
     RackGraph graph;
     configure(graph);

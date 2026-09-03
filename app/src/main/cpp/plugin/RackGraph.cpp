@@ -1754,10 +1754,30 @@ void RackGraph::process(
                 const uint64_t startFrame = looping
                     ? static_cast<uint64_t>(std::llround(startQn * 60.0 * rate / timelineBpm))
                     : 0;
-                const uint64_t length = looping
-                    ? std::max<uint64_t>(1, static_cast<uint64_t>(std::llround(lengthQn * 60.0 * rate / bpm)))
-                    : std::max<uint64_t>(1, static_cast<uint64_t>(std::ceil(
+                // The loop length is a musical span in quarter notes while the
+                // audio is a fixed number of frames, and rounding between them
+                // leaves a few frames of mismatch. Too long reads past the end,
+                // which ClipTempoAdapter::sample renders as hard silence; too
+                // short cuts the seam early. Either way every wrap clicks, and
+                // a listener hears it: a two second loop produced breaks where
+                // the same tone in a thirty-two second loop produced none.
+                // When the two spans are meant to describe the same audio,
+                // snap to the exact frame count. The tolerance is rounding
+                // width, not a musical difference, so a loop region the user
+                // deliberately set longer or shorter than the clip is kept.
+                const uint64_t sourceFrames = std::max<uint64_t>(1,
+                    static_cast<uint64_t>(std::ceil(
                         adapter.adaptedLengthFrames(static_cast<double>(wav->left.size())))));
+                uint64_t length = sourceFrames;
+                if (looping) {
+                    const uint64_t musical = std::max<uint64_t>(1,
+                        static_cast<uint64_t>(std::llround(lengthQn * 60.0 * rate / bpm)));
+                    const uint64_t tolerance =
+                        std::max<uint64_t>(2, sourceFrames / 4096);
+                    const uint64_t drift = musical > sourceFrames
+                        ? musical - sourceFrames : sourceFrames - musical;
+                    length = drift <= tolerance ? sourceFrames : musical;
+                }
                 if (runtime->localFrame >= length) {
                     if (looping) runtime->localFrame %= length;
                     else { runtime->localPlaying = false; runtime->statusPlaying.store(false, std::memory_order_relaxed); }
