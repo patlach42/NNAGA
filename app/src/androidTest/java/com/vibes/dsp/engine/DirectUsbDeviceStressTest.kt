@@ -290,6 +290,12 @@ class DirectUsbDeviceStressTest {
             // first completion are both recorded; enabling clears the history.
             runCatching {
                 engine.nativeSetDirectUsbFlightRecorderEnabled(flightRecorder)
+            }.onFailure { error ->
+                Log.i(
+                    tag,
+                    "FLIGHT_SUMMARY enable_failed=1 " +
+                        "error=${error.javaClass.simpleName}-${error.message?.replace(Regex("[\r\n]"), " ")}"
+                )
             }
             DirectUsbAudioManager.startSelected(context, format)
             val started = runBlocking {
@@ -609,11 +615,24 @@ class DirectUsbDeviceStressTest {
         multiplier: Int,
         cycle: Int,
     ) {
-        val snapshot = runCatching {
+        // Report the failure rather than swallowing it. The first run of this
+        // dump produced no output at all because the native library on the
+        // device was stale and the JNI method was missing; a silent return made
+        // that indistinguishable from "the recorder had nothing to say".
+        val snapshotResult = runCatching {
             FlightRecorderSnapshot.decode(
                 engine.nativeGetDirectUsbFlightRecorderSnapshot(MAX_FLIGHT_RECORDS)
             )
-        }.getOrNull() ?: return
+        }
+        val snapshot = snapshotResult.getOrElse { error ->
+            Log.i(
+                tag,
+                "FLIGHT_SUMMARY rate=${format.sampleRate} buffer=$buffer " +
+                    "multiplier=$multiplier cycle=$cycle unavailable=1 " +
+                    "error=${error.javaClass.simpleName}-${error.message?.replace(Regex("[\r\n]"), " ")}"
+            )
+            return
+        }
         val prefix = "rate=${format.sampleRate} buffer=$buffer multiplier=$multiplier cycle=$cycle"
         Log.i(
             tag,
