@@ -80,6 +80,7 @@ data class FlightRecord(
         const val EVENT_SIGNAL_DISCONTINUITY = 9
         const val EVENT_TRANSFER_DISCONTINUITY = 10
         const val EVENT_CAPTURE_DISCONTINUITY = 11
+        const val EVENT_CAPTURE_MODULATION = 12
 
         /** Events that mean something went wrong, rather than steady traffic. */
         const val ANOMALY_MASK =
@@ -90,7 +91,8 @@ data class FlightRecord(
                 (1 shl EVENT_DEFERRED_NO_PCM) or
                 (1 shl EVENT_SIGNAL_DISCONTINUITY) or
                 (1 shl EVENT_TRANSFER_DISCONTINUITY) or
-                (1 shl EVENT_CAPTURE_DISCONTINUITY)
+                (1 shl EVENT_CAPTURE_DISCONTINUITY) or
+                (1 shl EVENT_CAPTURE_MODULATION)
 
         fun eventName(event: Int): String = when (event) {
             EVENT_PLAYBACK_COMPLETE -> "playback-complete"
@@ -104,6 +106,7 @@ data class FlightRecord(
             EVENT_SIGNAL_DISCONTINUITY -> "signal-discontinuity"
             EVENT_TRANSFER_DISCONTINUITY -> "transfer-discontinuity"
             EVENT_CAPTURE_DISCONTINUITY -> "capture-discontinuity"
+            EVENT_CAPTURE_MODULATION -> "capture-modulation"
             else -> "unknown"
         }
     }
@@ -674,6 +677,13 @@ class NativeEngine private constructor() {
      * input one it covers the DAC, the cable and the ADC.
      */
     external fun nativeSetDirectUsbCaptureDiscontinuityThreshold(threshold: Float)
+
+    /**
+     * Flags the captured level wandering from its running average by more than
+     * this fraction. A steady tone must come back steady; a wandering envelope
+     * means the output is modulated.
+     */
+    external fun nativeSetDirectUsbCaptureModulationThreshold(threshold: Float)
 
     external fun nativeSetDirectUsbFlightRecorderFreezeTrigger(event: Int)
 

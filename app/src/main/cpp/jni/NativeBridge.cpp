@@ -724,6 +724,19 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCaptureDiscontinuityThr
     }
 }
 
+// Flag the captured level wandering from its running average by more than this
+// fraction. A steady tone must come back steady; a wandering envelope means the
+// output is modulated, which summing with a delayed copy at a drifting delay
+// produces and which no step detector can see.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCaptureModulationThreshold(
+        JNIEnv* env, jobject thiz, jfloat threshold) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setCaptureModulationThreshold(
+            static_cast<float>(threshold));
+    }
+}
+
 // Freeze the recorder when `event` first occurs so its run-up survives. Without
 // it a rare event is evicted by the steady-state traffic that follows: one
 // device cycle offered 143329 events into a 4096 slot buffer.
@@ -732,7 +745,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderFreezeTri
         JNIEnv* env, jobject thiz, jint event) {
     if (!g_ctx || !g_ctx->directUsbOutput) return;
     using Event = monotrypt::usb::PacketFlightRecorder::Event;
-    if (event < 0 || event > static_cast<jint>(Event::CaptureDiscontinuity)) return;
+    if (event < 0 || event > static_cast<jint>(Event::CaptureModulation)) return;
     g_ctx->directUsbOutput->setFlightRecorderFreezeTrigger(
         static_cast<Event>(event));
 }
@@ -920,16 +933,17 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbErrorDetail(
 JNIEXPORT jdoubleArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeMeasureRoundTrip(
         JNIEnv* env, jobject) {
-    double result[5] = {};
-    jdouble values[6] = {};
+    constexpr int kSlots = AudioEngine::kRoundTripResultSlots;
+    double result[kSlots] = {};
+    jdouble values[kSlots + 1] = {};
     std::string error;
     const bool ok = g_ctx && g_ctx->audioEngine &&
         g_ctx->audioEngine->measureDirectUsbRoundTrip(3000, result, error);
     g_roundTripError = ok ? std::string() : error;
     values[0] = ok ? 1.0 : 0.0;
-    for (int i = 0; i < 5; ++i) values[i + 1] = result[i];
-    jdoubleArray out = env->NewDoubleArray(6);
-    if (out) env->SetDoubleArrayRegion(out, 0, 6, values);
+    for (int i = 0; i < kSlots; ++i) values[i + 1] = result[i];
+    jdoubleArray out = env->NewDoubleArray(kSlots + 1);
+    if (out) env->SetDoubleArrayRegion(out, 0, kSlots + 1, values);
     return out;
 }
 

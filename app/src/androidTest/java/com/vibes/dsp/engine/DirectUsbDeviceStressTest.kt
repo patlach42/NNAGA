@@ -332,6 +332,10 @@ class DirectUsbDeviceStressTest {
                     // not matter. A 440 Hz tone steps by 5.8% of its peak
                     // between samples; 30% is unambiguous.
                     engine.nativeSetDirectUsbCaptureDiscontinuityThreshold(0.30f)
+                    // A steady tone must come back at a steady level. 8% is
+                    // far above the RMS jitter of a clean loopback and far
+                    // below the swing a drifting overlap produces.
+                    engine.nativeSetDirectUsbCaptureModulationThreshold(0.08f)
                     // No freeze trigger: with the filter in place the whole run
                     // fits, and freezing on the first refusal would hide every
                     // deferral that followed it.

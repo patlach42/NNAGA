@@ -975,6 +975,28 @@ bool AudioEngine::measureDirectUsbRoundTrip(
     result[2] = correlation.correlation;
     result[3] = measurement.inputPeak.load(std::memory_order_acquire);
     result[4] = measurement.outputPeak.load(std::memory_order_acquire);
+
+    // How many copies of the probe came back. One is a clean path; more means
+    // the signal is summed with a delayed copy of itself, which is smooth and
+    // therefore invisible to every discontinuity check. The threshold stays
+    // clear of the noise floor, which for an N-sample random probe sits near
+    // 1/sqrt(N).
+    const auto peaks = analyzeRoundTripPeaks(
+        measurement.probe.data(),
+        static_cast<int32_t>(measurement.probe.size()),
+        measurement.capture.data(),
+        capturedFrames,
+        0.5,
+        measurement.sampleRate / 1000);
+    result[5] = static_cast<double>(peaks.count);
+    for (int i = 0; i < kRoundTripReportedPeaks; ++i) {
+        const bool present = i < peaks.count;
+        result[6 + i * 2] = present
+            ? static_cast<double>(peaks.peaks[i].offset -
+                                  measurement.preRollFrames)
+            : -1.0;
+        result[7 + i * 2] = present ? peaks.peaks[i].correlation : 0.0;
+    }
     measurement.state.store(0, std::memory_order_release);
     error.clear();
     return true;

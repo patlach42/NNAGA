@@ -125,7 +125,15 @@ public:
 
     void stop();
     // Blocking control-thread measurement; render thread only observes the atomic request.
-    bool measureDirectUsbRoundTrip(int32_t timeoutMs, double result[5],
+    // Slots 0..4 are latency frames, latency ms, correlation, input peak and
+    // output peak. Slot 5 is how many arrivals the loopback contained and
+    // 6..11 are up to three of them as offset/correlation pairs, strongest
+    // first. More than one arrival means the path sums the signal with a
+    // delayed copy of itself, which no discontinuity check can see.
+    static constexpr int kRoundTripResultSlots = 12;
+    static constexpr int kRoundTripReportedPeaks = 3;
+    bool measureDirectUsbRoundTrip(int32_t timeoutMs,
+                                   double result[kRoundTripResultSlots],
                                    std::string& error) noexcept;
 
     bool startAndroidOboeSession(int32_t inputDeviceId, int32_t outputDeviceId, int32_t bufferFrames);

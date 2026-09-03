@@ -111,7 +111,16 @@ class DirectUsbRoundTripTest {
                         "correlation=${formatValue(result.correlation)} " +
                         "input_peak=${formatValue(result.inputPeak)} " +
                         "output_peak=${formatValue(result.outputPeak)} " +
-                        "rate=${configuredFormat.sampleRate} output_pair=0",
+                        "rate=${configuredFormat.sampleRate} output_pair=0 " +
+                        // More than one arrival means the loopback carries the
+                        // signal plus a delayed copy of itself. That sum is
+                        // smooth, so no discontinuity check can see it, and a
+                        // listener hears it as the wave overlapping itself.
+                        "arrivals=${result.arrivals.size} " +
+                        result.arrivals.joinToString(" ") { arrival ->
+                            "arrival_frames=${arrival.latencyFrames}" +
+                                ",corr=${formatValue(arrival.correlation)}"
+                        },
                 )
                 assertTrue(
                     "Round-trip latency frames must be positive on run $runIndex",

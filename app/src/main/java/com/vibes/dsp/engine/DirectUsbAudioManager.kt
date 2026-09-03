@@ -106,12 +106,24 @@ data class DirectUsbCalibrationProfile(
     val successfulRuns: Int = if (started) 1 else 0,
     val score: Int = 0
 )
+/** One copy of the probe returning through the loopback. */
+data class DirectUsbRoundTripArrival(
+    val latencyFrames: Int,
+    val correlation: Double,
+)
+
 data class DirectUsbRoundTripResult(
     val latencyFrames: Int,
     val latencyMilliseconds: Double,
     val correlation: Double,
     val inputPeak: Double,
     val outputPeak: Double,
+    /**
+     * Every copy of the probe the loopback returned, strongest first. One is a
+     * clean path; more than one means the signal is summed with a delayed copy
+     * of itself, which is smooth and so invisible to a discontinuity check.
+     */
+    val arrivals: List<DirectUsbRoundTripArrival> = emptyList(),
 )
 
 fun scoreAutoCalibrationProfileList(profiles: List<DirectUsbCalibrationProfile>): List<DirectUsbCalibrationProfile> {
@@ -1118,6 +1130,13 @@ object DirectUsbAudioManager {
                         )
                     )
                 }
+                val arrivalCount = raw.getOrElse(6) { 0.0 }.toInt()
+                val arrivals = (0 until minOf(arrivalCount, 3)).mapNotNull { index ->
+                    val frames = raw.getOrElse(7 + index * 2) { -1.0 }
+                    val correlation = raw.getOrElse(8 + index * 2) { 0.0 }
+                    if (frames < 0.0) null
+                    else DirectUsbRoundTripArrival(frames.toInt(), correlation)
+                }
                 Result.success(
                     DirectUsbRoundTripResult(
                         raw.getOrElse(1) { 0.0 }.toInt(),
@@ -1125,6 +1144,7 @@ object DirectUsbAudioManager {
                         raw.getOrElse(3) { 0.0 },
                         raw.getOrElse(4) { 0.0 },
                         raw.getOrElse(5) { 0.0 },
+                        arrivals,
                     )
                 )
             }
