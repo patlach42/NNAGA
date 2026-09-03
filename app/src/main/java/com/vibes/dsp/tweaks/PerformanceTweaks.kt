@@ -262,12 +262,27 @@ object PerformanceTweaks {
             "for c in /sys/devices/system/cpu/cpu[0-9]*; do " +
                 "printf \"%s %s\n\" \${c##*/cpu} \$(cat \$c/cpu_capacity 2>/dev/null || echo 0); done"
         )
-        val entries = caps.stdout.lineSequence()
+        return bigCoreMaskOf(caps.stdout)
+    }
+
+    /**
+     * Affinity mask covering every CPU at the highest reported capacity.
+     *
+     * Split out from the shell call so it can be tested: an affinity mask is
+     * a bitmask in hex, and getting the shift or the base wrong silently pins
+     * an interrupt to the wrong cluster - a mistake that would look like the
+     * tweak working while making things worse.
+     *
+     * Falls back to every CPU when the topology cannot be read, which is the
+     * kernel default and therefore harmless.
+     */
+    internal fun bigCoreMaskOf(topology: String): String {
+        val entries = topology.lineSequence()
             .mapNotNull { line ->
-                val parts = line.trim().split(" ")
+                val parts = line.trim().split(Regex("\\s+"))
                 val cpu = parts.getOrNull(0)?.toIntOrNull()
                 val capacity = parts.getOrNull(1)?.toIntOrNull()
-                if (cpu != null && capacity != null) cpu to capacity else null
+                if (cpu != null && capacity != null && capacity > 0) cpu to capacity else null
             }
             .toList()
         if (entries.isEmpty()) return "ff"
