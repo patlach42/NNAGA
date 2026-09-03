@@ -478,6 +478,15 @@ class DirectUsbDeviceStressTest {
                     (finalRaw.getOrZero(METADATA_FIFO_OVERRUNS) - baselineRaw.getOrZero(METADATA_FIFO_OVERRUNS)).coerceAtLeast(0L)
                 val zeroRunwayGrowth =
                     (finalRaw.getOrZero(ZERO_RUNWAY_EVENTS) - baselineRaw.getOrZero(ZERO_RUNWAY_EVENTS)).coerceAtLeast(0L)
+                // A deferred OUT transfer is the documented response to missing
+                // capture metadata or PCM - the driver must not fabricate a
+                // layout - but the device still loses that service slot, and
+                // deferrals track what a listener reports hearing. Two runs of
+                // this profile: six deferrals and one drop against eight clicks
+                // heard, then two anomalies against one. It has to be gated.
+                val deferredTransferGrowth =
+                    (finalRaw.getOrZero(DEFERRED_TRANSFERS) -
+                        baselineRaw.getOrZero(DEFERRED_TRANSFERS)).coerceAtLeast(0L)
                 if (reason == null && !samplePositionProgressed) reason = "sample-position-did-not-advance"
                 if (reason == null && !trackFrameProgressed) reason = "track-frame-did-not-advance"
                 if (reason == null && starvationGrowth > 0L) {
@@ -492,6 +501,9 @@ class DirectUsbDeviceStressTest {
                 }
                 if (reason == null && zeroRunwayGrowth > 0L) {
                     reason = "zero-runway-growth-exceeded-$zeroRunwayGrowth"
+                }
+                if (reason == null && deferredTransferGrowth > 0L) {
+                    reason = "transfer-deferral-growth-exceeded-$deferredTransferGrowth"
                 }
                 // Reported last: backpressure is a real defect but a different
                 // one, and naming it separately keeps it from masquerading as
