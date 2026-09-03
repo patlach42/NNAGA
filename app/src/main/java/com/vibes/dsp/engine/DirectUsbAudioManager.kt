@@ -512,6 +512,10 @@ object DirectUsbAudioManager {
     suspend fun startConfigured(context: Context): Result<Unit> =
         lifecycleMutex.withLock {
             acquireAudioWakeLock(context)
+            // Before the engine starts, so the process is already foreground
+            // when the render thread comes up rather than being promoted
+            // mid-stream.
+            AudioSessionService.start(context)
             if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
                 if (ContextCompat.checkSelfPermission(
                         context,
@@ -1124,6 +1128,7 @@ object DirectUsbAudioManager {
 
     private fun disableInternal(context: Context) {
         releaseAudioWakeLock()
+        AudioSessionService.stop(context)
         val engine = NativeEngine.getInstance()
         if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
             engine.stopEngine()

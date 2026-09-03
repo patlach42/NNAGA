@@ -32,6 +32,10 @@
     <!-- Keeping the CPU out of deep idle while audio runs. A normal permission,
          granted at install, so this needs nothing from the user. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Keeps the process out of the cached state while audio runs. Both are
+         normal permissions, granted at install. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
 
     <application
         android:allowBackup="true"
@@ -68,6 +72,11 @@
             android:configChanges="orientation|screenSize|screenLayout"
             android:theme="@style/Theme.NNAGA"
             android:windowLayoutInDisplayCutoutMode="shortEdges" />
+        <service
+            android:name=".engine.AudioSessionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
     </application>
 
 </manifest>
