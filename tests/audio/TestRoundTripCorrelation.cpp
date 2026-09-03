@@ -1,5 +1,8 @@
 #include <gtest/gtest.h>
 
+#include <cstdint>
+#include <vector>
+
 #include "engine/RoundTripCorrelation.h"
 
 #include <cstddef>
@@ -53,6 +56,104 @@ std::vector<float> makeCapture(const std::vector<float>& probe,
         capture[static_cast<std::size_t>(offset) + i] += scale * probe[i];
     }
     return capture;
+}
+
+// One path gives one peak; a path that sums the signal with a delayed copy of
+// itself gives two. That second case is what a listener described as the wave
+// overlapping itself, and it is invisible to a discontinuity detector because
+// the sum is perfectly smooth.
+TEST(RoundTripPeaks, SingleEchoYieldsOnePeak) {
+    constexpr int kProbe = 64;
+    constexpr int kCapture = 512;
+    constexpr int kDelay = 100;
+    std::vector<float> probe(kProbe), capture(kCapture, 0.0f);
+    uint32_t random = 0x9e3779b9u;
+    for (float& sample : probe) {
+        random ^= random << 13u; random ^= random >> 17u; random ^= random << 5u;
+        sample = (random & 1u) != 0u ? 0.25f : -0.25f;
+    }
+    for (int i = 0; i < kProbe; ++i) capture[kDelay + i] = probe[i];
+
+    const auto profile = guitarrackcraft::analyzeRoundTripPeaks(
+        probe.data(), kProbe, capture.data(), kCapture);
+    ASSERT_EQ(profile.count, 1);
+    EXPECT_EQ(profile.peaks[0].offset, kDelay);
+    EXPECT_GT(profile.peaks[0].correlation, 0.9);
+}
+
+TEST(RoundTripPeaks, OverlappingCopiesYieldTwoPeaks) {
+    constexpr int kProbe = 64;
+    constexpr int kCapture = 512;
+    constexpr int kFirst = 100;
+    constexpr int kSecond = 180;
+    std::vector<float> probe(kProbe), capture(kCapture, 0.0f);
+    uint32_t random = 0x9e3779b9u;
+    for (float& sample : probe) {
+        random ^= random << 13u; random ^= random >> 17u; random ^= random << 5u;
+        sample = (random & 1u) != 0u ? 0.25f : -0.25f;
+    }
+    for (int i = 0; i < kProbe; ++i) {
+        capture[kFirst + i] += probe[i];
+        capture[kSecond + i] += probe[i] * 0.8f;
+    }
+
+    const auto profile = guitarrackcraft::analyzeRoundTripPeaks(
+        probe.data(), kProbe, capture.data(), kCapture);
+    ASSERT_EQ(profile.count, 2) << "an overlapped path must not read as one";
+    // The correlation is normalised, so a quieter copy scores as highly as a
+    // loud one and the order between them is arbitrary. What matters is that
+    // both arrivals are reported.
+    bool sawFirst = false, sawSecond = false;
+    for (int i = 0; i < profile.count; ++i) {
+        if (profile.peaks[i].offset == kFirst) sawFirst = true;
+        if (profile.peaks[i].offset == kSecond) sawSecond = true;
+        EXPECT_GT(profile.peaks[i].correlation, 0.9);
+    }
+    EXPECT_TRUE(sawFirst) << "the direct arrival was missed";
+    EXPECT_TRUE(sawSecond) << "the delayed copy was missed";
+}
+
+// One arrival smeared over a few samples, as any real analogue path smears it,
+// must be reported once rather than as a burst of neighbouring arrivals.
+TEST(RoundTripPeaks, SmearedSingleArrivalCountsOnce) {
+    // A long probe on purpose: correlation of an N-sample random sequence with
+    // an unrelated stretch sits around 1/sqrt(N), so a 64-sample probe has a
+    // noise floor near 0.125 and a 0.2 threshold would admit noise anywhere.
+    // The real probe is 1024 to 2048 samples, where the floor is about 0.022.
+    constexpr int kProbe = 512;
+    constexpr int kCapture = 2048;
+    constexpr int kDelay = 100;
+    std::vector<float> probe(kProbe), capture(kCapture, 0.0f);
+    uint32_t random = 0x12345678u;
+    for (float& sample : probe) {
+        random ^= random << 13u; random ^= random >> 17u; random ^= random << 5u;
+        sample = (random & 1u) != 0u ? 0.25f : -0.25f;
+    }
+    for (int i = 0; i < kProbe; ++i) {
+        capture[kDelay + i] += probe[i];
+        capture[kDelay + i + 1] += probe[i] * 0.5f;
+        capture[kDelay + i + 2] += probe[i] * 0.25f;
+    }
+
+    // A low threshold admits the shoulders of the arrival, so suppressing the
+    // cluster is what keeps this at one. At 0.5 the shoulders fall below the
+    // floor on their own and the test would pass without that logic.
+    const auto profile = guitarrackcraft::analyzeRoundTripPeaks(
+        probe.data(), kProbe, capture.data(), kCapture, 0.2, 16);
+    EXPECT_EQ(profile.count, 1)
+        << "a smeared arrival was split into " << profile.count << " peaks";
+    EXPECT_EQ(profile.peaks[0].offset, kDelay);
+}
+
+TEST(RoundTripPeaks, RejectsDegenerateInput) {
+    std::vector<float> probe(8, 0.0f), capture(64, 0.0f);
+    EXPECT_EQ(guitarrackcraft::analyzeRoundTripPeaks(
+        probe.data(), 8, capture.data(), 64).count, 0)
+        << "a silent probe has no energy to correlate";
+    EXPECT_EQ(guitarrackcraft::analyzeRoundTripPeaks(
+        nullptr, 8, capture.data(), 64).count, 0);
+    EXPECT_EQ(guitarrackcraft::analyzeRoundTripPeaks(
+        probe.data(), 8, capture.data(), 4).count, 0);
 }
 
 } // namespace
