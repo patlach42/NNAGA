@@ -482,8 +482,36 @@ object DirectUsbAudioManager {
             Result.success(formats)
         }
 
+    // Held for as long as audio runs. Without it the CPU may enter deep idle
+    // between our wakeups, and coming back out of it is exactly the kind of
+    // latency a fixed render deadline cannot absorb. WAKE_LOCK is a normal
+    // permission, granted at install, so this is reliable and needs nothing
+    // from the user.
+    private var audioWakeLock: android.os.PowerManager.WakeLock? = null
+
+    private fun acquireAudioWakeLock(context: Context) {
+        if (audioWakeLock?.isHeld == true) return
+        runCatching {
+            val power = context.getSystemService(android.os.PowerManager::class.java)
+                ?: return
+            val lock = power.newWakeLock(
+                android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                "nnaga:direct-usb-audio",
+            )
+            lock.setReferenceCounted(false)
+            lock.acquire()
+            audioWakeLock = lock
+        }
+    }
+
+    private fun releaseAudioWakeLock() {
+        runCatching { audioWakeLock?.takeIf { it.isHeld }?.release() }
+        audioWakeLock = null
+    }
+
     suspend fun startConfigured(context: Context): Result<Unit> =
         lifecycleMutex.withLock {
+            acquireAudioWakeLock(context)
             if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
                 if (ContextCompat.checkSelfPermission(
                         context,
@@ -1095,6 +1123,7 @@ object DirectUsbAudioManager {
     }
 
     private fun disableInternal(context: Context) {
+        releaseAudioWakeLock()
         val engine = NativeEngine.getInstance()
         if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
             engine.stopEngine()
