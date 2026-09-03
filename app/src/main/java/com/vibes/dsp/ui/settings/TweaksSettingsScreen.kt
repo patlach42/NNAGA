@@ -70,6 +70,10 @@ fun TweaksSettingsScreen() {
         mutableStateOf<Pair<PerformanceTweaks.Tweak, Boolean>?>(null)
     }
     var lastResult by remember { mutableStateOf<String?>(null) }
+    var probes by remember {
+        mutableStateOf<List<com.vibes.dsp.tweaks.SystemProbe.Report>>(emptyList())
+    }
+    var probing by remember { mutableStateOf(false) }
 
     suspend fun refresh() {
         withContext(Dispatchers.IO) {
@@ -185,6 +189,19 @@ fun TweaksSettingsScreen() {
                             .requestBatteryOptimisationExemption(context)
                     },
                 ) { Text("Battery exemption") }
+                OutlinedButton(
+                    enabled = !probing && access == PrivilegedShell.Access.Root,
+                    onClick = { probing = true },
+                ) { Text(if (probing) "Probing…" else "Investigate") }
+            }
+        }
+
+        items(probes, key = { it.title }) { report ->
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text(report.title, style = MaterialTheme.typography.titleSmall)
+                    Text(report.body, style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
 
@@ -211,6 +228,15 @@ fun TweaksSettingsScreen() {
     // Applying reports what the device says afterwards, not what was asked
     // for: a sysfs write can succeed and be reverted by a vendor daemon, and
     // a tweak that only looks applied is worse than one that is absent.
+    // Read-only, so it needs no confirmation and changes nothing if it fails.
+    LaunchedEffect(probing) {
+        if (!probing) return@LaunchedEffect
+        probes = withContext(Dispatchers.IO) {
+            com.vibes.dsp.tweaks.SystemProbe.all()
+        }
+        probing = false
+    }
+
     LaunchedEffect(pending) {
         val request = pending ?: return@LaunchedEffect
         val (tweak, enable) = request
