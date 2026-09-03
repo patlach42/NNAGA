@@ -165,12 +165,22 @@ object SystemProbe {
             val value = PrivilegedShell.runAsRoot("settings get global $key")
             "$key = ${value.stdout.trim().ifBlank { "?" }}"
         }
+        // The framework's own thirty-second candidate. If this reads 30000 it
+        // is at least a timer of the right period; anything else rules the
+        // framework out and leaves vendor firmware housekeeping, which has no
+        // public name and no setting to read.
+        val rssiPoll = PrivilegedShell.runAsRoot(
+            "cmd wifi get-poll-rssi-interval-msecs 2>/dev/null"
+        )
         val power = PrivilegedShell.runAsRoot(
             "dumpsys wifi 2>/dev/null | grep -iE 'power save|screen off|dtim' | head -4"
         )
         return Report(
             "Wi-Fi periodic behaviour",
-            body + "\n" + power.stdout.trimEnd().ifBlank { "(no power-save detail)" },
+            body +
+                "\nrssi poll interval = " +
+                rssiPoll.stdout.trim().ifBlank { "?" } +
+                "\n" + power.stdout.trimEnd().ifBlank { "(no power-save detail)" },
         )
     }
 
