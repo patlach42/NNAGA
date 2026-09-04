@@ -538,6 +538,23 @@ class DirectUsbDeviceStressTest {
                         if (raw.getOrZero(EVENT_THREAD_URGENT_AUDIO) != 1L || raw.getOrZero(RENDER_THREAD_URGENT_AUDIO) != 1L) {
                             reason = "urgent-audio-thread-not-enabled"
                         }
+                        // Startup is its own gate: the pipeline fills and the
+                        // first completions settle there, so a frame lost then
+                        // is still a frame lost, but its extrema describe a
+                        // different regime and must not be read as the steady
+                        // state envelope.
+                        if (reason == null && stats.playbackQuantumDrops > 0L) {
+                            reason = "startup-quantum-drop-${stats.playbackQuantumDrops}"
+                        }
+                        if (reason == null && stats.minAdmissionMarginFrames < 0L) {
+                            reason = "startup-admission-margin-${stats.minAdmissionMarginFrames}"
+                        }
+                        Log.i(tag, "STARTUP_ENVELOPE quantum_drops=${stats.playbackQuantumDrops} " +
+                            "min_admission_margin=${stats.minAdmissionMarginFrames} " +
+                            "max_completion_gap_ns=${stats.maxCompletionGapNs} " +
+                            "max_missing_drains=${stats.maxMissingDrains} " +
+                            "max_writes_between_drains=${stats.maxWritesBetweenDrains}")
+                        runCatching { engine.nativeResetDirectUsbEnvelope() }
                     }
                     SystemClock.sleep(pollIntervalMs)
                 }
@@ -564,6 +581,14 @@ class DirectUsbDeviceStressTest {
                     (finalRaw.getOrZero(METADATA_FIFO_OVERRUNS) - baselineRaw.getOrZero(METADATA_FIFO_OVERRUNS)).coerceAtLeast(0L)
                 val zeroRunwayGrowth =
                     (finalRaw.getOrZero(ZERO_RUNWAY_EVENTS) - baselineRaw.getOrZero(ZERO_RUNWAY_EVENTS)).coerceAtLeast(0L)
+                val captureDiscontinuityGrowth =
+                    (finalStats.captureDiscontinuities - baseline.captureDiscontinuities).coerceAtLeast(0L)
+                val signalDiscontinuityGrowth =
+                    (finalStats.signalDiscontinuities - baseline.signalDiscontinuities).coerceAtLeast(0L)
+                val transferDiscontinuityGrowth =
+                    (finalStats.transferDiscontinuities - baseline.transferDiscontinuities).coerceAtLeast(0L)
+                val implicitMetadataInvalidGrowth =
+                    (finalStats.implicitMetadataInvalid - baseline.implicitMetadataInvalid).coerceAtLeast(0L)
                 // Deferral growth is deliberately NOT gated. It looked like the
                 // audible fault on two runs, but across four it varies by three
                 // orders of magnitude - 5 to 70855 - while a listener reports
@@ -582,6 +607,27 @@ class DirectUsbDeviceStressTest {
                 if (reason == null && metadataFifoOverflowGrowth > 0L) {
                     reason = "metadata-fifo-overflow-growth-exceeded-$metadataFifoOverflowGrowth"
                 }
+                // Detector events now decide the verdict. A counter that only
+                // reaches the flight log protects nothing: this run reported
+                // 39 capture breaks and still passed on every other gate.
+                if (reason == null && captureDiscontinuityGrowth > 0L) {
+                    reason = "capture-discontinuity-growth-exceeded-$captureDiscontinuityGrowth"
+                }
+                if (reason == null && signalDiscontinuityGrowth > 0L) {
+                    reason = "signal-discontinuity-growth-exceeded-$signalDiscontinuityGrowth"
+                }
+                if (reason == null && transferDiscontinuityGrowth > 0L) {
+                    reason = "transfer-discontinuity-growth-exceeded-$transferDiscontinuityGrowth"
+                }
+                if (reason == null && implicitMetadataInvalidGrowth > 0L) {
+                    reason = "implicit-metadata-invalid-growth-exceeded-$implicitMetadataInvalidGrowth"
+                }
+                if (reason == null && finalStats.minAdmissionMarginFrames < 0L) {
+                    // writable < quantum means the block was refused and its
+                    // 64 frames are gone. Gating on counter growth alone let
+                    // that pass whenever the loss landed outside the window.
+                    reason = "admission-margin-negative-${finalStats.minAdmissionMarginFrames}"
+                }
                 if (reason == null && zeroRunwayGrowth > 0L) {
                     reason = "zero-runway-growth-exceeded-$zeroRunwayGrowth"
                 }
@@ -596,6 +642,12 @@ class DirectUsbDeviceStressTest {
             }
             if (reason == null && requireLoopback && maxOutputPeak < LOOPBACK_OUTPUT_MIN_PEAK) {
                 reason = "loopback-output-peak-below-threshold"
+            }
+            if (reason == null && requireLoopback && !finalStats.captureDetectorArmed) {
+                // The loop can be present and still too quiet for the detector
+                // to judge: below its arming level a silent run and a clean one
+                // are the same run. That is a bench failure, not a pass.
+                reason = "capture-detector-never-armed"
             }
             if (reason == null && requireLoopback && maxInputPeak < LOOPBACK_INPUT_MIN_PEAK) {
                 reason = "loopback-input-peak-below-threshold"
@@ -844,6 +896,20 @@ class DirectUsbDeviceStressTest {
             "capture_headroom_frames=${stats.captureHeadroomFrames} capture_deadline_slack_frames=${stats.captureDeadlineSlackFrames} " +
             "deferred_no_metadata=${stats.deferredNoMetadata} deferred_no_pcm=${stats.deferredNoPcm} " +
             "queued_out_low_water=${stats.queuedOutLowWaterFrames} " +
+            "capture_discontinuities=${stats.captureDiscontinuities} " +
+            "signal_discontinuities=${stats.signalDiscontinuities} " +
+            "transfer_discontinuities=${stats.transferDiscontinuities} " +
+            "capture_modulations=${stats.captureModulations} " +
+            "capture_detector_armed=${if (stats.captureDetectorArmed) 1 else 0} " +
+            "implicit_metadata_invalid=${stats.implicitMetadataInvalid} " +
+            "ring_low_water=${stats.ringLowWaterFrames} ring_high_water=${stats.ringHighWaterFrames} " +
+            "drain_chunk_frames=${stats.drainChunkFrames} " +
+            "ring_p05=${stats.ringOccupancyP05} ring_p50=${stats.ringOccupancyP50} " +
+            "ring_p95=${stats.ringOccupancyP95} ring_samples=${stats.ringOccupancySamples} " +
+            "max_completion_gap_ns=${stats.maxCompletionGapNs} max_missing_drains=${stats.maxMissingDrains} " +
+            "drain_frames_min=${stats.drainFramesMin} drain_frames_max=${stats.drainFramesMax} " +
+            "max_writes_between_drains=${stats.maxWritesBetweenDrains} " +
+            "min_admission_margin=${stats.minAdmissionMarginFrames} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
@@ -914,7 +980,7 @@ class DirectUsbDeviceStressTest {
     private data class CaseResult(val passed: Boolean, val reason: String?)
 
     private companion object {
-        const val TELEMETRY_SCHEMA_VERSION = 8L
+        const val TELEMETRY_SCHEMA_VERSION = 12L
         const val RAW_STAT_COUNT = 55
         const val MAX_IMPLICIT_FIFO = 256L
         // One 30 s cycle at a 64-frame quantum offers about 22500 quanta, so a

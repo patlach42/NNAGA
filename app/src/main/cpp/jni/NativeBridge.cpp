@@ -712,6 +712,16 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbTransferDiscontinuityTh
     }
 }
 
+// Starts a fresh envelope epoch, so steady-state extrema are not contaminated
+// by the pipeline filling at startup.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeResetDirectUsbEnvelope(
+        JNIEnv* env, jobject thiz) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->resetEnvelopeMetrics();
+    }
+}
+
 // Which capture channel the loopback detectors watch. An interface with an
 // internal loop returns the signal on the pair fed by the playback pair, not
 // on channel one, and a silent channel reports nothing at all.
@@ -818,7 +828,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 58;
+    constexpr jsize kStatCount = 77;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -857,7 +867,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 9;
+            values[18] = 12;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -905,6 +915,51 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             g_ctx->directUsbOutput->deferredNoPcmCount());
         values[57] = static_cast<jlong>(
             g_ctx->directUsbOutput->queuedOutLowWaterFrames());
+        // Continuity detectors, counted so they can gate a verdict, plus the
+        // arming flag that separates "nothing broke" from "nothing looked".
+        values[58] = static_cast<jlong>(
+            g_ctx->directUsbOutput->captureDiscontinuityCount());
+        values[59] = static_cast<jlong>(
+            g_ctx->directUsbOutput->captureModulationCount());
+        values[60] = static_cast<jlong>(
+            g_ctx->directUsbOutput->signalDiscontinuityCount());
+        values[61] = static_cast<jlong>(
+            g_ctx->directUsbOutput->transferDiscontinuityCount());
+        values[62] = g_ctx->directUsbOutput->captureDetectorArmed() ? 1 : 0;
+        values[63] = static_cast<jlong>(
+            g_ctx->directUsbOutput->implicitMetadataInvalidCount());
+        // Ring occupancy extremes: their difference is the latency wobble.
+        values[64] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringLowWaterFrames());
+        values[65] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringHighWaterFrames());
+        values[66] = static_cast<jlong>(
+            g_ctx->directUsbOutput->drainChunkFrames());
+        // Occupancy percentiles, sampled per drain. The extremes above answer
+        // "how bad did it get"; these answer "where does it normally sit",
+        // which is the part the reported latency actually follows.
+        values[67] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringOccupancyPercentile(0.05));
+        values[68] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringOccupancyPercentile(0.50));
+        values[69] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringOccupancyPercentile(0.95));
+        values[70] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringOccupancySampleCount());
+        // Jitter envelope: the terms the depth and headroom formulas need
+        // measured rather than assumed.
+        values[71] = static_cast<jlong>(
+            g_ctx->directUsbOutput->maxCompletionGapNs());
+        values[72] = static_cast<jlong>(
+            g_ctx->directUsbOutput->maxMissingDrains());
+        values[73] = static_cast<jlong>(
+            g_ctx->directUsbOutput->drainFramesMin());
+        values[74] = static_cast<jlong>(
+            g_ctx->directUsbOutput->drainFramesMax());
+        values[75] = static_cast<jlong>(
+            g_ctx->directUsbOutput->maxWritesBetweenDrains());
+        values[76] = static_cast<jlong>(
+            g_ctx->directUsbOutput->minAdmissionMarginFrames());
     }
     jlongArray out = env->NewLongArray(kStatCount);
     if (out) env->SetLongArrayRegion(out, 0, kStatCount, values);

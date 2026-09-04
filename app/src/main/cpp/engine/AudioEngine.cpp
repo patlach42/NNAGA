@@ -1235,8 +1235,22 @@ void AudioEngine::directUsbRenderLoop() {
         if (inputPeak >= kClippingThreshold) inputClipping_.store(true, std::memory_order_relaxed);
         if (outputPeak >= kClippingThreshold) outputClipping_.store(true, std::memory_order_relaxed);
 
-        const bool submitted = directUsbOutput_->submitWholeQuantum(
+        // Publish against frames the device has actually played, never against
+        // this thread's own wakeups. Without it the startup pre-roll lets the
+        // producer run the ring past its admission ceiling and a whole quantum
+        // is discarded; the credit removes that overshoot without adding any
+        // latency, which a deeper prime or a startup-only headroom would.
+        const bool credited = directUsbOutput_->waitForPlaybackCreditUntil(
+            frames, deadline);
+        if (credited) directUsbOutput_->takePlaybackCredit(frames);
+        const bool submitted = credited && directUsbOutput_->submitWholeQuantum(
             directUsbOutputLeft_.data(), directUsbOutputRight_.data(), frames);
+        if (!credited) {
+            // The device stopped consuming for a whole quantum period. That is
+            // a transport fault, not backpressure: nothing was rendered into
+            // the stream and nothing was discarded from it.
+            directUsbCreditTimeouts_.fetch_add(1, std::memory_order_relaxed);
+        }
         if (!submitted) {
             directUsbWriteWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
             if (!directUsbOutput_->driverStreaming()) {

@@ -201,6 +201,38 @@ data class DirectUsbStats(
     val deferredNoPcm: Long = 0,
     /** Smallest submitted OUT runway seen; falls before anything is heard. */
     val queuedOutLowWaterFrames: Long = 0,
+    /** Breaks in the captured loopback, counted so they can fail a verdict. */
+    val captureDiscontinuities: Long = 0,
+    /** Envelope wander in the captured loopback. */
+    val captureModulations: Long = 0,
+    /** Breaks in the rendered signal before packing. */
+    val signalDiscontinuities: Long = 0,
+    /** Breaks in the packed PCM leaving the ring. */
+    val transferDiscontinuities: Long = 0,
+    /** Whether the capture detector ever saw a level worth judging. */
+    val captureDetectorArmed: Boolean = false,
+    /** Capture packets that arrived failed or empty and carried no clock. */
+    val implicitMetadataInvalid: Long = 0,
+    /** Ring occupancy extremes; their difference is the latency wobble. */
+    val ringLowWaterFrames: Long = 0,
+    val ringHighWaterFrames: Long = 0,
+    /** Frames handed to the device per transfer. */
+    val drainChunkFrames: Long = 0,
+    /** Occupancy percentiles sampled per drain; p95 minus p05 is the sawtooth. */
+    val ringOccupancyP05: Long = 0,
+    val ringOccupancyP50: Long = 0,
+    val ringOccupancyP95: Long = 0,
+    val ringOccupancySamples: Long = 0,
+    /** Worst gap between OUT completions, and the nominal drains it spans. */
+    val maxCompletionGapNs: Long = 0,
+    val maxMissingDrains: Long = 0,
+    /** Frames a completion actually removed, rather than the nominal. */
+    val drainFramesMin: Long = 0,
+    val drainFramesMax: Long = 0,
+    /** Graph quanta accepted between two drains: the catch-up burst. */
+    val maxWritesBetweenDrains: Long = 0,
+    /** Smallest writable-minus-quantum seen; negative means a refusal. */
+    val minAdmissionMarginFrames: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -257,6 +289,25 @@ data class DirectUsbStats(
         private const val DEFERRED_NO_METADATA = 55
         private const val DEFERRED_NO_PCM = 56
         private const val QUEUED_OUT_LOW_WATER = 57
+        private const val CAPTURE_DISCONTINUITIES = 58
+        private const val CAPTURE_MODULATIONS = 59
+        private const val SIGNAL_DISCONTINUITIES = 60
+        private const val TRANSFER_DISCONTINUITIES = 61
+        private const val CAPTURE_DETECTOR_ARMED = 62
+        private const val IMPLICIT_METADATA_INVALID = 63
+        private const val RING_LOW_WATER = 64
+        private const val RING_HIGH_WATER = 65
+        private const val DRAIN_CHUNK = 66
+        private const val RING_P05 = 67
+        private const val RING_P50 = 68
+        private const val RING_P95 = 69
+        private const val RING_SAMPLES = 70
+        private const val MAX_COMPLETION_GAP_NS = 71
+        private const val MAX_MISSING_DRAINS = 72
+        private const val DRAIN_FRAMES_MIN = 73
+        private const val DRAIN_FRAMES_MAX = 74
+        private const val MAX_WRITES_BETWEEN_DRAINS = 75
+        private const val MIN_ADMISSION_MARGIN = 76
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -313,6 +364,25 @@ data class DirectUsbStats(
                 deferredNoMetadata = at(DEFERRED_NO_METADATA),
                 deferredNoPcm = at(DEFERRED_NO_PCM),
                 queuedOutLowWaterFrames = at(QUEUED_OUT_LOW_WATER),
+                captureDiscontinuities = at(CAPTURE_DISCONTINUITIES),
+                captureModulations = at(CAPTURE_MODULATIONS),
+                signalDiscontinuities = at(SIGNAL_DISCONTINUITIES),
+                transferDiscontinuities = at(TRANSFER_DISCONTINUITIES),
+                captureDetectorArmed = at(CAPTURE_DETECTOR_ARMED) != 0L,
+                implicitMetadataInvalid = at(IMPLICIT_METADATA_INVALID),
+                ringLowWaterFrames = at(RING_LOW_WATER),
+                ringHighWaterFrames = at(RING_HIGH_WATER),
+                drainChunkFrames = at(DRAIN_CHUNK),
+                ringOccupancyP05 = at(RING_P05),
+                ringOccupancyP50 = at(RING_P50),
+                ringOccupancyP95 = at(RING_P95),
+                ringOccupancySamples = at(RING_SAMPLES),
+                maxCompletionGapNs = at(MAX_COMPLETION_GAP_NS),
+                maxMissingDrains = at(MAX_MISSING_DRAINS),
+                drainFramesMin = at(DRAIN_FRAMES_MIN),
+                drainFramesMax = at(DRAIN_FRAMES_MAX),
+                maxWritesBetweenDrains = at(MAX_WRITES_BETWEEN_DRAINS),
+                minAdmissionMarginFrames = at(MIN_ADMISSION_MARGIN),
             )
         }
     }
@@ -696,6 +766,13 @@ class NativeEngine private constructor() {
      * the playback pair, so watching channel zero would see silence.
      */
     external fun nativeSetDirectUsbCaptureInspectChannel(channel: Int)
+
+    /**
+     * Starts a fresh envelope epoch. Startup fills the pipeline and settles the
+     * first completions, so its extrema describe a different regime than the
+     * steady state and must not be mixed into it.
+     */
+    external fun nativeResetDirectUsbEnvelope()
 
     /**
      * Flags the captured level wandering from its running average by more than

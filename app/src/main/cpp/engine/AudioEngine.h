@@ -278,6 +278,8 @@ private:
     std::atomic<uint64_t> directUsbDeadlineMisses_{0};
     std::atomic<uint64_t> directUsbSchedulerDeadlineMisses_{0};
     std::atomic<uint64_t> directUsbMaxSchedulerLatenessNs_{0};
+    // Quantum periods in which the device granted no playback credit.
+    std::atomic<uint64_t> directUsbCreditTimeouts_{0};
     std::atomic<int32_t> directUsbOutputPair_{0};
     // Which capture channel the input meter follows. Zero unless a caller
     // points it elsewhere, which a loopback returning on another pair needs.
