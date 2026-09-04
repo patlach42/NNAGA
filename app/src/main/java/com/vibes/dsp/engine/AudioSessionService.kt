@@ -62,6 +62,14 @@ class AudioSessionService : Service() {
         // so it is tried next rather than giving up.
         val promoted = runCatching { startForegroundCompat(typed = true) }.isSuccess ||
             runCatching { startForegroundCompat(typed = false) }.isSuccess
+        if (promoted && intent?.action == ACTION_STOP) {
+            // The stop arrives as a command rather than as stopService() so
+            // that this method runs and discharges the pending obligation
+            // before the service goes away. See stop().
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (!promoted) {
             // Nothing left to try. Stopping now may still cost us the process,
             // but staying started without a notification certainly would.
@@ -109,6 +117,13 @@ class AudioSessionService : Service() {
         private const val TAG = "AudioSessionService"
         private const val CHANNEL_ID = "nnaga.audio.engine"
         private const val NOTIFICATION_ID = 0x4E4E41
+        private const val ACTION_STOP = "com.vibes.dsp.engine.AudioSessionService.STOP"
+
+        // Whether a startForegroundService() of ours is outstanding. Only then
+        // does the platform hold us to a startForeground(), and only then must
+        // a stop go through the service instead of around it.
+        @Volatile
+        private var startRequested = false
 
         /** Failures are logged, never fatal: audio must still run without it. */
         fun start(context: Context) {
@@ -124,6 +139,7 @@ class AudioSessionService : Service() {
             runCatching {
                 val intent = Intent(context, AudioSessionService::class.java)
                 context.startForegroundService(intent)
+                startRequested = true
             }.onFailure { Log.w(TAG, "start failed: ${it.message}") }
         }
 
@@ -138,9 +154,27 @@ class AudioSessionService : Service() {
         }
 
         fun stop(context: Context) {
+            val intent = Intent(context, AudioSessionService::class.java)
+            if (!startRequested) {
+                // Nothing was promised, so nothing has to be discharged.
+                runCatching { context.stopService(intent) }
+                    .onFailure { Log.w(TAG, "stop failed: ${it.message}") }
+                return
+            }
+            // stopService() does NOT lift a pending startForegroundService()
+            // obligation. Stopping a session immediately after starting it -
+            // which every audit cycle does - reached the service before its
+            // first onStartCommand, and the platform killed the process with
+            // ForegroundServiceDidNotStartInTimeException. Sending the stop as
+            // a command guarantees onStartCommand runs, promotes, and only then
+            // stands the service down.
+            startRequested = false
             runCatching {
-                context.stopService(Intent(context, AudioSessionService::class.java))
-            }.onFailure { Log.w(TAG, "stop failed: ${it.message}") }
+                context.startForegroundService(intent.setAction(ACTION_STOP))
+            }.onFailure {
+                Log.w(TAG, "stop command failed: ${it.message}")
+                runCatching { context.stopService(intent) }
+            }
         }
     }
 }
