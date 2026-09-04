@@ -1219,7 +1219,14 @@ void AudioEngine::directUsbRenderLoop() {
 
         float inputPeak = 0.0f;
         float outputPeak = 0.0f;
-        measureStereoPeaks(renderInputPtrs[0], renderOutputPtrs[0],
+        // The meter follows the same channel as the loopback detectors: with an
+        // interface looping internally the signal comes back on the pair the
+        // playback pair feeds, and metering a silent channel one would read as
+        // a dead loop.
+        const int32_t meterChannel = std::min(
+            directUsbInputMeterChannel_.load(std::memory_order_relaxed),
+            std::max(0, directUsbInputChannelCount_ - 1));
+        measureStereoPeaks(renderInputPtrs[meterChannel], renderOutputPtrs[0],
                            renderOutputPtrs[1], frames, inputPeak, outputPeak);
         inputPeakHold_ = std::max(inputPeak, inputPeakHold_ * peakDecay);
         outputPeakHold_ = std::max(outputPeak, outputPeakHold_ * peakDecay);

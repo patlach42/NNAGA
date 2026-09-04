@@ -211,6 +211,10 @@ public:
 
     // Attach the duplex direct USB transport. Lifetime is owned by NativeContext.
     void setDirectUsbOutput(DirectUsbOutput* output) { directUsbOutput_ = output; }
+    void setDirectUsbInputMeterChannel(int32_t channel) {
+        directUsbInputMeterChannel_.store(channel < 0 ? 0 : channel,
+                                          std::memory_order_relaxed);
+    }
     bool isDirectUsbRenderUrgentAudio() const noexcept {
         return directUsbRenderUrgentAudio_.load(std::memory_order_acquire);
     }
@@ -275,6 +279,9 @@ private:
     std::atomic<uint64_t> directUsbSchedulerDeadlineMisses_{0};
     std::atomic<uint64_t> directUsbMaxSchedulerLatenessNs_{0};
     std::atomic<int32_t> directUsbOutputPair_{0};
+    // Which capture channel the input meter follows. Zero unless a caller
+    // points it elsewhere, which a loopback returning on another pair needs.
+    std::atomic<int32_t> directUsbInputMeterChannel_{0};
     std::atomic<bool> directUsbRenderUrgentAudio_{false};
     std::atomic<bool> directUsbPerformanceHintActive_{false};
     std::atomic<bool> cleanupStarted_{true};

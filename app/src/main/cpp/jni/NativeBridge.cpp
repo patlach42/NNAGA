@@ -712,6 +712,22 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbTransferDiscontinuityTh
     }
 }
 
+// Which capture channel the loopback detectors watch. An interface with an
+// internal loop returns the signal on the pair fed by the playback pair, not
+// on channel one, and a silent channel reports nothing at all.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCaptureInspectChannel(
+        JNIEnv* env, jobject thiz, jint channel) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setCaptureInspectChannel(
+            static_cast<int>(channel));
+    }
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->setDirectUsbInputMeterChannel(
+            static_cast<int32_t>(channel));
+    }
+}
+
 // The same check on captured input, relative to the signal's own peak. With a
 // loopback from output one to input one it covers the DAC, cable and ADC - the
 // one stretch the playback checks cannot reach.

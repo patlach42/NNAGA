@@ -679,6 +679,13 @@ class NativeEngine private constructor() {
     external fun nativeSetDirectUsbCaptureDiscontinuityThreshold(threshold: Float)
 
     /**
+     * Which capture channel the loopback detectors watch, zero based. An
+     * interface with an internal loop returns the signal on the pair fed by
+     * the playback pair, so watching channel zero would see silence.
+     */
+    external fun nativeSetDirectUsbCaptureInspectChannel(channel: Int)
+
+    /**
      * Flags the captured level wandering from its running average by more than
      * this fraction. A steady tone must come back steady; a wandering envelope
      * means the output is modulated.

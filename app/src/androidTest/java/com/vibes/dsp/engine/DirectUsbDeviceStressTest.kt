@@ -60,6 +60,11 @@ class DirectUsbDeviceStressTest {
         val pollIntervalMs = argumentLong(args, "direct_usb_poll_ms", "poll_ms", 10L, 1L, 1_000L)
         val discontinuityThreshold =
             argumentDouble(args, "direct_usb_discontinuity", 0.05).toFloat()
+        // An interface that loops internally returns playback on the input pair
+        // fed by the playback pair, not on input one. Both default to the first
+        // pair and the first channel, which is the external-cable arrangement.
+        val outputPair = argumentInt(args, "direct_usb_output_pair", "output_pair", 0, 0, 7)
+        val inputChannel = argumentInt(args, "direct_usb_input_channel", "input_channel", 0, 0, 15)
         val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 1, 8)
         val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 600_000L)
         val warmupMs = minOf(1_000L, (durationMs / 3L).coerceAtLeast(250L))
@@ -92,7 +97,10 @@ class DirectUsbDeviceStressTest {
         val results = linkedMapOf<CaseKey, MutableList<CaseResult>>()
         var cases = 0
         try {
-            AudioSettingsManager.setDirectUsbOutputPair(context, 0)
+            AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
+            // Separate line, not a TELEMETRY field: the analyzer's schema is
+            // versioned and this is harness configuration, not a measurement.
+            Log.i(tag, "LOOPBACK_CONFIG output_pair=$outputPair input_channel=$inputChannel")
             EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
             assertTrue("Native engine initialization failed", EngineInitHelper.initEngine(context))
             originalTransport = runCatching { engine.getTransportInfo() }.getOrNull()
@@ -123,6 +131,9 @@ class DirectUsbDeviceStressTest {
                 .filter {
                     it.bits <= it.subslotBytes * 8 && it.channels >= 2 && it.channels % 2 == 0
                 }
+                // The requested pair and inspected channel must exist in the
+                // negotiated format, or the run measures a channel nobody feeds.
+                .filter { it.channels > outputPair * 2 + 1 && it.channels > inputChannel }
                 .distinctBy { FormatKey(it.sampleRate, it.bits, it.subslotBytes, it.channels) }
                 .sortedWith(
                     compareBy<DirectUsbFormat> { it.sampleRate }
@@ -156,7 +167,8 @@ class DirectUsbDeviceStressTest {
                                 requireLoopback,
                                 flightRecorder,
                                 pollIntervalMs,
-                                discontinuityThreshold
+                                discontinuityThreshold,
+                                inputChannel
                             )
                         }
                     }
@@ -284,6 +296,7 @@ class DirectUsbDeviceStressTest {
         flightRecorder: Boolean,
         pollIntervalMs: Long,
         discontinuityThreshold: Float,
+        inputChannel: Int,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -351,6 +364,9 @@ class DirectUsbDeviceStressTest {
                         "error=${error.javaClass.simpleName}-${error.message?.replace(Regex("[\r\n]"), " ")}"
                 )
             }
+            // Before the session starts, so the very first decoded block is
+            // already inspected on the channel the loopback returns on.
+            runCatching { engine.nativeSetDirectUsbCaptureInspectChannel(inputChannel) }
             DirectUsbAudioManager.startSelected(context, format)
             val started = runBlocking {
                 DirectUsbAudioManager.startConfigured(context)
