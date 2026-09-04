@@ -655,6 +655,70 @@ TEST_F(LV2HostContractTest, ConcurrentInstancesShareCollisionSafeURIDs) {
     for (bool success : succeeded) EXPECT_TRUE(success);
 }
 
+TEST(LV2WorkerContractTest, OptionalEndRunIsAdmittedAndProcessesWorkerResponseAudio) {
+    LilvFixture fixture(
+        "https://guitarrackcraft.test/lv2/worker-contract-without-end-run");
+    ASSERT_NE(fixture.plugin, nullptr);
+    auto plugin = std::make_unique<guitarrackcraft::LV2Plugin>(
+        fixture.plugin, fixture.generation, 48000.0f);
+    auto* instance = plugin.get();
+
+    guitarrackcraft::PluginChain chain;
+    chain.setSampleRate(48000.0f, 64);
+    ASSERT_EQ(chain.addPlugin(std::move(plugin)), 0);
+    ASSERT_EQ(chain.getSize(), 1u);
+    ASSERT_TRUE(instance->isReadyForRealtime());
+    EXPECT_EQ(instance->getInfo().realtimeClass,
+              guitarrackcraft::RealtimeClass::CertifiedInProcess);
+    EXPECT_TRUE(chain.getRealtimeDiagnostic().empty());
+    chain.activate();
+    ASSERT_TRUE(chain.getRealtimeDiagnostic().empty());
+
+    ASSERT_TRUE(chain.visitPlugin(0, [](guitarrackcraft::IPlugin& admitted) {
+        admitted.setParameter(0, 1.0f);
+        return true;
+    }));
+
+    constexpr uint32_t kFrames = 4;
+    const float inputLeft[kFrames] = {0.125f, 0.25f, 0.5f, 1.0f};
+    const float inputRight[kFrames] = {1.0f, 0.5f, 0.25f, 0.125f};
+    const float* inputs[2] = {inputLeft, inputRight};
+    float outputLeft[kFrames] = {};
+    float outputRight[kFrames] = {};
+    float* outputs[2] = {outputLeft, outputRight};
+
+    ASSERT_EQ(chain.process(inputs, outputs, kFrames,
+                            guitarrackcraft::AudioProcessContext{},
+                            nullptr, 0, nullptr, 0), 0u);
+    for (uint32_t frame = 0; frame < kFrames; ++frame) {
+        EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
+        EXPECT_FLOAT_EQ(outputRight[frame], inputLeft[frame]);
+    }
+
+    bool sawResponse = false;
+    bool sawProcessedAudio = false;
+    for (uint32_t tick = 0; tick < 128 && !sawProcessedAudio; ++tick) {
+        std::fill(outputLeft, outputLeft + kFrames, -7.0f);
+        std::fill(outputRight, outputRight + kFrames, -7.0f);
+        ASSERT_EQ(chain.process(inputs, outputs, kFrames,
+                                guitarrackcraft::AudioProcessContext{},
+                                nullptr, 0, nullptr, 0), 0u);
+        const auto values = drainIntEvents(*instance);
+        if (contains(values, 10201)) sawResponse = true;
+        bool scaled = true;
+        for (uint32_t frame = 0; frame < kFrames; ++frame) {
+            scaled = scaled &&
+                     outputLeft[frame] == inputLeft[frame] * 2.0f &&
+                     outputRight[frame] == inputLeft[frame] * 2.0f;
+        }
+        if (sawResponse && scaled) sawProcessedAudio = true;
+        if (!sawProcessedAudio) std::this_thread::yield();
+    }
+    EXPECT_TRUE(sawResponse);
+    EXPECT_TRUE(sawProcessedAudio);
+    chain.deactivate();
+}
+
 TEST(LV2WorkerContractTest, WorkerResponseIsDeliveredBeforeEndRunWhenAvailable) {
     LilvFixture fixture("https://guitarrackcraft.test/lv2/worker-contract");
     ASSERT_NE(fixture.plugin, nullptr);

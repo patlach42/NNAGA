@@ -20,6 +20,9 @@ typedef struct {
     LV2_Atom_Sequence* output;
     float* mode;
     float* modeStorage;
+    float* audioInput;
+    float* audioOutput;
+    float gain;
     _Atomic uint32_t responseDrops;
     _Atomic int gate;
 } WorkerContract;
@@ -70,6 +73,7 @@ static LV2_Handle instantiate(const LV2_Descriptor* descriptor,
     self->atomInt = map_uri(self, LV2_ATOM__Int);
     self->modeStorage = (float*)calloc(1, sizeof(float));
     self->mode = self->modeStorage;
+    self->gain = 1.0f;
     atomic_init(&self->responseDrops, 0);
     atomic_init(&self->gate, 1);
     if (!self->modeStorage) {
@@ -83,11 +87,16 @@ static void connect_port(LV2_Handle instance, uint32_t port, void* data) {
     WorkerContract* self = (WorkerContract*)instance;
     if (port == 0) self->mode = (float*)data;
     else if (port == 1) self->output = (LV2_Atom_Sequence*)data;
+    else if (port == 2) self->audioInput = (float*)data;
+    else if (port == 3) self->audioOutput = (float*)data;
 }
 
 static void run(LV2_Handle instance, uint32_t sample_count) {
-    (void)sample_count;
     WorkerContract* self = (WorkerContract*)instance;
+    if (self->audioInput && self->audioOutput) {
+        for (uint32_t frame = 0; frame < sample_count; ++frame)
+            self->audioOutput[frame] = self->audioInput[frame] * self->gain;
+    }
     if (!self->output || !self->schedule || !self->mode) return;
     self->output->atom.type = self->atomSequence;
     self->output->atom.size = sizeof(LV2_Atom_Sequence_Body);
@@ -173,6 +182,7 @@ static LV2_Worker_Status work_response(LV2_Handle instance,
     if (size == sizeof(int32_t) && body) {
         int32_t value;
         memcpy(&value, body, sizeof(value));
+        if (value == 201) self->gain = 2.0f;
         append_int(self, value + 10000);
     }
     return LV2_WORKER_SUCCESS;
@@ -197,6 +207,20 @@ static const void* extension_data(const char* uri) {
     return strcmp(uri, LV2_WORKER__interface) == 0 ? &kWorkerInterface : NULL;
 }
 
+static const LV2_Worker_Interface kWorkerInterfaceWithoutEndRun = {
+    work,
+    work_response,
+    NULL,
+};
+
+static const char* const kPluginUriWithoutEndRun =
+    "https://guitarrackcraft.test/lv2/worker-contract-without-end-run";
+
+static const void* extension_data_without_end_run(const char* uri) {
+    return strcmp(uri, LV2_WORKER__interface) == 0
+        ? &kWorkerInterfaceWithoutEndRun
+        : NULL;
+}
 static void cleanup(LV2_Handle instance) {
     WorkerContract* self = (WorkerContract*)instance;
     free(self->modeStorage);
@@ -214,6 +238,19 @@ static const LV2_Descriptor kDescriptor = {
     extension_data,
 };
 
+static const LV2_Descriptor kDescriptorWithoutEndRun = {
+    kPluginUriWithoutEndRun,
+    instantiate,
+    connect_port,
+    NULL,
+    run,
+    NULL,
+    cleanup,
+    extension_data_without_end_run,
+};
+
 LV2_SYMBOL_EXPORT const LV2_Descriptor* lv2_descriptor(uint32_t index) {
-    return index == 0 ? &kDescriptor : NULL;
+    if (index == 0) return &kDescriptor;
+    if (index == 1) return &kDescriptorWithoutEndRun;
+    return NULL;
 }

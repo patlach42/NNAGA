@@ -1206,7 +1206,6 @@ bool LV2Plugin::startWorker() {
          (void*)workerInterface_->work, (void*)workerInterface_->work_response,
          (void*)workerInterface_->end_run);
     if (!workerInterface_->work || !workerInterface_->work_response ||
-        !workerInterface_->end_run ||
         !workerSemInitialized_.load(std::memory_order_acquire)) {
         workerInterface_ = nullptr;
         return false;
