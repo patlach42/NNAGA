@@ -63,6 +63,10 @@ class DirectUsbDeviceStressTest {
         // An interface that loops internally returns playback on the input pair
         // fed by the playback pair, not on input one. Both default to the first
         // pair and the first channel, which is the external-cable arrangement.
+        // Submitted OUT runway, in transfers. This is the reserve that survives
+        // a late completion, as distinct from PCM waiting in the ring, so a
+        // sweep over it needs no rebuild. Zero keeps the automatic policy.
+        val transferCount = argumentInt(args, "direct_usb_transfers", "transfers", 0, 0, 8)
         val outputPair = argumentInt(args, "direct_usb_output_pair", "output_pair", 0, 0, 7)
         val inputChannel = argumentInt(args, "direct_usb_input_channel", "input_channel", 0, 0, 15)
         val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 1, 8)
@@ -91,6 +95,9 @@ class DirectUsbDeviceStressTest {
         val originalSubslot = AudioSettingsManager.getDirectUsbSubslot(context)
         val originalChannels = AudioSettingsManager.getDirectUsbChannels(context)
         val originalOutputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
+        // Restored with the rest: a sweep that leaves the transfer count behind
+        // silently biases every later run on the device.
+        val originalTransferCount = AudioSettingsManager.getDirectUsbTransferCount(context)
         val originalBuffer = AudioSettingsManager.getBufferSize(context)
         val originalMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
         var originalTransport: TransportInfo? = null
@@ -98,9 +105,13 @@ class DirectUsbDeviceStressTest {
         var cases = 0
         try {
             AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
+            if (transferCount > 0) {
+                AudioSettingsManager.setDirectUsbTransferCount(context, transferCount)
+            }
             // Separate line, not a TELEMETRY field: the analyzer's schema is
             // versioned and this is harness configuration, not a measurement.
-            Log.i(tag, "LOOPBACK_CONFIG output_pair=$outputPair input_channel=$inputChannel")
+            Log.i(tag, "LOOPBACK_CONFIG output_pair=$outputPair input_channel=$inputChannel " +
+                "transfers=${AudioSettingsManager.getDirectUsbTransferCount(context)}")
             EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
             assertTrue("Native engine initialization failed", EngineInitHelper.initEngine(context))
             originalTransport = runCatching { engine.getTransportInfo() }.getOrNull()
@@ -215,6 +226,7 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setDirectUsbFormat(context, originalRate, originalBits, originalSubslot, originalChannels)
             AudioSettingsManager.setBufferSize(context, originalBuffer)
             AudioSettingsManager.setDirectUsbOutputPair(context, originalOutputPair)
+            AudioSettingsManager.setDirectUsbTransferCount(context, originalTransferCount)
             AudioSettingsManager.setDirectUsbPeriodMultiplier(context, originalMultiplier)
             // Restore transport controls last. The exact frame cannot be restored
             // because no public API exposes a frame setter. Looping is a per-track
@@ -546,8 +558,8 @@ class DirectUsbDeviceStressTest {
                     (finalStats.playbackQuantumDrops - baseline.playbackQuantumDrops).coerceAtLeast(0L)
                 val starvationGrowth = (actualXrunGrowth - quantumDropGrowth).coerceAtLeast(0L)
                 val deadlineMissGrowth = (finalStats.deadlineMisses - baseline.deadlineMisses).coerceAtLeast(0L)
-                val silentPacketGrowth = (finalStats.playbackSilentPackets - baseline.playbackSilentPackets).coerceAtLeast(0L)
-                val silentFrameGrowth = (finalStats.playbackSilentFrames - baseline.playbackSilentFrames).coerceAtLeast(0L)
+                val shortPacketGrowth = (finalStats.playbackShortPackets - baseline.playbackShortPackets).coerceAtLeast(0L)
+                val shortFrameGrowth = (finalStats.playbackShortFrames - baseline.playbackShortFrames).coerceAtLeast(0L)
                 val metadataFifoOverflowGrowth =
                     (finalRaw.getOrZero(METADATA_FIFO_OVERRUNS) - baselineRaw.getOrZero(METADATA_FIFO_OVERRUNS)).coerceAtLeast(0L)
                 val zeroRunwayGrowth =
@@ -564,8 +576,8 @@ class DirectUsbDeviceStressTest {
                     reason = "consumer-starvation-growth-exceeded-$starvationGrowth"
                 }
                 if (reason == null && deadlineMissGrowth > 0L) reason = "deadline-miss-growth-exceeded"
-                if (reason == null && (silentPacketGrowth > 0L || silentFrameGrowth > 0L)) {
-                    reason = "playback-silence-padding-growth-exceeded-packets=$silentPacketGrowth-frames=$silentFrameGrowth"
+                if (reason == null && (shortPacketGrowth > 0L || shortFrameGrowth > 0L)) {
+                    reason = "playback-short-packet-growth-exceeded-packets=$shortPacketGrowth-frames=$shortFrameGrowth"
                 }
                 if (reason == null && metadataFifoOverflowGrowth > 0L) {
                     reason = "metadata-fifo-overflow-growth-exceeded-$metadataFifoOverflowGrowth"
@@ -782,11 +794,11 @@ class DirectUsbDeviceStressTest {
         val starvationGrowth = (actualXrunGrowth - quantumDropGrowth).coerceAtLeast(0L)
         val deadlineMissGrowth =
             (stats.deadlineMisses - (warmup?.deadlineMisses ?: stats.deadlineMisses)).coerceAtLeast(0L)
-        val silentPacketGrowth =
-            (stats.playbackSilentPackets - (warmup?.playbackSilentPackets ?: stats.playbackSilentPackets))
+        val shortPacketGrowth =
+            (stats.playbackShortPackets - (warmup?.playbackShortPackets ?: stats.playbackShortPackets))
                 .coerceAtLeast(0L)
-        val silentFrameGrowth =
-            (stats.playbackSilentFrames - (warmup?.playbackSilentFrames ?: stats.playbackSilentFrames))
+        val shortFrameGrowth =
+            (stats.playbackShortFrames - (warmup?.playbackShortFrames ?: stats.playbackShortFrames))
                 .coerceAtLeast(0L)
         val rawPlaybackXrunGrowth =
             (rawStats.getOrZero(RAW_PLAYBACK_XRUNS) -
@@ -815,9 +827,9 @@ class DirectUsbDeviceStressTest {
             "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} " +
             "playback_quantum_drops=${stats.playbackQuantumDrops} aggregate_xruns=${stats.actualXruns} " +
             "starvation_growth=$starvationGrowth quantum_drop_growth=$quantumDropGrowth " +
-            "playback_backpressure=${stats.playbackBackpressure} playback_silent_packets=${stats.playbackSilentPackets} " +
-            "playback_silent_frames=${stats.playbackSilentFrames} playback_silent_packets_growth=$silentPacketGrowth " +
-            "playback_silent_frames_growth=$silentFrameGrowth performance_hint_active=${if (stats.performanceHintActive) 1 else 0} " +
+            "playback_backpressure=${stats.playbackBackpressure} playback_short_packets=${stats.playbackShortPackets} " +
+            "playback_short_frames=${stats.playbackShortFrames} playback_short_packets_growth=$shortPacketGrowth " +
+            "playback_short_frames_growth=$shortFrameGrowth performance_hint_active=${if (stats.performanceHintActive) 1 else 0} " +
             "lifecycle_failures=${rawStats.getOrZero(LIFECYCLE_FAILURES)} transport_failed=${rawStats.getOrZero(TRANSPORT_FAILED)} " +
             "capture_ring_frames=${rawStats.getOrZero(CAPTURE_RING_FRAMES)} playback_ring_frames=${rawStats.getOrZero(PLAYBACK_RING_FRAMES)} " +
             "implicit_fifo_depth=${rawStats.getOrZero(IMPLICIT_FIFO_DEPTH)} deferred_transfers=${rawStats.getOrZero(DEFERRED_TRANSFERS)} " +
@@ -830,6 +842,8 @@ class DirectUsbDeviceStressTest {
             "deadline_misses=${stats.deadlineMisses} scheduler_deadline_misses=${stats.schedulerDeadlineMisses} " +
             "max_scheduler_lateness_ns=${stats.maxSchedulerLatenessNs} capture_target_frames=${stats.captureTargetFrames} " +
             "capture_headroom_frames=${stats.captureHeadroomFrames} capture_deadline_slack_frames=${stats.captureDeadlineSlackFrames} " +
+            "deferred_no_metadata=${stats.deferredNoMetadata} deferred_no_pcm=${stats.deferredNoPcm} " +
+            "queued_out_low_water=${stats.queuedOutLowWaterFrames} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +

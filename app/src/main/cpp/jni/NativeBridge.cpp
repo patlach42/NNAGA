@@ -818,7 +818,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 55;
+    constexpr jsize kStatCount = 58;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -843,9 +843,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         values[37] = static_cast<jlong>(
             g_ctx->directUsbOutput->playbackBackpressureCount());
         values[39] = static_cast<jlong>(
-            g_ctx->directUsbOutput->playbackSilentPacketCount());
+            g_ctx->directUsbOutput->playbackShortPacketCount());
         values[40] = static_cast<jlong>(
-            g_ctx->directUsbOutput->playbackSilentFrameCount());
+            g_ctx->directUsbOutput->playbackShortFrameCount());
         values[41] = static_cast<jlong>(transport.metadataFifoOverruns);
         values[42] = static_cast<jlong>(transport.pendingDepth);
         values[43] = static_cast<jlong>(transport.pendingHighWater);
@@ -857,7 +857,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 8;
+            values[18] = 9;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -895,6 +895,16 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[53] = static_cast<jlong>(stats.captureHeadroomFrames);
             values[54] = static_cast<jlong>(stats.captureDeadlineSlackFrames);
         }
+        // Why implicit transfers were deferred, and the smallest submitted
+        // OUT runway seen. The first two say whether a stall came from
+        // capture metadata or from the render side; the third falls before
+        // anything is heard.
+        values[55] = static_cast<jlong>(
+            g_ctx->directUsbOutput->deferredNoMetadataCount());
+        values[56] = static_cast<jlong>(
+            g_ctx->directUsbOutput->deferredNoPcmCount());
+        values[57] = static_cast<jlong>(
+            g_ctx->directUsbOutput->queuedOutLowWaterFrames());
     }
     jlongArray out = env->NewLongArray(kStatCount);
     if (out) env->SetLongArrayRegion(out, 0, kStatCount, values);

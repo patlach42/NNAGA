@@ -164,8 +164,8 @@ data class DirectUsbStats(
     val playbackXruns: Long = 0,
     val playbackQuantumDrops: Long = 0,
     val playbackBackpressure: Long = 0,
-    val playbackSilentPackets: Long = 0,
-    val playbackSilentFrames: Long = 0,
+    val playbackShortPackets: Long = 0,
+    val playbackShortFrames: Long = 0,
     val lifecycleFailures: Long = 0,
     val transportFailed: Boolean = false,
     val performanceHintActive: Boolean = false,
@@ -195,6 +195,12 @@ data class DirectUsbStats(
     val captureTargetFrames: Long = 0,
     val captureHeadroomFrames: Long = 0,
     val captureDeadlineSlackFrames: Long = 0,
+    /** Deferrals waiting on capture packet layouts rather than on rendered PCM. */
+    val deferredNoMetadata: Long = 0,
+    /** Deferrals waiting on rendered PCM rather than on capture packet layouts. */
+    val deferredNoPcm: Long = 0,
+    /** Smallest submitted OUT runway seen; falls before anything is heard. */
+    val queuedOutLowWaterFrames: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -232,7 +238,7 @@ data class DirectUsbStats(
         private const val ACTUAL_XRUNS = 32
         private const val PLAYBACK_BACKPRESSURE = 37
         private const val PERFORMANCE_HINT_ACTIVE = 38
-        private const val PLAYBACK_SILENT_PACKETS = 39
+        private const val PLAYBACK_SHORT_PACKETS = 39
         private const val PLAYBACK_SILENT_FRAMES = 40
         private const val IMPLICIT_METADATA_OVERRUNS = 41
         private const val IMPLICIT_PENDING_TRANSFERS = 42
@@ -248,6 +254,9 @@ data class DirectUsbStats(
         private const val CAPTURE_TARGET = 52
         private const val CAPTURE_HEADROOM = 53
         private const val CAPTURE_DEADLINE_SLACK = 54
+        private const val DEFERRED_NO_METADATA = 55
+        private const val DEFERRED_NO_PCM = 56
+        private const val QUEUED_OUT_LOW_WATER = 57
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -272,7 +281,7 @@ data class DirectUsbStats(
                 playbackXruns = at(PLAYBACK_XRUNS),
                 playbackBackpressure = at(PLAYBACK_BACKPRESSURE),
                 playbackQuantumDrops = at(PLAYBACK_QUANTUM_DROPS),
-                playbackSilentPackets = at(PLAYBACK_SILENT_PACKETS),
+                playbackShortPackets = at(PLAYBACK_SHORT_PACKETS),
                 transportFailed = at(TRANSPORT_FAILED) != 0L,
                 performanceHintActive = at(PERFORMANCE_HINT_ACTIVE) != 0L,
                 thermalSafetyEnabled = at(THERMAL_SAFETY_ENABLED) != 0L,
@@ -301,6 +310,9 @@ data class DirectUsbStats(
                 captureTargetFrames = at(CAPTURE_TARGET),
                 captureHeadroomFrames = at(CAPTURE_HEADROOM),
                 captureDeadlineSlackFrames = at(CAPTURE_DEADLINE_SLACK),
+                deferredNoMetadata = at(DEFERRED_NO_METADATA),
+                deferredNoPcm = at(DEFERRED_NO_PCM),
+                queuedOutLowWaterFrames = at(QUEUED_OUT_LOW_WATER),
             )
         }
     }
