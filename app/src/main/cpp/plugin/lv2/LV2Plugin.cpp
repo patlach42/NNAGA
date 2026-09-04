@@ -572,9 +572,16 @@ uint32_t LV2Plugin::process(const float* const* inputs, float* const* outputs, u
     gLv2RealtimeMapContext = true;
     lilv_instance_run(instance_, static_cast<uint32_t>(maxCopy));
     if (workerInterface_ && workerInterface_->work_response) {
-        for (size_t drain = 0; drain < 8 && workResponses_.consume([&](const WorkerMessage& response) {
-            workerInterface_->work_response(workerHandle, response.size, response.data);
-        });) {}
+        // The budget has to be spent, not merely declared: without the
+        // increment the counter stayed at zero and the loop ran until the
+        // queue happened to be empty, which on a plugin that answers one
+        // request with many responses means the whole ring on the audio
+        // thread, and longer still while the worker keeps refilling it.
+        for (size_t drain = 0;
+             drain < 8 && workResponses_.consume([&](const WorkerMessage& response) {
+                 workerInterface_->work_response(workerHandle, response.size, response.data);
+             });
+             ++drain) {}
     }
     if (workerInterface_ && workerInterface_->end_run) workerInterface_->end_run(workerHandle);
     gLv2RealtimeMapContext = false;
@@ -1205,7 +1212,12 @@ bool LV2Plugin::startWorker() {
     LOGI("Starting worker thread (work=%p work_response=%p end_run=%p)",
          (void*)workerInterface_->work, (void*)workerInterface_->work_response,
          (void*)workerInterface_->end_run);
-    if (!workerInterface_->work || !workerInterface_->work_response ||
+    // The extension requires only work(). work_response() and end_run() are
+    // optional: a plugin that schedules fire-and-forget work has nothing to
+    // hand back, and one with nothing to finish at the end of a cycle leaves
+    // end_run null. Both call sites below are guarded, so requiring them here
+    // would refuse a conforming plugin outright.
+    if (!workerInterface_->work ||
         !workerSemInitialized_.load(std::memory_order_acquire)) {
         workerInterface_ = nullptr;
         return false;

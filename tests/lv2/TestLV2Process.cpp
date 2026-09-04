@@ -719,6 +719,50 @@ TEST(LV2WorkerContractTest, OptionalEndRunIsAdmittedAndProcessesWorkerResponseAu
     chain.deactivate();
 }
 
+TEST(LV2WorkerContractTest, OptionalWorkResponseIsAdmittedAndKeepsProcessing) {
+    LilvFixture fixture(
+        "https://guitarrackcraft.test/lv2/worker-contract-work-only");
+    ASSERT_NE(fixture.plugin, nullptr);
+    auto plugin = std::make_unique<guitarrackcraft::LV2Plugin>(
+        fixture.plugin, fixture.generation, 48000.0f);
+    auto* instance = plugin.get();
+
+    guitarrackcraft::PluginChain chain;
+    chain.setSampleRate(48000.0f, 64);
+    ASSERT_EQ(chain.addPlugin(std::move(plugin)), 0);
+    ASSERT_TRUE(instance->isReadyForRealtime());
+    chain.activate();
+    ASSERT_TRUE(chain.getRealtimeDiagnostic().empty());
+
+    // Schedule work the plugin will never answer: with work_response absent
+    // the response is dropped, and the run cycle must carry on regardless.
+    ASSERT_TRUE(chain.visitPlugin(0, [](guitarrackcraft::IPlugin& admitted) {
+        admitted.setParameter(0, 1.0f);
+        return true;
+    }));
+
+    constexpr uint32_t kFrames = 4;
+    const float inputLeft[kFrames] = {0.125f, 0.25f, 0.5f, 1.0f};
+    const float inputRight[kFrames] = {1.0f, 0.5f, 0.25f, 0.125f};
+    const float* inputs[2] = {inputLeft, inputRight};
+    float outputLeft[kFrames] = {};
+    float outputRight[kFrames] = {};
+    float* outputs[2] = {outputLeft, outputRight};
+
+    for (uint32_t tick = 0; tick < 16; ++tick) {
+        ASSERT_EQ(chain.process(inputs, outputs, kFrames,
+                                guitarrackcraft::AudioProcessContext{},
+                                nullptr, 0, nullptr, 0), 0u);
+        for (uint32_t frame = 0; frame < kFrames; ++frame) {
+            EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
+            EXPECT_FLOAT_EQ(outputRight[frame], inputLeft[frame]);
+        }
+        std::this_thread::yield();
+    }
+    EXPECT_TRUE(chain.getRealtimeDiagnostic().empty());
+    chain.deactivate();
+}
+
 TEST(LV2WorkerContractTest, WorkerResponseIsDeliveredBeforeEndRunWhenAvailable) {
     LilvFixture fixture("https://guitarrackcraft.test/lv2/worker-contract");
     ASSERT_NE(fixture.plugin, nullptr);

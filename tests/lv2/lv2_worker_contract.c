@@ -221,6 +221,23 @@ static const void* extension_data_without_end_run(const char* uri) {
         ? &kWorkerInterfaceWithoutEndRun
         : NULL;
 }
+// work_response is optional too: a plugin that schedules fire-and-forget work,
+// such as freeing a buffer off the audio thread, has nothing to hand back.
+static const LV2_Worker_Interface kWorkerInterfaceWorkOnly = {
+    work,
+    NULL,
+    NULL,
+};
+
+static const char* const kPluginUriWorkOnly =
+    "https://guitarrackcraft.test/lv2/worker-contract-work-only";
+
+static const void* extension_data_work_only(const char* uri) {
+    return strcmp(uri, LV2_WORKER__interface) == 0
+        ? &kWorkerInterfaceWorkOnly
+        : NULL;
+}
+
 static void cleanup(LV2_Handle instance) {
     WorkerContract* self = (WorkerContract*)instance;
     free(self->modeStorage);
@@ -249,8 +266,20 @@ static const LV2_Descriptor kDescriptorWithoutEndRun = {
     extension_data_without_end_run,
 };
 
+static const LV2_Descriptor kDescriptorWorkOnly = {
+    kPluginUriWorkOnly,
+    instantiate,
+    connect_port,
+    NULL,
+    run,
+    NULL,
+    cleanup,
+    extension_data_work_only,
+};
+
 LV2_SYMBOL_EXPORT const LV2_Descriptor* lv2_descriptor(uint32_t index) {
     if (index == 0) return &kDescriptor;
     if (index == 1) return &kDescriptorWithoutEndRun;
+    if (index == 2) return &kDescriptorWorkOnly;
     return NULL;
 }

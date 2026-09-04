@@ -8,3 +8,7 @@
 <https://guitarrackcraft.test/lv2/worker-contract-without-end-run>
     a lv2:Plugin ;
     rdfs:seeAlso <lv2_worker_contract.ttl> .
+
+<https://guitarrackcraft.test/lv2/worker-contract-work-only>
+    a lv2:Plugin ;
+    rdfs:seeAlso <lv2_worker_contract.ttl> .
