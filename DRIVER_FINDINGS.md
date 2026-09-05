@@ -336,3 +336,16 @@ the loopback records exactly that.
 So the breaks are service gaps, not admission or geometry. Which is also why
 every configuration showed roughly the same count once the alarm was off, and
 why chasing them through the admission rules produced nothing.
+
+## What removed the last lost quantum is not established
+
+Two candidates were tested by building without each: the credit charge on entry
+to the holding slot, and the wait against the target. Both builds still show
+zero lost quanta, so neither is the cause. Either something earlier did it -
+holding a refused block rather than discarding it is the obvious candidate - or
+the loss depended on conditions that are currently absent, since the machine had
+just been quietened.
+
+Recorded as unresolved rather than credited to whichever change happened to be
+in the tree when it stopped reproducing. The attribution was nearly made on that
+basis, and it would have been wrong.
