@@ -1343,6 +1343,14 @@ void AudioEngine::directUsbRenderLoop() {
             // publishes them first. This trades a dropout for latency, and
             // only for as long as the stall lasts - depth stays one, so a
             // device that has genuinely stopped still surfaces as a fault.
+            // Charged on entry to the slot, not on publication. The credit
+            // wait only tests, and the charge inside publication happens after
+            // the room check - so a block refused for room reached the slot
+            // unpaid and republished free. Each one silently granted a whole
+            // quantum of lead: three or four of them put 192 to 256 frames of
+            // unaccounted stock in the pipeline, which is more than any of the
+            // reserves being compared and is why none of them mattered.
+            directUsbOutput_->takePlaybackCredit(frames);
             std::copy(directUsbOutputLeft_.begin(),
                       directUsbOutputLeft_.begin() + frames,
                       directUsbHeldLeft_.begin());

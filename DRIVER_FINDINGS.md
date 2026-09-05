@@ -188,3 +188,35 @@ period**, for the stated reason that there is no way to know in advance where
 the next period ends - the same strategy as ours at 0.5 ms, but its overall
 queue ceiling is far deeper than our 2-3 ms, which is worth remembering before
 treating a single clean run as qualification.
+
+## The arithmetic that found the last loss
+
+One quantum was still lost per session, almost always in the first second, and
+the state captured at the moment of loss looked contradictory: room exhausted
+while credit was plentiful, and the same signature under every reserve. The
+reserve sweep could not tell its arms apart on it.
+
+The stock accounting settled it. With `ring + queued + credit = prime` as the
+invariant, the three snapshots were over by exactly whole quanta:
+
+| arm | ring + queued + credit - prime | unaccounted quanta |
+|---|---:|---:|
+| r0 | 232 + 120 + 96 - 256 = 192 | 3 |
+| r64 | 240 + 120 + 152 - 256 = 256 | 4 |
+| r128 | 240 + 120 + 88 - 256 = 192 | 3 |
+
+The cause was an overcorrection of the earlier double-charge fix: the credit
+wait only tests, the charge inside publication happens after the room check, so
+a block refused for room reached the holding slot unpaid and republished with
+charging disabled. Every held publication silently granted a whole quantum of
+lead - three or four of them being more unaccounted stock than any reserve
+under test, which is exactly why no reserve made any difference.
+
+Charging on entry to the slot instead removed the last loss: zero lost quanta,
+at startup and in steady state, with occupancy unchanged.
+
+It also revealed how close the pipeline runs: 45253 blocks held in sixty
+seconds, against roughly 45000 render cycles. The holding slot is not an
+exception path any more, it is the normal route. Zero loss is necessary but it
+is not sufficient - a mechanism that engages on every single block has no margin
+left for the next disturbance.
