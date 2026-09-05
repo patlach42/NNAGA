@@ -220,3 +220,41 @@ seconds, against roughly 45000 render cycles. The holding slot is not an
 exception path any more, it is the normal route. Zero loss is necessary but it
 is not sufficient - a mechanism that engages on every single block has no margin
 left for the next disturbance.
+
+## Four ways to account for a held block, three of them wrong
+
+The holding slot needs an answer to when its block pays its credit, and each
+plausible answer failed differently. Measured on one configuration, sixty
+seconds, target 256 with five transfers and a reserve of 64:
+
+| | lost | held | ring p50 | credit at loss |
+|---|---:|---:|---:|---:|
+| A: publish held for free | 1 | 718 | 244 | +96 |
+| B: charge on entry, ignore the result | 0 | 45253 | 252 | - |
+| C: charge on entry, force the debt | 1 | 1087 | 204 | -168 |
+| D: reserve before rendering | 1 | 731 | 228 | -40 |
+
+**A** breaks the ledger: every held publication grants a whole quantum of lead,
+and three or four of them are more unaccounted stock than any reserve under
+test - which is why a reserve sweep running at the time could not tell its arms
+apart.
+
+**B** loses nothing, but 45253 holds against roughly 45000 render cycles means
+the slot is the normal route rather than an exception, and a mechanism that
+engages on every block has no margin for the next disturbance.
+
+**C** looks like honest accounting and is not: forcing the debt drove credit to
+-168 against a reserve floor of -64, turning a bounded lead into an unbounded
+overdraft, and the tighter dynamics starved the producer further.
+
+**D** is the right shape - reserve credit and room before capture is consumed,
+so a block never exists without somewhere to go - but a first implementation
+made it worse: 605 admission refusals, because waiting for room is not the same
+as reserving it. Between the check and the publication lies the whole graph
+render, and the held block from the previous cycle takes the space in between.
+The contract requires the slot to be emptied before capture is read at all,
+which this did not do.
+
+Reverted to A pending a correct implementation. The lesson is the shape of the
+mistake rather than the numbers: three of these were defensible on paper, and
+only the ledger arithmetic and the hardware told them apart.
