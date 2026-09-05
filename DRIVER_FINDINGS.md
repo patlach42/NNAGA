@@ -258,3 +258,36 @@ which this did not do.
 Reverted to A pending a correct implementation. The lesson is the shape of the
 mistake rather than the numbers: three of these were defensible on paper, and
 only the ledger arithmetic and the hardware told them apart.
+
+## The ceiling was the problem, not the admission rule
+
+Five admission policies were tried against the last remaining loss and every
+one of them lost exactly one quantum at startup. What they shared was the state
+at the moment of loss: `ring + queued` between 348 and 360 frames against a
+logical capacity of `target + headroom` = 256 + 104 = 360. Credit was always
+positive - the right to write existed, the room did not.
+
+So the pipeline was hitting its own ceiling, and no rule about who may publish
+can help when there is nowhere to publish to. Doubling the headroom to 208
+settled it at once:
+
+| | lost | held | ring p50 | reported latency |
+|---|---:|---:|---:|---:|
+| target 256, headroom 104 | 1 | 718 | 236 | 384 |
+| target 256, headroom 208 | 0 | 3 | 316 | 384 |
+| target 192, headroom 208 | 0 | 3 | 252 | 320 |
+
+The holding slot went from 718 engagements per minute to three, which is what
+an exception path should look like.
+
+Note the middle row: raising the ceiling alone costs 80 frames of real
+occupancy, about 1.7 ms, while the reported latency does not move - it is
+computed from the target. Lowering the target by the same amount recovers it,
+and the last row is better than the original on both counts rather than being a
+trade: no loss, an exception path that is exceptional again, and 64 frames less
+latency than where this started.
+
+The lesson is that the working point sat against the ceiling, so every
+disturbance became a refusal, and five rounds of rewriting the admission rule
+were five rounds spent on the wrong layer. The stock arithmetic is what
+eventually pointed at it.

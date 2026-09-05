@@ -71,6 +71,11 @@ class DirectUsbDeviceStressTest {
         // Frames the producer may run ahead of the device under the credit
         // policy. Zero is strict credit, which holds no lead at all.
         val creditReserve = argumentInt(args, "direct_usb_credit_reserve", "credit_reserve", 0, 0, 1024)
+        // Write headroom, so the ceiling can be moved without moving the
+        // working level: the target sets where the pipeline sits, the headroom
+        // sets how far it may excurse before admission refuses. Zero keeps the
+        // automatic policy.
+        val writeHeadroom = argumentInt(args, "direct_usb_headroom", "headroom", 0, 0, 1024)
         val transferCount = argumentInt(args, "direct_usb_transfers", "transfers", 0, 0, 8)
         val outputPair = argumentInt(args, "direct_usb_output_pair", "output_pair", 0, 0, 7)
         val inputChannel = argumentInt(args, "direct_usb_input_channel", "input_channel", 0, 0, 15)
@@ -103,6 +108,7 @@ class DirectUsbDeviceStressTest {
         // Restored with the rest: a sweep that leaves the transfer count behind
         // silently biases every later run on the device.
         val originalTransferCount = AudioSettingsManager.getDirectUsbTransferCount(context)
+        val originalWriteHeadroom = AudioSettingsManager.getDirectUsbWriteHeadroom(context)
         val originalBuffer = AudioSettingsManager.getBufferSize(context)
         val originalMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
         var originalTransport: TransportInfo? = null
@@ -112,6 +118,9 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
             if (transferCount > 0) {
                 AudioSettingsManager.setDirectUsbTransferCount(context, transferCount)
+            }
+            if (writeHeadroom > 0) {
+                AudioSettingsManager.setDirectUsbWriteHeadroom(context, writeHeadroom)
             }
             // Separate line, not a TELEMETRY field: the analyzer's schema is
             // versioned and this is harness configuration, not a measurement.
@@ -235,6 +244,7 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setBufferSize(context, originalBuffer)
             AudioSettingsManager.setDirectUsbOutputPair(context, originalOutputPair)
             AudioSettingsManager.setDirectUsbTransferCount(context, originalTransferCount)
+            AudioSettingsManager.setDirectUsbWriteHeadroom(context, originalWriteHeadroom)
             AudioSettingsManager.setDirectUsbPeriodMultiplier(context, originalMultiplier)
             // Restore transport controls last. The exact frame cannot be restored
             // because no public API exposes a frame setter. Looping is a per-track
