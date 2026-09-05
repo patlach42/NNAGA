@@ -951,6 +951,7 @@ class DirectUsbDeviceStressTest {
             "capture_partial_reads=${stats.capturePartialReads} " +
             "lost_quanta=${stats.lostQuanta} " +
             "held_quanta=${stats.heldQuanta} " +
+            "live_queue_frames=${stats.liveQueueFrames} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
@@ -1021,7 +1022,7 @@ class DirectUsbDeviceStressTest {
     private data class CaseResult(val passed: Boolean, val reason: String?)
 
     private companion object {
-        const val TELEMETRY_SCHEMA_VERSION = 15L
+        const val TELEMETRY_SCHEMA_VERSION = 16L
         const val RAW_STAT_COUNT = 55
         const val MAX_IMPLICIT_FIFO = 256L
         // One 30 s cycle at a 64-frame quantum offers about 22500 quanta, so a

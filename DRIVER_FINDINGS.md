@@ -146,3 +146,45 @@ Paired over blocks, 64 against 128 differs by 64 frames of occupancy (p=0.031)
 with no difference in breaks (p=1.0), so the smaller reserve buys 1.33 ms for
 nothing. The largest reserve is worse on both counts: past some point the
 producer's lead stops being insurance and starts being latency that still fails.
+
+## What established practice says, and where we differed
+
+Researched against kernel `sound/usb`, ALSA, JACK2, PortAudio, WASAPI, the UAC2
+specification and Android's own guidance.
+
+Aligned already: slaving OUT cadence to the capture endpoint under implicit
+feedback is exactly what `sound/usb/implicit.c` does; treating a late producer
+as an xrun rather than concealing it is universal - ALSA returns `-EPIPE`, JACK
+notifies, PortAudio raises `paOutputUnderflow`; and lock-free SPSC without
+assuming realtime priority is the consensus design, because locks are only safe
+with priority inheritance and Android refuses SCHED_FIFO.
+
+Departures worth knowing:
+
+**A bounded producer lead is standard, but it is expressed as remaining buffer
+capacity, not as a separate credit counter.** WASAPI exposes `GetCurrentPadding`
+and ALSA `avail_update`; the producer throttles against space. Our credit is a
+homegrown formulation of the same idea. It works, and the reserve makes it an
+axis, but it is not how anyone else states it.
+
+**Latency is reported as configured depth, never as live occupancy.** The two
+are deliberately not conflated: occupancy drives flow control internally, and
+the number shown to a person stays still. We were reporting occupancy, which is
+precisely why the figure appeared to wander - it was measuring the pipeline
+breathe rather than describing its configuration. Now split: configured depth is
+the reported latency, live occupancy has its own field.
+
+**A missed presentation deadline should end the epoch, and does not yet.**
+Established practice makes it an xrun, and ours drops the block and carries on,
+which reads as delivery to everything downstream. Making it terminal was tried
+twice and killed sessions during startup, before the transport reached Running -
+gating on that state was not enough, because the pipeline is still filling and
+the render loop has not settled. It fails the audit as a counted loss for now.
+Turning it into a stop needs the startup path measured first; guessing at it
+twice was already one time too many.
+
+**snd-usb-audio keeps synchronised URBs under a millisecond and shorter than a
+period**, for the stated reason that there is no way to know in advance where
+the next period ends - the same strategy as ours at 0.5 ms, but its overall
+queue ceiling is far deeper than our 2-3 ms, which is worth remembering before
+treating a single clean run as qualification.

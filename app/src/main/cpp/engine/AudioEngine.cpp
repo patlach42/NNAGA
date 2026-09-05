@@ -1110,14 +1110,26 @@ void AudioEngine::directUsbRenderLoop() {
                 directUsbOutput_->submitHeldQuantum(
                     directUsbHeldLeft_.data(), directUsbHeldRight_.data(),
                     frames);
+            directUsbHoldingBlock_ = false;
             if (!heldSubmitted) {
-                // Still nowhere to put it. A second undeliverable block means
-                // the device has stopped consuming, which queueing deeper
-                // would only hide.
+                // The block's presentation deadline passed with nowhere to put
+                // it. Reading the next capture quantum here would carry on as
+                // though the audio had been delivered, which is the very
+                // concealment this driver refuses everywhere else: established
+                // practice makes a missed period an xrun, and so does this.
+                //
+                // Only once the stream is established, though. While the
+                // pipeline is still filling there is no presentation timeline
+                // to miss, and ending the session there kills runs that were
+                // about to be fine.
+                //
+                // Held as a counter rather than a stop for now: making it
+                // terminal was tried and ended sessions during startup, before
+                // the transport had reached Running - the state check alone did
+                // not cover it, and the run died with the pipeline still
+                // filling. It fails the audit either way; turning it into a
+                // stop needs a measured startup path, not another guess.
                 directUsbLostQuanta_.fetch_add(1, std::memory_order_relaxed);
-                directUsbHoldingBlock_ = false;
-            } else {
-                directUsbHoldingBlock_ = false;
             }
         }
         directUsbOutput_->readInputChannels(

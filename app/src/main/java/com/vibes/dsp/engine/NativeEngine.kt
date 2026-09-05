@@ -184,6 +184,7 @@ data class DirectUsbStats(
     val captureTransferFrames: Long = 0,
     val lastDspNs: Long = 0,
     val peakDspNs: Long = 0,
+    /** Configured pipeline depth: capture cushion, one quantum, playback target. */
     val knownHostLatencyFrames: Long = 0,
     val actualXruns: Long = 0,
     val lastCycleNs: Long = 0,
@@ -239,6 +240,12 @@ data class DirectUsbStats(
     val lostQuanta: Long = 0,
     /** Rendered blocks published a cycle late rather than discarded. */
     val heldQuanta: Long = 0,
+    /**
+     * Instantaneous frames in the pipeline. Breathes with the producer/device
+     * sawtooth, so it diagnoses flow rather than describing configuration -
+     * [knownHostLatencyFrames] is the figure to show a person.
+     */
+    val liveQueueFrames: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -317,6 +324,7 @@ data class DirectUsbStats(
         private const val CAPTURE_PARTIAL_READS = 77
         private const val LOST_QUANTA = 78
         private const val HELD_QUANTA = 79
+        private const val LIVE_QUEUE_FRAMES = 80
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -395,6 +403,7 @@ data class DirectUsbStats(
                 capturePartialReads = at(CAPTURE_PARTIAL_READS),
                 lostQuanta = at(LOST_QUANTA),
                 heldQuanta = at(HELD_QUANTA),
+                liveQueueFrames = at(LIVE_QUEUE_FRAMES),
             )
         }
     }

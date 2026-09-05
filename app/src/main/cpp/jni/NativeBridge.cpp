@@ -849,7 +849,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 80;
+    constexpr jsize kStatCount = 81;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -888,7 +888,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 15;
+            values[18] = 16;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -901,10 +901,26 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[28] = static_cast<jlong>(stats.captureTransferFrames);
             values[29] = static_cast<jlong>(stats.lastDspNanoseconds);
             values[30] = static_cast<jlong>(stats.peakDspNanoseconds);
+            // Two different quantities, kept apart deliberately.
+            //
+            // The configured depth is what the pipeline is set up to hold: the
+            // capture cushion, one graph quantum and the playback target. It
+            // does not move while a stream runs, so it is the number a person
+            // can act on - and it is what every established stack reports as
+            // its latency.
+            //
+            // The live figure below is instantaneous occupancy, which breathes
+            // with the sawtooth between producer and device and with every
+            // scheduling excursion. Reporting it as "latency" is what made the
+            // number appear to wander: it was measuring the pipeline, not
+            // describing it. It stays, for flow control and diagnosis, under
+            // its own name.
             const uint64_t hostFrames = std::max<uint32_t>(
                 stats.effectiveQuantum,
                 std::max(stats.captureRingFrames, stats.captureTransferFrames));
             values[31] = static_cast<jlong>(
+                hostFrames + stats.effectiveQuantum + stats.steadyTargetFrames);
+            values[80] = static_cast<jlong>(
                 hostFrames + stats.playbackRingFrames + stats.queuedOutFrames);
             values[32] = static_cast<jlong>(
                 stats.playbackXruns + stats.captureOverruns +
