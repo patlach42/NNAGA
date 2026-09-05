@@ -261,6 +261,10 @@ data class DirectUsbStats(
     val stallsFired: Long = 0,
     /** Overruns while working, excluding time paced by the device. */
     val workDeadlineMisses: Long = 0,
+    /** What was outstanding at the worst service pause; -1 when none. */
+    val worstGapInflight: Long = 0,
+    val worstGapPending: Long = 0,
+    val worstGapRing: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -347,6 +351,9 @@ data class DirectUsbStats(
         private const val SERVICE_GAP_COUNT = 85
         private const val STALLS_FIRED = 86
         private const val WORK_DEADLINE_MISSES = 87
+        private const val GAP_INFLIGHT = 88
+        private const val GAP_PENDING = 89
+        private const val GAP_RING = 90
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -433,6 +440,9 @@ data class DirectUsbStats(
                 serviceGapCount = at(SERVICE_GAP_COUNT),
                 stallsFired = at(STALLS_FIRED),
                 workDeadlineMisses = at(WORK_DEADLINE_MISSES),
+                worstGapInflight = at(GAP_INFLIGHT),
+                worstGapPending = at(GAP_PENDING),
+                worstGapRing = at(GAP_RING),
             )
         }
     }

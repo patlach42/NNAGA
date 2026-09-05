@@ -864,7 +864,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 88;
+    constexpr jsize kStatCount = 91;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -903,7 +903,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 19;
+            values[18] = 20;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -1055,6 +1055,15 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             // fault and should not fail a run.
             values[87] = static_cast<jlong>(
                 g_ctx->audioEngine->getDirectUsbWorkDeadlineMisses());
+            // What was outstanding at the worst service pause: in-flight
+            // transfers, deferred transfers and ring occupancy. Distinguishes
+            // libusb not being scheduled from the device not answering.
+            int gapInflight = -1, gapPending = -1, gapRing = -1;
+            g_ctx->directUsbOutput->worstServiceGapState(
+                &gapInflight, &gapPending, &gapRing);
+            values[88] = static_cast<jlong>(gapInflight);
+            values[89] = static_cast<jlong>(gapPending);
+            values[90] = static_cast<jlong>(gapRing);
         }
     }
     jlongArray out = env->NewLongArray(kStatCount);

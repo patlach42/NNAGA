@@ -80,6 +80,9 @@ class DirectUsbDeviceStressTest {
         // the pipeline is settled and the disturbance is the only variable.
         // Separate knobs because a render stall and a service stall produce
         // different symptoms, and a test that conflates them proves nothing.
+        // The transfer-continuity detector costs event-thread time; the others
+        // do not. Off by default so a measurement is not dominated by it.
+        val transferDetector = argumentBoolean(args, "direct_usb_transfer_detector")
         val renderStallUs = argumentInt(args, "direct_usb_render_stall_us", "render_stall_us", 0, 0, 50000)
         val serviceStallUs = argumentInt(args, "direct_usb_service_stall_us", "service_stall_us", 0, 0, 50000)
         val transferCount = argumentInt(args, "direct_usb_transfers", "transfers", 0, 0, 8)
@@ -204,7 +207,8 @@ class DirectUsbDeviceStressTest {
                                 admissionPolicy,
                                 creditReserve,
                                 renderStallUs,
-                                serviceStallUs
+                                serviceStallUs,
+                                transferDetector
                             )
                         }
                     }
@@ -339,6 +343,7 @@ class DirectUsbDeviceStressTest {
         creditReserve: Int,
         renderStallUs: Int,
         serviceStallUs: Int,
+        transferDetector: Boolean,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -380,8 +385,14 @@ class DirectUsbDeviceStressTest {
                     engine.nativeSetDirectUsbDiscontinuityThreshold(
                         discontinuityThreshold
                     )
+                    // Off unless asked for. This one runs on the USB event
+                    // thread, unpacking and comparing every frame of every
+                    // drain - 48000 frames a second inside the completion
+                    // callback. Measured, it is most of the difference between
+                    // a worst service gap of 6.2 ms and one of 1.46 ms, so
+                    // leaving it on turns the instrument into the disturbance.
                     engine.nativeSetDirectUsbTransferDiscontinuityThreshold(
-                        discontinuityThreshold
+                        if (transferDetector) discontinuityThreshold else 0.0f
                     )
                     // Relative to the loopback signal's own peak, so gain does
                     // not matter. A 440 Hz tone steps by 5.8% of its peak
@@ -987,6 +998,8 @@ class DirectUsbDeviceStressTest {
             "live_queue_frames=${stats.liveQueueFrames} " +
             "service_gaps=${stats.serviceGapCount} stalls_fired=${stats.stallsFired} " +
             "work_deadline_misses=${stats.workDeadlineMisses} " +
+            "gap_inflight=${stats.worstGapInflight} gap_pending=${stats.worstGapPending} " +
+            "gap_ring=${stats.worstGapRing} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
@@ -1057,7 +1070,7 @@ class DirectUsbDeviceStressTest {
     private data class CaseResult(val passed: Boolean, val reason: String?)
 
     private companion object {
-        const val TELEMETRY_SCHEMA_VERSION = 19L
+        const val TELEMETRY_SCHEMA_VERSION = 20L
         const val RAW_STAT_COUNT = 55
         const val MAX_IMPLICIT_FIFO = 256L
         // One 30 s cycle at a 64-frame quantum offers about 22500 quanta, so a

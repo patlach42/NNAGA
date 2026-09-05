@@ -380,3 +380,35 @@ runs were being failed on.
 two transfer periods in a single minute. The maximum gap was visible before, so
 the picture looked like one rare stall; the frequency says the bus is
 interrupted constantly and the pipeline absorbs it.
+
+## The instrument disturbs the thing it measures
+
+The worst service pause was traced to what was outstanding when it happened:
+five transfers in flight, nothing deferred, ring full. The driver had done
+everything it could and simply was not scheduled - our libusb event thread was
+preempted, which already runs pinned to the big cores at nice -19 after Android
+refuses SCHED_FIFO.
+
+Then the same configuration measured with instrumentation off:
+
+| | worst gap | gaps/min | breaks |
+|---|---:|---:|---:|
+| all detectors + recorder | 6.22 ms | 22 | 3 |
+| transfer detector off | 2.87 ms | 166 | 1 |
+| everything off | 1.46 ms | 20 | - |
+
+The worst gap falls fourfold when the instruments are off, and halves when just
+the transfer-continuity detector is. That detector runs inside the USB
+completion callback, unpacking and comparing every frame of every drain - 48000
+frames a second on the thread whose timeliness everything depends on. It is now
+off unless asked for.
+
+The gap *count* does not follow the same order, and no explanation is offered
+for that here: it varies from 20 to 218 between runs of identical
+configurations, so a single measurement cannot separate it from the room. Only
+the worst-gap figure is claimed.
+
+What this costs retroactively: every service-gap and capture-break number
+recorded today was taken with the expensive detector on. Comparisons between
+arms remain valid, since all arms paid the same tax, but the absolute picture -
+"the bus is interrupted constantly" - was partly us interrupting it.
