@@ -412,3 +412,39 @@ What this costs retroactively: every service-gap and capture-break number
 recorded today was taken with the expensive detector on. Comparisons between
 arms remain valid, since all arms paid the same tax, but the absolute picture -
 "the bus is interrupted constantly" - was partly us interrupting it.
+
+## Stability qualification
+
+One configuration - target 256, five transfers, credit with a 64 frame reserve
+- run twelve times for two minutes each, with a deliberate 4 ms stall injected
+on two cycles in every three, and the expensive detector off so the instrument
+is not the disturbance. The pass criterion was stated before the run: zero lost
+quanta across all twelve, including the eight disturbed ones.
+
+| injected | cycles | lost | held (median) | capture breaks | worst gap |
+|---|---:|---:|---:|---:|---:|
+| none | 4 | 0 | 4 | 15 | 6.38 ms |
+| render 4 ms | 4 | 0 | 3 | 5 | 4.09 ms |
+| service 4 ms | 4 | 0 | 4 | 20 | 4.50 ms |
+
+Zero lost frames in twenty-four minutes of continuous audio. The holding slot
+engaged three or four times per cycle, so it remains the exception path it was
+meant to be rather than the pipeline.
+
+Two things the table says that the verdict column does not.
+
+A service stall costs four times the capture breaks of a render stall of the
+same length - twenty against five. That asymmetry is structural: when USB
+servicing stops, capture URBs are not resubmitted and the input simply does not
+arrive, and no amount of buffering recovers samples that were never delivered.
+The holding slot protects the output path and cannot protect this one.
+
+The worst pause of the whole run, 6.38 ms, happened in a cycle with nothing
+injected. The environment produces disturbances larger than the ones being
+injected deliberately, which makes the qualification stricter than designed and
+confirms once more that the source is outside the driver.
+
+Most cycles are marked FAIL, on the capture-break gate. That gate was left as it
+is rather than softened to fit the result: it correctly reports that the input
+signal was interrupted. But an interrupted input and a failing pipeline are
+different things, and the second did not happen once.
