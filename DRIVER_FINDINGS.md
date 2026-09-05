@@ -291,3 +291,48 @@ The lesson is that the working point sat against the ceiling, so every
 disturbance became a refusal, and five rounds of rewriting the admission rule
 were five rounds spent on the wrong layer. The stock arithmetic is what
 eventually pointed at it.
+
+## The bench hears the phone
+
+Three consecutive cycles reported eight to eleven capture discontinuities each,
+across all three configurations, and then the next cycle was clean again. The
+cause was an alarm going off on the device: another app taking the audio path
+disturbs the device itself, and the hardware loopback faithfully records the
+result as breaks in our capture.
+
+This is a measurement hazard rather than a driver defect, and it is invisible in
+the counters - a disturbed cycle looks exactly like a badly configured one. The
+runner now records concurrent audio playback and pending alarms per cycle, so
+such a cycle can be excluded on evidence.
+
+It also explains a pattern seen repeatedly today: a configuration that fails
+three cycles running and then passes six. Before blaming geometry for that, ask
+what else the phone was doing.
+
+## Where the capture breaks come from
+
+Counting them was not the same as knowing them. The flight log separates two
+populations.
+
+**Two breaks were the detector describing itself.** Every run, every
+configuration, at about 0.23 seconds, with the decayed peak at 0.03 to 0.06
+against a steady 0.44: the level was still climbing, so an ordinary sample step
+measured against a small peak looked enormous. The modulation detector had this
+fixed with a warmup and the discontinuity detector never did. With a tenth of a
+second of settling the phantom pair is gone and the remaining events all occur
+at full level.
+
+**The real ones arrive in bursts.** In a nine-break cycle they fell at 84.8 s,
+93.3 s and 111.6 s - two or three consecutive quanta each time, tens of seconds
+apart, always at full level. That is not a sawtooth and not geometry: it is
+something outside stopping the pipeline for a moment.
+
+The telemetry from the same cycles names it. `max_completion_gap_ns` reaching
+3.34 ms with `max_missing_drains` at six means USB service stopped for six drain
+periods together. The ring stayed full and nothing was lost - the driver
+survives it - but capture is physically interrupted for those milliseconds and
+the loopback records exactly that.
+
+So the breaks are service gaps, not admission or geometry. Which is also why
+every configuration showed roughly the same count once the alarm was off, and
+why chasing them through the admission rules produced nothing.

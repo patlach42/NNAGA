@@ -1108,6 +1108,15 @@ void AudioEngine::directUsbRenderLoop() {
         // Only when it is away does this cycle render anything new, so capture
         // keeps advancing and the hold clears itself as soon as room appears.
         if (directUsbHoldingBlock_) {
+            // Sampled before the wait, not after it. The wait runs a whole
+            // quantum period, during which completions grant credit and free
+            // ring space, so a snapshot taken afterwards describes a pipeline
+            // that has already moved on - which made the ledger look two
+            // quanta over when it may only have been skewed in time.
+            const int ringAtFlush = directUsbOutput_->bufferedFrames();
+            const int64_t queuedAtFlush =
+                static_cast<int64_t>(directUsbOutput_->queuedOutFrames());
+            const int64_t creditAtFlush = directUsbOutput_->playbackCreditFrames();
             const bool heldRoom =
                 directUsbOutput_->waitForWritableFramesUntil(frames, deadline);
             const bool heldSubmitted = heldRoom &&
@@ -1138,17 +1147,15 @@ void AudioEngine::directUsbRenderLoop() {
                 if (previousLosses == 0) {
                     // First loss only: the state that produced it, kept where
                     // no arming decision can hide it.
-                    directUsbFirstLossRing_.store(
-                        directUsbOutput_->bufferedFrames(),
-                        std::memory_order_relaxed);
+                    directUsbFirstLossRing_.store(ringAtFlush,
+                                                  std::memory_order_relaxed);
                     directUsbFirstLossQueued_.store(
-                        static_cast<int32_t>(directUsbOutput_->queuedOutFrames()),
+                        static_cast<int32_t>(queuedAtFlush),
                         std::memory_order_relaxed);
                     directUsbFirstLossHadRoom_.store(heldRoom ? 1 : 0,
                                                      std::memory_order_relaxed);
-                    directUsbFirstLossCredit_.store(
-                        directUsbOutput_->playbackCreditFrames(),
-                        std::memory_order_relaxed);
+                    directUsbFirstLossCredit_.store(creditAtFlush,
+                                                    std::memory_order_relaxed);
                 }
                 // Recorded where it happens, with the state that produced it:
                 // a counter says how often, the flight log says why.
