@@ -849,7 +849,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 81;
+    constexpr jsize kStatCount = 85;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -888,7 +888,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 16;
+            values[18] = 17;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -1014,6 +1014,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             // they are reported separately from lost quanta.
             values[79] = static_cast<jlong>(
                 g_ctx->audioEngine->getDirectUsbHeldQuanta());
+            // The pipeline as it stood at the first lost quantum: -1 when
+            // nothing was lost. Taken outside the flight recorder, which a
+            // caller has to arm and therefore cannot be trusted to have been
+            // listening when the loss happened.
+            int32_t lossRing = -1, lossQueued = -1, lossRoom = -1;
+            int64_t lossCredit = 0;
+            g_ctx->audioEngine->getDirectUsbFirstLoss(
+                &lossRing, &lossQueued, &lossRoom, &lossCredit);
+            values[81] = static_cast<jlong>(lossRing);
+            values[82] = static_cast<jlong>(lossQueued);
+            values[83] = static_cast<jlong>(lossRoom);
+            values[84] = static_cast<jlong>(lossCredit);
         }
     }
     jlongArray out = env->NewLongArray(kStatCount);

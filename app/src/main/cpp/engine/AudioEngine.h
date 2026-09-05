@@ -175,6 +175,15 @@ public:
     /**
      * Get input peak level (0.0–1.0).
      */
+    // Zero when nothing was lost. Reported once, at the warmup boundary, off
+    // the render thread.
+    void getDirectUsbFirstLoss(int32_t* ring, int32_t* queued, int32_t* hadRoom,
+                               int64_t* credit) const {
+        if (ring) *ring = directUsbFirstLossRing_.load(std::memory_order_relaxed);
+        if (queued) *queued = directUsbFirstLossQueued_.load(std::memory_order_relaxed);
+        if (hadRoom) *hadRoom = directUsbFirstLossHadRoom_.load(std::memory_order_relaxed);
+        if (credit) *credit = directUsbFirstLossCredit_.load(std::memory_order_relaxed);
+    }
     uint64_t getDirectUsbHeldQuanta() const {
         return directUsbHeldQuanta_.load(std::memory_order_relaxed);
     }
@@ -299,6 +308,14 @@ private:
     std::vector<float> directUsbHeldRight_;
     bool directUsbHoldingBlock_ = false;
     std::atomic<uint64_t> directUsbHeldQuanta_{0};
+    // The pipeline as it stood when the first quantum was lost. Captured with
+    // plain atomic stores rather than through the flight recorder, which is
+    // armed by a caller and so cannot be relied on to have been listening.
+    std::atomic<uint64_t> directUsbFirstLossNs_{0};
+    std::atomic<int32_t> directUsbFirstLossRing_{-1};
+    std::atomic<int32_t> directUsbFirstLossQueued_{-1};
+    std::atomic<int32_t> directUsbFirstLossHadRoom_{-1};
+    std::atomic<int64_t> directUsbFirstLossCredit_{0};
     std::atomic<int32_t> directUsbOutputPair_{0};
     // Which capture channel the input meter follows. Zero unless a caller
     // points it elsewhere, which a loopback returning on another pair needs.

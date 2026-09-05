@@ -401,6 +401,10 @@ bool AudioEngine::startDirectUsbSession(
     directUsbPlaybackQuantumDrops_.store(0, std::memory_order_relaxed);
     directUsbLostQuanta_.store(0, std::memory_order_relaxed);
     directUsbHeldQuanta_.store(0, std::memory_order_relaxed);
+    directUsbFirstLossRing_.store(-1, std::memory_order_relaxed);
+    directUsbFirstLossQueued_.store(-1, std::memory_order_relaxed);
+    directUsbFirstLossHadRoom_.store(-1, std::memory_order_relaxed);
+    directUsbFirstLossCredit_.store(0, std::memory_order_relaxed);
 
     const int32_t captureCapacityFrames =
         std::max(renderFrames, directUsbOutput_->captureCapacityFrames());
@@ -1129,7 +1133,33 @@ void AudioEngine::directUsbRenderLoop() {
                 // not cover it, and the run died with the pipeline still
                 // filling. It fails the audit either way; turning it into a
                 // stop needs a measured startup path, not another guess.
-                directUsbLostQuanta_.fetch_add(1, std::memory_order_relaxed);
+                const uint64_t previousLosses =
+                    directUsbLostQuanta_.fetch_add(1, std::memory_order_relaxed);
+                if (previousLosses == 0) {
+                    // First loss only: the state that produced it, kept where
+                    // no arming decision can hide it.
+                    directUsbFirstLossRing_.store(
+                        directUsbOutput_->bufferedFrames(),
+                        std::memory_order_relaxed);
+                    directUsbFirstLossQueued_.store(
+                        static_cast<int32_t>(directUsbOutput_->queuedOutFrames()),
+                        std::memory_order_relaxed);
+                    directUsbFirstLossHadRoom_.store(heldRoom ? 1 : 0,
+                                                     std::memory_order_relaxed);
+                    directUsbFirstLossCredit_.store(
+                        directUsbOutput_->playbackCreditFrames(),
+                        std::memory_order_relaxed);
+                }
+                // Recorded where it happens, with the state that produced it:
+                // a counter says how often, the flight log says why.
+                directUsbOutput_->flightRecorder().record(
+                    monotrypt::usb::PacketFlightRecorder::Event::QuantumLost,
+                    monotrypt::usb::monotonicNowNs(),
+                    static_cast<uint32_t>(frames),
+                    heldRoom ? 1u : 0u,
+                    static_cast<uint32_t>(
+                        std::max(0, directUsbOutput_->bufferedFrames())),
+                    static_cast<uint32_t>(directUsbOutput_->queuedOutFrames()));
             }
         }
         directUsbOutput_->readInputChannels(

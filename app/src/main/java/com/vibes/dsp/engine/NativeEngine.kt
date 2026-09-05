@@ -81,6 +81,8 @@ data class FlightRecord(
         const val EVENT_TRANSFER_DISCONTINUITY = 10
         const val EVENT_CAPTURE_DISCONTINUITY = 11
         const val EVENT_CAPTURE_MODULATION = 12
+        /** A rendered quantum that reached neither the ring nor the hold. */
+        const val EVENT_QUANTUM_LOST = 13
 
         /** Events that mean something went wrong, rather than steady traffic. */
         const val ANOMALY_MASK =
@@ -92,7 +94,8 @@ data class FlightRecord(
                 (1 shl EVENT_SIGNAL_DISCONTINUITY) or
                 (1 shl EVENT_TRANSFER_DISCONTINUITY) or
                 (1 shl EVENT_CAPTURE_DISCONTINUITY) or
-                (1 shl EVENT_CAPTURE_MODULATION)
+                (1 shl EVENT_CAPTURE_MODULATION) or
+                (1 shl EVENT_QUANTUM_LOST)
 
         fun eventName(event: Int): String = when (event) {
             EVENT_PLAYBACK_COMPLETE -> "playback-complete"
@@ -107,6 +110,7 @@ data class FlightRecord(
             EVENT_TRANSFER_DISCONTINUITY -> "transfer-discontinuity"
             EVENT_CAPTURE_DISCONTINUITY -> "capture-discontinuity"
             EVENT_CAPTURE_MODULATION -> "capture-modulation"
+            EVENT_QUANTUM_LOST -> "quantum-lost"
             else -> "unknown"
         }
     }
@@ -246,6 +250,11 @@ data class DirectUsbStats(
      * [knownHostLatencyFrames] is the figure to show a person.
      */
     val liveQueueFrames: Long = 0,
+    /** Pipeline state at the first lost quantum; -1 when nothing was lost. */
+    val firstLossRing: Long = 0,
+    val firstLossQueued: Long = 0,
+    val firstLossHadRoom: Long = 0,
+    val firstLossCredit: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -325,6 +334,10 @@ data class DirectUsbStats(
         private const val LOST_QUANTA = 78
         private const val HELD_QUANTA = 79
         private const val LIVE_QUEUE_FRAMES = 80
+        private const val FIRST_LOSS_RING = 81
+        private const val FIRST_LOSS_QUEUED = 82
+        private const val FIRST_LOSS_HAD_ROOM = 83
+        private const val FIRST_LOSS_CREDIT = 84
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -404,6 +417,10 @@ data class DirectUsbStats(
                 lostQuanta = at(LOST_QUANTA),
                 heldQuanta = at(HELD_QUANTA),
                 liveQueueFrames = at(LIVE_QUEUE_FRAMES),
+                firstLossRing = at(FIRST_LOSS_RING),
+                firstLossQueued = at(FIRST_LOSS_QUEUED),
+                firstLossHadRoom = at(FIRST_LOSS_HAD_ROOM),
+                firstLossCredit = at(FIRST_LOSS_CREDIT),
             )
         }
     }
