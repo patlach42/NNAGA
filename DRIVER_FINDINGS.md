@@ -349,3 +349,34 @@ just been quietened.
 Recorded as unresolved rather than credited to whichever change happened to be
 in the tree when it stopped reproducing. The attribution was nearly made on that
 basis, and it would have been wrong.
+
+## Disturbance is now injected, not waited for
+
+The natural loss disappeared when the machine was quietened, which left nothing
+to test against: a passing run would only have meant the disturbance was absent.
+Two stalls are now injected deliberately, once each, a second into the steady
+window, and they are kept separate because they are different faults. A render
+stall delays the producer while USB keeps draining - the case the holding slot
+exists for. A service stall stops completions being processed, so the ring
+stops draining and capture URBs are not resubmitted.
+
+Four milliseconds of each, three times the quantum period and the length seen in
+the wild:
+
+| stall | lost | held | work overruns | service gaps |
+|---|---:|---:|---:|---:|
+| service 4 ms | 0 | 4 | 0 | 93 |
+| render 4 ms | 0 | 3 | 1 | 121 |
+
+No frames lost under either. That is the first evidence for the pipeline
+surviving this rather than an absence of evidence against it.
+
+The separated counter earns its place in the same table. A render stall is work
+overrunning its period and is counted; a service stall is the stream's own clock
+pacing us and is not. The old counter would have flagged both, and it is the one
+runs were being failed on.
+
+`service_gaps` is also new and immediately useful: 93 to 121 pauses longer than
+two transfer periods in a single minute. The maximum gap was visible before, so
+the picture looked like one rare stall; the frequency says the bus is
+interrupted constantly and the pipeline absorbs it.

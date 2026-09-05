@@ -76,6 +76,12 @@ class DirectUsbDeviceStressTest {
         // sets how far it may excurse before admission refuses. Zero keeps the
         // automatic policy.
         val writeHeadroom = argumentInt(args, "direct_usb_headroom", "headroom", 0, 0, 1024)
+        // Deliberate stalls fired once, a second into the steady window, so
+        // the pipeline is settled and the disturbance is the only variable.
+        // Separate knobs because a render stall and a service stall produce
+        // different symptoms, and a test that conflates them proves nothing.
+        val renderStallUs = argumentInt(args, "direct_usb_render_stall_us", "render_stall_us", 0, 0, 50000)
+        val serviceStallUs = argumentInt(args, "direct_usb_service_stall_us", "service_stall_us", 0, 0, 50000)
         val transferCount = argumentInt(args, "direct_usb_transfers", "transfers", 0, 0, 8)
         val outputPair = argumentInt(args, "direct_usb_output_pair", "output_pair", 0, 0, 7)
         val inputChannel = argumentInt(args, "direct_usb_input_channel", "input_channel", 0, 0, 15)
@@ -196,7 +202,9 @@ class DirectUsbDeviceStressTest {
                                 discontinuityThreshold,
                                 inputChannel,
                                 admissionPolicy,
-                                creditReserve
+                                creditReserve,
+                                renderStallUs,
+                                serviceStallUs
                             )
                         }
                     }
@@ -329,6 +337,8 @@ class DirectUsbDeviceStressTest {
         inputChannel: Int,
         admissionPolicy: Int,
         creditReserve: Int,
+        renderStallUs: Int,
+        serviceStallUs: Int,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -585,6 +595,15 @@ class DirectUsbDeviceStressTest {
                             "first_loss_had_room=${stats.firstLossHadRoom} " +
                             "first_loss_credit=${stats.firstLossCredit}")
                         runCatching { engine.nativeResetDirectUsbEnvelope() }
+                        // Armed at the warmup boundary: the pipeline has
+                        // settled, so what follows is the stall and nothing
+                        // else.
+                        if (renderStallUs > 0 || serviceStallUs > 0) {
+                            runCatching {
+                                engine.nativeInjectDirectUsbStall(renderStallUs, serviceStallUs)
+                            }
+                            Log.i(tag, "STALL_INJECTED render_us=$renderStallUs service_us=$serviceStallUs")
+                        }
                     }
                     SystemClock.sleep(pollIntervalMs)
                 }
@@ -966,6 +985,8 @@ class DirectUsbDeviceStressTest {
             "lost_quanta=${stats.lostQuanta} " +
             "held_quanta=${stats.heldQuanta} " +
             "live_queue_frames=${stats.liveQueueFrames} " +
+            "service_gaps=${stats.serviceGapCount} stalls_fired=${stats.stallsFired} " +
+            "work_deadline_misses=${stats.workDeadlineMisses} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
@@ -1036,7 +1057,7 @@ class DirectUsbDeviceStressTest {
     private data class CaseResult(val passed: Boolean, val reason: String?)
 
     private companion object {
-        const val TELEMETRY_SCHEMA_VERSION = 17L
+        const val TELEMETRY_SCHEMA_VERSION = 19L
         const val RAW_STAT_COUNT = 55
         const val MAX_IMPLICIT_FIFO = 256L
         // One 30 s cycle at a 64-frame quantum offers about 22500 quanta, so a

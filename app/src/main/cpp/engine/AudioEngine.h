@@ -184,6 +184,15 @@ public:
         if (hadRoom) *hadRoom = directUsbFirstLossHadRoom_.load(std::memory_order_relaxed);
         if (credit) *credit = directUsbFirstLossCredit_.load(std::memory_order_relaxed);
     }
+    void injectRenderStallUs(int microseconds) {
+        directUsbRenderStallUs_.store(microseconds, std::memory_order_relaxed);
+    }
+    uint64_t getDirectUsbRenderStallsFired() const {
+        return directUsbRenderStallsFired_.load(std::memory_order_relaxed);
+    }
+    uint64_t getDirectUsbWorkDeadlineMisses() const {
+        return directUsbWorkDeadlineMisses_.load(std::memory_order_relaxed);
+    }
     uint64_t getDirectUsbHeldQuanta() const {
         return directUsbHeldQuanta_.load(std::memory_order_relaxed);
     }
@@ -292,6 +301,10 @@ private:
     std::atomic<uint64_t> directUsbDeadlineBudgetNs_{0};
     std::atomic<uint64_t> directUsbDeadlineMisses_{0};
     std::atomic<uint64_t> directUsbSchedulerDeadlineMisses_{0};
+    // Cycles that overran the period by more than they spent blocked - that
+    // is, overran while actually working. The counter above includes waiting
+    // for the device, which is the stream's clock rather than a fault.
+    std::atomic<uint64_t> directUsbWorkDeadlineMisses_{0};
     std::atomic<uint64_t> directUsbMaxSchedulerLatenessNs_{0};
     // Quantum periods in which the device granted no playback credit.
     std::atomic<uint64_t> directUsbCreditTimeouts_{0};
@@ -308,6 +321,12 @@ private:
     std::vector<float> directUsbHeldRight_;
     bool directUsbHoldingBlock_ = false;
     std::atomic<uint64_t> directUsbHeldQuanta_{0};
+    // A deliberate stall in the render thread, in microseconds, fired once
+    // when armed. Distinct from a service stall: this one delays the producer
+    // while USB keeps draining, which is the opposite disturbance and should
+    // produce the opposite symptom.
+    std::atomic<int> directUsbRenderStallUs_{0};
+    std::atomic<uint64_t> directUsbRenderStallsFired_{0};
     // The pipeline as it stood when the first quantum was lost. Captured with
     // plain atomic stores rather than through the flight recorder, which is
     // armed by a caller and so cannot be relied on to have been listening.

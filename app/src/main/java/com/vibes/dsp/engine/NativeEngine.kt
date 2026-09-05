@@ -255,6 +255,12 @@ data class DirectUsbStats(
     val firstLossQueued: Long = 0,
     val firstLossHadRoom: Long = 0,
     val firstLossCredit: Long = 0,
+    /** Completion gaps beyond twice the nominal transfer period. */
+    val serviceGapCount: Long = 0,
+    /** Deliberate stalls that actually fired, for regression tests. */
+    val stallsFired: Long = 0,
+    /** Overruns while working, excluding time paced by the device. */
+    val workDeadlineMisses: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -338,6 +344,9 @@ data class DirectUsbStats(
         private const val FIRST_LOSS_QUEUED = 82
         private const val FIRST_LOSS_HAD_ROOM = 83
         private const val FIRST_LOSS_CREDIT = 84
+        private const val SERVICE_GAP_COUNT = 85
+        private const val STALLS_FIRED = 86
+        private const val WORK_DEADLINE_MISSES = 87
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -421,6 +430,9 @@ data class DirectUsbStats(
                 firstLossQueued = at(FIRST_LOSS_QUEUED),
                 firstLossHadRoom = at(FIRST_LOSS_HAD_ROOM),
                 firstLossCredit = at(FIRST_LOSS_CREDIT),
+                serviceGapCount = at(SERVICE_GAP_COUNT),
+                stallsFired = at(STALLS_FIRED),
+                workDeadlineMisses = at(WORK_DEADLINE_MISSES),
             )
         }
     }
@@ -811,6 +823,14 @@ class NativeEngine private constructor() {
      * steady state and must not be mixed into it.
      */
     external fun nativeResetDirectUsbEnvelope()
+
+    /**
+     * Fires one deliberate stall of each kind, in microseconds, zero for none.
+     * A render stall delays the producer while USB keeps draining; a service
+     * stall stops completions being processed. They produce different symptoms,
+     * so a test that cannot tell them apart proves nothing.
+     */
+    external fun nativeInjectDirectUsbStall(renderUs: Int, serviceUs: Int)
 
     /**
      * Admission policy: 0 waits for room before publishing a quantum, 1 paces

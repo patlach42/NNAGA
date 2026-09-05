@@ -733,6 +733,21 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCreditReserve(
     }
 }
 
+// Deliberate stalls, fired once when armed: a render stall delays the producer
+// while USB keeps draining, a service stall stops completions being processed.
+// The two produce different symptoms and a generic CPU load cannot separate
+// them, which is why they are injected apart.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeInjectDirectUsbStall(
+        JNIEnv* env, jobject thiz, jint renderUs, jint serviceUs) {
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->injectRenderStallUs(static_cast<int>(renderUs));
+    }
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->injectServiceStallUs(static_cast<int>(serviceUs));
+    }
+}
+
 // Starts a fresh envelope epoch, so steady-state extrema are not contaminated
 // by the pipeline filling at startup.
 JNIEXPORT void JNICALL
@@ -849,7 +864,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 85;
+    constexpr jsize kStatCount = 88;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -888,7 +903,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 17;
+            values[18] = 19;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -1026,6 +1041,20 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[82] = static_cast<jlong>(lossQueued);
             values[83] = static_cast<jlong>(lossRoom);
             values[84] = static_cast<jlong>(lossCredit);
+            // How often the bus stopped being serviced, and how many stalls
+            // were injected deliberately: the first separates a quiet run from
+            // a busy one, the second says whether a regression test actually
+            // fired.
+            values[85] = static_cast<jlong>(
+                g_ctx->directUsbOutput->serviceGapCount());
+            values[86] = static_cast<jlong>(
+                g_ctx->audioEngine->getDirectUsbRenderStallsFired() +
+                g_ctx->directUsbOutput->serviceStallsFired());
+            // Overruns that were not waiting for the device: the counter above
+            // includes cycles paced by the stream's own clock, which is not a
+            // fault and should not fail a run.
+            values[87] = static_cast<jlong>(
+                g_ctx->audioEngine->getDirectUsbWorkDeadlineMisses());
         }
     }
     jlongArray out = env->NewLongArray(kStatCount);

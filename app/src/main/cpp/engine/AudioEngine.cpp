@@ -1065,9 +1065,11 @@ void AudioEngine::directUsbRenderLoop() {
         directUsbDeadlineBudgetNs_.store(
             static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                 quantumPeriod).count()), std::memory_order_relaxed);
+        const auto waitBegan = std::chrono::steady_clock::now();
         const bool captureTargetReady = directUsbOutput_ &&
             directUsbOutput_->waitForCaptureUntil(
                 static_cast<int>(captureRequiredFrames), deadline);
+        const auto waitEnded = std::chrono::steady_clock::now();
         if (!captureTargetReady) {
             directUsbCaptureWaitTimeouts_.fetch_add(
                 1, std::memory_order_relaxed);
@@ -1173,6 +1175,18 @@ void AudioEngine::directUsbRenderLoop() {
             directUsbInputPlanes_.data(),
             directUsbInputChannelCount_,
             frames);
+
+        // Fired here, after capture has been read and before the block is
+        // rendered and published: the producer is late while USB keeps
+        // draining, which is the disturbance the holding slot exists for.
+        if (const int stallUs =
+                directUsbRenderStallUs_.exchange(0, std::memory_order_relaxed);
+            stallUs > 0) {
+            const auto until = std::chrono::steady_clock::now() +
+                std::chrono::microseconds(stallUs);
+            while (std::chrono::steady_clock::now() < until) {}
+            directUsbRenderStallsFired_.fetch_add(1, std::memory_order_relaxed);
+        }
 
         const auto dspBegan = std::chrono::steady_clock::now();
         processRackBlock(
@@ -1387,6 +1401,19 @@ void AudioEngine::directUsbRenderLoop() {
         while (peak < cycleNs && !directUsbPeakCycleNs_.compare_exchange_weak(
                    peak, cycleNs, std::memory_order_relaxed)) {}
         const auto cycleDeadline = began + quantumPeriod;
+        // A cycle that ran long because it was waiting for the device is not
+        // late, it is paced: the capture wait blocks until the device has
+        // delivered a whole quantum, which is the stream's own clock. Counting
+        // those as scheduler misses mixed normal operation into the number
+        // that was supposed to mean preemption, and it is the number runs were
+        // being failed on.
+        const auto blockedFor = waitEnded - waitBegan;
+        const bool overranWithoutWaiting =
+            finished > cycleDeadline &&
+            (finished - cycleDeadline) > blockedFor;
+        if (overranWithoutWaiting) {
+            directUsbWorkDeadlineMisses_.fetch_add(1, std::memory_order_relaxed);
+        }
         if (finished > cycleDeadline) {
             directUsbSchedulerDeadlineMisses_.fetch_add(
                 1, std::memory_order_relaxed);
