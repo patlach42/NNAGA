@@ -712,6 +712,27 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbTransferDiscontinuityTh
     }
 }
 
+// Admission policy: 0 waits for room, 1 paces the producer by played frames.
+// Selectable at run time so a paired comparison needs one build, not two.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbAdmissionPolicy(
+        JNIEnv* env, jobject thiz, jint policy) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setAdmissionPolicy(static_cast<int>(policy));
+    }
+}
+
+// How far the producer may run ahead of the device under the credit policy.
+// Zero forbids any lead, which forbids a buffer; the reserve bounds the lead
+// instead of removing it.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCreditReserve(
+        JNIEnv* env, jobject thiz, jint frames) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setPlaybackCreditReserve(static_cast<int>(frames));
+    }
+}
+
 // Starts a fresh envelope epoch, so steady-state extrema are not contaminated
 // by the pipeline filling at startup.
 JNIEXPORT void JNICALL
@@ -828,7 +849,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 77;
+    constexpr jsize kStatCount = 80;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -867,7 +888,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 12;
+            values[18] = 15;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -960,6 +981,24 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             g_ctx->directUsbOutput->maxWritesBetweenDrains());
         values[76] = static_cast<jlong>(
             g_ctx->directUsbOutput->minAdmissionMarginFrames());
+        // Capture reads refused for being short of a whole quantum. The old
+        // zero-filled tail went into the graph, out to playback and back
+        // through the hardware loop, where it was counted as a capture break
+        // and blamed on the environment.
+        values[77] = static_cast<jlong>(
+            g_ctx->directUsbOutput->capturePartialReadCount());
+        // Rendered blocks that never reached the ring because a wait expired.
+        // Frame loss under another name, previously counted nowhere that
+        // decided a verdict.
+        if (g_ctx->audioEngine) {
+            values[78] = static_cast<jlong>(
+                g_ctx->audioEngine->getDirectUsbLostQuanta());
+            // Rendered blocks held for one cycle rather than discarded. These
+            // are not losses - the audio was delivered late, not dropped - so
+            // they are reported separately from lost quanta.
+            values[79] = static_cast<jlong>(
+                g_ctx->audioEngine->getDirectUsbHeldQuanta());
+        }
     }
     jlongArray out = env->NewLongArray(kStatCount);
     if (out) env->SetLongArrayRegion(out, 0, kStatCount, values);

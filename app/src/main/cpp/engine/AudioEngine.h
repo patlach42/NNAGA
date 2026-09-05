@@ -175,6 +175,12 @@ public:
     /**
      * Get input peak level (0.0–1.0).
      */
+    uint64_t getDirectUsbHeldQuanta() const {
+        return directUsbHeldQuanta_.load(std::memory_order_relaxed);
+    }
+    uint64_t getDirectUsbLostQuanta() const {
+        return directUsbLostQuanta_.load(std::memory_order_relaxed);
+    }
     float getInputLevel() const;
 
     /**
@@ -280,6 +286,19 @@ private:
     std::atomic<uint64_t> directUsbMaxSchedulerLatenessNs_{0};
     // Quantum periods in which the device granted no playback credit.
     std::atomic<uint64_t> directUsbCreditTimeouts_{0};
+    // Rendered blocks that never reached the ring because a wait ran out of
+    // deadline. Frame loss, and gated as such.
+    std::atomic<uint64_t> directUsbLostQuanta_{0};
+    // A rendered quantum that could not be published this cycle, kept so the
+    // next cycle can publish it instead of discarding it. Depth is one by
+    // design: a second undeliverable block means the device is not consuming,
+    // which is a transport fault rather than something to queue deeper.
+    // Holding it converts a loss into latency, and only for as long as the
+    // stall lasts.
+    std::vector<float> directUsbHeldLeft_;
+    std::vector<float> directUsbHeldRight_;
+    bool directUsbHoldingBlock_ = false;
+    std::atomic<uint64_t> directUsbHeldQuanta_{0};
     std::atomic<int32_t> directUsbOutputPair_{0};
     // Which capture channel the input meter follows. Zero unless a caller
     // points it elsewhere, which a loopback returning on another pair needs.

@@ -349,6 +349,9 @@ bool AudioEngine::startDirectUsbSession(
             directUsbInputPlanes_[static_cast<size_t>(channel)] =
                 directUsbInputBuffer_.data() + static_cast<size_t>(channel) * renderFrames;
         }
+        directUsbHeldLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
+        directUsbHeldRight_.assign(static_cast<size_t>(renderFrames), 0.0f);
+        directUsbHoldingBlock_ = false;
         directUsbOutputLeft_.assign(static_cast<size_t>(renderFrames), 0.0f);
         directUsbOutputRight_.assign(static_cast<size_t>(renderFrames), 0.0f);
     } catch (const std::bad_alloc&) {
@@ -377,7 +380,6 @@ bool AudioEngine::startDirectUsbSession(
     rackGraph_.pauseAndResetTransport();
     cleanupStarted_.store(false, std::memory_order_release);
     directUsbRenderUrgentAudio_.store(false, std::memory_order_relaxed);
-    directUsbPlaybackQuantumDrops_.store(0, std::memory_order_relaxed);
     for (int32_t block = 0; block < startupBlocks; ++block) {
         if (!directUsbOutput_->submitWholeQuantum(
                 directUsbOutputLeft_.data(), directUsbOutputRight_.data(), renderFrames)) {
@@ -391,6 +393,15 @@ bool AudioEngine::startDirectUsbSession(
             return false;
         }
     }
+    // Cleared after priming, not before it. The prime publishes into a ring
+    // that the previous session left counters on, so zeroing first attributed
+    // that history to this session's startup - a drop that had already
+    // happened and could not be caused here, since priming runs before
+    // playback starts and admission cannot refuse it.
+    directUsbPlaybackQuantumDrops_.store(0, std::memory_order_relaxed);
+    directUsbLostQuanta_.store(0, std::memory_order_relaxed);
+    directUsbHeldQuanta_.store(0, std::memory_order_relaxed);
+
     const int32_t captureCapacityFrames =
         std::max(renderFrames, directUsbOutput_->captureCapacityFrames());
     const int32_t captureTargetFrames =
@@ -1088,6 +1099,27 @@ void AudioEngine::directUsbRenderLoop() {
                 continue;
             }
         }
+        // A block held from the previous cycle goes first: it is older audio,
+        // and publishing the new one ahead of it would reorder the stream.
+        // Only when it is away does this cycle render anything new, so capture
+        // keeps advancing and the hold clears itself as soon as room appears.
+        if (directUsbHoldingBlock_) {
+            const bool heldRoom =
+                directUsbOutput_->waitForWritableFramesUntil(frames, deadline);
+            const bool heldSubmitted = heldRoom &&
+                directUsbOutput_->submitHeldQuantum(
+                    directUsbHeldLeft_.data(), directUsbHeldRight_.data(),
+                    frames);
+            if (!heldSubmitted) {
+                // Still nowhere to put it. A second undeliverable block means
+                // the device has stopped consuming, which queueing deeper
+                // would only hide.
+                directUsbLostQuanta_.fetch_add(1, std::memory_order_relaxed);
+                directUsbHoldingBlock_ = false;
+            } else {
+                directUsbHoldingBlock_ = false;
+            }
+        }
         directUsbOutput_->readInputChannels(
             directUsbInputPlanes_.data(),
             directUsbInputChannelCount_,
@@ -1246,13 +1278,39 @@ void AudioEngine::directUsbRenderLoop() {
         // the device can actually play is prime minus credit. Producer
         // lateness then shrinks the buffer one for one, which is backwards -
         // it drove the ring to four frames and the OUT queue to zero.
-        const bool credited =
+        // Policy 1 paces the producer by frames the device has played, which
+        // holds fewer rendered frames in the pipeline and so cuts latency;
+        // policy 0 simply waits for room. Which one is better on this hardware
+        // is an open measurement, so both live here rather than in two builds.
+        // Room is waited for under either policy: a rendered block is never
+        // discarded. The credit wait is an additional constraint on top, not a
+        // replacement - waiting only for credit let a large reserve pass the
+        // gate freely at startup and then lose the block to a full ring, which
+        // is the drop this loop exists to avoid.
+        bool credited = true;
+        if (directUsbOutput_->admissionPolicy() == 1) {
+            credited = directUsbOutput_->waitForPlaybackCreditUntil(frames, deadline);
+        }
+        credited = credited &&
             directUsbOutput_->waitForWritableFramesUntil(frames, deadline);
         const bool submitted = credited && directUsbOutput_->submitWholeQuantum(
             directUsbOutputLeft_.data(), directUsbOutputRight_.data(), frames);
+        if (!submitted) {
+            // Hold the block rather than lose it: the frames are rendered and
+            // valid, they simply have nowhere to go this instant. Next cycle
+            // publishes them first. This trades a dropout for latency, and
+            // only for as long as the stall lasts - depth stays one, so a
+            // device that has genuinely stopped still surfaces as a fault.
+            std::copy(directUsbOutputLeft_.begin(),
+                      directUsbOutputLeft_.begin() + frames,
+                      directUsbHeldLeft_.begin());
+            std::copy(directUsbOutputRight_.begin(),
+                      directUsbOutputRight_.begin() + frames,
+                      directUsbHeldRight_.begin());
+            directUsbHoldingBlock_ = true;
+            directUsbHeldQuanta_.fetch_add(1, std::memory_order_relaxed);
+        }
         if (!credited) {
-            // The ring did not free a quantum within the period: the device
-            // stopped consuming. A transport fault, not backpressure.
             directUsbCreditTimeouts_.fetch_add(1, std::memory_order_relaxed);
         }
         if (!submitted) {

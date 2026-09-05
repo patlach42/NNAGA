@@ -95,3 +95,54 @@ The same configuration reported six capture breaks in one block, none in the
 next and ten in a third. Every conclusion drawn from a single run in this
 project has had to be withdrawn, including two of mine on the same evening.
 Comparisons are paired blocks with a fixed seed, and the unit is the block.
+
+## Capture had its own silence
+
+`readInputChannels` zero-filled every destination before decoding, so a short
+read handed the graph real audio followed by invented silence - the capture-side
+twin of the playback padding, and invisible for the same reason. Worse, on this
+bench that silence went out through playback and came back through the hardware
+loop, where the capture detector counted it as a break and the environment took
+the blame. Short reads are now refused whole and counted. Channels the format
+does not carry are still zeroed: a channel that does not exist is not a channel
+that was invented.
+
+## Three kinds of frame loss wore different names
+
+Padding a short packet, discarding a refused quantum, and a rendered block that
+never reached the ring because a wait expired. Each looked like ordinary error
+handling in its own function, and none of them was gated. They are the same
+event - audio that was produced and never played - and only the first was even
+visible in a counter.
+
+## A refusal stopped being a loss
+
+With a depth-one holding slot the refused block is published on the next cycle
+instead of being discarded, so `playbackQuantumDrops` now measures pressure and
+`lostQuanta` measures damage. Measured over sixty seconds: 718 blocks held,
+one lost. Gating on refusals after this change would fail runs in which nothing
+was lost, which is how a counter that used to mean damage becomes a counter that
+means nothing.
+
+## Held blocks must not be charged twice
+
+The credit for a held block was spent on its first attempt; charging it again on
+republication failed at startup, where credit is scarce, and destroyed the block
+the holding slot existed to save. Startup admission refusals went from two to
+zero once republication stopped re-billing.
+
+## The reserve has an optimum, and it is small
+
+Six randomised blocks of reserve 64, 128 and 192 frames at target 256 with five
+transfers:
+
+| reserve | clean | ring p50 | capture breaks |
+|---|---|---|---|
+| 64 | 5/6 | 124 | 16 |
+| 128 | 5/6 | 188 | 14 |
+| 192 | 1/6 | 188 | 40 |
+
+Paired over blocks, 64 against 128 differs by 64 frames of occupancy (p=0.031)
+with no difference in breaks (p=1.0), so the smaller reserve buys 1.33 ms for
+nothing. The largest reserve is worse on both counts: past some point the
+producer's lead stops being insurance and starts being latency that still fails.

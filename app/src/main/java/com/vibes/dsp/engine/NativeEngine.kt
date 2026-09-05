@@ -233,6 +233,12 @@ data class DirectUsbStats(
     val maxWritesBetweenDrains: Long = 0,
     /** Smallest writable-minus-quantum seen; negative means a refusal. */
     val minAdmissionMarginFrames: Long = 0,
+    /** Capture reads refused for being short of a whole quantum. */
+    val capturePartialReads: Long = 0,
+    /** Rendered blocks that never reached the ring because a wait expired. */
+    val lostQuanta: Long = 0,
+    /** Rendered blocks published a cycle late rather than discarded. */
+    val heldQuanta: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -308,6 +314,9 @@ data class DirectUsbStats(
         private const val DRAIN_FRAMES_MAX = 74
         private const val MAX_WRITES_BETWEEN_DRAINS = 75
         private const val MIN_ADMISSION_MARGIN = 76
+        private const val CAPTURE_PARTIAL_READS = 77
+        private const val LOST_QUANTA = 78
+        private const val HELD_QUANTA = 79
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -383,6 +392,9 @@ data class DirectUsbStats(
                 drainFramesMax = at(DRAIN_FRAMES_MAX),
                 maxWritesBetweenDrains = at(MAX_WRITES_BETWEEN_DRAINS),
                 minAdmissionMarginFrames = at(MIN_ADMISSION_MARGIN),
+                capturePartialReads = at(CAPTURE_PARTIAL_READS),
+                lostQuanta = at(LOST_QUANTA),
+                heldQuanta = at(HELD_QUANTA),
             )
         }
     }
@@ -773,6 +785,20 @@ class NativeEngine private constructor() {
      * steady state and must not be mixed into it.
      */
     external fun nativeResetDirectUsbEnvelope()
+
+    /**
+     * Admission policy: 0 waits for room before publishing a quantum, 1 paces
+     * the producer by frames the device has actually played. The second holds
+     * fewer rendered frames in the pipeline and so cuts latency; which is
+     * better here is a measurement, not a decision.
+     */
+    external fun nativeSetDirectUsbAdmissionPolicy(policy: Int)
+
+    /**
+     * How far the producer may run ahead of the device under the credit
+     * policy, in frames. Zero forbids any lead, which forbids a buffer.
+     */
+    external fun nativeSetDirectUsbCreditReserve(frames: Int)
 
     /**
      * Flags the captured level wandering from its running average by more than

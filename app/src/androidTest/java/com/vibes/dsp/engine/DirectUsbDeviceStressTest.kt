@@ -66,6 +66,11 @@ class DirectUsbDeviceStressTest {
         // Submitted OUT runway, in transfers. This is the reserve that survives
         // a late completion, as distinct from PCM waiting in the ring, so a
         // sweep over it needs no rebuild. Zero keeps the automatic policy.
+        // 0 waits for room, 1 paces by played frames. One build serves both.
+        val admissionPolicy = argumentInt(args, "direct_usb_admission", "admission", 0, 0, 1)
+        // Frames the producer may run ahead of the device under the credit
+        // policy. Zero is strict credit, which holds no lead at all.
+        val creditReserve = argumentInt(args, "direct_usb_credit_reserve", "credit_reserve", 0, 0, 1024)
         val transferCount = argumentInt(args, "direct_usb_transfers", "transfers", 0, 0, 8)
         val outputPair = argumentInt(args, "direct_usb_output_pair", "output_pair", 0, 0, 7)
         val inputChannel = argumentInt(args, "direct_usb_input_channel", "input_channel", 0, 0, 15)
@@ -110,6 +115,7 @@ class DirectUsbDeviceStressTest {
             }
             // Separate line, not a TELEMETRY field: the analyzer's schema is
             // versioned and this is harness configuration, not a measurement.
+            Log.i(tag, "ADMISSION_POLICY policy=$admissionPolicy reserve=$creditReserve")
             Log.i(tag, "LOOPBACK_CONFIG output_pair=$outputPair input_channel=$inputChannel " +
                 "transfers=${AudioSettingsManager.getDirectUsbTransferCount(context)}")
             EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
@@ -179,7 +185,9 @@ class DirectUsbDeviceStressTest {
                                 flightRecorder,
                                 pollIntervalMs,
                                 discontinuityThreshold,
-                                inputChannel
+                                inputChannel,
+                                admissionPolicy,
+                                creditReserve
                             )
                         }
                     }
@@ -309,6 +317,8 @@ class DirectUsbDeviceStressTest {
         pollIntervalMs: Long,
         discontinuityThreshold: Float,
         inputChannel: Int,
+        admissionPolicy: Int,
+        creditReserve: Int,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -379,6 +389,8 @@ class DirectUsbDeviceStressTest {
             // Before the session starts, so the very first decoded block is
             // already inspected on the channel the loopback returns on.
             runCatching { engine.nativeSetDirectUsbCaptureInspectChannel(inputChannel) }
+            runCatching { engine.nativeSetDirectUsbAdmissionPolicy(admissionPolicy) }
+            runCatching { engine.nativeSetDirectUsbCreditReserve(creditReserve) }
             DirectUsbAudioManager.startSelected(context, format)
             val started = runBlocking {
                 DirectUsbAudioManager.startConfigured(context)
@@ -543,8 +555,12 @@ class DirectUsbDeviceStressTest {
                         // is still a frame lost, but its extrema describe a
                         // different regime and must not be read as the steady
                         // state envelope.
-                        if (reason == null && stats.playbackQuantumDrops > 0L) {
-                            reason = "startup-quantum-drop-${stats.playbackQuantumDrops}"
+                        // A refused admission is not a lost frame any more:
+                        // the block is held and published on the next cycle,
+                        // so this counter measures pressure while lostQuanta
+                        // measures damage. Only damage fails the run.
+                        if (reason == null && stats.lostQuanta > 0L) {
+                            reason = "startup-lost-quantum-${stats.lostQuanta}"
                         }
                         if (reason == null && stats.minAdmissionMarginFrames < 0L) {
                             reason = "startup-admission-margin-${stats.minAdmissionMarginFrames}"
@@ -589,6 +605,10 @@ class DirectUsbDeviceStressTest {
                     (finalStats.transferDiscontinuities - baseline.transferDiscontinuities).coerceAtLeast(0L)
                 val implicitMetadataInvalidGrowth =
                     (finalStats.implicitMetadataInvalid - baseline.implicitMetadataInvalid).coerceAtLeast(0L)
+                val lostQuantaGrowth =
+                    (finalStats.lostQuanta - baseline.lostQuanta).coerceAtLeast(0L)
+                val capturePartialReadGrowth =
+                    (finalStats.capturePartialReads - baseline.capturePartialReads).coerceAtLeast(0L)
                 // Deferral growth is deliberately NOT gated. It looked like the
                 // audible fault on two runs, but across four it varies by three
                 // orders of magnitude - 5 to 70855 - while a listener reports
@@ -597,6 +617,12 @@ class DirectUsbDeviceStressTest {
                 // hears. It stays in telemetry as a pressure indicator.
                 if (reason == null && !samplePositionProgressed) reason = "sample-position-did-not-advance"
                 if (reason == null && !trackFrameProgressed) reason = "track-frame-did-not-advance"
+                if (reason == null && quantumDropGrowth > 0L && lostQuantaGrowth == 0L) {
+                    // Refusals without losses are pressure, not damage: the
+                    // held block was delivered a cycle late. Recorded, not
+                    // fatal, so the distinction stays visible in telemetry.
+                    Log.i(tag, "ADMISSION_PRESSURE refusals=$quantumDropGrowth held=${finalStats.heldQuanta}")
+                }
                 if (reason == null && starvationGrowth > 0L) {
                     reason = "consumer-starvation-growth-exceeded-$starvationGrowth"
                 }
@@ -618,6 +644,18 @@ class DirectUsbDeviceStressTest {
                 }
                 if (reason == null && transferDiscontinuityGrowth > 0L) {
                     reason = "transfer-discontinuity-growth-exceeded-$transferDiscontinuityGrowth"
+                }
+                if (reason == null && lostQuantaGrowth > 0L) {
+                    // A rendered block that never reached the ring is frame
+                    // loss; it was counted only as a wait timeout before, so
+                    // nothing failed on it.
+                    reason = "lost-quantum-growth-exceeded-$lostQuantaGrowth"
+                }
+                if (reason == null && capturePartialReadGrowth > 0L) {
+                    // A short capture read used to hand the graph a zero tail,
+                    // which returned through the hardware loop as a capture
+                    // break and was blamed on the environment.
+                    reason = "capture-partial-read-growth-exceeded-$capturePartialReadGrowth"
                 }
                 if (reason == null && implicitMetadataInvalidGrowth > 0L) {
                     reason = "implicit-metadata-invalid-growth-exceeded-$implicitMetadataInvalidGrowth"
@@ -910,6 +948,9 @@ class DirectUsbDeviceStressTest {
             "drain_frames_min=${stats.drainFramesMin} drain_frames_max=${stats.drainFramesMax} " +
             "max_writes_between_drains=${stats.maxWritesBetweenDrains} " +
             "min_admission_margin=${stats.minAdmissionMarginFrames} " +
+            "capture_partial_reads=${stats.capturePartialReads} " +
+            "lost_quanta=${stats.lostQuanta} " +
+            "held_quanta=${stats.heldQuanta} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
@@ -980,7 +1021,7 @@ class DirectUsbDeviceStressTest {
     private data class CaseResult(val passed: Boolean, val reason: String?)
 
     private companion object {
-        const val TELEMETRY_SCHEMA_VERSION = 12L
+        const val TELEMETRY_SCHEMA_VERSION = 15L
         const val RAW_STAT_COUNT = 55
         const val MAX_IMPLICIT_FIFO = 256L
         // One 30 s cycle at a 64-frame quantum offers about 22500 quanta, so a
