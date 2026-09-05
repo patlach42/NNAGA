@@ -155,7 +155,7 @@ void AudioEngine::directUsbThermalPolicyLoop() {
     bool safetyActive = false;
     int32_t configuredRenderTid = initialRenderTid;
     int32_t configuredEventTid = initialEventTid;
-
+    bool hintRebindRefusalLogged = false;
 
     directUsbPerformanceHintActive_.store(
         performanceHint.active(), std::memory_order_release);
@@ -175,9 +175,47 @@ void AudioEngine::directUsbThermalPolicyLoop() {
         }
         lock.unlock();
         if (!directUsbSession_.load(std::memory_order_acquire)) continue;
+        // Either thread can be recreated inside a live session. A hint session
+        // still holding the old tid boosts a thread that no longer exists and
+        // reports nothing about it, so rebind whenever the pair moves.
+        if (performanceHint.active()) {
+            const int32_t renderTid =
+                directUsbRenderTid_.load(std::memory_order_acquire);
+            const int32_t eventTid =
+                directUsbOutput_ ? directUsbOutput_->eventThreadTid() : 0;
+            if (renderTid > 0 && eventTid > 0 && eventTid != renderTid &&
+                (renderTid != configuredRenderTid ||
+                 eventTid != configuredEventTid)) {
+                const int32_t threadIds[] = {renderTid, eventTid};
+                if (!performanceHint.canSetThreads()) {
+                    // Nothing to retry on this platform; record the drift once
+                    // so the stale hint is visible, then stop asking.
+                    LOGI("adpf-rebind unsupported render=%d->%d event=%d->%d",
+                         configuredRenderTid, renderTid,
+                         configuredEventTid, eventTid);
+                    configuredRenderTid = renderTid;
+                    configuredEventTid = eventTid;
+                } else if (performanceHint.setThreads(threadIds, 2)) {
+                    LOGI("adpf-rebind render=%d->%d event=%d->%d",
+                         configuredRenderTid, renderTid,
+                         configuredEventTid, eventTid);
+                    configuredRenderTid = renderTid;
+                    configuredEventTid = eventTid;
+                    hintRebindRefusalLogged = false;
+                } else if (!hintRebindRefusalLogged) {
+                    // Retried every tick; logged once so a permanent refusal
+                    // does not bury the log it is trying to explain.
+                    LOGE("adpf-rebind refused render=%d event=%d",
+                         renderTid, eventTid);
+                    hintRebindRefusalLogged = true;
+                }
+            }
+        }
         const float headroom = monitor.sample(5);
         if (!directUsbThermalSafetyEnabled_.load(std::memory_order_acquire)) {
             if (safetyActive && directUsbOutput_) {
+                const uint32_t previousTarget =
+                    directUsbSteadyTargetFrames_.load(std::memory_order_acquire);
                 directUsbOutput_->setGraphQuantum(
                     directUsbEffectiveQuantum_.load(std::memory_order_acquire),
                     directUsbConfiguredMultiplier_,
@@ -185,6 +223,9 @@ void AudioEngine::directUsbThermalPolicyLoop() {
                 directUsbSteadyTargetFrames_.store(
                     static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())),
                     std::memory_order_release);
+                LOGI("thermal-safety restored reason=disabled target=%u->%u",
+                     previousTarget,
+                     directUsbSteadyTargetFrames_.load(std::memory_order_acquire));
             }
             safetyActive = false;
             directUsbThermalSafetyActive_ = false;
@@ -199,12 +240,23 @@ void AudioEngine::directUsbThermalPolicyLoop() {
                 directUsbSteadyTargetFrames_.store(static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())), std::memory_order_release);
                 safetyActive = true;
                 directUsbThermalSafetyActive_ = true;
+                // The queue geometry a measurement is read against just moved:
+                // say so, or the run looks like it used the configured depth.
+                LOGI("thermal-safety engaged headroom=%.3f target=%d->%u quantum=%d",
+                     static_cast<double>(headroom), currentTarget,
+                     directUsbSteadyTargetFrames_.load(std::memory_order_acquire),
+                     quantum);
             }
         } else if (safetyActive && headroom <= 0.65f) {
             const int32_t quantum = static_cast<int32_t>(directUsbEffectiveQuantum_.load(std::memory_order_acquire));
             if (quantum > 0 && directUsbOutput_) {
+                const uint32_t previousTarget =
+                    directUsbSteadyTargetFrames_.load(std::memory_order_acquire);
                 directUsbOutput_->setGraphQuantum(quantum, directUsbConfiguredMultiplier_, directUsbConfiguredWatermarkFrames_);
                 directUsbSteadyTargetFrames_.store(static_cast<uint32_t>(std::max(0, directUsbOutput_->playbackTargetFrames())), std::memory_order_release);
+                LOGI("thermal-safety restored reason=cooled headroom=%.3f target=%u->%u",
+                     static_cast<double>(headroom), previousTarget,
+                     directUsbSteadyTargetFrames_.load(std::memory_order_acquire));
             }
             safetyActive = false;
             directUsbThermalSafetyActive_ = false;
