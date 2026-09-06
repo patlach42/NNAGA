@@ -305,7 +305,8 @@ class DirectUsbDeviceStressTest {
                                 creditReserve,
                                 renderStallUs,
                                 serviceStallUs,
-                                transferDetector
+                                transferDetector,
+                                appliedTweaks
                             )
                         }
                     }
@@ -456,6 +457,7 @@ class DirectUsbDeviceStressTest {
         renderStallUs: Int,
         serviceStallUs: Int,
         transferDetector: Boolean,
+        lateTweaks: List<PerformanceTweaks.Tweak>,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -560,6 +562,17 @@ class DirectUsbDeviceStressTest {
             }
             if (started.isFailure) {
                 reason = "start-failed detail=${started.exceptionOrNull()?.message ?: "unknown"}"
+            }
+            // Applied again now the audio threads exist. Some privileged
+            // tweaks set a policy on a thread rather than a limit on the
+            // process, and a thread that has not been created yet cannot be
+            // given one - applying only before the session would report
+            // success for something nobody holds.
+            lateTweaks.forEach { tweak ->
+                val outcome = runCatching {
+                    PerformanceTweaks.apply(context, tweak, true)
+                }.getOrNull()
+                Log.i(tag, "TWEAK_LATE id=${tweak.id} state=${outcome?.state} detail=${outcome?.detail}")
             }
             var runningStats: DirectUsbStats? = null
             if (reason == null) {

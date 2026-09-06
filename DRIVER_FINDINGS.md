@@ -1335,3 +1335,46 @@ because both channels see it. Not a driver defect, and the reason to record it
 is that it consumed a line in the verdict for the whole run: a cycle that is
 otherwise clean fails on `signal-discontinuity-growth-exceeded` because it was
 switched off at the end.
+
+## Real-time scheduling, and the interrupt
+
+Both were in the tweak list untested because the device had no root. It has now,
+granted to the app rather than to the shell, so the harness is the only place
+they can be applied - which is what it does, before the session for the ones
+that set a limit and again after it for the ones that set a policy on a thread.
+
+**The real-time tweak did not work as written.** It raises `RLIMIT_RTPRIO` with
+`prlimit`, and this device has no `prlimit`. It has `chrt`, which sets the
+policy on a thread directly and therefore works on threads that already exist -
+the limit never could, because each thread asks for its policy once, when it
+starts. Servicing is given the higher priority of the two, at the bottom of the
+real-time band: it runs every half millisecond against the graph's one and a
+third, and a completion the device is waiting on cannot be made up later.
+
+Toybox takes the pid before the priority, the reverse of util-linux. Passing
+them the other way round sets the policy on a pid that happens to equal the
+priority, and reports success.
+
+**Measured against the listener's criterion,** capture discontinuities per
+cycle with the detectors armed, same geometry throughout:
+
+| | breaks per cycle | total | clean cycles |
+|---|---|---:|---|
+| nothing applied | 31, 8, 10 | 49 | 0 of 3 |
+| USB interrupt moved to the core that stays awake | 14, 3, 6 | 23 | 0 of 3 |
+| core control, both prime cores awake | 7, 0, 0 / 0, 2, 0 | 9 | 5 of 6 |
+| **real-time policy, servicing above the graph** | **0, 0, 0 / 0, 0, 1** | **1** | **5 of 6** |
+
+The real-time policy is the strongest of the three by a wide margin, and it is
+the only one that cleaned the first cycle of a run - the one that carries the
+session start.
+
+**The interrupt tweak is close to a no-op here.** It writes the big-core mask,
+and the interrupt is already on 6-7; its effective affinity is cpu6, which is
+the core core control parks. Pinning it to cpu7 alone - the core that stays
+awake - halves the breaks, which says the parked core does reach the interrupt
+path, but it is not where the fault mostly lives.
+
+Service gap counts do not order the same way: the real-time arm shows 10 to 21
+gaps a cycle against 1 to 6 for core control, while producing far fewer audible
+breaks. Gaps are not the audible quantity and should stop being read as one.

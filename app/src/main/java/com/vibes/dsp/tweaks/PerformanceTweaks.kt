@@ -234,11 +234,12 @@ object PerformanceTweaks {
                 // a refused call is a permission problem.
                 val available = PrivilegedShell.runAsRoot("command -v prlimit")
                 if (!available.ok || available.stdout.isBlank()) {
-                    return Outcome(
-                        State.Unavailable,
-                        "prlimit is not present on this device, so the limit " +
-                            "cannot be raised from here",
-                    )
+                    // No prlimit here, and raising the limit is only a way to
+                    // let a thread ask for a policy it cannot ask for itself.
+                    // Root can set the policy on the thread directly instead,
+                    // which also works on threads that already exist - the
+                    // limit does not, because each asks once when it starts.
+                    return applyRealtimeViaChrt(pid, enable)
                 }
                 val result = PrivilegedShell.runAsRoot(
                     if (enable) "prlimit --rtprio=1:1 --pid $pid"
@@ -566,6 +567,57 @@ object PerformanceTweaks {
     }
 
     /** cpufreq policy directory governing the highest-capacity cluster. */
+    /**
+     * Sets the audio threads' scheduling policy directly, for devices without
+     * prlimit. Servicing is given the higher of the two real-time priorities:
+     * it runs every half millisecond against the graph's one and a third, and
+     * a completion the device is waiting on cannot be made up later. Both sit
+     * at the bottom of the real-time band, well under anything the system
+     * reserves for itself.
+     */
+    private fun applyRealtimeViaChrt(pid: Int, enable: Boolean): Outcome {
+        if (!PrivilegedShell.runAsRoot("command -v chrt").let {
+                it.ok && it.stdout.isNotBlank()
+            }) {
+            return Outcome(
+                State.Unavailable,
+                "neither prlimit nor chrt is present, so the policy cannot be " +
+                    "set from here",
+            )
+        }
+        val applied = PrivilegedShell.runAsRoot(
+            "n=0; for t in /proc/$pid/task/*; do " +
+                "c=\$(cat \$t/comm 2>/dev/null); tid=\${t##*/}; " +
+                "case \"\$c\" in " +
+                "UsbIsoEvents) " + chrtCommand(enable, 3) + " && n=\$((n+1));; " +
+                "UsbAudioRender) " + chrtCommand(enable, 2) + " && n=\$((n+1));; " +
+                "esac; done; echo \$n"
+        )
+        val count = applied.stdout.trim().lines().lastOrNull()?.trim()?.toIntOrNull() ?: 0
+        return when {
+            !applied.ok -> Outcome(State.NotApplied, applied.output.trim().ifBlank {
+                "chrt refused the change"
+            })
+            // No audio thread means nothing to set, and reporting success for
+            // a policy nobody holds is the mistake the affinity code made for
+            // as long as it did.
+            count == 0 -> Outcome(
+                State.Unknown,
+                "no audio thread running; start a session and apply again",
+            )
+            enable -> Outcome(State.Applied, "real-time policy set on $count threads")
+            else -> Outcome(State.NotApplied, "policy returned to normal on $count threads")
+        }
+    }
+
+    // Toybox takes the pid before the priority - `chrt -p PID PRIORITY` - which
+    // is the reverse of util-linux, and passing them the other way round sets
+    // the policy on a pid that happens to equal the priority. Verified against
+    // a live thread before being used.
+    private fun chrtCommand(enable: Boolean, priority: Int): String =
+        if (enable) "chrt -f -p \$tid $priority 2>/dev/null"
+        else "chrt -o -p \$tid 0 2>/dev/null"
+
     /**
      * The core-control directory of the cluster holding the fastest CPU. Found
      * rather than assumed: the prime cluster is not cpu6 everywhere, and a
