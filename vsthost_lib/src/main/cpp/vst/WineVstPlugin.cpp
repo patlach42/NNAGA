@@ -161,16 +161,37 @@ WineVstPlugin::~WineVstPlugin() {
 }
 
 void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
-    // A new guest lifecycle must never inherit latency from the previous one.
     lastStableLatencyFrames_.store(0, std::memory_order_release);
+    realtimeReady_.store(false, std::memory_order_release);
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize;
+    dryRampSamples_ = 0;
+    wetRampSamples_ = 0;
+    dryFallback_ = true;
+    lastOutputLeft_ = 0.0f;
+    lastOutputRight_ = 0.0f;
+    haveLastOutput_ = false;
+
+    // The transport and guest host only support a bounded, nonzero quantum.
+    // Keep admission false for invalid activation rather than publishing a
+    // plugin that can only remain on the dry fallback path.
+    if (!std::isfinite(sampleRate) || sampleRate <= 0.0f ||
+        bufferSize == 0 || bufferSize > VSTPOC_MAX_BLOCK_FRAMES) {
+        return;
+    }
     prepare();
+    realtimeReady_.store(
+        prepared_.load(std::memory_order_acquire) &&
+        guestReadyForActivation_.load(std::memory_order_acquire) &&
+        ring_ && ring_->valid(),
+        std::memory_order_release);
 }
 
 void WineVstPlugin::prepare() {
-    lastStableLatencyFrames_.store(0, std::memory_order_release);
     if (prepared_.load()) return;
+    lastStableLatencyFrames_.store(0, std::memory_order_release);
+    realtimeReady_.store(false, std::memory_order_release);
+    guestReadyForActivation_.store(false, std::memory_order_release);
 
     // Per-plugin shm + picker files. Naming matches vstpoc convention so
     // wine-side env vars + tmpfs lookups behave the same. The "_v" + uuid
@@ -283,9 +304,8 @@ void WineVstPlugin::prepare() {
     // remember(pluginIndex) — if getInfo() returns no control ports at that
     // moment, the sliders panel stays empty for the lifetime of the rack
     // row. Worth a short wait here so the slider list is correct on first
-    // render. Timeout = 5s; if the guest hasn't reported by then it
-    // probably never will, but the rest of the chain still works (audio
-    // path doesn't depend on params).
+    // render. Timeout = 5s; a timeout is a failed runtime admission, so
+    // PluginChain rejects publication rather than retaining a dry-only guest.
     {
         auto* shared = ring_->raw();
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -294,9 +314,11 @@ void WineVstPlugin::prepare() {
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
         if (shared && shared->guest_ready == 0) {
-            LOGW("WineVstPlugin[%s] guest_ready timeout after 5s — sliders won't render",
+            guestReadyForActivation_.store(false, std::memory_order_release);
+            LOGW("WineVstPlugin[%s] guest_ready timeout after 5s — realtime admission failed",
                  entry_.displayName.c_str());
         } else if (shared) {
+            guestReadyForActivation_.store(true, std::memory_order_release);
             paramMirror_.assign(static_cast<size_t>(std::max(0, shared->param_count)), 0.5f);
             std::vector<float> guestValues;
             if (readGuestParamSnapshot(ring_.get(), guestValues)) {
@@ -311,10 +333,11 @@ void WineVstPlugin::prepare() {
     LOGI("WineVstPlugin[%s] prepared pid=%d sr=%.0f bs=%u",
          entry_.displayName.c_str(), guest_->pid(), sampleRate_, bufferSize_);
 }
-
 void WineVstPlugin::deactivate() {
-    // Clear before tearing down the ring so readers cannot observe a dead
-    // guest's last stable value as current latency.
+    // Clear admission before tearing down the ring so readers cannot observe
+    // a dead guest as realtime-capable.
+    realtimeReady_.store(false, std::memory_order_release);
+    guestReadyForActivation_.store(false, std::memory_order_release);
     lastStableLatencyFrames_.store(0, std::memory_order_release);
     if (!prepared_.exchange(false)) return;
     if (guest_) {
@@ -349,52 +372,63 @@ uint32_t WineVstPlugin::process(const float* const* inputs,
                                 uint32_t midiEventCount,
                                 guitarrackcraft::MidiEvent* outputEvents,
                                 uint32_t outputCapacity) {
-    if (!ring_ || !inputs || !outputs) {
+    const auto renderDryFallback = [&](uint64_t missingFrames) -> uint32_t {
+        if (!dryFallback_ || wetRampSamples_ > 0) dryRampSamples_ = 0;
+        const float* inL = inputs && inputs[0] ? inputs[0] : nullptr;
+        const float* inR = inputs && inputs[1] ? inputs[1] : inL;
+        const float fromLeft = haveLastOutput_ ? lastOutputLeft_ : 0.0f;
+        const float fromRight = haveLastOutput_ ? lastOutputRight_ : 0.0f;
         if (outputs) {
-            for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch)
-                if (outputs[ch]) std::memset(outputs[ch], 0, numFrames * sizeof(float));
+            for (uint32_t i = 0; i < numFrames; ++i) {
+                if (dryRampSamples_ < 64) ++dryRampSamples_;
+                const float dryGain = static_cast<float>(dryRampSamples_) / 64.0f;
+                const float wetGain = 1.0f - dryGain;
+                if (outputs[0]) {
+                    outputs[0][i] =
+                        fromLeft * wetGain + (inL ? inL[i] : 0.0f) * dryGain;
+                }
+                if (outputs[1]) {
+                    outputs[1][i] =
+                        fromRight * wetGain + (inR ? inR[i] : 0.0f) * dryGain;
+                }
+            }
+            if (numFrames > 0 && outputs[0] && outputs[1]) {
+                lastOutputLeft_ = outputs[0][numFrames - 1];
+                lastOutputRight_ = outputs[1][numFrames - 1];
+                haveLastOutput_ = true;
+            }
         }
-        return 0;
-    }
-    if (numFrames > VSTPOC_MAX_BLOCK_FRAMES) {
-        for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch) {
-            if (!outputs[ch]) continue;
-            const float* src = inputs[ch] ? inputs[ch] : inputs[0];
-            if (src) std::memcpy(outputs[ch], src, numFrames * sizeof(float));
-            else std::memset(outputs[ch], 0, numFrames * sizeof(float));
-        }
-        uint32_t count = std::min(midiEventCount, outputCapacity);
-        if (outputEvents && midiEvents) std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
+        dryFallback_ = true;
+        wetRampSamples_ = 0;
         underruns_.fetch_add(1, std::memory_order_relaxed);
-        return count;
-    }
-
-    if (!ring_->inputWritable(numFrames)) {
-        for (uint32_t ch = 0; ch < getNumOutputPorts(); ++ch)
-            if (outputs[ch]) std::memset(outputs[ch], 0, numFrames * sizeof(float));
+        underrunFrames_.fetch_add(missingFrames, std::memory_order_relaxed);
         const uint32_t count = std::min(midiEventCount, outputCapacity);
         if (outputEvents && midiEvents) {
             std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
         }
-        underruns_.fetch_add(1, std::memory_order_relaxed);
         return count;
+    };
+    if (!ring_ || !outputs) return renderDryFallback(numFrames);
+    if (bufferSize_ == 0 || numFrames > bufferSize_ ||
+        numFrames > VSTPOC_MAX_BLOCK_FRAMES) {
+        return renderDryFallback(numFrames);
     }
+
+    if (!ring_->inputWritable(numFrames)) return renderDryFallback(numFrames);
     if (!ring_->publishTransport(context.samplePosition, context.transportFrame,
                                  context.loopEndFrame, context.sampleRate,
                                  context.beatsPerMinute, context.playing,
                                  context.looping, numFrames,
                                  midiEvents, midiEventCount)) {
-        const uint32_t count = std::min(midiEventCount, outputCapacity);
-        if (outputEvents && midiEvents) {
-            std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
-        }
-        underruns_.fetch_add(1, std::memory_order_relaxed);
-        return count;
+        return renderDryFallback(numFrames);
     }
     // 1) push planar input into wine (mono input is duplicated).
     const float* inL = (inputs && inputs[0]) ? inputs[0] : silentInput_.data();
     const float* inR = (inputs && inputs[1]) ? inputs[1] : inL;
-    ring_->pushInput(inL, inR, static_cast<int32_t>(numFrames));
+    if (ring_->pushInput(inL, inR, static_cast<int32_t>(numFrames)) !=
+        static_cast<int32_t>(numFrames)) {
+        return renderDryFallback(numFrames);
+    }
 
     // 2) pull processed output. There's a ≥1-block round-trip latency by
     //    design; pulled < numFrames is expected at startup and on any
@@ -403,16 +437,58 @@ uint32_t WineVstPlugin::process(const float* const* inputs,
     //    feedback_vst_host_no_zero_pad.
     const int32_t pulled = ring_->pullAudio(outputs[0], outputs[1], static_cast<int32_t>(numFrames));
     if (pulled < static_cast<int32_t>(numFrames)) {
+        if (!dryFallback_ || wetRampSamples_ > 0) dryRampSamples_ = 0;
+        const float fromLeft =
+            pulled > 0 ? outputs[0][pulled - 1] : (haveLastOutput_ ? lastOutputLeft_ : 0.0f);
+        const float fromRight =
+            pulled > 0 && outputs[1]
+                ? outputs[1][pulled - 1]
+                : (haveLastOutput_ ? lastOutputRight_ : 0.0f);
         for (int32_t i = pulled; i < static_cast<int32_t>(numFrames); ++i) {
-            outputs[0][i] = 0.0f;
-            if (outputs[1]) outputs[1][i] = 0.0f;
+            if (dryRampSamples_ < 64) ++dryRampSamples_;
+            const float dryGain = static_cast<float>(dryRampSamples_) / 64.0f;
+            const float wetGain = 1.0f - dryGain;
+            outputs[0][i] = fromLeft * wetGain + inL[i] * dryGain;
+            if (outputs[1]) {
+                outputs[1][i] = fromRight * wetGain + inR[i] * dryGain;
+            }
         }
+        dryFallback_ = true;
+        wetRampSamples_ = 0;
         underruns_.fetch_add(1, std::memory_order_relaxed);
+        underrunFrames_.fetch_add(
+                static_cast<uint64_t>(numFrames - static_cast<uint32_t>(pulled)),
+                std::memory_order_relaxed);
+    } else {
+        if (dryFallback_) {
+            uint32_t frame = 0;
+            while (frame < numFrames && wetRampSamples_ < 64) {
+                ++wetRampSamples_;
+                const float wetGain = static_cast<float>(wetRampSamples_) / 64.0f;
+                const float dryGain = 1.0f - wetGain;
+                outputs[0][frame] = outputs[0][frame] * wetGain + inL[frame] * dryGain;
+                if (outputs[1]) {
+                    outputs[1][frame] =
+                        outputs[1][frame] * wetGain + inR[frame] * dryGain;
+                }
+                ++frame;
+            }
+            if (wetRampSamples_ >= 64) {
+                dryFallback_ = false;
+                dryRampSamples_ = 0;
+                wetRampSamples_ = 0;
+            }
+        }
     }
     uint32_t outCount = ring_->readMidiOutput(outputEvents, outputCapacity);
     if (outCount == 0 && outputEvents && midiEvents) {
         outCount = std::min(midiEventCount, outputCapacity);
         std::memcpy(outputEvents, midiEvents, outCount * sizeof(*outputEvents));
+    }
+    if (numFrames > 0 && outputs[0] && outputs[1]) {
+        lastOutputLeft_ = outputs[0][numFrames - 1];
+        lastOutputRight_ = outputs[1][numFrames - 1];
+        haveLastOutput_ = true;
     }
     return outCount;
 }
@@ -475,14 +551,13 @@ void WineVstPlugin::respondNativeFilePicker(uint32_t sequence,
     if (!picker_) return;
     picker_->writeResponse(sequence, cancelled, windowsPath.c_str());
 }
-
 guitarrackcraft::PluginInfo WineVstPlugin::getInfo() const {
     guitarrackcraft::PluginInfo info;
-    info.id = entry_.format + ":" + entry_.uuid;
+    info.id = entry_.uuid;
     info.name = entry_.displayName;
     info.format = entry_.format;
+    info.realtimeClass = guitarrackcraft::RealtimeClass::Isolated;
     info.parameterMetadataRevision = 0;
-    // Audio ports — stereo in/out, indices 0..3. Control ports for VST
     // params start at 4 (numAudio); the JNI bridge / RackScreen separates
     // them by isControl/isAudio flags.
     guitarrackcraft::PortInfo in_l { 0, "In L",  "in_l",  true,  true, false, false, 0, 0, 0, {} };

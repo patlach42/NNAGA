@@ -66,7 +66,8 @@ enum class SettingsTab(val argument: String, val label: String) {
     Driver("driver", "Driver"),
     Vst("vst", "Manage VST"),
     Interface("interface", "Interface"),
-    ClipLauncher("clip-launcher", "Clip Launcher");
+    ClipLauncher("clip-launcher", "Clip Launcher"),
+    Tweaks("tweaks", "Tweaks");
 
     companion object {
         fun fromArgument(argument: String?): SettingsTab =
@@ -95,6 +96,7 @@ fun SettingsScreen(
             if (BuildConfig.HAS_VST_HOST) add(SettingsTab.Vst)
             add(SettingsTab.Interface)
             add(SettingsTab.ClipLauncher)
+            add(SettingsTab.Tweaks)
         }
     }
     var selectedTab by rememberSaveable(initialTab, availableTabs) {
@@ -268,6 +270,7 @@ fun SettingsScreen(
             )
             SettingsTab.Interface -> InterfaceSettingsScreen()
             SettingsTab.ClipLauncher -> ClipLauncherSettingsScreen()
+            SettingsTab.Tweaks -> TweaksSettingsScreen()
         }
     }
 }

@@ -124,7 +124,7 @@ Before performance changes, normalize guest `stop_flag`, `guest_frames_produced`
 - choose performance CPUs from observed capacity/frequency data, not CPU number; retain cpuset/permission fallbacks and avoid hard pinning when too few CPUs are allowed;
 - report actual CPU work rather than USB wait/backpressure time to ADPF;
 - prefault bounded USB, graph, and startup buffers off the RT thread;
-- optionally `mlock` only bounded buffers after checking `RLIMIT_MEMLOCK`; never use `mlockall`;
+- leave the transport rings unpinned: pinning was measured against no pinning over six randomised blocks and changed nothing, `RLIMIT_MEMLOCK` is 64 KiB on the reference device and covers one ring of two, an unaligned ring is refused outright, and `mlockall` is never used;
 - collect representative production PGO profiles across the full rack matrix; generation instrumentation must never ship.
 
 Reject generic `-Ofast`/`-ffast-math`, SoC-specific `-mcpu`, broad allocator replacement, and unmeasured linker flags because they risk plugin floating-point semantics, fleet compatibility, code-size/cache regressions, or provide no benefit to an allocation-free callback.

@@ -36,6 +36,40 @@ bool JsfxPluginFactory::initialize() {
     std::sort(scripts_.begin(),scripts_.end()); config_=std::shared_ptr<ysfx_config_t>(ysfx_config_new(),ysfx_config_free); if(!config_) return false;
     ysfx_set_import_root(config_.get(),root.string().c_str()); ysfx_set_data_root(config_.get(),dataRoot_.string().c_str()); ysfx_register_builtin_audio_formats(config_.get()); return true;
 }
-std::vector<PluginInfo> JsfxPluginFactory::enumeratePlugins() { std::vector<PluginInfo> result; const auto root=std::filesystem::weakly_canonical(effectsRoot_); for(const auto&p:scripts_) { auto id=p.lexically_relative(root).generic_string(); auto plugin=std::make_unique<JsfxPlugin>(config_,p.string(),id); if(plugin->loaded()){result.push_back(plugin->getInfo());}} return result; }
-std::unique_ptr<IPlugin> JsfxPluginFactory::createPlugin(const std::string&id) { if(id.empty()||id.find("..")!=std::string::npos||id.front()=='/') return nullptr; std::error_code ec; const auto root=std::filesystem::weakly_canonical(effectsRoot_,ec); const auto p=std::filesystem::weakly_canonical(root/std::filesystem::path(id),ec); if(ec||p.lexically_relative(root).empty()||p.lexically_relative(root).string().find("..") == 0||!isJsfxMain(p)) return nullptr; if(std::find(scripts_.begin(),scripts_.end(),p)==scripts_.end()) return nullptr; auto plugin=std::make_unique<JsfxPlugin>(config_,p.string(),id); return plugin->loaded()?std::move(plugin):nullptr; }
+std::vector<PluginInfo> JsfxPluginFactory::enumeratePlugins() {
+    std::vector<PluginInfo> result;
+    try {
+        const auto root = std::filesystem::weakly_canonical(effectsRoot_);
+        for (const auto& p : scripts_) {
+            try {
+                const auto id = p.lexically_relative(root).generic_string();
+                auto plugin = std::make_unique<JsfxPlugin>(config_, p.string(), id);
+                if (plugin->loaded()) result.push_back(plugin->getInfo());
+            } catch (const std::exception&) {
+            } catch (...) {
+            }
+        }
+    } catch (const std::exception&) {
+    } catch (...) {
+    }
+    return result;
 }
+
+std::unique_ptr<IPlugin> JsfxPluginFactory::createPlugin(const std::string& id) {
+    try {
+        if (id.empty() || id.find("..") != std::string::npos || id.front() == '/') return nullptr;
+        std::error_code ec;
+        const auto root = std::filesystem::weakly_canonical(effectsRoot_, ec);
+        const auto p = std::filesystem::weakly_canonical(root / std::filesystem::path(id), ec);
+        if (ec || p.lexically_relative(root).empty() ||
+            p.lexically_relative(root).string().find("..") == 0 || !isJsfxMain(p)) return nullptr;
+        if (std::find(scripts_.begin(), scripts_.end(), p) == scripts_.end()) return nullptr;
+        auto plugin = std::make_unique<JsfxPlugin>(config_, p.string(), id);
+        return plugin->loaded() ? std::move(plugin) : nullptr;
+    } catch (const std::exception&) {
+        return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+} // namespace guitarrackcraft

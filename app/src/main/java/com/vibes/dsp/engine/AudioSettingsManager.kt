@@ -46,6 +46,9 @@ data class DirectUsbBufferConfig(
     val startupPrimeFrames: Int,
     val writeHeadroomFrames: Int,
     val captureLimitFrames: Int,
+    val captureTargetFrames: Int = 0,
+    val captureHeadroomFrames: Int = 0,
+    val captureDeadlineSlackFrames: Int = 0,
     val transferCount: Int,
     val packetsPerTransfer: Int,
     val ringCapacityBytes: Int
@@ -75,14 +78,30 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_STARTUP_PRIME = "directUsbStartupPrime"
     private const val KEY_DIRECT_USB_WRITE_HEADROOM = "directUsbWriteHeadroom"
     private const val KEY_DIRECT_USB_CAPTURE_LIMIT = "directUsbCaptureLimit"
+    private const val KEY_DIRECT_USB_CAPTURE_TARGET = "directUsbCaptureTarget"
+    private const val KEY_DIRECT_USB_CAPTURE_HEADROOM = "directUsbCaptureHeadroom"
+    private const val KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK = "directUsbCaptureDeadlineSlack"
     private const val KEY_DIRECT_USB_TRANSFER_COUNT = "directUsbTransferCount"
     private const val KEY_DIRECT_USB_PACKETS_PER_TRANSFER = "directUsbPacketsPerTransfer"
+    private const val KEY_AUDIO_AFFINITY = "audioAffinityEnabled"
+    private const val KEY_DIRECT_USB_ADMISSION = "directUsbAdmissionPolicy"
+    private const val KEY_DIRECT_USB_CREDIT_RESERVE = "directUsbCreditReserve"
+    private const val KEY_UI_STATS_INTERVAL_MS = "uiStatsIntervalMs"
+    private const val KEY_UI_METER_INTERVAL_MS = "uiMeterIntervalMs"
+    private const val KEY_UI_TRANSPORT_FRAME_CLOCK = "uiTransportFrameClock"
+    private const val KEY_UI_TRANSPORT_CLOCK_MS = "uiTransportClockMs"
     private const val KEY_DIRECT_USB_RING_CAPACITY_KIB = "directUsbRingCapacityKiB"
     private const val KEY_DIRECT_USB_CALIBRATION_PREFIX = "directUsbCalibration:"
     private const val KEY_DIRECT_USB_THERMAL_SAFETY = "directUsbThermalSafety"
-    private const val DEFAULT_BUFFER_SIZE = 16
+    // Measured on the reference device with the audio threads holding a
+    // real-time priority: a 32 frame quantum with a multiplier of two - a
+    // target of 64 - ran three cycles with no starvation, no lost quanta and
+    // no audible break, at about 5.4 ms of output latency. Depths below that
+    // buy nothing, because the ring stops falling at 140 frames whichever
+    // target is asked for.
+    private const val DEFAULT_BUFFER_SIZE = 32
 
-    private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 3
+    private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 2
     private const val MIN_DIRECT_USB_PERIOD_MULTIPLIER = 1
     private const val MAX_DIRECT_USB_PERIOD_MULTIPLIER = 8
     private const val MAX_DIRECT_USB_WATERMARK = 4096
@@ -96,8 +115,13 @@ object AudioSettingsManager {
     fun setDirectUsbStartupPrime(context: Context, frames: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_STARTUP_PRIME, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)).apply()
     }
+    // The overdraft above the target. Under credit admission it is free room
+    // rather than occupancy, and it is what absorbs a service stall: the same
+    // geometry lost quanta at 208 frames of it and lost none at 416, with no
+    // latency difference because the producer is paced by the device rather
+    // than by the ceiling.
     fun getDirectUsbWriteHeadroom(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_WRITE_HEADROOM, 0).coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+        prefs(context).getInt(KEY_DIRECT_USB_WRITE_HEADROOM, 416).coerceIn(0, MAX_DIRECT_USB_WATERMARK)
     fun setDirectUsbWriteHeadroom(context: Context, frames: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_WRITE_HEADROOM, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)).apply()
     }
@@ -106,8 +130,39 @@ object AudioSettingsManager {
     fun setDirectUsbCaptureLimit(context: Context, frames: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_CAPTURE_LIMIT, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)).apply()
     }
+    fun getDirectUsbCaptureTarget(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_CAPTURE_TARGET, 0)
+            .coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+    fun setDirectUsbCaptureTarget(context: Context, frames: Int) {
+        prefs(context).edit()
+            .putInt(KEY_DIRECT_USB_CAPTURE_TARGET, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK))
+            .apply()
+    }
+    fun getDirectUsbCaptureHeadroom(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_CAPTURE_HEADROOM, 0)
+            .coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+    fun setDirectUsbCaptureHeadroom(context: Context, frames: Int) {
+        prefs(context).edit()
+            .putInt(KEY_DIRECT_USB_CAPTURE_HEADROOM, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK))
+            .apply()
+    }
+    fun getDirectUsbCaptureDeadlineSlack(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK, 0)
+            .coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+    fun setDirectUsbCaptureDeadlineSlack(context: Context, frames: Int) {
+        prefs(context).edit()
+            .putInt(
+                KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK,
+                frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            )
+            .apply()
+    }
+    // Five, not the automatic policy: four was measured to bring back audible
+    // breaks even with a real-time priority, because fewer transfers means
+    // fewer capture URBs outstanding and no playback buffer covers input that
+    // never arrived.
     fun getDirectUsbTransferCount(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_TRANSFER_COUNT, 0).coerceIn(0, 8)
+        prefs(context).getInt(KEY_DIRECT_USB_TRANSFER_COUNT, 5).coerceIn(0, 8)
     fun setDirectUsbTransferCount(context: Context, count: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_TRANSFER_COUNT, count.coerceIn(0, 8)).apply()
     }
@@ -116,6 +171,72 @@ object AudioSettingsManager {
     fun setDirectUsbPacketsPerTransfer(context: Context, packets: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, packets.coerceIn(0, 8)).apply()
     }
+    // How the producer is admitted to the ring. 1 paces it by frames the device
+    // has played, which holds the ring near its target and leaves the write
+    // headroom as free room rather than as occupancy; 0 simply waits for room,
+    // which lets the ring float up to the ceiling and costs the difference in
+    // latency. Measured on the reference device, the same target of 256 frames
+    // sat at 7.9 ms of output latency under credit and 9.3 ms waiting for room.
+    fun getDirectUsbAdmissionPolicy(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_ADMISSION, 1).coerceIn(0, 1)
+    fun setDirectUsbAdmissionPolicy(context: Context, policy: Int) {
+        prefs(context).edit().putInt(KEY_DIRECT_USB_ADMISSION, policy.coerceIn(0, 1)).apply()
+    }
+    // How far the producer may run ahead of the device under credit. Zero
+    // forbids any lead and was measured to starve; a reserve bounds the lead
+    // instead of removing it.
+    fun getDirectUsbCreditReserve(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_CREDIT_RESERVE, 32).coerceIn(0, 1024)
+    fun setDirectUsbCreditReserve(context: Context, frames: Int) {
+        prefs(context).edit()
+            .putInt(KEY_DIRECT_USB_CREDIT_RESERVE, frames.coerceIn(0, 1024)).apply()
+    }
+
+    // Whether the audio threads ask for the fast cluster when they start.
+    // On by default: it was measured to cut USB service gaps about fourfold.
+    // Off is offered because a mask is a bet on the platform's core policy,
+    // and the bet is device-specific.
+    fun getAudioAffinityEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUDIO_AFFINITY, true)
+    fun setAudioAffinityEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUDIO_AFFINITY, enabled).apply()
+    }
+
+    // How often the rack refreshes statistics, transport and clip slots. Much
+    // heavier per turn than the meters and much slower, so the prior is that it
+    // costs nothing; settable so that can be measured rather than assumed.
+    fun getUiStatsIntervalMs(context: Context): Int =
+        prefs(context).getInt(KEY_UI_STATS_INTERVAL_MS, 200).coerceIn(20, 5000)
+    fun setUiStatsIntervalMs(context: Context, ms: Int) {
+        prefs(context).edit().putInt(KEY_UI_STATS_INTERVAL_MS, ms.coerceIn(20, 5000)).apply()
+    }
+
+    // How often the rack polls the meters, and whether the transport display
+    // follows the display frame clock. Both are periodic work in the process
+    // that owns the render thread, and both are settable so their cost can be
+    // measured rather than argued about.
+    fun getUiMeterIntervalMs(context: Context): Int =
+        prefs(context).getInt(KEY_UI_METER_INTERVAL_MS, 17).coerceIn(4, 500)
+    fun setUiMeterIntervalMs(context: Context, ms: Int) {
+        prefs(context).edit().putInt(KEY_UI_METER_INTERVAL_MS, ms.coerceIn(4, 500)).apply()
+    }
+    fun getUiTransportFrameClock(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_UI_TRANSPORT_FRAME_CLOCK, true)
+    fun setUiTransportFrameClock(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_UI_TRANSPORT_FRAME_CLOCK, enabled).apply()
+    }
+    // How often the transport readout advances, in milliseconds. Zero means
+    // once per display frame, which is what it used to do and what a
+    // measurement needs to reproduce. The default is 33 ms: the elapsed readout
+    // is whole seconds and the musical one is sixteenths, which at 240 BPM
+    // change sixteen times a second, so thirty hertz is above both with room
+    // to spare.
+    fun getUiTransportClockMs(context: Context): Int =
+        prefs(context).getInt(KEY_UI_TRANSPORT_CLOCK_MS, 33).coerceIn(0, 500)
+    fun setUiTransportClockMs(context: Context, ms: Int) {
+        prefs(context).edit().putInt(KEY_UI_TRANSPORT_CLOCK_MS, ms.coerceIn(0, 500)).apply()
+    }
+
     fun getDirectUsbRingCapacityKiB(context: Context): Int =
         prefs(context).getInt(KEY_DIRECT_USB_RING_CAPACITY_KIB, 64)
             .takeIf { it == 0 || it in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024) } ?: 64
@@ -138,6 +259,9 @@ object AudioSettingsManager {
             startupPrimeFrames = getDirectUsbStartupPrime(context),
             writeHeadroomFrames = getDirectUsbWriteHeadroom(context),
             captureLimitFrames = getDirectUsbCaptureLimit(context),
+            captureTargetFrames = getDirectUsbCaptureTarget(context),
+            captureHeadroomFrames = getDirectUsbCaptureHeadroom(context),
+            captureDeadlineSlackFrames = getDirectUsbCaptureDeadlineSlack(context),
             transferCount = getDirectUsbTransferCount(context),
             packetsPerTransfer = getDirectUsbPacketsPerTransfer(context),
             ringCapacityBytes = getDirectUsbRingCapacityKiB(context) * 1024
@@ -345,8 +469,9 @@ object AudioSettingsManager {
             KEY_DIRECT_USB_SUBSLOT, KEY_DIRECT_USB_CHANNELS, KEY_DIRECT_USB_OUTPUT_PAIR,
             KEY_DIRECT_USB_PERIOD_MULTIPLIER, KEY_DIRECT_USB_STARTUP_PRIME,
             KEY_DIRECT_USB_WRITE_HEADROOM, KEY_DIRECT_USB_CAPTURE_LIMIT,
-            KEY_DIRECT_USB_TRANSFER_COUNT, KEY_DIRECT_USB_PACKETS_PER_TRANSFER,
-            KEY_DIRECT_USB_RING_CAPACITY_KIB
+            KEY_DIRECT_USB_CAPTURE_TARGET, KEY_DIRECT_USB_CAPTURE_HEADROOM,
+            KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK, KEY_DIRECT_USB_TRANSFER_COUNT,
+            KEY_DIRECT_USB_PACKETS_PER_TRANSFER, KEY_DIRECT_USB_RING_CAPACITY_KIB
         ).forEach(editor::remove)
         editor.apply()
     }
@@ -386,7 +511,8 @@ object AudioSettingsManager {
             profile.latencyFrames, profile.latencyMilliseconds, profile.xruns, profile.deadlineMisses,
             profile.transferErrors, profile.deviceMinimumFrames, profile.dangerous,
             profile.extended, profile.label, profile.autoGenerated, profile.attemptedRuns,
-            profile.successfulRuns, profile.score
+            profile.successfulRuns, profile.score, c.captureTargetFrames,
+            c.captureHeadroomFrames, c.captureDeadlineSlackFrames
         ).joinToString("|") { encode(it.toString()) }
         return prefs(context).edit().putString(
             "$KEY_DIRECT_USB_CALIBRATION_PREFIX$vendorId:$productId:${profile.id}", value
@@ -402,12 +528,23 @@ object AudioSettingsManager {
         }.values.mapNotNull { raw ->
             runCatching {
                 val v = raw.toString().split('|').map(decode)
-                require(v.size == 24 || v.size == 26 || v.size == 28 || v.size == 32)
+                require(v.size == 24 || v.size == 26 || v.size == 28 ||
+                    v.size == 32 || v.size == 35)
                 DirectUsbCalibrationProfile(v[0],
                     DirectUsbFormat(v[1].toInt(), v[2].toInt(), v[3].toInt(), v[4].toInt()),
                     v[5].toInt(), v[6].toInt(),
-                    DirectUsbBufferConfig(v[7].toInt(), v[8].toInt(), v[9].toInt(), v[10].toInt(),
-                        v[11].toInt(), v[12].toInt(), v[13].toInt()),
+                    DirectUsbBufferConfig(
+                        playbackTargetFrames = v[7].toInt(),
+                        startupPrimeFrames = v[8].toInt(),
+                        writeHeadroomFrames = v[9].toInt(),
+                        captureLimitFrames = v[10].toInt(),
+                        captureTargetFrames = if (v.size >= 35) v[32].toInt() else 0,
+                        captureHeadroomFrames = if (v.size >= 35) v[33].toInt() else 0,
+                        captureDeadlineSlackFrames = if (v.size >= 35) v[34].toInt() else 0,
+                        transferCount = v[11].toInt(),
+                        packetsPerTransfer = v[12].toInt(),
+                        ringCapacityBytes = v[13].toInt()
+                    ),
                     v[14].toBoolean(), v[15].toLong(), v[16].toBoolean(), v[17].toBoolean(),
                     v[18].ifEmpty { null }, v[19].toLong(), v[20].toDouble(), v[21].toLong(),
                     v[22].toLong(), v[23].toLong(),
@@ -423,21 +560,72 @@ object AudioSettingsManager {
         }.sortedBy { it.id }
     }
 
-    fun applyDirectUsbCalibrationProfile(context: Context, profile: DirectUsbCalibrationProfile) {
-        setDirectUsbFormat(context, profile.format.sampleRate, profile.format.bits,
-            profile.format.subslotBytes, profile.format.channels)
-        setBufferSize(context, profile.bufferFrames)
-        setDirectUsbPeriodMultiplier(context, profile.periodMultiplier)
+    fun applyDirectUsbCalibrationProfile(
+        context: Context,
+        profile: DirectUsbCalibrationProfile
+    ): Boolean {
         val c = profile.bufferConfig
-        setDirectUsbStartupPrime(context, c.startupPrimeFrames)
-        setDirectUsbWriteHeadroom(context, c.writeHeadroomFrames)
-        setDirectUsbCaptureLimit(context, c.captureLimitFrames)
-        setDirectUsbTransferCount(context, c.transferCount)
-        setDirectUsbPacketsPerTransfer(context, c.packetsPerTransfer)
-        setDirectUsbRingCapacityKiB(context, c.ringCapacityBytes / 1024)
-        setDirectUsbWatermark(context, getDirectUsbVendorId(context), getDirectUsbProductId(context),
-            profile.format.sampleRate, profile.format.bits, profile.format.subslotBytes,
-            profile.format.channels, c.playbackTargetFrames, profile.bufferFrames, profile.periodMultiplier)
+        val bufferFrames = normalizeBufferSize(profile.bufferFrames)
+        val periodMultiplier =
+            clampDirectUsbPeriodMultiplier(profile.periodMultiplier)
+        val ringCapacityKiB = c.ringCapacityBytes / 1024
+        require(
+            ringCapacityKiB == 0 ||
+                ringCapacityKiB in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024)
+        )
+        val vendorId = getDirectUsbVendorId(context)
+        val productId = getDirectUsbProductId(context)
+        return prefs(context).edit()
+            .putInt(KEY_DIRECT_USB_RATE, profile.format.sampleRate)
+            .putInt(KEY_DIRECT_USB_BITS, profile.format.bits)
+            .putInt(KEY_DIRECT_USB_SUBSLOT, profile.format.subslotBytes)
+            .putInt(KEY_DIRECT_USB_CHANNELS, profile.format.channels)
+            .putInt(KEY_BUFFER_SIZE, bufferFrames)
+            .putInt(KEY_DIRECT_USB_PERIOD_MULTIPLIER, periodMultiplier)
+            .putInt(
+                KEY_DIRECT_USB_STARTUP_PRIME,
+                c.startupPrimeFrames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            )
+            .putInt(
+                KEY_DIRECT_USB_WRITE_HEADROOM,
+                c.writeHeadroomFrames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            )
+            .putInt(
+                KEY_DIRECT_USB_CAPTURE_LIMIT,
+                c.captureLimitFrames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            )
+            .putInt(
+                KEY_DIRECT_USB_CAPTURE_TARGET,
+                c.captureTargetFrames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            )
+            .putInt(
+                KEY_DIRECT_USB_CAPTURE_HEADROOM,
+                c.captureHeadroomFrames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            )
+            .putInt(
+                KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK,
+                c.captureDeadlineSlackFrames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            )
+            .putInt(KEY_DIRECT_USB_TRANSFER_COUNT, c.transferCount.coerceIn(0, 8))
+            .putInt(
+                KEY_DIRECT_USB_PACKETS_PER_TRANSFER,
+                c.packetsPerTransfer.coerceIn(0, 8)
+            )
+            .putInt(KEY_DIRECT_USB_RING_CAPACITY_KIB, ringCapacityKiB)
+            .putInt(
+                watermarkKey(
+                    vendorId,
+                    productId,
+                    profile.format.sampleRate,
+                    profile.format.bits,
+                    profile.format.subslotBytes,
+                    profile.format.channels,
+                    bufferFrames,
+                    periodMultiplier
+                ),
+                clampWatermark(c.playbackTargetFrames)
+            )
+            .commit()
     }
 
 }

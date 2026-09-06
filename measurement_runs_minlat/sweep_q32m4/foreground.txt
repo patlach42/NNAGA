@@ -1,0 +1,1 @@
+      topResumedActivity=ActivityRecord{211991562 u0 com.miui.home/.launcher.Launcher t2}

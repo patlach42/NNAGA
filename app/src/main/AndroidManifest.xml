@@ -29,6 +29,20 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- Keeping the CPU out of deep idle while audio runs. A normal permission,
+         granted at install, so this needs nothing from the user. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Reading whether Wi-Fi is on. Without it the check throws and the app
+         would report no interference on a device that has it. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <!-- Keeps the process out of the cached state while audio runs. Both are
+         normal permissions, granted at install. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Lets the app show the exemption dialog. The user still decides; this
+         only makes the request possible without sending them into Settings to
+         find it themselves. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
@@ -65,6 +79,11 @@
             android:configChanges="orientation|screenSize|screenLayout"
             android:theme="@style/Theme.NNAGA"
             android:windowLayoutInDisplayCutoutMode="shortEdges" />
+        <service
+            android:name=".engine.AudioSessionService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
     </application>
 
 </manifest>

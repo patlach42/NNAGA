@@ -1,0 +1,5 @@
+      topResumedActivity=ActivityRecord{211991562 u0 com.miui.home/.launcher.Launcher t2}
+    topResumedActivity=ActivityRecord{29071494 u0 com.vibes.dsp/.MainActivity t6413}
+    topResumedActivity=ActivityRecord{29071494 u0 com.vibes.dsp/.MainActivity t6413}
+    topResumedActivity=ActivityRecord{29071494 u0 com.vibes.dsp/.MainActivity t6413}
+    topResumedActivity=ActivityRecord{29071494 u0 com.vibes.dsp/.MainActivity t6413}

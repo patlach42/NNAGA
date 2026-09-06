@@ -1,0 +1,40 @@
+[
+  {
+    "arm": "split_cores",
+    "cycles": 5,
+    "quantum": 64,
+    "target": 256,
+    "rtt_frames": 519,
+    "rtt_ms": 10.81,
+    "ring_p50": 332,
+    "queued_out": 120,
+    "latency_frames": 387,
+    "latency_ms": 8.06,
+    "verdicts": [
+      "consumer-starvation-growth-exceeded-1",
+      "deadline-miss-growth-exceeded"
+    ],
+    "hard": {
+      "actual_xrun_growth": 1,
+      "deadline_miss_growth": 21
+    },
+    "startup_cycles": 0,
+    "steady_lost": 1,
+    "min_admission_margin": 0,
+    "service_gaps": 165,
+    "max_completion_gap_ms": 7.04,
+    "held_quanta": 1240,
+    "stalls_fired": 0,
+    "max_render_late_ms": 6.7,
+    "per_cycle_render_late_ms": [
+      6.66,
+      6.7,
+      5.05,
+      5.04,
+      3.6
+    ],
+    "peak_cycle_ms": 8.03,
+    "starvation": 1,
+    "capture_breaks": 0
+  }
+]

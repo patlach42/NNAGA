@@ -18,7 +18,6 @@
  */
 
 #include "PluginRegistry.h"
-#include <algorithm>
 
 namespace guitarrackcraft {
 
@@ -36,8 +35,10 @@ bool PluginRegistry::initializeAll() {
     for (auto& factory : factories_) {
         if (!factory->initialize()) { allSucceeded = false; continue; }
         for (const auto& plugin : factory->enumeratePlugins()) {
-            const std::string& fmt = plugin.format.empty() ? factory->getFormat() : plugin.format;
-            pluginCache_[fmt + ":" + plugin.id] = plugin;
+            const std::string& fmt =
+                plugin.format.empty() ? factory->getFormat() : plugin.format;
+            const std::string key = fmt + ":" + plugin.id;
+            if (!pluginCache_.emplace(key, plugin).second) allSucceeded = false;
         }
     }
     return allSucceeded;
@@ -53,11 +54,26 @@ std::vector<PluginInfo> PluginRegistry::getAllPlugins() const {
 
 std::unique_ptr<IPlugin> PluginRegistry::createPlugin(const std::string& pluginId) const {
     std::shared_lock lock(mutex_);
+    const auto cached = pluginCache_.find(pluginId);
+    if (cached == pluginCache_.end()) return nullptr;
     const size_t colonPos = pluginId.find(':');
-    if (colonPos == std::string::npos) return nullptr;
+    if (colonPos == std::string::npos || colonPos == 0 ||
+        colonPos + 1 >= pluginId.size()) {
+        return nullptr;
+    }
     const std::string format = pluginId.substr(0, colonPos);
     const std::string id = pluginId.substr(colonPos + 1);
-    for (const auto& factory : factories_) if (factory->acceptsFormat(format)) return factory->createPlugin(id);
+    for (const auto& factory : factories_) {
+        if (!factory->acceptsFormat(format)) continue;
+        auto plugin = factory->createPlugin(id);
+        if (!plugin) return nullptr;
+        const PluginInfo info = plugin->getInfo();
+        if (info.id != id || info.format != format ||
+            info.realtimeClass != cached->second.realtimeClass) {
+            return nullptr;
+        }
+        return plugin;
+    }
     return nullptr;
 }
 

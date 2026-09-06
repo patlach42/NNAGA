@@ -106,6 +106,25 @@ data class DirectUsbCalibrationProfile(
     val successfulRuns: Int = if (started) 1 else 0,
     val score: Int = 0
 )
+/** One copy of the probe returning through the loopback. */
+data class DirectUsbRoundTripArrival(
+    val latencyFrames: Int,
+    val correlation: Double,
+)
+
+data class DirectUsbRoundTripResult(
+    val latencyFrames: Int,
+    val latencyMilliseconds: Double,
+    val correlation: Double,
+    val inputPeak: Double,
+    val outputPeak: Double,
+    /**
+     * Every copy of the probe the loopback returned, strongest first. One is a
+     * clean path; more than one means the signal is summed with a delayed copy
+     * of itself, which is smooth and so invisible to a discontinuity check.
+     */
+    val arrivals: List<DirectUsbRoundTripArrival> = emptyList(),
+)
 
 fun scoreAutoCalibrationProfileList(profiles: List<DirectUsbCalibrationProfile>): List<DirectUsbCalibrationProfile> {
     val stable = profiles.filter { it.stable }
@@ -124,6 +143,47 @@ fun scoreAutoCalibrationProfiles(profiles: List<DirectUsbCalibrationProfile>): D
         .sortedWith(compareByDescending<DirectUsbCalibrationProfile> { it.score }
             .thenBy { it.latencyMilliseconds }.thenBy { it.bufferFrames }.thenBy { it.id })
         .firstOrNull()
+internal data class DirectUsbCalibrationEvidence(
+    val xruns: Long,
+    val deadlineMisses: Long,
+    val schedulerDeadlineMisses: Long,
+    val transferErrors: Long,
+    val stable: Boolean
+)
+
+internal fun evaluateDirectUsbCalibrationEvidence(
+    baseline: DirectUsbStats,
+    sample: DirectUsbStats
+): DirectUsbCalibrationEvidence {
+    val xruns = (sample.actualXruns - baseline.actualXruns).coerceAtLeast(0)
+    val deadlineMisses =
+        (sample.deadlineMisses - baseline.deadlineMisses).coerceAtLeast(0)
+    val schedulerDeadlineMisses = (
+        sample.schedulerDeadlineMisses - baseline.schedulerDeadlineMisses
+        ).coerceAtLeast(0)
+    val transferErrors = (
+        sample.captureTransferErrors - baseline.captureTransferErrors +
+            sample.playbackTransferErrors - baseline.playbackTransferErrors
+        ).coerceAtLeast(0)
+    val stable =
+        sample.state == DirectUsbSessionState.Running &&
+            sample.failure == DirectUsbFailure.Ok &&
+            !sample.transportFailed &&
+            xruns == 0L &&
+            deadlineMisses == 0L &&
+            transferErrors == 0L &&
+            sample.steadyTarget > 0 &&
+            sample.lastCycleNs > 0 &&
+            sample.deadlineBudgetNs > 0
+    return DirectUsbCalibrationEvidence(
+        xruns = xruns,
+        schedulerDeadlineMisses = schedulerDeadlineMisses,
+        deadlineMisses = deadlineMisses,
+        transferErrors = transferErrors,
+        stable = stable
+    )
+}
+
 data class DirectUsbCalibrationCandidate(
     val bufferFrames: Int,
     val periodMultiplier: Int
@@ -197,10 +257,18 @@ data class DirectUsbCalibrationResult(
     val productId: Int = 0,
     val format: DirectUsbFormat = profiles.firstOrNull()?.format
         ?: DirectUsbFormat(48_000, 32, 4),
-    val selectedFrames: Int = profiles.firstOrNull { it.stable }?.latencyFrames?.toInt() ?: 0,
-    val selectedMilliseconds: Double = profiles.firstOrNull { it.stable }?.latencyMilliseconds ?: 0.0,
-    val passedCandidates: List<Int> = profiles.filter { it.stable }.map { it.latencyFrames.toInt() },
-    val failedCandidates: List<Int> = profiles.filterNot { it.stable }.map { it.latencyFrames.toInt() }
+    val selectedProfile: DirectUsbCalibrationProfile? =
+        profiles.firstOrNull { it.stable },
+    val selectedFrames: Int =
+        selectedProfile?.bufferConfig?.playbackTargetFrames ?: 0,
+    val selectedMilliseconds: Double =
+        selectedProfile?.let {
+            selectedFrames * 1000.0 / it.format.sampleRate
+        } ?: 0.0,
+    val passedCandidates: List<Int> =
+        profiles.filter { it.stable }.map { it.bufferConfig.playbackTargetFrames },
+    val failedCandidates: List<Int> =
+        profiles.filterNot { it.stable }.map { it.bufferConfig.playbackTargetFrames }
 )
 
 
@@ -414,8 +482,40 @@ object DirectUsbAudioManager {
             Result.success(formats)
         }
 
+    // Held for as long as audio runs. Without it the CPU may enter deep idle
+    // between our wakeups, and coming back out of it is exactly the kind of
+    // latency a fixed render deadline cannot absorb. WAKE_LOCK is a normal
+    // permission, granted at install, so this is reliable and needs nothing
+    // from the user.
+    private var audioWakeLock: android.os.PowerManager.WakeLock? = null
+
+    private fun acquireAudioWakeLock(context: Context) {
+        if (audioWakeLock?.isHeld == true) return
+        runCatching {
+            val power = context.getSystemService(android.os.PowerManager::class.java)
+                ?: return
+            val lock = power.newWakeLock(
+                android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                "nnaga:direct-usb-audio",
+            )
+            lock.setReferenceCounted(false)
+            lock.acquire()
+            audioWakeLock = lock
+        }
+    }
+
+    private fun releaseAudioWakeLock() {
+        runCatching { audioWakeLock?.takeIf { it.isHeld }?.release() }
+        audioWakeLock = null
+    }
+
     suspend fun startConfigured(context: Context): Result<Unit> =
         lifecycleMutex.withLock {
+            acquireAudioWakeLock(context)
+            // Before the engine starts, so the process is already foreground
+            // when the render thread comes up rather than being promoted
+            // mid-stream.
+            AudioSessionService.start(context)
             if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
                 if (ContextCompat.checkSelfPermission(
                         context,
@@ -468,8 +568,14 @@ object DirectUsbAudioManager {
             val outputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
                 .coerceIn(0, (exact.channels / 2 - 1).coerceAtLeast(0))
             AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
+            val requestedBuffer = AudioSettingsManager.getBufferSize(context)
+            val periodMultiplier =
+                AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
             val bufferConfig = AudioSettingsManager.getDirectUsbBufferConfig(context)
-            startExact(context, exact, outputPair, bufferConfig)
+            startExact(
+                context, exact, outputPair, bufferConfig,
+                requestedBuffer, periodMultiplier
+            )
         }
 
     private fun startExact(
@@ -482,13 +588,29 @@ object DirectUsbAudioManager {
             AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
     ): Result<Unit> {
         val engine = NativeEngine.getInstance()
+        // Before the session, because the audio threads read it once when they
+        // are created. A thread already running keeps whatever it started with.
+        engine.nativeSetAudioAffinityEnabled(
+            AudioSettingsManager.getAudioAffinityEnabled(context)
+        )
+        // Also before the session: the first admission decision is made by the
+        // first rendered block, and until now only the stress harness ever set
+        // these - so every ordinary launch ran the wait-for-room policy no
+        // measurement had recommended since credit was added.
+        engine.nativeSetDirectUsbAdmissionPolicy(
+            AudioSettingsManager.getDirectUsbAdmissionPolicy(context)
+        )
+        engine.nativeSetDirectUsbCreditReserve(
+            AudioSettingsManager.getDirectUsbCreditReserve(context)
+        )
         if (!engine.nativeStartDirectUsbSession(
                 exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels,
                 outputPair, bufferFrames, periodMultiplier,
                 bufferConfig.playbackTargetFrames, bufferConfig.startupPrimeFrames,
                 bufferConfig.writeHeadroomFrames, bufferConfig.captureLimitFrames,
-                bufferConfig.transferCount, bufferConfig.packetsPerTransfer,
-                bufferConfig.ringCapacityBytes,
+                bufferConfig.captureTargetFrames, bufferConfig.captureHeadroomFrames,
+                bufferConfig.captureDeadlineSlackFrames, bufferConfig.transferCount,
+                bufferConfig.packetsPerTransfer, bufferConfig.ringCapacityBytes,
                 AudioSettingsManager.getDirectUsbThermalSafetyEnabled(context)
             )
         ) {
@@ -533,25 +655,22 @@ object DirectUsbAudioManager {
                 val measured = NativeEngine.getInstance().getDirectUsbStats()
                 delay(CALIBRATION_MEASURE_MS)
                 val after = NativeEngine.getInstance().getDirectUsbStats()
-                val xruns = (after.actualXruns - measured.actualXruns).coerceAtLeast(0)
-                val misses = (after.deadlineMisses - measured.deadlineMisses).coerceAtLeast(0)
-                val errors = (after.captureTransferErrors - measured.captureTransferErrors +
-                    after.playbackTransferErrors - measured.playbackTransferErrors).coerceAtLeast(0)
+                val evidence =
+                    evaluateDirectUsbCalibrationEvidence(measured, after)
                 val started = after.state == DirectUsbSessionState.Running
-                val stable = started && after.failure == DirectUsbFailure.Ok && !after.transportFailed &&
-                    xruns == 0L && misses == 0L && errors == 0L && after.queuedOut > 0 &&
-                    after.lastCycleNs > 0 && after.deadlineBudgetNs > 0
                 template.copy(
                     id = "${template.id}:remeasure:$ranAt",
                     ranAtEpochMs = ranAt,
                     started = started,
-                    stable = stable,
-                    failure = if (stable) null else "Safety checks failed",
+                    stable = evidence.stable,
+                    failure = if (evidence.stable) null else "Safety checks failed",
                     latencyFrames = after.knownHostLatencyFrames,
-                    latencyMilliseconds = after.knownHostLatencyFrames * 1000.0 / template.format.sampleRate,
-                    xruns = xruns,
-                    deadlineMisses = misses,
-                    transferErrors = errors,
+                    latencyMilliseconds =
+                        after.knownHostLatencyFrames * 1000.0 /
+                            template.format.sampleRate,
+                    xruns = evidence.xruns,
+                    deadlineMisses = evidence.deadlineMisses,
+                    transferErrors = evidence.transferErrors,
                     attemptedRuns = 1,
                     successfulRuns = if (started) 1 else 0
                 )
@@ -642,8 +761,16 @@ object DirectUsbAudioManager {
                         AudioSettingsManager.persistDirectUsbCalibrationProfile(context, option.vendorId, option.productId, failure)
                     }
                     val automatic = config.copy(
-                        playbackTargetFrames = 0, startupPrimeFrames = 0, writeHeadroomFrames = 0,
-                        captureLimitFrames = 0, transferCount = 0, packetsPerTransfer = 0, ringCapacityBytes = 0
+                        playbackTargetFrames = 0,
+                        startupPrimeFrames = 0,
+                        writeHeadroomFrames = 0,
+                        captureLimitFrames = 0,
+                        captureTargetFrames = 0,
+                        captureHeadroomFrames = 0,
+                        captureDeadlineSlackFrames = 0,
+                        transferCount = 0,
+                        packetsPerTransfer = 0,
+                        ringCapacityBytes = 0
                     )
                     val minimums = mutableMapOf<DirectUsbFormat, Int>()
                     for (candidate in candidates) {
@@ -710,7 +837,16 @@ object DirectUsbAudioManager {
                                 startExact(context, candidateFormat, pair, automatic, bufferFrames, multiplier).getOrThrow()
                                 delay(CALIBRATION_WARMUP_MS)
                                 val before = NativeEngine.getInstance().getDirectUsbStats()
-                                val resolved = automatic.copy(playbackTargetFrames = before.steadyTarget.toInt().coerceAtLeast(0))
+                                val resolved = automatic.copy(
+                                    playbackTargetFrames =
+                                        before.steadyTarget.toInt().coerceAtLeast(0),
+                                    captureTargetFrames =
+                                        before.captureTargetFrames.toInt().coerceAtLeast(0),
+                                    captureHeadroomFrames =
+                                        before.captureHeadroomFrames.toInt().coerceAtLeast(0),
+                                    captureDeadlineSlackFrames =
+                                        before.captureDeadlineSlackFrames.toInt().coerceAtLeast(0)
+                                )
                                 disableInternal(context)
                                 probeFormatsInternal(context, option).getOrThrow()
                                 startExact(context, candidateFormat, pair, resolved, bufferFrames, multiplier).getOrThrow()
@@ -718,20 +854,20 @@ object DirectUsbAudioManager {
                                 val measured = NativeEngine.getInstance().getDirectUsbStats()
                                 delay(CALIBRATION_MEASURE_MS)
                                 val after = NativeEngine.getInstance().getDirectUsbStats()
-                                val xruns = (after.actualXruns - measured.actualXruns).coerceAtLeast(0)
-                                val misses = (after.deadlineMisses - measured.deadlineMisses).coerceAtLeast(0)
-                                val errors = (after.captureTransferErrors - measured.captureTransferErrors +
-                                    after.playbackTransferErrors - measured.playbackTransferErrors).coerceAtLeast(0)
-                                val started = after.state == DirectUsbSessionState.Running
-                                val stable = started && after.failure == DirectUsbFailure.Ok && !after.transportFailed &&
-                                    xruns == 0L && misses == 0L && errors == 0L && after.queuedOut > 0 &&
-                                    after.lastCycleNs > 0 && after.deadlineBudgetNs > 0
+                                val evidence =
+                                    evaluateDirectUsbCalibrationEvidence(measured, after)
+                                val started =
+                                    after.state == DirectUsbSessionState.Running
                                 DirectUsbCalibrationProfile(
                                     "${option.vendorId}:${option.productId}:${candidateFormat.sampleRate}:${candidateFormat.bits}:${candidateFormat.subslotBytes}:${candidateFormat.channels}:$bufferFrames:$multiplier",
                                     candidateFormat, bufferFrames, multiplier, resolved, bufferFrames !in standard, ranAt,
-                                    started, stable, if (stable) null else "Safety checks failed",
-                                    after.knownHostLatencyFrames, after.knownHostLatencyFrames * 1000.0 / candidateFormat.sampleRate,
-                                    xruns, misses, errors, minFrames, dangerOverride
+                                    started, evidence.stable,
+                                    if (evidence.stable) null else "Safety checks failed",
+                                    after.knownHostLatencyFrames,
+                                    after.knownHostLatencyFrames * 1000.0 /
+                                        candidateFormat.sampleRate,
+                                    evidence.xruns, evidence.deadlineMisses,
+                                    evidence.transferErrors, minFrames, dangerOverride
                                 )
                             } catch (cancelled: kotlinx.coroutines.CancellationException) {
                                 throw cancelled
@@ -753,9 +889,23 @@ object DirectUsbAudioManager {
                         }
                     }
                     }
-                    DirectUsbCalibrationResult(profiles, profiles.any { it.stable },
-                        if (profiles.any { it.stable }) "Calibration complete" else "No stable profiles",
-                        option.vendorId, option.productId, candidates.firstOrNull() ?: format)
+                    val selected = scoreAutoCalibrationProfiles(profiles)
+                    if (selected != null) {
+                        AudioSettingsManager.applyDirectUsbCalibrationProfile(context, selected)
+                    }
+                    DirectUsbCalibrationResult(
+                        profiles = profiles,
+                        success = selected != null,
+                        message = if (selected != null) {
+                            "Calibration complete"
+                        } else {
+                            "No stable profiles"
+                        },
+                        vendorId = option.vendorId,
+                        productId = option.productId,
+                        format = selected?.format ?: candidates.firstOrNull() ?: format,
+                        selectedProfile = selected
+                    )
                 }
             }
         } finally {
@@ -825,22 +975,21 @@ object DirectUsbAudioManager {
                             val measured = NativeEngine.getInstance().getDirectUsbStats()
                             delay(CALIBRATION_MEASURE_MS)
                             val after = NativeEngine.getInstance().getDirectUsbStats()
-                            val xruns = (after.actualXruns - measured.actualXruns).coerceAtLeast(0)
-                            val misses = (after.deadlineMisses - measured.deadlineMisses).coerceAtLeast(0)
-                            val errors = (after.captureTransferErrors - measured.captureTransferErrors +
-                                after.playbackTransferErrors - measured.playbackTransferErrors).coerceAtLeast(0)
-                            val started = after.state == DirectUsbSessionState.Running
-                            val stable = started && after.failure == DirectUsbFailure.Ok && !after.transportFailed &&
-                                xruns == 0L && misses == 0L && errors == 0L && after.queuedOut > 0 &&
-                                after.lastCycleNs > 0 && after.deadlineBudgetNs > 0
+                            val evidence =
+                                evaluateDirectUsbCalibrationEvidence(measured, after)
+                            val started =
+                                after.state == DirectUsbSessionState.Running
                             DirectUsbCalibrationProfile(
                                 id, baseProfile.format, baseProfile.bufferFrames, baseProfile.periodMultiplier,
-                                config, true, ranAt, started, stable, if (stable) null else "Safety checks failed",
+                                config, true, ranAt, started, evidence.stable,
+                                if (evidence.stable) null else "Safety checks failed",
                                 after.knownHostLatencyFrames,
-
-                                after.knownHostLatencyFrames * 1000.0 / baseProfile.format.sampleRate,
-                                xruns, misses, errors, baseProfile.deviceMinimumFrames, baseProfile.dangerous,
-                                true, label
+                                after.knownHostLatencyFrames * 1000.0 /
+                                    baseProfile.format.sampleRate,
+                                evidence.xruns, evidence.deadlineMisses,
+                                evidence.transferErrors,
+                                baseProfile.deviceMinimumFrames,
+                                baseProfile.dangerous, true, label
                             )
                         } catch (cancelled: kotlinx.coroutines.CancellationException) {
                             throw cancelled
@@ -993,6 +1142,8 @@ object DirectUsbAudioManager {
     }
 
     private fun disableInternal(context: Context) {
+        releaseAudioWakeLock()
+        AudioSessionService.stop(context)
         val engine = NativeEngine.getInstance()
         if (AudioSettingsManager.getAudioBackend(context) == AudioBackend.AndroidOboe) {
             engine.stopEngine()
@@ -1008,6 +1159,45 @@ object DirectUsbAudioManager {
         unregisterDetachReceiver(context.applicationContext)
     }
 
+
+    suspend fun measureRoundTrip(): Result<DirectUsbRoundTripResult> =
+        lifecycleMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val engine = NativeEngine.getInstance()
+                val raw = runCatching { engine.nativeMeasureRoundTrip() }
+                    .getOrElse {
+                        return@withContext Result.failure<DirectUsbRoundTripResult>(
+                            IllegalStateException(it.message ?: "Round-trip measurement failed", it)
+                        )
+                    }
+                if (raw.getOrElse(0) { 0.0 } == 0.0) {
+                    return@withContext Result.failure(
+                        IllegalStateException(
+                            runCatching { engine.nativeGetRoundTripError() }.getOrDefault(
+                                "Round-trip measurement failed"
+                            )
+                        )
+                    )
+                }
+                val arrivalCount = raw.getOrElse(6) { 0.0 }.toInt()
+                val arrivals = (0 until minOf(arrivalCount, 3)).mapNotNull { index ->
+                    val frames = raw.getOrElse(7 + index * 2) { -1.0 }
+                    val correlation = raw.getOrElse(8 + index * 2) { 0.0 }
+                    if (frames < 0.0) null
+                    else DirectUsbRoundTripArrival(frames.toInt(), correlation)
+                }
+                Result.success(
+                    DirectUsbRoundTripResult(
+                        raw.getOrElse(1) { 0.0 }.toInt(),
+                        raw.getOrElse(2) { 0.0 },
+                        raw.getOrElse(3) { 0.0 },
+                        raw.getOrElse(4) { 0.0 },
+                        raw.getOrElse(5) { 0.0 },
+                        arrivals,
+                    )
+                )
+            }
+        }
 
     fun isStreaming(): Boolean = NativeEngine.getInstance().nativeIsDirectUsbOutputStreaming()
 

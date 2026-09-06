@@ -2,6 +2,7 @@
 
 #include "ipc/SharedRing.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -10,6 +11,18 @@
 #include <vector>
 
 namespace {
+
+static_assert(VSTPOC_SHARED_LAYOUT_VERSION == 8u);
+static_assert(VSTPOC_SHARED_LAYOUT_MAGIC == UINT64_C(0x565354504f435338));
+static_assert(sizeof(VstpocParamMetadata) == 36u);
+static_assert(offsetof(VstpocShared, param_metadata_seq) == 1442624u);
+static_assert(offsetof(VstpocShared, param_metadata) == 1442688u);
+static_assert(offsetof(VstpocShared, param_display_values) == 1479552u);
+static_assert(offsetof(VstpocShared, param_desired_seq) == 1545088u);
+static_assert(offsetof(VstpocShared, param_desired_values) == 1553280u);
+static_assert(offsetof(VstpocShared, latency_seq) == 1557376u);
+static_assert(offsetof(VstpocShared, deadline_miss_count) == 1557760u);
+static_assert(sizeof(VstpocShared) == 1560704u);
 
 class TempBackingFile {
 public:
@@ -51,8 +64,8 @@ struct ParameterSnapshot {
     std::vector<std::string> displays;
 };
 
-// This is the reader-side rule encoded by the v7 ABI: an even, non-zero
-// sequence brackets one coherent values/display snapshot.
+// v8's parameter values/display arrays are one seqlock snapshot: an even,
+// non-zero sequence brackets a coherent externally visible snapshot.
 bool ReadStableSnapshot(const VstpocShared& shared, ParameterSnapshot* out) {
     if (!out) return false;
     const uint64_t before = LoadAcquire(&shared.param_values_seq);
@@ -76,29 +89,27 @@ bool ReadStableSnapshot(const VstpocShared& shared, ParameterSnapshot* out) {
     return true;
 }
 
-TEST(VstParameterContractTest, SupportsMetadataBeyondLegacy128ParameterLimit) {
+TEST(VstParameterContractTest, V8StorageIsPreSizedBeyondLegacyParameterLimit) {
     TempBackingFile backing;
     SharedRing ring(backing.path());
     ASSERT_TRUE(ring.valid());
 
     ASSERT_GT(VSTPOC_MAX_PARAMS, 128u);
-    constexpr int32_t kParameterCount = static_cast<int32_t>(VSTPOC_MAX_PARAMS);
-    constexpr int32_t kHighIndex = kParameterCount - 1;
+    constexpr int32_t kHighIndex = static_cast<int32_t>(VSTPOC_MAX_PARAMS) - 1;
     VstpocShared* shared = ring.raw();
-    shared->param_count = kParameterCount;
     std::strncpy(shared->param_names[kHighIndex], "High-index instrument control",
                  VSTPOC_PARAM_NAME_LEN - 1);
     shared->param_names[kHighIndex][VSTPOC_PARAM_NAME_LEN - 1] = '\0';
-    shared->param_metadata[kHighIndex] = {
-        0.375f, 127, VSTPOC_PARAM_FLAG_HIDDEN | VSTPOC_PARAM_FLAG_READ_ONLY, {}};
+    shared->param_metadata[kHighIndex] = {0.375f, 127,
+                                          VSTPOC_PARAM_FLAG_HIDDEN |
+                                              VSTPOC_PARAM_FLAG_READ_ONLY,
+                                          {}};
     std::strncpy(shared->param_metadata[kHighIndex].unit, "semitones",
                  VSTPOC_PARAM_UNIT_LEN - 1);
     shared->param_metadata[kHighIndex].unit[VSTPOC_PARAM_UNIT_LEN - 1] = '\0';
     StoreRelease(&shared->param_metadata_seq, 2);
 
-    EXPECT_EQ(shared->param_count, kParameterCount);
     EXPECT_STREQ(shared->param_names[kHighIndex], "High-index instrument control");
-    EXPECT_FLOAT_EQ(shared->param_metadata[kHighIndex].default_normalized, 0.375f);
     EXPECT_EQ(shared->param_metadata[kHighIndex].step_count, 127);
     EXPECT_EQ(shared->param_metadata[kHighIndex].flags,
               VSTPOC_PARAM_FLAG_HIDDEN | VSTPOC_PARAM_FLAG_READ_ONLY);
@@ -106,7 +117,7 @@ TEST(VstParameterContractTest, SupportsMetadataBeyondLegacy128ParameterLimit) {
     EXPECT_EQ(LoadAcquire(&shared->param_metadata_seq), 2u);
 }
 
-TEST(VstParameterContractTest, PublishesDescriptorFlagsDefaultStepsAndUnitAsOneMetadataSnapshot) {
+TEST(VstParameterContractTest, PublishesDescriptorFlagsStepsAndUnitAsOneMetadataSnapshot) {
     TempBackingFile backing;
     SharedRing ring(backing.path());
     ASSERT_TRUE(ring.valid());
@@ -121,25 +132,22 @@ TEST(VstParameterContractTest, PublishesDescriptorFlagsDefaultStepsAndUnitAsOneM
     std::strncpy(shared->param_metadata[2].unit, "ms", VSTPOC_PARAM_UNIT_LEN - 1);
     StoreRelease(&shared->param_metadata_seq, 4);
 
-    ASSERT_EQ(LoadAcquire(&shared->param_metadata_seq), 4u);
-    EXPECT_FLOAT_EQ(shared->param_metadata[0].default_normalized, 0.5f);
+    EXPECT_EQ(LoadAcquire(&shared->param_metadata_seq), 4u);
     EXPECT_EQ(shared->param_metadata[0].step_count, 0);
     EXPECT_EQ(shared->param_metadata[0].flags, 0u);
     EXPECT_STREQ(shared->param_metadata[0].unit, "dB");
-    EXPECT_FLOAT_EQ(shared->param_metadata[1].default_normalized, 1.0f);
     EXPECT_EQ(shared->param_metadata[1].step_count, 1);
     EXPECT_EQ(shared->param_metadata[1].flags, VSTPOC_PARAM_FLAG_READ_ONLY);
     EXPECT_STREQ(shared->param_metadata[1].unit, "Hz");
-    EXPECT_FLOAT_EQ(shared->param_metadata[2].default_normalized, 0.25f);
     EXPECT_EQ(shared->param_metadata[2].step_count, 8);
     EXPECT_EQ(shared->param_metadata[2].flags, VSTPOC_PARAM_FLAG_HIDDEN);
     EXPECT_STREQ(shared->param_metadata[2].unit, "ms");
 }
 
-TEST_F(SharedRingFixture, ParameterWritesCoalescePerIndexAndLatestValueWins) {
+TEST_F(SharedRingFixture, ParameterWritesArePreSizedAndLatestValueWins) {
     ASSERT_TRUE(ring.valid());
     VstpocShared* shared = ring.raw();
-    constexpr int32_t kIndex = 700;
+    constexpr int32_t kIndex = static_cast<int32_t>(VSTPOC_MAX_PARAMS) - 1;
 
     ASSERT_EQ(LoadAcquire(&shared->param_desired_seq[kIndex]), 0u);
     ASSERT_EQ(LoadAcquire(&shared->param_head), 0u);
@@ -167,6 +175,23 @@ TEST_F(SharedRingFixture, ParameterMailboxesRemainIndependentAcrossIndices) {
     EXPECT_FLOAT_EQ(shared->param_desired_values[kSecond], 0.875f);
     EXPECT_EQ(LoadAcquire(&shared->param_desired_seq[kSecond]), 1u);
     EXPECT_EQ(LoadAcquire(&shared->param_head), 0u);
+}
+
+TEST_F(SharedRingFixture, InvalidParameterIndexDoesNotConsumePreSizedMailbox) {
+    ASSERT_TRUE(ring.valid());
+    VstpocShared* shared = ring.raw();
+    constexpr int32_t kIndex = 4;
+    shared->param_desired_values[kIndex] = 0.375f;
+    StoreRelease(&shared->param_desired_seq[kIndex], 7u);
+    StoreRelease(&shared->wake_requested, 0u);
+
+    ring.pushParam(-1, 0.1f);
+    ring.pushParam(static_cast<int32_t>(VSTPOC_MAX_PARAMS), 0.9f);
+
+    EXPECT_FLOAT_EQ(shared->param_desired_values[kIndex], 0.375f);
+    EXPECT_EQ(LoadAcquire(&shared->param_desired_seq[kIndex]), 7u);
+    EXPECT_EQ(LoadAcquire(&shared->param_head), 0u);
+    EXPECT_EQ(LoadAcquire(&shared->wake_requested), 0u);
 }
 
 TEST(VstParameterContractTest, ValuesAndDisplaysAreAcceptedOnlyFromStableEvenSnapshot) {

@@ -22,6 +22,7 @@ package com.vibes.dsp
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.PowerManager
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -119,6 +120,17 @@ class MainActivity : ComponentActivity() {
             audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Ask the platform to hold a clock the device can sustain instead of
+        // boosting and then throttling back. The oscillation is what an audio
+        // thread feels as jitter: a burst of fast frames followed by a stretch
+        // of slow ones is worse for a fixed deadline than a steady lower clock.
+        // Public since API 24 and silently ignored where unsupported.
+        runCatching {
+            val power = getSystemService(PowerManager::class.java)
+            if (power?.isSustainedPerformanceModeSupported == true) {
+                window.setSustainedPerformanceMode(true)
+            }
+        }
         val display = getSystemService(WindowManager::class.java).defaultDisplay
         val sixtyHertzMode = display.supportedModes.firstOrNull {
             kotlin.math.abs(it.refreshRate - 60f) < 0.5f

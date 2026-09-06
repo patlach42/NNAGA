@@ -8,6 +8,8 @@ add_executable(audio_realtime_tests
     TestAudioRealtime.cpp
     TestAudioCpuAffinity.cpp
     TestWavIO.cpp
+    TestRoundTripCorrelation.cpp
+    TestClipTempoAdapter.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginChain.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/RackGraph.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginRegistry.cpp
@@ -36,3 +38,17 @@ target_include_directories(plugin_chain_lifecycle_tests PRIVATE
 target_link_libraries(plugin_chain_lifecycle_tests PRIVATE GTest::gtest_main pthread)
 
 gtest_discover_tests(plugin_chain_lifecycle_tests)
+add_executable(native_plugin_host_tests
+    TestNativePluginHost.cpp
+    ${AUDIO_APP_CPP_DIR}/plugin/PluginChain.cpp
+    ${AUDIO_APP_CPP_DIR}/plugin/native/NativePlugin.cpp
+)
+
+target_include_directories(native_plugin_host_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${AUDIO_APP_CPP_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../3rd_party/nnaga-native-plugin-sdk/include
+)
+target_link_libraries(native_plugin_host_tests PRIVATE GTest::gtest_main pthread ${CMAKE_DL_LIBS})
+
+gtest_discover_tests(native_plugin_host_tests)

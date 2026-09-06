@@ -52,6 +52,7 @@ import com.vibes.dsp.engine.AudioSettingsManager
 import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.DirectUsbDeviceOption
 import com.vibes.dsp.engine.DirectUsbFormat
+import com.vibes.dsp.engine.DirectUsbRoundTripResult
 import com.vibes.dsp.engine.UsbAudioDriver
 import com.vibes.dsp.engine.DirectUsbCalibrationProfile
 import com.vibes.dsp.ui.rack.RackViewModel
@@ -110,7 +111,7 @@ private fun AudioSettingsContent(
     val context = LocalContext.current
     val selectedBackend = backend ?: AudioSettingsManager.getAudioBackend(context)
     var selectedBufferSize by remember { mutableIntStateOf(AudioSettingsManager.getBufferSize(context)) }
-    var isCalibrationRunning by remember { mutableStateOf(false) }
+    var isDirectUsbOperationRunning by remember { mutableStateOf(false) }
     val isEngineRunning by viewModel.isEngineRunning.collectAsState()
     val directUsbStats by viewModel.directUsbStats.collectAsState()
     DisposableEffect(viewModel) {
@@ -128,7 +129,8 @@ private fun AudioSettingsContent(
         DirectUsbSessionSettings(
             selectedBufferFrames = selectedBufferSize,
             inputsEnabled = !isEngineRunning,
-            onCalibrationStateChange = { isCalibrationRunning = it },
+            isEngineRunning = isEngineRunning,
+            onOperationStateChange = { isDirectUsbOperationRunning = it },
             onBufferFramesChange = { size ->
                 selectedBufferSize = size
                 AudioSettingsManager.setBufferSize(context, size)
@@ -136,7 +138,7 @@ private fun AudioSettingsContent(
         )
         BufferSizeDropdown(
             selectedSize = selectedBufferSize,
-            enabled = !isCalibrationRunning && !isEngineRunning,
+            enabled = !isDirectUsbOperationRunning && !isEngineRunning,
             onSelected = { size ->
                 selectedBufferSize = size
                 AudioSettingsManager.setBufferSize(context, size)
@@ -189,6 +191,7 @@ private fun AudioSettingsContent(
             )
             NnagaOutlinedButton(
                 onClick = viewModel::stopEngine,
+                enabled = !isDirectUsbOperationRunning,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text("Stop engine")
@@ -248,7 +251,8 @@ private fun AndroidAudioSettings(
 private fun DirectUsbSessionSettings(
     selectedBufferFrames: Int,
     inputsEnabled: Boolean,
-    onCalibrationStateChange: (Boolean) -> Unit,
+    isEngineRunning: Boolean,
+    onOperationStateChange: (Boolean) -> Unit,
     onBufferFramesChange: (Int) -> Unit
 ) {
     val context = LocalContext.current
@@ -275,7 +279,28 @@ private fun DirectUsbSessionSettings(
     var selectedWatermark by remember { mutableIntStateOf(0) }
     var selectedStartupPrime by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbStartupPrime(context)) }
     var selectedWriteHeadroom by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbWriteHeadroom(context)) }
+    var selectedCreditReserve by remember {
+        mutableIntStateOf(AudioSettingsManager.getDirectUsbCreditReserve(context))
+    }
+    var selectedUiMeterMs by remember {
+        mutableIntStateOf(AudioSettingsManager.getUiMeterIntervalMs(context))
+    }
+    var selectedUiClockMs by remember {
+        mutableIntStateOf(AudioSettingsManager.getUiTransportClockMs(context))
+    }
+    var selectedUiStatsMs by remember {
+        mutableIntStateOf(AudioSettingsManager.getUiStatsIntervalMs(context))
+    }
     var selectedCaptureLimit by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureLimit(context)) }
+    var selectedCaptureTarget by remember {
+        mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureTarget(context))
+    }
+    var selectedCaptureHeadroom by remember {
+        mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureHeadroom(context))
+    }
+    var selectedCaptureDeadlineSlack by remember {
+        mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureDeadlineSlack(context))
+    }
     var selectedTransferCount by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbTransferCount(context)) }
     var includeExperimental by remember { mutableStateOf(false) }
     var fixedSampleRateCalibration by remember { mutableStateOf(false) }
@@ -285,6 +310,9 @@ private fun DirectUsbSessionSettings(
     var selectedRingCapacityKiB by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRingCapacityKiB(context)) }
     var thermalSafetyEnabled by remember {
         mutableStateOf(AudioSettingsManager.getDirectUsbThermalSafetyEnabled(context))
+    }
+    var creditAdmission by remember {
+        mutableStateOf(AudioSettingsManager.getDirectUsbAdmissionPolicy(context) == 1)
     }
     var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
     var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
@@ -297,13 +325,42 @@ private fun DirectUsbSessionSettings(
     }
     var isExtendedCalibration by remember { mutableStateOf(false) }
     var isAutoCalibration by remember { mutableStateOf(false) }
+    var showRoundTripDialog by remember { mutableStateOf(false) }
+    var isMeasuringRoundTrip by remember { mutableStateOf(false) }
+    var roundTripResult by remember { mutableStateOf<DirectUsbRoundTripResult?>(null) }
+    var roundTripError by remember { mutableStateOf<String?>(null) }
     var showUsbInterfaceLog by remember { mutableStateOf(false) }
     var usbInterfaceLog by remember { mutableStateOf("Long press the interface selector to collect diagnostics.") }
     var runAtStart by remember { mutableStateOf(AudioSettingsManager.getEngineRunAtStart(context)) }
     var message by remember { mutableStateOf<String?>(null) }
-    val controlsEnabled = inputsEnabled && !isCalibrating
+    val controlsEnabled = inputsEnabled && !isCalibrating && !isMeasuringRoundTrip
     var devicesExpanded by remember { mutableStateOf(false) }
     val clipboardManager = LocalClipboardManager.current
+
+    fun startRoundTripMeasurement() {
+        scope.launch {
+            isMeasuringRoundTrip = true
+            onOperationStateChange(true)
+            roundTripResult = null
+            roundTripError = null
+            try {
+                DirectUsbAudioManager.measureRoundTrip()
+                    .onSuccess { roundTripResult = it }
+                    .onFailure { error ->
+                        roundTripError = error.message?.takeIf(String::isNotBlank)
+                            ?: error::class.java.simpleName
+                    }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (error: Throwable) {
+                roundTripError = error.message?.takeIf(String::isNotBlank)
+                    ?: error::class.java.simpleName
+            } finally {
+                isMeasuringRoundTrip = false
+                onOperationStateChange(false)
+            }
+        }
+    }
 
     fun refreshUsbInterfaceLog() {
         usbInterfaceLog = DirectUsbAudioManager.getAudioDevicesDebugLog(context)
@@ -455,6 +512,9 @@ private fun DirectUsbSessionSettings(
         selectedStartupPrime = profile.bufferConfig.startupPrimeFrames
         selectedWriteHeadroom = profile.bufferConfig.writeHeadroomFrames
         selectedCaptureLimit = profile.bufferConfig.captureLimitFrames
+        selectedCaptureTarget = profile.bufferConfig.captureTargetFrames
+        selectedCaptureHeadroom = profile.bufferConfig.captureHeadroomFrames
+        selectedCaptureDeadlineSlack = profile.bufferConfig.captureDeadlineSlackFrames
         selectedTransferCount = profile.bufferConfig.transferCount
         selectedPacketsPerTransfer = profile.bufferConfig.packetsPerTransfer
         selectedRingCapacityKiB = profile.bufferConfig.ringCapacityBytes / 1024
@@ -581,6 +641,18 @@ private fun DirectUsbSessionSettings(
         )
     }
 
+    if (showRoundTripDialog) {
+        RoundTripMeasurementDialog(
+            isMeasuring = isMeasuringRoundTrip,
+            canStart = isEngineRunning && selectedOutputPair == 0,
+            outputOneSelected = selectedOutputPair == 0,
+            result = roundTripResult,
+            error = roundTripError,
+            onStart = ::startRoundTripMeasurement,
+            onDismiss = { showRoundTripDialog = false },
+        )
+    }
+
     val rates = formats.map { it.sampleRate }.distinct()
     val bits = formats.filter { it.sampleRate == selectedRate }.map { it.bits }.distinct()
     if (formats.isNotEmpty()) {
@@ -666,10 +738,75 @@ private fun DirectUsbSessionSettings(
             selectedWriteHeadroom = it
             AudioSettingsManager.setDirectUsbWriteHeadroom(context, it)
         }
+        // How far the producer may run ahead of the device under the credit
+        // policy. Zero forbids any lead, which was measured to starve; the
+        // reserve bounds the lead rather than removing it.
+        IntSelector(
+            "Producer lead (credit reserve)",
+            selectedCreditReserve,
+            listOf(0, 16, 32, 48, 64, 96, 128, 192, 256),
+            controlsEnabled,
+        ) {
+            selectedCreditReserve = it
+            AudioSettingsManager.setDirectUsbCreditReserve(context, it)
+        }
+        // The interface's own periodic work, in the process that owns the
+        // render thread. The transport readout used to advance on every
+        // display frame, which cost milliseconds of render-thread tail; the
+        // meters at sixty hertz cost nothing measurable.
+        IntSelector(
+            "Meter refresh, ms",
+            selectedUiMeterMs,
+            listOf(8, 17, 33, 66, 100, 250),
+            controlsEnabled,
+        ) {
+            selectedUiMeterMs = it
+            AudioSettingsManager.setUiMeterIntervalMs(context, it)
+        }
+        IntSelector(
+            "Transport readout, ms",
+            selectedUiClockMs,
+            listOf(0, 16, 33, 50, 100, 250),
+            controlsEnabled,
+        ) {
+            selectedUiClockMs = it
+            AudioSettingsManager.setUiTransportClockMs(context, it)
+        }
+        IntSelector(
+            "Statistics refresh, ms",
+            selectedUiStatsMs,
+            listOf(50, 100, 200, 500, 1000, 2000),
+            controlsEnabled,
+        ) {
+            selectedUiStatsMs = it
+            AudioSettingsManager.setUiStatsIntervalMs(context, it)
+        }
         IntSelector("Capture queue limit", selectedCaptureLimit, watermarkOptions, controlsEnabled) {
             selectedCaptureLimit = it
             AudioSettingsManager.setDirectUsbCaptureLimit(context, it)
         }
+        IntSelector("Capture target", selectedCaptureTarget, watermarkOptions, controlsEnabled) {
+            selectedCaptureTarget = it
+            AudioSettingsManager.setDirectUsbCaptureTarget(context, it)
+        }
+        IntSelector("Capture headroom", selectedCaptureHeadroom, watermarkOptions, controlsEnabled) {
+            selectedCaptureHeadroom = it
+            AudioSettingsManager.setDirectUsbCaptureHeadroom(context, it)
+        }
+        IntSelector(
+            "Capture deadline slack",
+            selectedCaptureDeadlineSlack,
+            watermarkOptions,
+            controlsEnabled
+        ) {
+            selectedCaptureDeadlineSlack = it
+            AudioSettingsManager.setDirectUsbCaptureDeadlineSlack(context, it)
+        }
+        Text(
+            "Capture target is the post-read input runway. Headroom reserves one completion " +
+                "wave in the capture ring. Deadline slack adds bounded wait time. Auto uses " +
+                "negotiated endpoint geometry."
+        )
         IntSelector("Transfer count", selectedTransferCount, (0..8).toList(), controlsEnabled) {
             selectedTransferCount = it
             AudioSettingsManager.setDirectUsbTransferCount(context, it)
@@ -755,6 +892,29 @@ private fun DirectUsbSessionSettings(
                 enabled = controlsEnabled
             )
         }
+        Divider()
+        Text("Full analog round trip", style = MaterialTheme.typography.labelLarge)
+        NnagaOutlinedButton(
+            onClick = {
+                roundTripResult = null
+                roundTripError = null
+                showRoundTripDialog = true
+            },
+            enabled = !isCalibrating && !isMeasuringRoundTrip,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Measure round-trip")
+        }
+        Text(
+            if (isEngineRunning) {
+                "Measures the physical interface path; unlike the host queue estimate, " +
+                    "this includes conversion and the analog cable."
+            } else {
+                "Start a Direct USB rack session to measure the physical interface path."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         selectedFormat?.let { format ->
             val device = selectedDevice
             NnagaOutlinedButton(
@@ -767,7 +927,7 @@ private fun DirectUsbSessionSettings(
                         scope.launch {
                             appliedStableBaseProfile = null
                             isCalibrating = true
-                            onCalibrationStateChange(true)
+                            onOperationStateChange(true)
                             calibrationResult = null
                             calibrationProgress = null
                             try {
@@ -781,13 +941,14 @@ private fun DirectUsbSessionSettings(
                                     onProgress = { calibrationProgress = it }
                                 ).also { result ->
                                     calibrationResult = result
+                                    result.selectedProfile?.let(::applyProfile)
                                     savedProfiles = AudioSettingsManager.getDirectUsbCalibrationProfiles(
                                         context, device.vendorId, device.productId
                                     )
                                 }
                             } finally {
                                 isCalibrating = false
-                                onCalibrationStateChange(false)
+                                onOperationStateChange(false)
                             }
                         }
                     }
@@ -822,7 +983,7 @@ private fun DirectUsbSessionSettings(
                     scope.launch {
                         isCalibrating = true
                         isExtendedCalibration = true
-                        onCalibrationStateChange(true)
+                        onOperationStateChange(true)
                         calibrationResult = null
                         calibrationProgress = null
                         try {
@@ -839,7 +1000,7 @@ private fun DirectUsbSessionSettings(
                         } finally {
                             isExtendedCalibration = false
                             isCalibrating = false
-                            onCalibrationStateChange(false)
+                            onOperationStateChange(false)
                         }
                     }
                 }
@@ -891,7 +1052,7 @@ private fun DirectUsbSessionSettings(
                     scope.launch {
                         isCalibrating = true
                         isAutoCalibration = true
-                        onCalibrationStateChange(true)
+                        onOperationStateChange(true)
                         autoCalibrationResult = null
                         calibrationResult = null
                         calibrationProgress = null
@@ -925,7 +1086,7 @@ private fun DirectUsbSessionSettings(
                         } finally {
                             isAutoCalibration = false
                             isCalibrating = false
-                            onCalibrationStateChange(false)
+                            onOperationStateChange(false)
                         }
                     }
                 }
@@ -1033,6 +1194,9 @@ private fun DirectUsbSessionSettings(
                         )
                         Text(
                             "Capture limit ${config.captureLimitFrames}f · " +
+                                "target ${config.captureTargetFrames}f · " +
+                                "headroom ${config.captureHeadroomFrames}f · " +
+                                "deadline slack ${config.captureDeadlineSlackFrames}f · " +
                                 "transfer count ${config.transferCount} · " +
                                 "packets/transfer ${config.packetsPerTransfer} · " +
                                 "ring ${config.ringCapacityBytes / 1024} KiB",
@@ -1194,6 +1358,40 @@ private fun DirectUsbSessionSettings(
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
         Column(modifier = Modifier.weight(1f)) {
+            Text("Pace the producer by played frames")
+            Text(
+                "Holds the queue at its target instead of letting it fill to the " +
+                    "ceiling. Measured at the same target: 7.9 ms of output latency " +
+                    "against 9.3 ms waiting for room.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        NnagaSwitch(
+            checked = creditAdmission,
+            onCheckedChange = {
+                creditAdmission = it
+                AudioSettingsManager.setDirectUsbAdmissionPolicy(context, if (it) 1 else 0)
+            },
+            enabled = controlsEnabled
+        )
+    }
+    Text(
+        if (creditAdmission) {
+            "Paced by the device, with a 32 frame lead. Applies on the next engine start."
+        } else {
+            "Waiting for room: the queue floats to the admission ceiling and the write " +
+                "headroom is spent on latency. Applies on the next engine start."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
             Text("Thermal safety buffer policy")
             Text(
                 "Opt-in: raises target by 2× quantum at headroom ≥0.85 and restores it at ≤0.65.",
@@ -1260,6 +1458,127 @@ private fun DirectUsbSessionSettings(
 }
 
 @Composable
+private fun RoundTripMeasurementDialog(
+    isMeasuring: Boolean,
+    canStart: Boolean,
+    outputOneSelected: Boolean,
+    result: DirectUsbRoundTripResult?,
+    error: String?,
+    onStart: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = { if (!isMeasuring) onDismiss() },
+        title = { Text("Measure full analog round trip") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Connect a physical cable from USB interface output 1 to input 1.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Text(
+                    "Set the output and input gain high enough for a clear capture, but make " +
+                        "sure neither side clips.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "NNAGA temporarily mutes the rack output and plays a short audible probe " +
+                        "on output 1. Output 2 stays silent.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "This measures the complete analog path through the DAC, cable, and ADC. " +
+                        "It is not the estimated host queue shown in Current USB Session.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                when {
+                    isMeasuring -> {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            "Measuring… Keep the cable connected and gains unchanged.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    result != null -> {
+                        Divider()
+                        Text(
+                            "Measurement complete",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        InfoRow("Latency", "${result.latencyFrames} frames")
+                        InfoRow(
+                            "Round trip",
+                            "${String.format(Locale.US, "%.2f", result.latencyMilliseconds)} ms",
+                        )
+                        InfoRow(
+                            "Correlation",
+                            String.format(Locale.US, "%.4f", result.correlation),
+                        )
+                        InfoRow(
+                            "Output peak",
+                            String.format(Locale.US, "%.4f", result.outputPeak),
+                        )
+                        InfoRow(
+                            "Input peak",
+                            String.format(Locale.US, "%.4f", result.inputPeak),
+                        )
+                    }
+                    error != null -> {
+                        Divider()
+                        Text(
+                            "Measurement failed: $error",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    !canStart -> {
+                        Text(
+                            if (!outputOneSelected) {
+                                "Select USB outputs 1–2 before measuring output 1 to input 1."
+                            } else {
+                                "The Direct USB session is no longer running. Start it before measuring."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            NnagaTextButton(
+                onClick = onStart,
+                enabled = canStart && !isMeasuring,
+            ) {
+                Text(
+                    when {
+                        isMeasuring -> "Measuring…"
+                        result != null || error != null -> "Measure again"
+                        else -> "Start measurement"
+                    }
+                )
+            }
+        },
+        dismissButton = {
+            NnagaTextButton(
+                onClick = onDismiss,
+                enabled = !isMeasuring,
+            ) {
+                Text(if (result == null && error == null) "Cancel" else "Close")
+            }
+        },
+    )
+}
+
+@Composable
 private fun AutoCalibrationEvidence(
     title: String,
     profile: DirectUsbCalibrationProfile
@@ -1314,7 +1633,8 @@ private fun IntSelector(
         "Input" -> "Input $value"
         "Output" -> "Outputs ${value * 2 - 1}–${value * 2}"
         "Period multiplier" -> "$value×"
-        "Playback target", "Startup prime", "Write headroom", "Capture queue limit" ->
+        "Playback target", "Startup prime", "Write headroom", "Capture queue limit",
+        "Capture target", "Capture headroom", "Capture deadline slack" ->
             if (value == 0) "Auto" else "$value frames"
         "Transfer count", "Packets per transfer" -> if (value == 0) "Auto" else "$value"
         "Ring capacity" -> "$value KiB (restart)"

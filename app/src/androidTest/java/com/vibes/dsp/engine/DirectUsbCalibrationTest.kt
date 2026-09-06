@@ -94,7 +94,14 @@ class DirectUsbCalibrationTest {
 
             val result = runBlocking {
                 withTimeout(calibrationTimeoutMs(InstrumentationRegistry.getArguments())) {
-                    DirectUsbAudioManager.calibrate(context, option!!, format) { }
+                    DirectUsbAudioManager.calibrate(
+                        context,
+                        option!!,
+                        format,
+                        fixedSampleRate = format.sampleRate,
+                        onProgress = {},
+                        stopAfterFirstStable = true
+                    )
                 }
             }
 

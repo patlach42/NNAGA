@@ -42,10 +42,116 @@ enum class DirectUsbFailure {
     }
 }
 
+
+
+/**
+ * One packet-event flight recorder entry.
+ *
+ * The recorder answers "what did the ring look like when this happened",
+ * which aggregate counters cannot: the same configuration reported twelve
+ * producer quantum drops in one campaign and four in the next.
+ *
+ * [a] and [b] are event specific. For [Event.QUANTUM_REFUSED] and
+ * [Event.QUANTUM_OFFERED] they are the writable and the requested frames;
+ * for [Event.PLAYBACK_UNDERRUN] the frames served and the frames requested;
+ * for the completion events the frames carried by that transfer.
+ */
+data class FlightRecord(
+    val sequence: Long,
+    val timestampNs: Long,
+    val event: Int,
+    val a: Long,
+    val b: Long,
+    val ringFrames: Long,
+    val queuedFrames: Long,
+) {
+    companion object {
+        const val FIELDS = 7
+
+        const val EVENT_UNKNOWN = 0
+        const val EVENT_PLAYBACK_COMPLETE = 1
+        const val EVENT_QUANTUM_OFFERED = 2
+        const val EVENT_QUANTUM_REFUSED = 3
+        const val EVENT_CAPTURE_COMPLETE = 4
+        const val EVENT_PLAYBACK_UNDERRUN = 5
+        const val EVENT_TRANSFER_DEFERRED = 6
+        const val EVENT_DEFERRED_NO_METADATA = 7
+        const val EVENT_DEFERRED_NO_PCM = 8
+        const val EVENT_SIGNAL_DISCONTINUITY = 9
+        const val EVENT_TRANSFER_DISCONTINUITY = 10
+        const val EVENT_CAPTURE_DISCONTINUITY = 11
+        const val EVENT_CAPTURE_MODULATION = 12
+        /** A rendered quantum that reached neither the ring nor the hold. */
+        const val EVENT_QUANTUM_LOST = 13
+
+        /** Events that mean something went wrong, rather than steady traffic. */
+        const val ANOMALY_MASK =
+            (1 shl EVENT_QUANTUM_REFUSED) or
+                (1 shl EVENT_PLAYBACK_UNDERRUN) or
+                (1 shl EVENT_TRANSFER_DEFERRED) or
+                (1 shl EVENT_DEFERRED_NO_METADATA) or
+                (1 shl EVENT_DEFERRED_NO_PCM) or
+                (1 shl EVENT_SIGNAL_DISCONTINUITY) or
+                (1 shl EVENT_TRANSFER_DISCONTINUITY) or
+                (1 shl EVENT_CAPTURE_DISCONTINUITY) or
+                (1 shl EVENT_CAPTURE_MODULATION) or
+                (1 shl EVENT_QUANTUM_LOST)
+
+        fun eventName(event: Int): String = when (event) {
+            EVENT_PLAYBACK_COMPLETE -> "playback-complete"
+            EVENT_QUANTUM_OFFERED -> "quantum-offered"
+            EVENT_QUANTUM_REFUSED -> "quantum-refused"
+            EVENT_CAPTURE_COMPLETE -> "capture-complete"
+            EVENT_PLAYBACK_UNDERRUN -> "playback-underrun"
+            EVENT_TRANSFER_DEFERRED -> "transfer-deferred"
+            EVENT_DEFERRED_NO_METADATA -> "deferred-no-metadata"
+            EVENT_DEFERRED_NO_PCM -> "deferred-no-pcm"
+            EVENT_SIGNAL_DISCONTINUITY -> "signal-discontinuity"
+            EVENT_TRANSFER_DISCONTINUITY -> "transfer-discontinuity"
+            EVENT_CAPTURE_DISCONTINUITY -> "capture-discontinuity"
+            EVENT_CAPTURE_MODULATION -> "capture-modulation"
+            EVENT_QUANTUM_LOST -> "quantum-lost"
+            else -> "unknown"
+        }
+    }
+}
+
+/** A decoded snapshot; [dropped] is non-zero when the history outran the buffer. */
+data class FlightRecorderSnapshot(
+    val recorded: Long = 0,
+    val dropped: Long = 0,
+    val records: List<FlightRecord> = emptyList(),
+) {
+    companion object {
+        fun decode(raw: LongArray): FlightRecorderSnapshot {
+            if (raw.size < 2) return FlightRecorderSnapshot()
+            val fields = FlightRecord.FIELDS
+            val count = (raw.size - 2) / fields
+            val records = ArrayList<FlightRecord>(count)
+            for (i in 0 until count) {
+                val base = 2 + i * fields
+                records.add(
+                    FlightRecord(
+                        sequence = raw[base],
+                        timestampNs = raw[base + 1],
+                        event = raw[base + 2].toInt(),
+                        a = raw[base + 3],
+                        b = raw[base + 4],
+                        ringFrames = raw[base + 5],
+                        queuedFrames = raw[base + 6],
+                    )
+                )
+            }
+            return FlightRecorderSnapshot(raw[0], raw[1], records)
+        }
+    }
+}
+
 data class DirectUsbStats(
     val sequence: Long = 0,
     val captureOverruns: Long = 0,
     val captureUnderruns: Long = 0,
+    val capturePacketDrops: Long = 0,
     val implicitFeedbackFifoDepth: Long = 0,
     val implicitDeferredTransfers: Long = 0,
     val implicitMetadataOverruns: Long = 0,
@@ -60,9 +166,10 @@ data class DirectUsbStats(
     val captureWaitPressure: Long = 0,
     val writeWaitPressure: Long = 0,
     val playbackXruns: Long = 0,
+    val playbackQuantumDrops: Long = 0,
     val playbackBackpressure: Long = 0,
-    val playbackSilentPackets: Long = 0,
-    val playbackSilentFrames: Long = 0,
+    val playbackShortPackets: Long = 0,
+    val playbackShortFrames: Long = 0,
     val lifecycleFailures: Long = 0,
     val transportFailed: Boolean = false,
     val performanceHintActive: Boolean = false,
@@ -81,12 +188,90 @@ data class DirectUsbStats(
     val captureTransferFrames: Long = 0,
     val lastDspNs: Long = 0,
     val peakDspNs: Long = 0,
+    /** Configured pipeline depth: capture cushion, one quantum, playback target. */
     val knownHostLatencyFrames: Long = 0,
     val actualXruns: Long = 0,
     val lastCycleNs: Long = 0,
     val peakCycleNs: Long = 0,
     val deadlineBudgetNs: Long = 0,
     val deadlineMisses: Long = 0,
+    val schedulerDeadlineMisses: Long = 0,
+    val maxSchedulerLatenessNs: Long = 0,
+    val captureTargetFrames: Long = 0,
+    val captureHeadroomFrames: Long = 0,
+    val captureDeadlineSlackFrames: Long = 0,
+    /** Deferrals waiting on capture packet layouts rather than on rendered PCM. */
+    val deferredNoMetadata: Long = 0,
+    /** Deferrals waiting on rendered PCM rather than on capture packet layouts. */
+    val deferredNoPcm: Long = 0,
+    /** Smallest submitted OUT runway seen; falls before anything is heard. */
+    val queuedOutLowWaterFrames: Long = 0,
+    /** Breaks in the captured loopback, counted so they can fail a verdict. */
+    val captureDiscontinuities: Long = 0,
+    /** Envelope wander in the captured loopback. */
+    val captureModulations: Long = 0,
+    /** Breaks in the rendered signal before packing. */
+    val signalDiscontinuities: Long = 0,
+    /** Breaks in the packed PCM leaving the ring. */
+    val transferDiscontinuities: Long = 0,
+    /** Whether the capture detector ever saw a level worth judging. */
+    val captureDetectorArmed: Boolean = false,
+    /** Capture packets that arrived failed or empty and carried no clock. */
+    val implicitMetadataInvalid: Long = 0,
+    /** Ring occupancy extremes; their difference is the latency wobble. */
+    val ringLowWaterFrames: Long = 0,
+    val ringHighWaterFrames: Long = 0,
+    /** Frames handed to the device per transfer. */
+    val drainChunkFrames: Long = 0,
+    /** Occupancy percentiles sampled per drain; p95 minus p05 is the sawtooth. */
+    val ringOccupancyP05: Long = 0,
+    val ringOccupancyP50: Long = 0,
+    val ringOccupancyP95: Long = 0,
+    val ringOccupancySamples: Long = 0,
+    /** Worst gap between OUT completions, and the nominal drains it spans. */
+    val maxCompletionGapNs: Long = 0,
+    val maxMissingDrains: Long = 0,
+    /** Frames a completion actually removed, rather than the nominal. */
+    val drainFramesMin: Long = 0,
+    val drainFramesMax: Long = 0,
+    /** Graph quanta accepted between two drains: the catch-up burst. */
+    val maxWritesBetweenDrains: Long = 0,
+    /** Smallest writable-minus-quantum seen; negative means a refusal. */
+    val minAdmissionMarginFrames: Long = 0,
+    /** Capture reads refused for being short of a whole quantum. */
+    val capturePartialReads: Long = 0,
+    /** Rendered blocks that never reached the ring because a wait expired. */
+    val lostQuanta: Long = 0,
+    /** Rendered blocks published a cycle late rather than discarded. */
+    val heldQuanta: Long = 0,
+    /**
+     * Instantaneous frames in the pipeline. Breathes with the producer/device
+     * sawtooth, so it diagnoses flow rather than describing configuration -
+     * [knownHostLatencyFrames] is the figure to show a person.
+     */
+    val liveQueueFrames: Long = 0,
+    /** Pipeline state at the first lost quantum; -1 when nothing was lost. */
+    val worstDspBlockOffCpuNs: Long = 0,
+    val worstDspBlockWallNs: Long = 0,
+    val worstServiceOffCpuNs: Long = 0,
+    val serviceRunqueueWaitNs: Long = 0,
+    val maxCallbacksPerPoll: Long = 0,
+    val worstMultiCollectSpanNs: Long = 0,
+    val worstMultiCollectRunqueueNs: Long = 0,
+    val firstLossRing: Long = 0,
+    val firstLossQueued: Long = 0,
+    val firstLossHadRoom: Long = 0,
+    val firstLossCredit: Long = 0,
+    /** Completion gaps beyond twice the nominal transfer period. */
+    val serviceGapCount: Long = 0,
+    /** Deliberate stalls that actually fired, for regression tests. */
+    val stallsFired: Long = 0,
+    /** Overruns while working, excluding time paced by the device. */
+    val workDeadlineMisses: Long = 0,
+    /** What was outstanding at the worst service pause; -1 when none. */
+    val worstGapInflight: Long = 0,
+    val worstGapPending: Long = 0,
+    val worstGapRing: Long = 0,
 ) {
     companion object {
         private const val SEQUENCE = 0
@@ -124,7 +309,7 @@ data class DirectUsbStats(
         private const val ACTUAL_XRUNS = 32
         private const val PLAYBACK_BACKPRESSURE = 37
         private const val PERFORMANCE_HINT_ACTIVE = 38
-        private const val PLAYBACK_SILENT_PACKETS = 39
+        private const val PLAYBACK_SHORT_PACKETS = 39
         private const val PLAYBACK_SILENT_FRAMES = 40
         private const val IMPLICIT_METADATA_OVERRUNS = 41
         private const val IMPLICIT_PENDING_TRANSFERS = 42
@@ -133,6 +318,56 @@ data class DirectUsbStats(
         private const val THERMAL_SAFETY_ACTIVE = 47
         private const val IMPLICIT_ZERO_RUNWAY_EVENTS = 44
         private const val IMPLICIT_MAX_PENDING_AGE_NS = 45
+        private const val CAPTURE_PACKET_DROPS = 48
+        private const val PLAYBACK_QUANTUM_DROPS = 49
+        private const val SCHEDULER_DEADLINE_MISSES = 50
+        private const val MAX_SCHEDULER_LATENESS = 51
+        private const val CAPTURE_TARGET = 52
+        private const val CAPTURE_HEADROOM = 53
+        private const val CAPTURE_DEADLINE_SLACK = 54
+        private const val DEFERRED_NO_METADATA = 55
+        private const val DEFERRED_NO_PCM = 56
+        private const val QUEUED_OUT_LOW_WATER = 57
+        private const val CAPTURE_DISCONTINUITIES = 58
+        private const val CAPTURE_MODULATIONS = 59
+        private const val SIGNAL_DISCONTINUITIES = 60
+        private const val TRANSFER_DISCONTINUITIES = 61
+        private const val CAPTURE_DETECTOR_ARMED = 62
+        private const val IMPLICIT_METADATA_INVALID = 63
+        private const val RING_LOW_WATER = 64
+        private const val RING_HIGH_WATER = 65
+        private const val DRAIN_CHUNK = 66
+        private const val RING_P05 = 67
+        private const val RING_P50 = 68
+        private const val RING_P95 = 69
+        private const val RING_SAMPLES = 70
+        private const val MAX_COMPLETION_GAP_NS = 71
+        private const val MAX_MISSING_DRAINS = 72
+        private const val DRAIN_FRAMES_MIN = 73
+        private const val DRAIN_FRAMES_MAX = 74
+        private const val MAX_WRITES_BETWEEN_DRAINS = 75
+        private const val MIN_ADMISSION_MARGIN = 76
+        private const val CAPTURE_PARTIAL_READS = 77
+        private const val LOST_QUANTA = 78
+        private const val HELD_QUANTA = 79
+        private const val LIVE_QUEUE_FRAMES = 80
+        private const val WORST_DSP_OFF_CPU = 91
+        private const val WORST_DSP_WALL = 92
+        private const val WORST_SERVICE_OFF_CPU = 93
+        private const val SERVICE_RUNQUEUE_WAIT = 94
+        private const val MAX_CALLBACKS_PER_POLL = 95
+        private const val MULTI_COLLECT_SPAN = 96
+        private const val MULTI_COLLECT_RUNQUEUE = 97
+        private const val FIRST_LOSS_RING = 81
+        private const val FIRST_LOSS_QUEUED = 82
+        private const val FIRST_LOSS_HAD_ROOM = 83
+        private const val FIRST_LOSS_CREDIT = 84
+        private const val SERVICE_GAP_COUNT = 85
+        private const val STALLS_FIRED = 86
+        private const val WORK_DEADLINE_MISSES = 87
+        private const val GAP_INFLIGHT = 88
+        private const val GAP_PENDING = 89
+        private const val GAP_RING = 90
 
         fun fromRaw(raw: LongArray): DirectUsbStats {
             fun at(index: Int) = raw.getOrElse(index) { 0L }
@@ -140,6 +375,7 @@ data class DirectUsbStats(
                 sequence = at(SEQUENCE),
                 captureOverruns = at(CAPTURE_OVERRUNS),
                 captureUnderruns = at(CAPTURE_UNDERRUNS),
+                capturePacketDrops = at(CAPTURE_PACKET_DROPS),
                 implicitFeedbackFifoDepth = at(IMPLICIT_FIFO_DEPTH),
                 implicitDeferredTransfers = at(IMPLICIT_DEFERRED_TRANSFERS),
                 implicitMetadataOverruns = at(IMPLICIT_METADATA_OVERRUNS),
@@ -155,7 +391,8 @@ data class DirectUsbStats(
                 writeWaitPressure = at(WRITE_WAIT_PRESSURE),
                 playbackXruns = at(PLAYBACK_XRUNS),
                 playbackBackpressure = at(PLAYBACK_BACKPRESSURE),
-                playbackSilentPackets = at(PLAYBACK_SILENT_PACKETS),
+                playbackQuantumDrops = at(PLAYBACK_QUANTUM_DROPS),
+                playbackShortPackets = at(PLAYBACK_SHORT_PACKETS),
                 transportFailed = at(TRANSPORT_FAILED) != 0L,
                 performanceHintActive = at(PERFORMANCE_HINT_ACTIVE) != 0L,
                 thermalSafetyEnabled = at(THERMAL_SAFETY_ENABLED) != 0L,
@@ -179,11 +416,102 @@ data class DirectUsbStats(
                 peakCycleNs = at(PEAK_CYCLE),
                 deadlineBudgetNs = at(DEADLINE_BUDGET),
                 deadlineMisses = at(DEADLINE_MISSES),
+                schedulerDeadlineMisses = at(SCHEDULER_DEADLINE_MISSES),
+                maxSchedulerLatenessNs = at(MAX_SCHEDULER_LATENESS),
+                captureTargetFrames = at(CAPTURE_TARGET),
+                captureHeadroomFrames = at(CAPTURE_HEADROOM),
+                captureDeadlineSlackFrames = at(CAPTURE_DEADLINE_SLACK),
+                deferredNoMetadata = at(DEFERRED_NO_METADATA),
+                deferredNoPcm = at(DEFERRED_NO_PCM),
+                queuedOutLowWaterFrames = at(QUEUED_OUT_LOW_WATER),
+                captureDiscontinuities = at(CAPTURE_DISCONTINUITIES),
+                captureModulations = at(CAPTURE_MODULATIONS),
+                signalDiscontinuities = at(SIGNAL_DISCONTINUITIES),
+                transferDiscontinuities = at(TRANSFER_DISCONTINUITIES),
+                captureDetectorArmed = at(CAPTURE_DETECTOR_ARMED) != 0L,
+                implicitMetadataInvalid = at(IMPLICIT_METADATA_INVALID),
+                ringLowWaterFrames = at(RING_LOW_WATER),
+                ringHighWaterFrames = at(RING_HIGH_WATER),
+                drainChunkFrames = at(DRAIN_CHUNK),
+                ringOccupancyP05 = at(RING_P05),
+                ringOccupancyP50 = at(RING_P50),
+                ringOccupancyP95 = at(RING_P95),
+                ringOccupancySamples = at(RING_SAMPLES),
+                maxCompletionGapNs = at(MAX_COMPLETION_GAP_NS),
+                maxMissingDrains = at(MAX_MISSING_DRAINS),
+                drainFramesMin = at(DRAIN_FRAMES_MIN),
+                drainFramesMax = at(DRAIN_FRAMES_MAX),
+                maxWritesBetweenDrains = at(MAX_WRITES_BETWEEN_DRAINS),
+                minAdmissionMarginFrames = at(MIN_ADMISSION_MARGIN),
+                capturePartialReads = at(CAPTURE_PARTIAL_READS),
+                lostQuanta = at(LOST_QUANTA),
+                heldQuanta = at(HELD_QUANTA),
+                liveQueueFrames = at(LIVE_QUEUE_FRAMES),
+                worstDspBlockOffCpuNs = at(WORST_DSP_OFF_CPU),
+                worstDspBlockWallNs = at(WORST_DSP_WALL),
+                worstServiceOffCpuNs = at(WORST_SERVICE_OFF_CPU),
+                serviceRunqueueWaitNs = at(SERVICE_RUNQUEUE_WAIT),
+                maxCallbacksPerPoll = at(MAX_CALLBACKS_PER_POLL),
+                worstMultiCollectSpanNs = at(MULTI_COLLECT_SPAN),
+                worstMultiCollectRunqueueNs = at(MULTI_COLLECT_RUNQUEUE),
+                firstLossRing = at(FIRST_LOSS_RING),
+                firstLossQueued = at(FIRST_LOSS_QUEUED),
+                firstLossHadRoom = at(FIRST_LOSS_HAD_ROOM),
+                firstLossCredit = at(FIRST_LOSS_CREDIT),
+                serviceGapCount = at(SERVICE_GAP_COUNT),
+                stallsFired = at(STALLS_FIRED),
+                workDeadlineMisses = at(WORK_DEADLINE_MISSES),
+                worstGapInflight = at(GAP_INFLIGHT),
+                worstGapPending = at(GAP_PENDING),
+                worstGapRing = at(GAP_RING),
             )
         }
     }
 }
 
+
+data class AudioRealtimeStats(
+    val callbackCount: Long,
+    val callbackFrames: Long,
+    val frameCapacityViolations: Long,
+    val inputUnderflowFrames: Long,
+    val inputOverflowFrames: Long,
+    val midiEventDrops: Long,
+    val planPublishDeferrals: Long,
+    val vstInputStarvations: Long,
+    val vstOutputUnderrunFrames: Long,
+    val vstGuestDeadlineMisses: Long,
+    val xRunCount: Long,
+    val audioApi: Long,
+    val sampleRateHz: Long,
+    val framesPerBurst: Long,
+    val bufferSize: Long,
+    val performanceMode: Long,
+    val sharingMode: Long,
+    val callbackFramesPerBurst: Long,
+    val activatedCapacity: Long,
+    val deviceId: Long,
+    val inputChannels: Long,
+    val lastCallbackNs: Long,
+    val peakCallbackNs: Long,
+    val callbackDeadlineBudgetNs: Long,
+    val callbackDeadlineMisses: Long,
+) {
+    companion object {
+        private const val VERSION = 1L
+        private const val SIZE = 26
+        fun fromRaw(raw: LongArray): AudioRealtimeStats {
+            require(raw.size >= SIZE) { "Realtime stats payload is truncated" }
+            require(raw[0] == VERSION) { "Unsupported realtime stats schema: ${raw[0]}" }
+            return AudioRealtimeStats(
+                raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+                raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14],
+                raw[15], raw[16], raw[17], raw[18], raw[19], raw[20], raw[21],
+                raw[22], raw[23], raw[24], raw[25]
+            )
+        }
+    }
+}
 
 typealias RackPathId = Long
 const val MASTER_PATH_ID: RackPathId = 0L
@@ -344,6 +672,13 @@ class NativeEngine private constructor() {
 
     /** Pins the calling UI thread away from CPUs reserved for Direct USB. */
     external fun nativeApplyCurrentThreadUiAffinity()
+    // Set before a session starts; the audio threads read them when created.
+    external fun nativeSetAdpfMode(mode: Int)
+    external fun nativeSetMeasureServiceRunqueue(enabled: Boolean)
+    external fun nativeSetMeasureRunqueueWait(enabled: Boolean)
+    external fun nativeSetAudioAffinityEnabled(enabled: Boolean)
+    external fun nativeSetUiAffinityEnabled(enabled: Boolean)
+    external fun nativeSetServiceCpuPlacement(placement: Int)
 
     /**
      * Set the path where LV2 bundles (e.g. Guitarix) are extracted.
@@ -443,6 +778,9 @@ class NativeEngine private constructor() {
         startupPrimeFrames: Int,
         writeHeadroomFrames: Int,
         captureLimitFrames: Int,
+        captureTargetFrames: Int,
+        captureHeadroomFrames: Int,
+        captureDeadlineSlackFrames: Int,
         transferCount: Int,
         packetsPerTransfer: Int,
         ringCapacityBytes: Int,
@@ -469,7 +807,104 @@ class NativeEngine private constructor() {
      */
     fun getDirectUsbStats(): DirectUsbStats = DirectUsbStats.fromRaw(nativeGetDirectUsbStats())
     external fun nativeGetDirectUsbStats(): LongArray
+
+    /**
+     * Diagnostics: step 1 of the ladder in liblowlatencyaudio/docs/measurement.md.
+     * Enable before starting a session; the recorder clears its history on
+     * enable. Recording is a bounded store on the realtime path and is off in
+     * ordinary use.
+     */
+    external fun nativeSetDirectUsbFlightRecorderEnabled(enabled: Boolean)
+
+    /**
+     * Freezes the recorder when [event] (a `FlightRecord.EVENT_*` value) first
+     * occurs, preserving the events leading up to it. Without a trigger the
+     * buffer keeps only the newest records, and a rare event is evicted by the
+     * ordinary traffic that follows it.
+     */
+    /**
+     * Records only the selected event types, as a bitfield of
+     * `1 shl FlightRecord.EVENT_*`; zero records everything. Use
+     * [FlightRecord.ANOMALY_MASK] to keep a whole run's anomalies rather than
+     * a few seconds of routine traffic.
+     */
+    external fun nativeSetDirectUsbFlightRecorderEventMask(mask: Int)
+
+    /**
+     * Flags a step between consecutive output samples above this fraction of
+     * full scale, recording it as [FlightRecord.EVENT_SIGNAL_DISCONTINUITY].
+     * A click is a discontinuity in the signal, so this finds one without
+     * anyone listening. Zero disables the check.
+     */
+    external fun nativeSetDirectUsbDiscontinuityThreshold(threshold: Float)
+
+    /** The same check on the packed PCM leaving the ring, just before the wire. */
+    external fun nativeSetDirectUsbTransferDiscontinuityThreshold(threshold: Float)
+
+    /**
+     * The same check on captured input, as a fraction of the signal's own peak
+     * so it does not depend on input gain. With a loopback from output one to
+     * input one it covers the DAC, the cable and the ADC.
+     */
+    external fun nativeSetDirectUsbCaptureDiscontinuityThreshold(threshold: Float)
+
+    /**
+     * Which capture channel the loopback detectors watch, zero based. An
+     * interface with an internal loop returns the signal on the pair fed by
+     * the playback pair, so watching channel zero would see silence.
+     */
+    external fun nativeSetDirectUsbCaptureInspectChannel(channel: Int)
+
+    /**
+     * Starts a fresh envelope epoch. Startup fills the pipeline and settles the
+     * first completions, so its extrema describe a different regime than the
+     * steady state and must not be mixed into it.
+     */
+    external fun nativeResetDirectUsbEnvelope()
+
+    /**
+     * Fires one deliberate stall of each kind, in microseconds, zero for none.
+     * A render stall delays the producer while USB keeps draining; a service
+     * stall stops completions being processed. They produce different symptoms,
+     * so a test that cannot tell them apart proves nothing.
+     */
+    external fun nativeInjectDirectUsbStall(renderUs: Int, serviceUs: Int)
+
+    /**
+     * Admission policy: 0 waits for room before publishing a quantum, 1 paces
+     * the producer by frames the device has actually played. The second holds
+     * fewer rendered frames in the pipeline and so cuts latency; which is
+     * better here is a measurement, not a decision.
+     */
+    external fun nativeSetDirectUsbAdmissionPolicy(policy: Int)
+
+    /**
+     * How far the producer may run ahead of the device under the credit
+     * policy, in frames. Zero forbids any lead, which forbids a buffer.
+     */
+    external fun nativeSetDirectUsbCreditReserve(frames: Int)
+
+    /**
+     * Flags the captured level wandering from its running average by more than
+     * this fraction. A steady tone must come back steady; a wandering envelope
+     * means the output is modulated.
+     */
+    external fun nativeSetDirectUsbCaptureModulationThreshold(threshold: Float)
+
+    external fun nativeSetDirectUsbFlightRecorderFreezeTrigger(event: Int)
+
+    /** True once the freeze trigger has fired. */
+    external fun nativeIsDirectUsbFlightRecorderFrozen(): Boolean
+
+    /**
+     * Newest flight-recorder records, flattened: two header slots (total events
+     * offered, events lost to wrap) followed by [FlightRecord.FIELDS] longs per
+     * record. Call from a control thread once production has stopped.
+     */
+    external fun nativeGetDirectUsbFlightRecorderSnapshot(maxRecords: Int): LongArray
     external fun nativeGetDirectUsbErrorDetail(): String
+    external fun nativeMeasureRoundTrip(): DoubleArray
+    external fun nativeGetRoundTripError(): String
     /** Flushes live PGO profile data; best effort and safe when unsupported. */
     external fun nativeFlushPgoProfile(): Boolean
 
@@ -494,6 +929,9 @@ class NativeEngine private constructor() {
      * Get actual buffer frame count used by the audio callback.
      */
     external fun nativeGetBufferFrameCount(): Int
+    fun getRealtimeStats(): AudioRealtimeStats =
+        AudioRealtimeStats.fromRaw(nativeGetRealtimeStats())
+    external fun nativeGetRealtimeStats(): LongArray
 
 
     /**
@@ -545,14 +983,18 @@ class NativeEngine private constructor() {
     external fun nativeRemovePluginFromRack(pathId: Long, position: Int): Boolean
     external fun nativeReorderRack(pathId: Long, fromPos: Int, toPos: Int): Boolean
     external fun nativeSetPluginFilePath(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String)
-    external fun nativeSetParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float)
+    external fun nativeSetParameter(pathId: Long, pluginInstanceId: Long, portIndex: Int, value: Float)
     external fun nativeSetManualLatencyFrames(pathId: Long, pluginIndex: Int, frames: Int): Boolean
     external fun nativeGetManualLatencyFrames(pathId: Long, pluginIndex: Int): Int
     external fun nativeGetPluginLatencyFrames(pathId: Long, pluginIndex: Int): Long
     external fun nativeGetPluginEffectiveLatencyFrames(pathId: Long, pluginIndex: Int): Long
-    external fun nativeGetParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float
-    external fun nativeGetParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String
+    external fun nativeGetParameter(pathId: Long, pluginInstanceId: Long, portIndex: Int): Float
+    external fun nativeGetParameterSnapshot(
+        pathId: Long, pluginInstanceId: Long, portIndices: IntArray
+    ): FloatArray?
+    external fun nativeGetParameterDisplay(pathId: Long, pluginInstanceId: Long, portIndex: Int): String
     external fun nativeGetRackSize(pathId: Long): Int
+    external fun nativeGetRackRealtimeDiagnostic(pathId: Long): String
     external fun nativeGetRackPluginInfo(pathId: Long, index: Int): PluginInfo?
 
     // --- X11 UI management (EGL + ANativeWindow, native X server) ---
@@ -754,8 +1196,8 @@ class NativeEngine private constructor() {
     fun reorderRack(pathId: Long, fromPos: Int, toPos: Int): Boolean = nativeReorderRack(pathId, fromPos, toPos)
     fun setPluginFilePath(pathId: Long, pluginIndex: Int, propertyUri: String, filePath: String) =
         nativeSetPluginFilePath(pathId, pluginIndex, propertyUri, filePath)
-    fun setParameter(pathId: Long, pluginIndex: Int, portIndex: Int, value: Float) =
-        nativeSetParameter(pathId, pluginIndex, portIndex, value)
+    fun setParameter(pathId: Long, pluginInstanceId: Long, portIndex: Int, value: Float) =
+        nativeSetParameter(pathId, pluginInstanceId, portIndex, value)
     fun setManualLatencyFrames(pathId: Long, pluginIndex: Int, frames: Int): Boolean =
         nativeSetManualLatencyFrames(pathId, pluginIndex, frames)
     fun getManualLatencyFrames(pathId: Long, pluginIndex: Int): Int =
@@ -764,11 +1206,16 @@ class NativeEngine private constructor() {
         nativeGetPluginLatencyFrames(pathId, pluginIndex)
     fun getPluginEffectiveLatencyFrames(pathId: Long, pluginIndex: Int): Long =
         nativeGetPluginEffectiveLatencyFrames(pathId, pluginIndex)
-    fun getParameter(pathId: Long, pluginIndex: Int, portIndex: Int): Float =
-        nativeGetParameter(pathId, pluginIndex, portIndex)
-    fun getParameterDisplay(pathId: Long, pluginIndex: Int, portIndex: Int): String =
-        nativeGetParameterDisplay(pathId, pluginIndex, portIndex)
+    fun getParameter(pathId: Long, pluginInstanceId: Long, portIndex: Int): Float =
+        nativeGetParameter(pathId, pluginInstanceId, portIndex)
+    fun getParameterSnapshot(
+        pathId: Long, pluginInstanceId: Long, portIndices: IntArray
+    ): FloatArray? = nativeGetParameterSnapshot(pathId, pluginInstanceId, portIndices)
+    fun getParameterDisplay(pathId: Long, pluginInstanceId: Long, portIndex: Int): String =
+        nativeGetParameterDisplay(pathId, pluginInstanceId, portIndex)
     fun getRackSize(pathId: Long): Int = nativeGetRackSize(pathId)
+    fun getRackRealtimeDiagnostic(pathId: Long): String =
+        nativeGetRackRealtimeDiagnostic(pathId)
     fun getRackPluginInfo(pathId: Long, index: Int): PluginInfo? = nativeGetRackPluginInfo(pathId, index)
     fun getRackPluginInstanceId(pathId: Long, index: Int): Long = nativeGetRackPluginInstanceId(pathId, index)
     fun getRackPlugins(pathId: Long): Array<RackPluginEntry> = nativeGetRackPlugins(pathId)

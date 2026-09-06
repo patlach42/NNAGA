@@ -11,6 +11,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <algorithm>
 
 namespace vsthost {
 
@@ -46,7 +47,19 @@ public:
                      uint32_t outputCapacity) override;
 
     guitarrackcraft::PluginInfo getInfo() const override;
+    bool isReadyForRealtime() const noexcept override {
+        return realtimeReady_.load(std::memory_order_acquire);
+    }
     uint32_t getLatencyFrames() const noexcept override;
+    guitarrackcraft::PluginRealtimeCounters getRealtimeCounters() const noexcept override {
+        guitarrackcraft::PluginRealtimeCounters counters;
+        if (ring_) {
+            counters.inputStarvations = ring_->starvationCount();
+            counters.guestDeadlineMisses = ring_->deadlineMissCount();
+        }
+        counters.outputUnderrunFrames = underrunFrames_.load(std::memory_order_relaxed);
+        return counters;
+    }
     void setParameter(uint32_t portIndex, float value) override;
     float getParameter(uint32_t portIndex) const override;
     std::string getParameterDisplay(uint32_t portIndex) const override;
@@ -86,7 +99,11 @@ private:
     float sampleRate_ = 48000.0f;
     uint32_t bufferSize_ = 0;
     std::atomic<bool> prepared_{false};
-
+    // Admission is separate from preparation: a started guest is not
+    // publishable until activation accepted a bounded nonzero quantum and the
+    // guest completed its startup handshake.
+    std::atomic<bool> guestReadyForActivation_{false};
+    std::atomic<bool> realtimeReady_{false};
     std::unique_ptr<SharedRing>      ring_;
     std::unique_ptr<PickerChannel>   picker_;
     std::unique_ptr<WineHostProcess> guest_;
@@ -110,6 +127,13 @@ private:
     // is publishing a new value so contention never transiently reports zero.
     mutable std::atomic<uint32_t> lastStableLatencyFrames_{0};
     std::atomic<int32_t> underruns_{0};
+    std::atomic<uint64_t> underrunFrames_{0};
+    uint32_t dryRampSamples_ = 0;
+    uint32_t wetRampSamples_ = 0;
+    bool dryFallback_ = true;
+    float lastOutputLeft_ = 0.0f;
+    float lastOutputRight_ = 0.0f;
+    bool haveLastOutput_ = false;
 };
 
 } // namespace vsthost

@@ -33,6 +33,10 @@ std::vector<std::string> candidates(const std::string& root) {
 }
 
 void* openHandle(const std::string& path) {
+    // Prefer the class-loader namespace or an already preloaded matching
+    // SONAME. This keeps the APK baseline authoritative when a stale
+    // installed file has the same SONAME.
+    if (void* handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL)) return handle;
 #if defined(__ANDROID__)
     const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) return nullptr;
@@ -43,18 +47,32 @@ void* openHandle(const std::string& path) {
     close(fd);
     return handle;
 #else
-    return dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+    return nullptr;
 #endif
 }
 
 std::shared_ptr<NativePluginLibrary> openLibrary(const std::string& path) {
     void* handle = openHandle(path);
     if (!handle) return {};
-    auto entry = reinterpret_cast<const NnagaPluginLibraryV1* (*)(uint32_t) noexcept>(
+    dlerror();
+    auto entry = reinterpret_cast<const NnagaPluginLibraryV2* (*)(uint32_t) noexcept>(
         dlsym(handle, "nnaga_plugin_entry"));
-    if (!entry) { dlclose(handle); return {}; }
+    const char* symbolError = dlerror();
+    if (!entry || symbolError) {
+        __android_log_print(
+            ANDROID_LOG_WARN, kTag, "dlsym nnaga_plugin_entry failed for %s: %s",
+            path.c_str(), symbolError ? symbolError : "missing symbol");
+        dlclose(handle);
+        return {};
+    }
     const auto* abi = entry(NNAGA_NATIVE_ABI_VERSION);
-    if (!abi) { dlclose(handle); return {}; }
+    if (!abi) {
+        __android_log_print(
+            ANDROID_LOG_WARN, kTag, "Native ABI %u rejected by %s",
+            NNAGA_NATIVE_ABI_VERSION, path.c_str());
+        dlclose(handle);
+        return {};
+    }
     auto library = std::make_shared<NativePluginLibrary>();
     library->handle = handle;
     library->abi = abi;
@@ -72,7 +90,7 @@ bool NativePluginFactory::initialize() {
     const std::vector<std::string> roots = {filesDir_ + "/plugin-repositories/installed/native", nativeLibDir_, pluginLibDir_};
     for (const auto& root : roots) for (const auto& path : candidates(root)) {
         auto library = openLibrary(path);
-        std::vector<const NnagaPluginDescriptorV1*> descriptors;
+        std::vector<const NnagaPluginDescriptorV2*> descriptors;
         std::string error;
         if (!validateNativePluginLibrary(library, &descriptors, &error)) {
             __android_log_print(ANDROID_LOG_WARN, kTag, "Skipping %s: %s", path.c_str(), error.c_str());

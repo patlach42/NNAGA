@@ -62,6 +62,8 @@ import android.content.pm.ActivityInfo
 import com.vibes.dsp.ui.components.NnagaIconButton
 import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.RackManager
+import com.vibes.dsp.ui.rack.RackViewModel
+import androidx.lifecycle.viewmodel.compose.viewModel
 import java.io.File
 
 /**
@@ -69,26 +71,32 @@ import java.io.File
  */
 class ModguiHostBridge(
     val pathId: Long,
-    @Volatile var pluginIndex: Int,
-    pluginInfo: PluginInfo
+    @Volatile var pluginInstanceId: Long,
+    pluginInfo: PluginInfo,
+    private val submitParameter: (Long, Long, Int, Float) -> Unit
 ) {
+    private val applied = java.util.concurrent.ConcurrentHashMap<Int, Float>()
     private val symbolToIndex: Map<String, Int> = pluginInfo.ports
         .filter { it.isControl && !it.isAudio }
         .associate { it.symbol to it.index }
+    internal val controlPortIndices: IntArray =
+        symbolToIndex.values.distinct().toIntArray()
+
+    internal fun updateParameterSnapshot(values: FloatArray) {
+        val count = minOf(controlPortIndices.size, values.size)
+        for (index in 0 until count) applied[controlPortIndices[index]] = values[index]
+    }
 
     @JavascriptInterface
     fun setParameter(symbol: String, value: Float) {
         symbolToIndex[symbol]?.let { portIndex ->
-            RackManager.setParameter(pathId, pluginIndex, portIndex, value)
+            applied[portIndex] = value
+            submitParameter(pathId, pluginInstanceId, portIndex, value)
         }
     }
-
     @JavascriptInterface
-    fun getParameter(symbol: String): Float {
-        return symbolToIndex[symbol]?.let { portIndex ->
-            RackManager.getParameter(pathId, pluginIndex, portIndex)
-        } ?: 0f
-    }
+    fun getParameter(symbol: String): Float =
+        symbolToIndex[symbol]?.let { portIndex -> applied[portIndex] ?: 0f } ?: 0f
 
     var onContentSize: ((Int, Int) -> Unit)? = null
         internal set
@@ -141,16 +149,19 @@ fun ModguiScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-    var pluginInfo by remember(pathId, pluginIndex) { mutableStateOf<PluginInfo?>(null) }
-    var pluginInfoLoaded by remember(pathId, pluginIndex) { mutableStateOf(false) }
+    var pluginEntry by remember(pathId, pluginIndex) {
+        mutableStateOf<com.vibes.dsp.engine.RackPluginEntry?>(null)
+    }
+    var pluginEntryLoaded by remember(pathId, pluginIndex) { mutableStateOf(false) }
+    val rackViewModel: RackViewModel = viewModel()
     LaunchedEffect(pathId, pluginIndex) {
-        pluginInfo = withContext(Dispatchers.IO) {
-            RackManager.getRackPluginInfo(pathId, pluginIndex)
+        pluginEntry = withContext(Dispatchers.IO) {
+            RackManager.getRackPlugins(pathId).firstOrNull { it.index == pluginIndex }
         }
-        pluginInfoLoaded = true
+        pluginEntryLoaded = true
     }
 
-    if (!pluginInfoLoaded) {
+    if (!pluginEntryLoaded) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(
                 color = MaterialTheme.colorScheme.primary,
@@ -159,7 +170,8 @@ fun ModguiScreen(
         }
         return
     }
-    val loadedPluginInfo = pluginInfo ?: run {
+    val loadedEntry = pluginEntry
+    val loadedPluginInfo = loadedEntry?.info ?: run {
         Box(modifier = Modifier.fillMaxSize()) {
             Text(
                 text = "Plugin not found",
@@ -168,6 +180,7 @@ fun ModguiScreen(
         }
         return
     }
+    val pluginInstanceId = loadedEntry.instanceId
 
     val basePath = loadedPluginInfo.modguiBasePath
     val iconTemplate = loadedPluginInfo.modguiIconTemplate
@@ -195,22 +208,40 @@ fun ModguiScreen(
         buildAssetLoader(context, baseDir, iconTemplate, templateData, loadedPluginInfo, inline = false)
     }
     val loadUrl = "https://modgui.app/$iconTemplate"
-    val bridge = remember(pathId, pluginIndex, loadedPluginInfo) {
-        ModguiHostBridge(pathId, pluginIndex, loadedPluginInfo)
+    val bridge = remember(pathId, loadedPluginInfo) {
+        ModguiHostBridge(pathId, 0L, loadedPluginInfo) { p, i, port, value ->
+            rackViewModel.setParameter(p, i, port, value)
+        }
     }
-    bridge.pluginIndex = pluginIndex  // keep current after reorders
+    LaunchedEffect(bridge, pluginInstanceId) {
+        bridge.pluginInstanceId = pluginInstanceId
+        if (pluginInstanceId == 0L) return@LaunchedEffect
+        while (true) {
+            rackViewModel.getParameterSnapshot(
+                pathId, pluginInstanceId, bridge.controlPortIndices
+            )?.let(bridge::updateParameterSnapshot)
+            bridge.webView?.post {
+                bridge.webView?.evaluateJavascript(
+                    "if(typeof _modRefreshPorts==='function')_modRefreshPorts();", null)
+            }
+            delay(200)
+        }
+    }
     Box(modifier = Modifier.fillMaxSize()) {
         AndroidView(
             factory = {
                 buildModguiWebView(context, assetLoader, bridge, loadUrl).apply {
-                    setScrollBarStyle(WebView.SCROLLBARS_OUTSIDE_OVERLAY)
                     clipChildren = false
                     clipToPadding = false
                     isFocusable = true
+                    bridge.webView = this
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
+        DisposableEffect(bridge) {
+            onDispose { bridge.webView = null }
+        }
         // Floating back button
         NnagaIconButton(
             onClick = onNavigateBack,
@@ -236,7 +267,7 @@ fun ModguiScreen(
 @Composable
 fun InlineModguiView(
     pathId: Long,
-    pluginIndex: Int,
+    pluginInstanceId: Long,
     pluginInfo: PluginInfo,
     isVisible: Boolean = true,
     modifier: Modifier = Modifier,
@@ -247,6 +278,7 @@ fun InlineModguiView(
     onModelSelected: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
+    val rackViewModel: RackViewModel = viewModel()
     val basePath = pluginInfo.modguiBasePath
     val iconTemplate = pluginInfo.modguiIconTemplate
     val baseDir = File(basePath)
@@ -273,10 +305,14 @@ fun InlineModguiView(
         buildAssetLoader(context, baseDir, iconTemplate, templateData, pluginInfo, inline = true)
     }
     val loadUrl = "https://modgui.app/$iconTemplate"
-    val bridge = remember(pathId, pluginIndex, pluginInfo) {
-        ModguiHostBridge(pathId, pluginIndex, pluginInfo)
+    val bridge = remember(pathId, pluginInfo) {
+        ModguiHostBridge(pathId, 0L, pluginInfo) { p, i, port, value ->
+            rackViewModel.setParameter(p, i, port, value)
+        }
     }
-    bridge.pluginIndex = pluginIndex  // keep current after reorders
+    LaunchedEffect(bridge, pluginInstanceId) {
+        bridge.pluginInstanceId = pluginInstanceId
+    }
     var contentWidth by remember { mutableStateOf(0) }
     var contentHeight by remember { mutableStateOf(0) }
 
@@ -332,15 +368,18 @@ fun InlineModguiView(
     // Periodically refresh modgui port visuals from native values so changes
     // made via X11 UI or sliders are reflected in the modgui knobs/toggles.
     // Only runs when visible to save CPU when scrolled off-screen.
-    LaunchedEffect(bridge, isVisible) {
-        if (!isVisible) return@LaunchedEffect
+    LaunchedEffect(bridge, pluginInstanceId, isVisible) {
+        if (!isVisible || pluginInstanceId == 0L) return@LaunchedEffect
         while (true) {
-            delay(200) // 5Hz refresh rate
+            rackViewModel.getParameterSnapshot(
+                pathId, pluginInstanceId, bridge.controlPortIndices
+            )?.let(bridge::updateParameterSnapshot)
             bridge.webView?.post {
                 bridge.webView?.evaluateJavascript(
                     "if(typeof _modRefreshPorts==='function')_modRefreshPorts();", null
                 )
             }
+            delay(200)
         }
     }
 

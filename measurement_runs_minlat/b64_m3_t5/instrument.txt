@@ -1,0 +1,8 @@
+
+com.vibes.dsp.engine.DirectUsbDeviceStressTest:.
+
+Time: 60.74
+
+OK (1 test)
+
+

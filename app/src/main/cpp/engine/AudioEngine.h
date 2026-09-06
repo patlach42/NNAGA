@@ -20,7 +20,7 @@
 #ifndef GUITARRACKCRAFT_AUDIO_ENGINE_H
 #define GUITARRACKCRAFT_AUDIO_ENGINE_H
 
-#include <cstdint>
+
 #include <condition_variable>
 #include <mutex>
 #include <atomic>
@@ -53,6 +53,9 @@ public:
         uint32_t playbackRingFrames = 0;
         uint32_t queuedOutFrames = 0;
         uint32_t captureTransferFrames = 0;
+        uint32_t captureTargetFrames = 0;
+        uint32_t captureHeadroomFrames = 0;
+        uint32_t captureDeadlineSlackFrames = 0;
         uint64_t lastDspNanoseconds = 0;
         uint64_t peakDspNanoseconds = 0;
         uint64_t lastCycleNanoseconds = 0;
@@ -61,14 +64,53 @@ public:
         uint64_t deadlineMisses = 0;
         uint64_t captureWaitTimeouts = 0;
         uint64_t writeWaitTimeouts = 0;
+        uint64_t playbackQuantumDrops = 0;
+        uint64_t capturePacketDrops = 0;
         uint64_t captureOverruns = 0;
         uint64_t captureUnderruns = 0;
         uint64_t playbackXruns = 0;
+        uint64_t schedulerDeadlineMisses = 0;
+        uint64_t maxSchedulerLatenessNanoseconds = 0;
+        // The worst graph block by time spent off the CPU, and the wall
+        // time of that same block. One block, so the two can be read against
+        // each other; separate maxima could come from different blocks.
+        uint64_t worstDspBlockOffCpuNanoseconds = 0;
+        uint64_t worstDspBlockWallNanoseconds = 0;
+        // Cumulative runqueue wait of the servicing thread, sampled off it.
+        uint64_t serviceRunqueueWaitNanoseconds = 0;
         bool performanceHintActive = false;
         bool thermalSafetyEnabled = false;
         bool thermalSafetyActive = false;
     };
     DirectUsbRuntimeStats getDirectUsbRuntimeStats() const noexcept;
+    struct RealtimeStatsSnapshot {
+        uint64_t callbackCount = 0;
+        uint64_t callbackFrames = 0;
+        uint64_t frameCapacityViolations = 0;
+        uint64_t inputUnderflowFrames = 0;
+        uint64_t inputOverflowFrames = 0;
+        uint64_t midiEventDrops = 0;
+        uint64_t planPublishDeferrals = 0;
+        uint64_t vstInputStarvations = 0;
+        uint64_t vstOutputUnderrunFrames = 0;
+        uint64_t vstGuestDeadlineMisses = 0;
+        uint64_t xRunCount = 0;
+        int32_t audioApi = 0;
+        int32_t sampleRateHz = 0;
+        int32_t framesPerBurst = 0;
+        int32_t bufferSize = 0;
+        int32_t performanceMode = 0;
+        int32_t sharingMode = 0;
+        int32_t callbackFramesPerBurst = 0;
+        int32_t activatedCapacity = 0;
+        int32_t deviceId = 0;
+        int32_t inputChannels = 0;
+        uint64_t lastCallbackNanoseconds = 0;
+        uint64_t peakCallbackNanoseconds = 0;
+        uint64_t callbackDeadlineBudgetNanoseconds = 0;
+        uint64_t callbackDeadlineMisses = 0;
+    };
+    RealtimeStatsSnapshot getRealtimeStatsSnapshot() const noexcept;
     AudioEngine();
     ~AudioEngine();
 
@@ -89,6 +131,18 @@ public:
                                bool thermalSafetyEnabled);
 
     void stop();
+    // Blocking control-thread measurement; render thread only observes the atomic request.
+    // Slots 0..4 are latency frames, latency ms, correlation, input peak and
+    // output peak. Slot 5 is how many arrivals the loopback contained and
+    // 6..11 are up to three of them as offset/correlation pairs, strongest
+    // first. More than one arrival means the path sums the signal with a
+    // delayed copy of itself, which no discontinuity check can see.
+    static constexpr int kRoundTripResultSlots = 12;
+    static constexpr int kRoundTripReportedPeaks = 3;
+    bool measureDirectUsbRoundTrip(int32_t timeoutMs,
+                                   double result[kRoundTripResultSlots],
+                                   std::string& error) noexcept;
+
     bool startAndroidOboeSession(int32_t inputDeviceId, int32_t outputDeviceId, int32_t bufferFrames);
     bool openDirectUsbDevice(int fd, int driverCode = 0);
     void closeDirectUsbDevice();
@@ -128,6 +182,30 @@ public:
     /**
      * Get input peak level (0.0–1.0).
      */
+    // Zero when nothing was lost. Reported once, at the warmup boundary, off
+    // the render thread.
+    void getDirectUsbFirstLoss(int32_t* ring, int32_t* queued, int32_t* hadRoom,
+                               int64_t* credit) const {
+        if (ring) *ring = directUsbFirstLossRing_.load(std::memory_order_relaxed);
+        if (queued) *queued = directUsbFirstLossQueued_.load(std::memory_order_relaxed);
+        if (hadRoom) *hadRoom = directUsbFirstLossHadRoom_.load(std::memory_order_relaxed);
+        if (credit) *credit = directUsbFirstLossCredit_.load(std::memory_order_relaxed);
+    }
+    void injectRenderStallUs(int microseconds) {
+        directUsbRenderStallUs_.store(microseconds, std::memory_order_relaxed);
+    }
+    uint64_t getDirectUsbRenderStallsFired() const {
+        return directUsbRenderStallsFired_.load(std::memory_order_relaxed);
+    }
+    uint64_t getDirectUsbWorkDeadlineMisses() const {
+        return directUsbWorkDeadlineMisses_.load(std::memory_order_relaxed);
+    }
+    uint64_t getDirectUsbHeldQuanta() const {
+        return directUsbHeldQuanta_.load(std::memory_order_relaxed);
+    }
+    uint64_t getDirectUsbLostQuanta() const {
+        return directUsbLostQuanta_.load(std::memory_order_relaxed);
+    }
     float getInputLevel() const;
 
     /**
@@ -164,6 +242,10 @@ public:
 
     // Attach the duplex direct USB transport. Lifetime is owned by NativeContext.
     void setDirectUsbOutput(DirectUsbOutput* output) { directUsbOutput_ = output; }
+    void setDirectUsbInputMeterChannel(int32_t channel) {
+        directUsbInputMeterChannel_.store(channel < 0 ? 0 : channel,
+                                          std::memory_order_relaxed);
+    }
     bool isDirectUsbRenderUrgentAudio() const noexcept {
         return directUsbRenderUrgentAudio_.load(std::memory_order_acquire);
     }
@@ -187,11 +269,41 @@ private:
     void directUsbRenderLoop();
     void directUsbThermalPolicyLoop();
     void stopDirectUsbThermalPolicy() noexcept;
+public:
+    // The USB envelope is reset at the warmup boundary so a measurement
+    // describes the steady window. The engine's own maxima were not, so the
+    // render figures spanned startup and the USB figures did not, and the two
+    // could not be read against each other. Same epoch or neither.
+    void resetDirectUsbRealtimeEnvelope() noexcept;
+    void setDirectUsbAdpfMode(int mode) noexcept {
+        directUsbAdpfMode_.store(mode, std::memory_order_relaxed);
+    }
+    void setDirectUsbMeasureRunqueueWait(bool enabled) noexcept {
+        // Kept for the instrumentation argument; the accounting is now two
+        // vDSO clock reads and cheap enough to leave on.
+        directUsbMeasureRunqueueWait_.store(enabled, std::memory_order_release);
+    }
+private:
     std::thread directUsbThermalPolicyThread_;
     std::mutex directUsbThermalPolicyMutex_;
     std::condition_variable directUsbThermalPolicyCv_;
     std::atomic<bool> directUsbThermalPolicyStop_{false};
     std::atomic<bool> directUsbThermalSafetyEnabled_{false};
+    // Off-CPU microseconds in the high half, wall microseconds in the low
+    // half, so the pair is published atomically.
+    std::atomic<uint64_t> directUsbWorstDspBlock_{0};
+    std::atomic<uint64_t> directUsbServiceRunqueueNs_{0};
+    // 0 off, 1 the CPU-only signal, 2 wall and CPU reported separately.
+    // Defaults to 1, which is what every measurement in DRIVER_FINDINGS was
+    // taken with. Mode 2 is built and switchable because the reasoning behind
+    // it is sound - a workload reported at a hundredth of its deadline invites
+    // the system to place it anywhere - but four cycles per arm could not
+    // separate the three, and a default is not the place for a hypothesis.
+    std::atomic<int> directUsbAdpfMode_{1};
+    // Two vDSO clock reads a block, so it is left on: the figure separates a
+    // graph that is slow from a graph that is descheduled, and nothing else
+    // does. The switch stays so a run can prove the reads cost nothing.
+    std::atomic<bool> directUsbMeasureRunqueueWait_{true};
     int32_t directUsbConfiguredWatermarkFrames_ = 0;
     int32_t directUsbConfiguredMultiplier_ = 0;
     std::atomic<bool> directUsbThermalSafetyActive_{false};
@@ -213,6 +325,7 @@ private:
     bool cleanupInProgress_ = false;
     std::atomic<DirectUsbState> directUsbState_{DirectUsbState::Stopped};
     std::atomic<uint64_t> directUsbSessionId_{0};
+    std::atomic<int32_t> directUsbFailureRequest_{0};
     std::atomic<int32_t> directUsbFailureCode_{0};
     std::atomic<uint32_t> directUsbEffectiveQuantum_{0};
     std::atomic<int32_t> directUsbPeriodMultiplier_{0};
@@ -224,6 +337,45 @@ private:
     std::atomic<uint64_t> directUsbPeakCycleNs_{0};
     std::atomic<uint64_t> directUsbDeadlineBudgetNs_{0};
     std::atomic<uint64_t> directUsbDeadlineMisses_{0};
+    std::atomic<uint64_t> directUsbSchedulerDeadlineMisses_{0};
+    // Cycles that overran the period by more than they spent blocked - that
+    // is, overran while actually working. The counter above includes waiting
+    // for the device, which is the stream's clock rather than a fault.
+    std::atomic<uint64_t> directUsbWorkDeadlineMisses_{0};
+    std::atomic<uint64_t> directUsbMaxSchedulerLatenessNs_{0};
+    // Quantum periods in which the device granted no playback credit.
+    std::atomic<uint64_t> directUsbCreditTimeouts_{0};
+    // Rendered blocks that never reached the ring because a wait ran out of
+    // deadline. Frame loss, and gated as such.
+    std::atomic<uint64_t> directUsbLostQuanta_{0};
+    // A rendered quantum that could not be published this cycle, kept so the
+    // next cycle can publish it instead of discarding it. Depth is one by
+    // design: a second undeliverable block means the device is not consuming,
+    // which is a transport fault rather than something to queue deeper.
+    // Holding it converts a loss into latency, and only for as long as the
+    // stall lasts.
+    std::vector<float> directUsbHeldLeft_;
+    std::vector<float> directUsbHeldRight_;
+    bool directUsbHoldingBlock_ = false;
+    std::atomic<uint64_t> directUsbHeldQuanta_{0};
+    // A deliberate stall in the render thread, in microseconds, fired once
+    // when armed. Distinct from a service stall: this one delays the producer
+    // while USB keeps draining, which is the opposite disturbance and should
+    // produce the opposite symptom.
+    std::atomic<int> directUsbRenderStallUs_{0};
+    std::atomic<uint64_t> directUsbRenderStallsFired_{0};
+    // The pipeline as it stood when the first quantum was lost. Captured with
+    // plain atomic stores rather than through the flight recorder, which is
+    // armed by a caller and so cannot be relied on to have been listening.
+    std::atomic<uint64_t> directUsbFirstLossNs_{0};
+    std::atomic<int32_t> directUsbFirstLossRing_{-1};
+    std::atomic<int32_t> directUsbFirstLossQueued_{-1};
+    std::atomic<int32_t> directUsbFirstLossHadRoom_{-1};
+    std::atomic<int64_t> directUsbFirstLossCredit_{0};
+    std::atomic<int32_t> directUsbOutputPair_{0};
+    // Which capture channel the input meter follows. Zero unless a caller
+    // points it elsewhere, which a loopback returning on another pair needs.
+    std::atomic<int32_t> directUsbInputMeterChannel_{0};
     std::atomic<bool> directUsbRenderUrgentAudio_{false};
     std::atomic<bool> directUsbPerformanceHintActive_{false};
     std::atomic<bool> cleanupStarted_{true};
@@ -238,6 +390,7 @@ private:
     std::vector<float> directUsbStartupLeft_;
     std::vector<float> directUsbStartupRight_;
     int32_t directUsbStartupBlocks_ = 0;
+    std::atomic<uint64_t> directUsbPlaybackQuantumDrops_{0};
     std::atomic<uint64_t> directUsbWriteWaitTimeouts_{0};
     std::vector<float> directUsbOutputRight_;
 
@@ -248,6 +401,8 @@ private:
     mutable std::atomic<bool> isRunning_;
     std::atomic<bool> androidOboeSession_{false};
 
+    std::atomic<uint64_t> realtimeCallbackCount_{0};
+    std::atomic<uint64_t> realtimeCallbackFrames_{0};
     
     // Temporary buffers for plugin chain
     const float* inputPtrs_[2];
@@ -264,13 +419,7 @@ private:
     std::atomic<uint32_t> publishedCallbackFrameCount_{0};
     std::atomic<double> publishedLatencyMs_{0.0};
     std::atomic<int32_t> publishedXRunCount_{0};
-    std::atomic<uint32_t> directCaptureRingFrames_{0};
-    std::atomic<uint32_t> directPlaybackRingFrames_{0};
-    std::atomic<uint32_t> directQueuedOutFrames_{0};
     std::atomic<uint32_t> directCaptureTransferFrames_{0};
-    std::atomic<uint64_t> directCaptureOverruns_{0};
-    std::atomic<uint64_t> directCaptureUnderruns_{0};
-    std::atomic<uint64_t> directPlaybackXruns_{0};
     float inputPeakHold_{0.0f};
     float outputPeakHold_{0.0f};
 
@@ -279,6 +428,21 @@ private:
 
 
 
+    struct RoundTripMeasurement {
+        // 0 idle, 1 armed, 2 complete, 3 cancel requested,
+        // 4 render thread quiesced, 5 control thread preparing.
+        std::atomic<int32_t> state{0};
+        std::atomic<int32_t> processedFrames{0};
+        std::atomic<int32_t> capturedFrames{0};
+        std::atomic<float> inputPeak{0.0f};
+        std::atomic<float> outputPeak{0.0f};
+        int32_t sampleRate = 0;
+        int32_t preRollFrames = 0;
+        std::vector<float> probe;
+        std::vector<float> capture;
+    };
+    RoundTripMeasurement roundTripMeasurement_;
+    std::atomic<RoundTripMeasurement*> activeRoundTripMeasurement_{nullptr};
 
     DirectUsbOutput* directUsbOutput_ = nullptr; // non-owning, NativeContext-owned
     void processRackBlock(const float* const* liveInputs, int32_t inputChannelCount,

@@ -1,0 +1,20 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <int name="directUsbChannels" value="4" />
+    <int name="directUsbProductId" value="9" />
+    <int name="directUsbDeviceId" value="1002" />
+    <boolean name="directUsbThermalSafety" value="true" />
+    <int name="directUsbPeriodMultiplier" value="4" />
+    <string name="directUsbFormats">44100,24,4,4;48000,24,4,4;88200,24,4,4;96000,24,4,4</string>
+    <int name="directUsbVendorId" value="9992" />
+    <int name="directUsbRate" value="48000" />
+    <int name="directUsbBits" value="24" />
+    <string name="directUsbDeviceName">Audient Audient iD4</string>
+    <int name="directUsbWriteHeadroom" value="48" />
+    <int name="directUsbOutputPair" value="0" />
+    <int name="directUsbTransferCount" value="5" />
+    <int name="directUsbSubslot" value="4" />
+    <int name="directUsbRingCapacityKiB" value="0" />
+    <int name="directUsbPacketsPerTransfer" value="4" />
+    <int name="bufferSize" value="64" />
+</map>

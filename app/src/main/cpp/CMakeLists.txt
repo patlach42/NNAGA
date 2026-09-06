@@ -216,6 +216,12 @@ if(GRC_ENABLE_AUDIO_THINLTO)
     target_compile_options(lowlatencyaudio PRIVATE -flto=thin)
 endif()
 
+option(GRC_ENABLE_RT_TIMING
+       "Enable profiling-only Oboe callback wall-clock timing" OFF)
+if(GRC_ENABLE_RT_TIMING)
+    target_compile_definitions(audio_engine PRIVATE GRC_ENABLE_RT_TIMING=1)
+endif()
+
 set(GRC_AUDIO_PGO_MODE "OFF" CACHE STRING
     "Audio PGO mode: OFF, GENERATE, or USE")
 set_property(CACHE GRC_AUDIO_PGO_MODE PROPERTY STRINGS OFF GENERATE USE)

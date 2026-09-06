@@ -36,11 +36,15 @@ object RackManager {
     fun removePlugin(pathId: RackPathId, position: Int): Boolean = native.removePluginFromRack(pathId, position)
     fun reorder(pathId: RackPathId, fromPos: Int, toPos: Int): Boolean = native.reorderRack(pathId, fromPos, toPos)
     fun setPluginFilePath(pathId: RackPathId, pluginIndex: Int, propertyUri: String, filePath: String) = native.setPluginFilePath(pathId, pluginIndex, propertyUri, filePath)
-    fun setParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int, value: Float) = native.setParameter(pathId, pluginIndex, portIndex, value)
-    fun getParameter(pathId: RackPathId, pluginIndex: Int, portIndex: Int): Float =
-        native.getParameter(pathId, pluginIndex, portIndex)
-    fun getParameterDisplay(pathId: RackPathId, pluginIndex: Int, portIndex: Int): String =
-        native.getParameterDisplay(pathId, pluginIndex, portIndex)
+    fun setParameter(pathId: RackPathId, pluginInstanceId: Long, portIndex: Int, value: Float) =
+        native.setParameter(pathId, pluginInstanceId, portIndex, value)
+    fun getParameter(pathId: RackPathId, pluginInstanceId: Long, portIndex: Int): Float =
+        native.getParameter(pathId, pluginInstanceId, portIndex)
+    fun getParameterSnapshot(
+        pathId: RackPathId, pluginInstanceId: Long, portIndices: IntArray
+    ): FloatArray? = native.getParameterSnapshot(pathId, pluginInstanceId, portIndices)
+    fun getParameterDisplay(pathId: RackPathId, pluginInstanceId: Long, portIndex: Int): String =
+        native.getParameterDisplay(pathId, pluginInstanceId, portIndex)
     fun setManualLatencyFrames(pathId: RackPathId, pluginIndex: Int, frames: Int): Boolean =
         native.setManualLatencyFrames(pathId, pluginIndex, frames)
     fun getManualLatencyFrames(pathId: RackPathId, pluginIndex: Int): Int =
@@ -49,6 +53,8 @@ object RackManager {
         native.getPluginLatencyFrames(pathId, pluginIndex)
     fun getPluginEffectiveLatencyFrames(pathId: RackPathId, pluginIndex: Int): Long =
         native.getPluginEffectiveLatencyFrames(pathId, pluginIndex)
+    fun getRackRealtimeDiagnostic(pathId: RackPathId): String =
+        native.getRackRealtimeDiagnostic(pathId)
     fun getRackSize(pathId: RackPathId): Int = native.getRackSize(pathId)
     fun getRackPluginInfo(pathId: RackPathId, index: Int): PluginInfo? = native.getRackPluginInfo(pathId, index)
     fun getRackPluginInstanceId(pathId: RackPathId, index: Int): Long = native.getRackPluginInstanceId(pathId, index)

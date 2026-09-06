@@ -34,10 +34,12 @@ public:
     void detachWindow();
     void resize(uint32_t width, uint32_t height, float scale = 1.0f);
     void setVisible(bool visible);
-    void setFocus(bool focus, bool mouseOver = false);
+    void setFocus(bool focused, bool mouseOver = false);
     void setMouseOver(bool over);
     void pauseEffect();
     void resumeEffect();
+    bool tryAcquireEffect() noexcept;
+    void releaseEffect() noexcept;
     void pointer(uint32_t modifiers, int32_t x, int32_t y, uint32_t buttons,
                  double wheel = 0.0, double horizontalWheel = 0.0);
     void key(uint32_t modifiers, uint32_t keyCode, bool pressed);

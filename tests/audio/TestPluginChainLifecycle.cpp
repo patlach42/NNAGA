@@ -53,7 +53,11 @@ public:
         return 0;
     }
 
-    PluginInfo getInfo() const override { return {}; }
+    PluginInfo getInfo() const override {
+        PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 0; }

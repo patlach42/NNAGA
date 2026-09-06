@@ -86,6 +86,7 @@ struct NativeContext {
 };
 
 static NativeContext* g_ctx = nullptr;
+static std::string g_roundTripError;
 
 // NativeContext is process-local and must be published exactly once.  The
 // context owns the live audio graph, so replacing it during Activity
@@ -171,6 +172,7 @@ static struct {
     jfieldID piX11UiBinaryPath = nullptr;
     jfieldID piParameterMetadataRevision = nullptr;
     jfieldID piX11UiUri = nullptr;
+    jfieldID piRealtimeClassOrdinal = nullptr;
 
     jclass portInfoClass = nullptr;
     jmethodID portInfoCtor = nullptr;
@@ -220,6 +222,8 @@ static bool ensureJniCache(JNIEnv* env) {
     g_jni.piParameterMetadataRevision = env->GetFieldID(
         g_jni.pluginInfoClass, "parameterMetadataRevision", "J");
     g_jni.piX11UiUri = env->GetFieldID(g_jni.pluginInfoClass, "x11UiUri", "Ljava/lang/String;");
+    g_jni.piRealtimeClassOrdinal =
+        env->GetFieldID(g_jni.pluginInfoClass, "realtimeClassOrdinal", "I");
 
     return true;
 }
@@ -304,6 +308,66 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     sa.sa_flags = 0;
     sigaction(SIGABRT, &sa, nullptr);
     return JNI_VERSION_1_6;
+}
+
+// Affinity switches, set before a session starts so the threads pick them up
+// when they are created. They exist so audio affinity and UI affinity can be
+// varied independently: the syscall fix turned both on at once, and no
+// comparison taken since can say which of them moved a number.
+// 0 silences the hint session, 1 keeps the old CPU-only signal, 2 reports the
+// period's wall time and CPU time separately. An A/B knob: which signal the
+// system responds best to is a measurement, not a guess.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetAdpfMode(
+        JNIEnv*, jobject, jint mode) {
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->setDirectUsbAdpfMode(static_cast<int>(mode));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetMeasureServiceRunqueue(
+        JNIEnv*, jobject, jboolean enabled) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setMeasureServiceRunqueue(enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetMeasureRunqueueWait(
+        JNIEnv*, jobject, jboolean enabled) {
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->setDirectUsbMeasureRunqueueWait(enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetAudioAffinityEnabled(
+        JNIEnv*, jobject, jboolean enabled) {
+#if defined(__linux__)
+    guitarrackcraft::setAudioAffinityEnabled(enabled == JNI_TRUE);
+#endif
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetUiAffinityEnabled(
+        JNIEnv*, jobject, jboolean enabled) {
+#if defined(__linux__)
+    guitarrackcraft::setUiAffinityEnabled(enabled == JNI_TRUE);
+#endif
+}
+
+// 0 holds USB servicing to one core of the fast pool, 1 gives it the pool,
+// 2 gives it that core exclusively and moves the render thread off it.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetServiceCpuPlacement(
+        JNIEnv*, jobject, jint placement) {
+#if defined(__linux__)
+    guitarrackcraft::setServiceCpuPlacement(
+        placement == 2 ? guitarrackcraft::ServiceCpuPlacement::ExclusiveSplit
+        : placement == 1 ? guitarrackcraft::ServiceCpuPlacement::WholePool
+                         : guitarrackcraft::ServiceCpuPlacement::OneCoreOfPool);
+#endif
 }
 
 JNIEXPORT void JNICALL
@@ -514,8 +578,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginX11Display(
     if (!g_ctx || !g_ctx->audioEngine) return -1;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    auto* plugin = chain ? chain->getPlugin(position) : nullptr;
-    return plugin ? plugin->getX11DisplayNumber() : -1;
+    if (!chain || position < 0 || static_cast<size_t>(position) >= chain->getSize()) return -1;
+    return chain->visitPlugin(static_cast<size_t>(position),
+                              [](IPlugin& plugin) { return plugin.getX11DisplayNumber(); });
 }
 
 JNIEXPORT jlong JNICALL
@@ -524,11 +589,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginEditorSize(
     if (!g_ctx || !g_ctx->audioEngine) return 0;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    auto* plugin = chain ? chain->getPlugin(position) : nullptr;
-    if (!plugin) return 0;
-    const int64_t w = plugin->getEditorWidth();
-    const int64_t h = plugin->getEditorHeight();
-    return (w << 32) | (h & 0xffffffffLL);
+    if (!chain || position < 0 || static_cast<size_t>(position) >= chain->getSize()) return 0;
+    return chain->visitPlugin(static_cast<size_t>(position), [](IPlugin& plugin) -> jlong {
+        const int64_t w = plugin.getEditorWidth();
+        const int64_t h = plugin.getEditorHeight();
+        return (w << 32) | (h & 0xffffffffLL);
+    });
 }
 
 JNIEXPORT jboolean JNICALL
@@ -578,7 +644,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
         jint bytesPerSample, jint channels, jint outputPair,
         jint bufferFrames, jint periodMultiplier, jint playbackTargetFrames,
         jint startupPrimeFrames, jint writeHeadroomFrames, jint captureLimitFrames,
-        jint transferCount, jint packetsPerTransfer, jint ringCapacityBytes,
+        jint captureTargetFrames, jint captureHeadroomFrames,
+        jint captureDeadlineSlackFrames, jint transferCount,
+        jint packetsPerTransfer, jint ringCapacityBytes,
         jboolean thermalSafetyEnabled) {
     if (!g_ctx || !g_ctx->audioEngine || !g_ctx->directUsbOutput) return JNI_FALSE;
     return g_ctx->audioEngine->startDirectUsbSession(
@@ -594,6 +662,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeStartDirectUsbSession(
             static_cast<int>(startupPrimeFrames),
             static_cast<int>(writeHeadroomFrames),
             static_cast<int>(captureLimitFrames),
+            static_cast<int>(captureTargetFrames),
+            static_cast<int>(captureHeadroomFrames),
+            static_cast<int>(captureDeadlineSlackFrames),
             static_cast<int>(transferCount),
             static_cast<int>(packetsPerTransfer),
             static_cast<size_t>(std::max(0, ringCapacityBytes))
@@ -655,10 +726,211 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbOutputStreaming(
         g_ctx->directUsbOutput->isStreaming() ? JNI_TRUE : JNI_FALSE;
 }
 
+// Diagnostics: step 1 of the ladder in docs/measurement.md. Enable before a
+// session starts; the recorder clears its history on enable so a run never
+// inherits records from the previous one.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderEnabled(
+        JNIEnv* env, jobject thiz, jboolean enabled) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setFlightRecorderEnabled(enabled == JNI_TRUE);
+    }
+}
+
+// Record only the selected event types (a bitfield of 1 << event); zero records
+// everything. Without it the anomalies drown: a 240 second run offers 186675
+// events into a 4096 slot buffer, nearly all routine completions.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderEventMask(
+        JNIEnv* env, jobject thiz, jint mask) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setFlightRecorderEventMask(
+            static_cast<uint32_t>(mask));
+    }
+}
+
+// Flag steps between consecutive output samples above this fraction of full
+// scale. A click is a signal discontinuity, so this finds one without a
+// listener; a 440 Hz tone at 48 kHz steps by at most 0.058 between samples.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbDiscontinuityThreshold(
+        JNIEnv* env, jobject thiz, jfloat threshold) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setDiscontinuityThreshold(
+            static_cast<float>(threshold));
+    }
+}
+
+// The same continuity check on the packed PCM leaving the ring. With the one
+// above it brackets the packing and the two-span ring copy.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbTransferDiscontinuityThreshold(
+        JNIEnv* env, jobject thiz, jfloat threshold) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setTransferDiscontinuityThreshold(
+            static_cast<float>(threshold));
+    }
+}
+
+// Admission policy: 0 waits for room, 1 paces the producer by played frames.
+// Selectable at run time so a paired comparison needs one build, not two.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbAdmissionPolicy(
+        JNIEnv* env, jobject thiz, jint policy) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setAdmissionPolicy(static_cast<int>(policy));
+    }
+}
+
+// How far the producer may run ahead of the device under the credit policy.
+// Zero forbids any lead, which forbids a buffer; the reserve bounds the lead
+// instead of removing it.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCreditReserve(
+        JNIEnv* env, jobject thiz, jint frames) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setPlaybackCreditReserve(static_cast<int>(frames));
+    }
+}
+
+// Deliberate stalls, fired once when armed: a render stall delays the producer
+// while USB keeps draining, a service stall stops completions being processed.
+// The two produce different symptoms and a generic CPU load cannot separate
+// them, which is why they are injected apart.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeInjectDirectUsbStall(
+        JNIEnv* env, jobject thiz, jint renderUs, jint serviceUs) {
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->injectRenderStallUs(static_cast<int>(renderUs));
+    }
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->injectServiceStallUs(static_cast<int>(serviceUs));
+    }
+}
+
+// Starts a fresh envelope epoch, so steady-state extrema are not contaminated
+// by the pipeline filling at startup.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeResetDirectUsbEnvelope(
+        JNIEnv* env, jobject thiz) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->resetEnvelopeMetrics();
+    }
+    // Both sides or neither: resetting only the USB envelope left the render
+    // maxima covering startup as well, which made the two incomparable and
+    // made every first cycle look like the worst one.
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->resetDirectUsbRealtimeEnvelope();
+    }
+}
+
+// Which capture channel the loopback detectors watch. An interface with an
+// internal loop returns the signal on the pair fed by the playback pair, not
+// on channel one, and a silent channel reports nothing at all.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCaptureInspectChannel(
+        JNIEnv* env, jobject thiz, jint channel) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setCaptureInspectChannel(
+            static_cast<int>(channel));
+    }
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->setDirectUsbInputMeterChannel(
+            static_cast<int32_t>(channel));
+    }
+}
+
+// The same check on captured input, relative to the signal's own peak. With a
+// loopback from output one to input one it covers the DAC, cable and ADC - the
+// one stretch the playback checks cannot reach.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCaptureDiscontinuityThreshold(
+        JNIEnv* env, jobject thiz, jfloat threshold) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setCaptureDiscontinuityThreshold(
+            static_cast<float>(threshold));
+    }
+}
+
+// Flag the captured level wandering from its running average by more than this
+// fraction. A steady tone must come back steady; a wandering envelope means the
+// output is modulated, which summing with a delayed copy at a drifting delay
+// produces and which no step detector can see.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbCaptureModulationThreshold(
+        JNIEnv* env, jobject thiz, jfloat threshold) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setCaptureModulationThreshold(
+            static_cast<float>(threshold));
+    }
+}
+
+// Freeze the recorder when `event` first occurs so its run-up survives. Without
+// it a rare event is evicted by the steady-state traffic that follows: one
+// device cycle offered 143329 events into a 4096 slot buffer.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetDirectUsbFlightRecorderFreezeTrigger(
+        JNIEnv* env, jobject thiz, jint event) {
+    if (!g_ctx || !g_ctx->directUsbOutput) return;
+    using Event = monotrypt::usb::PacketFlightRecorder::Event;
+    if (event < 0 || event > static_cast<jint>(Event::CaptureModulation)) return;
+    g_ctx->directUsbOutput->setFlightRecorderFreezeTrigger(
+        static_cast<Event>(event));
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeIsDirectUsbFlightRecorderFrozen(
+        JNIEnv* env, jobject thiz) {
+    return g_ctx && g_ctx->directUsbOutput &&
+        g_ctx->directUsbOutput->flightRecorderFrozen() ? JNI_TRUE : JNI_FALSE;
+}
+
+// Returns the newest records as a flat long array, seven fields each, so the
+// caller can page through a long history without a per-record object. Slot 0
+// of the header carries the total offered and slot 1 what wrap-around lost, so
+// a truncated snapshot is never mistaken for the whole run.
+JNIEXPORT jlongArray JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
+        JNIEnv* env, jobject thiz, jint maxRecords) {
+    constexpr jsize kHeader = 2;
+    constexpr jsize kFieldsPerRecord = 7;
+    if (!g_ctx || !g_ctx->directUsbOutput || maxRecords <= 0) {
+        return env->NewLongArray(0);
+    }
+    const size_t wanted = std::min<size_t>(
+        static_cast<size_t>(maxRecords), size_t{1} << 16);
+    std::vector<monotrypt::usb::PacketFlightRecorder::Record> records(wanted);
+    const size_t count =
+        g_ctx->directUsbOutput->flightRecorderSnapshot(records.data(), wanted);
+
+    const jsize total = kHeader +
+        static_cast<jsize>(count) * kFieldsPerRecord;
+    jlongArray out = env->NewLongArray(total);
+    if (!out) return nullptr;
+    std::vector<jlong> values(static_cast<size_t>(total));
+    values[0] = static_cast<jlong>(
+        g_ctx->directUsbOutput->flightRecorderRecorded());
+    values[1] = static_cast<jlong>(
+        g_ctx->directUsbOutput->flightRecorderDropped());
+    for (size_t i = 0; i < count; ++i) {
+        const auto& record = records[i];
+        jlong* slot = values.data() + kHeader + i * kFieldsPerRecord;
+        slot[0] = static_cast<jlong>(record.sequence);
+        slot[1] = static_cast<jlong>(record.timestampNs);
+        slot[2] = static_cast<jlong>(static_cast<uint16_t>(record.event));
+        slot[3] = static_cast<jlong>(record.a);
+        slot[4] = static_cast<jlong>(record.b);
+        slot[5] = static_cast<jlong>(record.ringFrames);
+        slot[6] = static_cast<jlong>(record.queuedFrames);
+    }
+    env->SetLongArrayRegion(out, 0, total, values.data());
+    return out;
+}
+
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 48;
+    constexpr jsize kStatCount = 98;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -683,9 +955,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         values[37] = static_cast<jlong>(
             g_ctx->directUsbOutput->playbackBackpressureCount());
         values[39] = static_cast<jlong>(
-            g_ctx->directUsbOutput->playbackSilentPacketCount());
+            g_ctx->directUsbOutput->playbackShortPacketCount());
         values[40] = static_cast<jlong>(
-            g_ctx->directUsbOutput->playbackSilentFrameCount());
+            g_ctx->directUsbOutput->playbackShortFrameCount());
         values[41] = static_cast<jlong>(transport.metadataFifoOverruns);
         values[42] = static_cast<jlong>(transport.pendingDepth);
         values[43] = static_cast<jlong>(transport.pendingHighWater);
@@ -697,7 +969,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             ? static_cast<jlong>(g_ctx->audioEngine->directUsbWriteWaitTimeouts()) : 0;
         if (g_ctx->audioEngine) {
             const auto stats = g_ctx->audioEngine->getDirectUsbRuntimeStats();
-            values[18] = 7;
+            values[18] = 20;
             values[19] = static_cast<jlong>(stats.sessionId);
             values[20] = static_cast<jlong>(stats.state);
             values[21] = static_cast<jlong>(stats.failureCode);
@@ -710,14 +982,31 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[28] = static_cast<jlong>(stats.captureTransferFrames);
             values[29] = static_cast<jlong>(stats.lastDspNanoseconds);
             values[30] = static_cast<jlong>(stats.peakDspNanoseconds);
+            // Two different quantities, kept apart deliberately.
+            //
+            // The configured depth is what the pipeline is set up to hold: the
+            // capture cushion, one graph quantum and the playback target. It
+            // does not move while a stream runs, so it is the number a person
+            // can act on - and it is what every established stack reports as
+            // its latency.
+            //
+            // The live figure below is instantaneous occupancy, which breathes
+            // with the sawtooth between producer and device and with every
+            // scheduling excursion. Reporting it as "latency" is what made the
+            // number appear to wander: it was measuring the pipeline, not
+            // describing it. It stays, for flow control and diagnosis, under
+            // its own name.
             const uint64_t hostFrames = std::max<uint32_t>(
                 stats.effectiveQuantum,
                 std::max(stats.captureRingFrames, stats.captureTransferFrames));
             values[31] = static_cast<jlong>(
+                hostFrames + stats.effectiveQuantum + stats.steadyTargetFrames);
+            values[80] = static_cast<jlong>(
                 hostFrames + stats.playbackRingFrames + stats.queuedOutFrames);
             values[32] = static_cast<jlong>(
-                g_ctx->directUsbOutput->xrunCount() +
-                capture.overruns + capture.underruns);
+                stats.playbackXruns + stats.captureOverruns +
+                stats.captureUnderruns + stats.capturePacketDrops +
+                stats.playbackQuantumDrops);
             values[33] = static_cast<jlong>(stats.lastCycleNanoseconds);
             values[34] = static_cast<jlong>(stats.peakCycleNanoseconds);
             values[35] = static_cast<jlong>(stats.deadlineBudgetNanoseconds);
@@ -725,10 +1014,191 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[38] = stats.performanceHintActive ? 1 : 0;
             values[46] = stats.thermalSafetyEnabled ? 1 : 0;
             values[47] = stats.thermalSafetyActive ? 1 : 0;
+            values[48] = static_cast<jlong>(stats.capturePacketDrops);
+            values[49] = static_cast<jlong>(stats.playbackQuantumDrops);
+            values[50] = static_cast<jlong>(stats.schedulerDeadlineMisses);
+            // The worst graph block by off-CPU time: wall time the block was
+            // charged that its own CPU clock did not advance. Unlike the cycle
+            // overrun beside it this excludes capture pacing and the admission
+            // waits, so it says whether a slow block was work or preemption.
+            values[91] = static_cast<jlong>(stats.worstDspBlockOffCpuNanoseconds);
+            // Cumulative, so the harness reads its growth across a cycle. Says
+            // how much of the gap between completions was the thread waiting
+            // for a CPU rather than the bus waiting for the device.
+            values[94] = static_cast<jlong>(stats.serviceRunqueueWaitNanoseconds);
+            // The wall time of that same block, so the two can be read as a
+            // ratio. Separate maxima would not have belonged to one block.
+            values[92] = static_cast<jlong>(stats.worstDspBlockWallNanoseconds);
+            // The same subtraction on the servicing side: the worst completion
+            // callback by time spent runnable and not running. The runway
+            // exists to cover exactly this, so it is worth naming.
+            values[93] = static_cast<jlong>(
+                g_ctx->directUsbOutput->worstServiceOffCpuNs());
+            values[95] = static_cast<jlong>(
+                g_ctx->directUsbOutput->maxCallbacksPerPoll());
+            // The pair that says what the servicing thread was doing through
+            // the worst multi-collect: how long the iteration took, and how
+            // much of that it spent runnable without a CPU.
+            values[96] = static_cast<jlong>(
+                g_ctx->directUsbOutput->worstMultiCollectSpanNs());
+            values[97] = static_cast<jlong>(
+                g_ctx->directUsbOutput->worstMultiCollectRunqueueNs());
+            values[51] = static_cast<jlong>(
+                stats.maxSchedulerLatenessNanoseconds);
+            values[52] = static_cast<jlong>(stats.captureTargetFrames);
+            values[53] = static_cast<jlong>(stats.captureHeadroomFrames);
+            values[54] = static_cast<jlong>(stats.captureDeadlineSlackFrames);
+        }
+        // Why implicit transfers were deferred, and the smallest submitted
+        // OUT runway seen. The first two say whether a stall came from
+        // capture metadata or from the render side; the third falls before
+        // anything is heard.
+        values[55] = static_cast<jlong>(
+            g_ctx->directUsbOutput->deferredNoMetadataCount());
+        values[56] = static_cast<jlong>(
+            g_ctx->directUsbOutput->deferredNoPcmCount());
+        values[57] = static_cast<jlong>(
+            g_ctx->directUsbOutput->queuedOutLowWaterFrames());
+        // Continuity detectors, counted so they can gate a verdict, plus the
+        // arming flag that separates "nothing broke" from "nothing looked".
+        values[58] = static_cast<jlong>(
+            g_ctx->directUsbOutput->captureDiscontinuityCount());
+        values[59] = static_cast<jlong>(
+            g_ctx->directUsbOutput->captureModulationCount());
+        values[60] = static_cast<jlong>(
+            g_ctx->directUsbOutput->signalDiscontinuityCount());
+        values[61] = static_cast<jlong>(
+            g_ctx->directUsbOutput->transferDiscontinuityCount());
+        values[62] = g_ctx->directUsbOutput->captureDetectorArmed() ? 1 : 0;
+        values[63] = static_cast<jlong>(
+            g_ctx->directUsbOutput->implicitMetadataInvalidCount());
+        // Ring occupancy extremes: their difference is the latency wobble.
+        values[64] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringLowWaterFrames());
+        values[65] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringHighWaterFrames());
+        values[66] = static_cast<jlong>(
+            g_ctx->directUsbOutput->drainChunkFrames());
+        // Occupancy percentiles, sampled per drain. The extremes above answer
+        // "how bad did it get"; these answer "where does it normally sit",
+        // which is the part the reported latency actually follows.
+        values[67] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringOccupancyPercentile(0.05));
+        values[68] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringOccupancyPercentile(0.50));
+        values[69] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringOccupancyPercentile(0.95));
+        values[70] = static_cast<jlong>(
+            g_ctx->directUsbOutput->ringOccupancySampleCount());
+        // Jitter envelope: the terms the depth and headroom formulas need
+        // measured rather than assumed.
+        values[71] = static_cast<jlong>(
+            g_ctx->directUsbOutput->maxCompletionGapNs());
+        values[72] = static_cast<jlong>(
+            g_ctx->directUsbOutput->maxMissingDrains());
+        values[73] = static_cast<jlong>(
+            g_ctx->directUsbOutput->drainFramesMin());
+        values[74] = static_cast<jlong>(
+            g_ctx->directUsbOutput->drainFramesMax());
+        values[75] = static_cast<jlong>(
+            g_ctx->directUsbOutput->maxWritesBetweenDrains());
+        values[76] = static_cast<jlong>(
+            g_ctx->directUsbOutput->minAdmissionMarginFrames());
+        // Capture reads refused for being short of a whole quantum. The old
+        // zero-filled tail went into the graph, out to playback and back
+        // through the hardware loop, where it was counted as a capture break
+        // and blamed on the environment.
+        values[77] = static_cast<jlong>(
+            g_ctx->directUsbOutput->capturePartialReadCount());
+        // Rendered blocks that never reached the ring because a wait expired.
+        // Frame loss under another name, previously counted nowhere that
+        // decided a verdict.
+        if (g_ctx->audioEngine) {
+            values[78] = static_cast<jlong>(
+                g_ctx->audioEngine->getDirectUsbLostQuanta());
+            // Rendered blocks held for one cycle rather than discarded. These
+            // are not losses - the audio was delivered late, not dropped - so
+            // they are reported separately from lost quanta.
+            values[79] = static_cast<jlong>(
+                g_ctx->audioEngine->getDirectUsbHeldQuanta());
+            // The pipeline as it stood at the first lost quantum: -1 when
+            // nothing was lost. Taken outside the flight recorder, which a
+            // caller has to arm and therefore cannot be trusted to have been
+            // listening when the loss happened.
+            int32_t lossRing = -1, lossQueued = -1, lossRoom = -1;
+            int64_t lossCredit = 0;
+            g_ctx->audioEngine->getDirectUsbFirstLoss(
+                &lossRing, &lossQueued, &lossRoom, &lossCredit);
+            values[81] = static_cast<jlong>(lossRing);
+            values[82] = static_cast<jlong>(lossQueued);
+            values[83] = static_cast<jlong>(lossRoom);
+            values[84] = static_cast<jlong>(lossCredit);
+            // How often the bus stopped being serviced, and how many stalls
+            // were injected deliberately: the first separates a quiet run from
+            // a busy one, the second says whether a regression test actually
+            // fired.
+            values[85] = static_cast<jlong>(
+                g_ctx->directUsbOutput->serviceGapCount());
+            values[86] = static_cast<jlong>(
+                g_ctx->audioEngine->getDirectUsbRenderStallsFired() +
+                g_ctx->directUsbOutput->serviceStallsFired());
+            // Overruns that were not waiting for the device: the counter above
+            // includes cycles paced by the stream's own clock, which is not a
+            // fault and should not fail a run.
+            values[87] = static_cast<jlong>(
+                g_ctx->audioEngine->getDirectUsbWorkDeadlineMisses());
+            // What was outstanding at the worst service pause: in-flight
+            // transfers, deferred transfers and ring occupancy. Distinguishes
+            // libusb not being scheduled from the device not answering.
+            int gapInflight = -1, gapPending = -1, gapRing = -1;
+            g_ctx->directUsbOutput->worstServiceGapState(
+                &gapInflight, &gapPending, &gapRing);
+            values[88] = static_cast<jlong>(gapInflight);
+            values[89] = static_cast<jlong>(gapPending);
+            values[90] = static_cast<jlong>(gapRing);
         }
     }
     jlongArray out = env->NewLongArray(kStatCount);
     if (out) env->SetLongArrayRegion(out, 0, kStatCount, values);
+    return out;
+}
+JNIEXPORT jlongArray JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRealtimeStats(
+        JNIEnv* env, jobject) {
+    // Schema v1; order mirrors AudioRealtimeStats.fromRaw.
+    constexpr jsize kCount = 26;
+    const auto stats = g_ctx && g_ctx->audioEngine
+        ? g_ctx->audioEngine->getRealtimeStatsSnapshot()
+        : AudioEngine::RealtimeStatsSnapshot{};
+    const jlong values[kCount] = {
+        1, static_cast<jlong>(stats.callbackCount),
+        static_cast<jlong>(stats.callbackFrames),
+        static_cast<jlong>(stats.frameCapacityViolations),
+        static_cast<jlong>(stats.inputUnderflowFrames),
+        static_cast<jlong>(stats.inputOverflowFrames),
+        static_cast<jlong>(stats.midiEventDrops),
+        static_cast<jlong>(stats.planPublishDeferrals),
+        static_cast<jlong>(stats.vstInputStarvations),
+        static_cast<jlong>(stats.vstOutputUnderrunFrames),
+        static_cast<jlong>(stats.vstGuestDeadlineMisses),
+        static_cast<jlong>(stats.xRunCount),
+        static_cast<jlong>(stats.audioApi),
+        static_cast<jlong>(stats.sampleRateHz),
+        static_cast<jlong>(stats.framesPerBurst),
+        static_cast<jlong>(stats.bufferSize),
+        static_cast<jlong>(stats.performanceMode),
+        static_cast<jlong>(stats.sharingMode),
+        static_cast<jlong>(stats.callbackFramesPerBurst),
+        static_cast<jlong>(stats.activatedCapacity),
+        static_cast<jlong>(stats.deviceId),
+        static_cast<jlong>(stats.inputChannels),
+        static_cast<jlong>(stats.lastCallbackNanoseconds),
+        static_cast<jlong>(stats.peakCallbackNanoseconds),
+        static_cast<jlong>(stats.callbackDeadlineBudgetNanoseconds),
+        static_cast<jlong>(stats.callbackDeadlineMisses),
+    };
+    jlongArray out = env->NewLongArray(kCount);
+    if (out) env->SetLongArrayRegion(out, 0, kCount, values);
     return out;
 }
 JNIEXPORT jstring JNICALL
@@ -738,9 +1208,28 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbErrorDetail(
     const std::string detail = g_ctx->directUsbOutput->lastErrorDetail();
     return env->NewStringUTF(detail.c_str());
 }
+JNIEXPORT jdoubleArray JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeMeasureRoundTrip(
+        JNIEnv* env, jobject) {
+    constexpr int kSlots = AudioEngine::kRoundTripResultSlots;
+    double result[kSlots] = {};
+    jdouble values[kSlots + 1] = {};
+    std::string error;
+    const bool ok = g_ctx && g_ctx->audioEngine &&
+        g_ctx->audioEngine->measureDirectUsbRoundTrip(3000, result, error);
+    g_roundTripError = ok ? std::string() : error;
+    values[0] = ok ? 1.0 : 0.0;
+    for (int i = 0; i < kSlots; ++i) values[i + 1] = result[i];
+    jdoubleArray out = env->NewDoubleArray(kSlots + 1);
+    if (out) env->SetDoubleArrayRegion(out, 0, kSlots + 1, values);
+    return out;
+}
 
-
-
+JNIEXPORT jstring JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRoundTripError(
+        JNIEnv* env, jobject) {
+    return env->NewStringUTF(g_roundTripError.c_str());
+}
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeStopEngine(JNIEnv* env, jobject thiz) {
     LOGI("nativeStopEngine CALLED tid=%ld (Java requested direct USB stop)", getTid());
@@ -916,6 +1405,11 @@ jobject createPluginInfoObject(JNIEnv* env, const PluginInfo& info) {
     if (g_jni.piParameterMetadataRevision)
         env->SetLongField(obj, g_jni.piParameterMetadataRevision,
                           static_cast<jlong>(info.parameterMetadataRevision));
+    if (g_jni.piRealtimeClassOrdinal) {
+        env->SetIntField(
+            obj, g_jni.piRealtimeClassOrdinal,
+            static_cast<jint>(info.realtimeClass));
+    }
 
     // Create ports list
     if (g_jni.piPorts && !info.ports.empty()) {
@@ -969,10 +1463,19 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeAddPluginToRack(
     std::string fullId(id);
     env->ReleaseStringUTFChars(pluginId, id);
     auto plugin = g_ctx->pluginRegistry->createPlugin(fullId);
-    if (!plugin) return -1;
     std::lock_guard lock(g_ctx->rackControlMutex);
-    auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
-    return chain ? chain->addPlugin(std::move(plugin), position) : -1;
+    auto chain = g_ctx->audioEngine->getRackGraph().getChain(
+        static_cast<RackPathId>(pathId));
+    if (!chain) return -1;
+    if (!plugin) {
+        chain->setRealtimeDiagnostic("plugin-create-failed:" + fullId);
+        return -1;
+    }
+    const int result = chain->addPlugin(std::move(plugin), position);
+    if (result < 0 && chain->getRealtimeDiagnostic().empty()) {
+        chain->setRealtimeDiagnostic("plugin-activation-failed:" + fullId);
+    }
+    return result;
 }
 
 JNIEXPORT jboolean JNICALL
@@ -1024,12 +1527,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetPluginFilePath(
 
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeSetParameter(
-    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex, jfloat value) {
-    if (!g_ctx || !g_ctx->audioEngine) return;
+    JNIEnv*, jobject, jlong pathId, jlong pluginInstanceId, jint portIndex, jfloat value) {
+    if (!g_ctx || !g_ctx->audioEngine || pluginInstanceId == 0 || portIndex < 0) return;
     std::lock_guard lock(g_ctx->rackControlMutex);
-    if (auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId))) {
-        chain->setParameter(pluginIndex, static_cast<uint32_t>(portIndex), value);
-    }
+    if (auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId)))
+        chain->submitParameter(static_cast<uint64_t>(pluginInstanceId),
+                               static_cast<uint32_t>(portIndex), value);
 }
 
 JNIEXPORT jboolean JNICALL
@@ -1088,23 +1591,54 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeHasPluginLatencyOverflow(
 
 JNIEXPORT jfloat JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameter(
-    JNIEnv*, jobject, jlong pathId, jint pluginIndex, jint portIndex) {
-    if (!g_ctx || !g_ctx->audioEngine) return 0.0f;
+    JNIEnv*, jobject, jlong pathId, jlong pluginInstanceId, jint portIndex) {
+    if (!g_ctx || !g_ctx->audioEngine || pluginInstanceId == 0 || portIndex < 0) return 0.0f;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
-    return chain ? chain->getParameter(pluginIndex, static_cast<uint32_t>(portIndex)) : 0.0f;
+    return chain ? chain->getParameter(static_cast<uint64_t>(pluginInstanceId),
+                                        static_cast<uint32_t>(portIndex)) : 0.0f;
+}
+
+JNIEXPORT jfloatArray JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameterSnapshot(
+    JNIEnv* env, jobject, jlong pathId, jlong pluginInstanceId, jintArray portIndices) {
+    if (!g_ctx || !g_ctx->audioEngine || pluginInstanceId == 0 || !portIndices) return nullptr;
+    const jsize count = env->GetArrayLength(portIndices);
+    if (count < 0 || count > 4096) return nullptr;
+    std::vector<jint> javaPorts(static_cast<size_t>(count));
+    env->GetIntArrayRegion(portIndices, 0, count, javaPorts.data());
+    if (env->ExceptionCheck()) return nullptr;
+    std::vector<uint32_t> ports(static_cast<size_t>(count));
+    for (jsize index = 0; index < count; ++index) {
+        if (javaPorts[static_cast<size_t>(index)] < 0) return nullptr;
+        ports[static_cast<size_t>(index)] =
+            static_cast<uint32_t>(javaPorts[static_cast<size_t>(index)]);
+    }
+    std::shared_ptr<PluginChain> chain;
+    {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
+    }
+    std::vector<float> values(static_cast<size_t>(count));
+    if (!chain || !chain->getParameters(
+            static_cast<uint64_t>(pluginInstanceId), ports.data(), ports.size(), values.data())) {
+        return nullptr;
+    }
+    jfloatArray result = env->NewFloatArray(count);
+    if (result) env->SetFloatArrayRegion(result, 0, count, values.data());
+    return result;
 }
 
 JNIEXPORT jstring JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetParameterDisplay(
-    JNIEnv* env, jobject, jlong pathId, jint pluginIndex, jint portIndex) {
-    if (!g_ctx || !g_ctx->audioEngine) return env->NewStringUTF("");
+    JNIEnv* env, jobject, jlong pathId, jlong pluginInstanceId, jint portIndex) {
+    if (!g_ctx || !g_ctx->audioEngine || pluginInstanceId == 0 || portIndex < 0)
+        return env->NewStringUTF("");
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(static_cast<RackPathId>(pathId));
     if (!chain) return env->NewStringUTF("");
-    auto* plugin = chain->getPlugin(pluginIndex);
-    if (!plugin) return env->NewStringUTF("");
-    const std::string display = plugin->getParameterDisplay(static_cast<uint32_t>(portIndex));
+    const std::string display = chain->getParameterDisplay(
+        static_cast<uint64_t>(pluginInstanceId), static_cast<uint32_t>(portIndex));
     return env->NewStringUTF(display.c_str());
 }
 
@@ -1497,13 +2031,29 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackSize(JNIEnv*, jobject, jlong
     return chain ? static_cast<jint>(chain->getSize()) : 0;
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackRealtimeDiagnostic(
+    JNIEnv* env, jobject, jlong pathId) {
+    if (!g_ctx || !g_ctx->audioEngine) return env->NewStringUTF("engine-unavailable");
+    std::shared_ptr<PluginChain> chain;
+    {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
+    }
+    const std::string diagnostic =
+        chain ? chain->getRealtimeDiagnostic() : "path-not-found";
+    return env->NewStringUTF(diagnostic.c_str());
+}
+
 JNIEXPORT jobject JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPluginInfo(JNIEnv* env, jobject, jlong pathId, jint index) {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     std::lock_guard lock(g_ctx->rackControlMutex);
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    IPlugin* plugin = chain ? chain->getPlugin(index) : nullptr;
-    return plugin ? createPluginInfoObject(env, plugin->getInfo()) : nullptr;
+    if (!chain || index < 0 || static_cast<size_t>(index) >= chain->getSize()) return nullptr;
+    const PluginInfo info = chain->visitPlugin(
+            static_cast<size_t>(index), [](const IPlugin& plugin) { return plugin.getInfo(); });
+    return createPluginInfoObject(env, info);
 }
 
 JNIEXPORT jlong JNICALL
@@ -1529,9 +2079,9 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRackPlugins(
     const size_t size = chain->getSize();
     jobjectArray result = env->NewObjectArray(static_cast<jsize>(size), entryClass, nullptr);
     for (size_t index = 0; index < size; ++index) {
-        IPlugin* plugin = chain->getPlugin(static_cast<int>(index));
-        if (!plugin) continue;
-        jobject info = createPluginInfoObject(env, plugin->getInfo());
+        const PluginInfo pluginInfo = chain->visitPlugin(
+                index, [](const IPlugin& plugin) { return plugin.getInfo(); });
+        jobject info = createPluginInfoObject(env, pluginInfo);
         jobject entry = env->NewObject(entryClass, ctor, static_cast<jint>(index),
                                        static_cast<jlong>(chain->getPluginInstanceId(index)), info);
         env->SetObjectArrayElement(result, static_cast<jsize>(index), entry);
@@ -1960,11 +2510,14 @@ Java_com_vibes_dsp_engine_NativeEngine_nativePollVstFilePickerRequest(
 {
     if (!g_ctx || !g_ctx->audioEngine) return nullptr;
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    IPlugin* plugin = chain ? chain->getPlugin(pluginIndex) : nullptr;
-    if (!plugin) return nullptr;
-
+    if (!chain || pluginIndex < 0 || static_cast<size_t>(pluginIndex) >= chain->getSize()) {
+        return nullptr;
+    }
     NativeFilePickerRequest req;
-    if (!plugin->pollNativeFilePicker(req)) return nullptr;
+    const bool hasRequest = chain->visitPlugin(
+            static_cast<size_t>(pluginIndex),
+            [&](IPlugin& plugin) { return plugin.pollNativeFilePicker(req); });
+    if (!hasRequest) return nullptr;
 
     jclass stringClass = env->FindClass("java/lang/String");
     jobjectArray result = env->NewObjectArray(6, stringClass, nullptr);
@@ -1993,8 +2546,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRespondVstFilePicker(
 {
     if (!g_ctx || !g_ctx->audioEngine) return;
     auto chain = g_ctx->audioEngine->getRackGraph().getChain(pathId);
-    IPlugin* plugin = chain ? chain->getPlugin(pluginIndex) : nullptr;
-    if (!plugin) return;
+    if (!chain || pluginIndex < 0 || static_cast<size_t>(pluginIndex) >= chain->getSize()) return;
 
     std::string path;
     if (windowsPath) {
@@ -2005,10 +2557,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeRespondVstFilePicker(
         }
     }
 
-    plugin->respondNativeFilePicker(
-        static_cast<uint32_t>(sequence),
-        cancelled == JNI_TRUE,
-        path);
+    chain->visitPlugin(static_cast<size_t>(pluginIndex), [&](IPlugin& plugin) {
+        plugin.respondNativeFilePicker(
+            static_cast<uint32_t>(sequence),
+            cancelled == JNI_TRUE,
+            path);
+    });
 }
 
 

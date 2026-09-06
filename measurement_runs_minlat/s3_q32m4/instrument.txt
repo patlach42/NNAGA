@@ -1,0 +1,21 @@
+
+com.vibes.dsp.engine.DirectUsbDeviceStressTest:
+Error in duplexRateBufferLifecycleStress(com.vibes.dsp.engine.DirectUsbDeviceStressTest):
+java.lang.AssertionError: Direct USB buffer audit failed; inspect AUDIT_SUMMARY/TELEMETRY
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.vibes.dsp.engine.DirectUsbDeviceStressTest.duplexRateBufferLifecycleStress(DirectUsbDeviceStressTest.kt:303)
+
+
+Time: 185.96
+There was 1 failure:
+1) duplexRateBufferLifecycleStress(com.vibes.dsp.engine.DirectUsbDeviceStressTest)
+java.lang.AssertionError: Direct USB buffer audit failed; inspect AUDIT_SUMMARY/TELEMETRY
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.vibes.dsp.engine.DirectUsbDeviceStressTest.duplexRateBufferLifecycleStress(DirectUsbDeviceStressTest.kt:303)
+
+FAILURES!!!
+Tests run: 1,  Failures: 1
+
+

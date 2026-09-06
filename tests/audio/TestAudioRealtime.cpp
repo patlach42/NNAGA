@@ -13,16 +13,13 @@
 #include <array>
 #include <initializer_list>
 #include <atomic>
-#include <cstddef>
+#include <cmath>
 #include <thread>
-#include <cstdint>
+#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <memory>
 #include <new>
-#include <chrono>
-#include <future>
-#include <mutex>
 #include <vector>
 
 namespace allocation_probe {
@@ -152,46 +149,120 @@ public:
         return 0;
     }
 
-    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
     uint32_t getNumOutputPorts() const override { return 2; }
 };
 
-class TailOutputPlugin final : public IPlugin {
+class ParameterPlugin final : public IPlugin {
 public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
-
     uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
+                     uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
                      const guitarrackcraft::MidiEvent*, uint32_t,
                      guitarrackcraft::MidiEvent*, uint32_t) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
-            const bool hasInput = inputs[0][frame] != 0.0f ||
-                                  inputs[1][frame] != 0.0f;
-            if (hasInput) {
-                tailActive_ = true;
-                outputs[0][frame] = inputs[0][frame] * 2.0f;
-                outputs[1][frame] = inputs[1][frame] * 2.0f;
-            } else {
-                outputs[0][frame] = tailActive_ ? 0.75f : 0.0f;
-                outputs[1][frame] = tailActive_ ? 0.75f : 0.0f;
-            }
+            outputs[0][frame] = inputs[0][frame];
+            outputs[1][frame] = inputs[1][frame];
         }
         return 0;
     }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
+    void setParameter(uint32_t port, float value) override {
+        if (port == 0) value_ = value;
+    }
+    float getParameter(uint32_t port) const override {
+        return port == 0 ? value_ : 0.0f;
+    }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
 
-    guitarrackcraft::PluginInfo getInfo() const override { return {}; }
+private:
+    float value_ = 0.0f;
+};
+
+struct DestructionState {
+    std::atomic<bool> entered{false};
+    std::atomic<bool> release{false};
+    std::atomic<bool> destroyed{false};
+};
+
+class HazardPlugin final : public IPlugin {
+public:
+    explicit HazardPlugin(std::shared_ptr<DestructionState> state)
+        : state_(std::move(state)) {}
+    ~HazardPlugin() override {
+        state_->destroyed.store(true, std::memory_order_release);
+    }
+    void activate(float, uint32_t) override {}
+    void deactivate() override {}
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        state_->entered.store(true, std::memory_order_release);
+        while (!state_->release.load(std::memory_order_acquire))
+            std::this_thread::yield();
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = inputs[0][frame];
+            outputs[1][frame] = inputs[1][frame];
+        }
+        return 0;
+    }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
     void setParameter(uint32_t, float) override {}
     float getParameter(uint32_t) const override { return 0.0f; }
     uint32_t getNumInputPorts() const override { return 2; }
     uint32_t getNumOutputPorts() const override { return 2; }
 
 private:
-    bool tailActive_ = false;
+    std::shared_ptr<DestructionState> state_;
+};
+
+class CountingPlugin final : public IPlugin {
+public:
+    explicit CountingPlugin(std::shared_ptr<std::atomic<uint32_t>> calls)
+        : calls_(std::move(calls)) {}
+    void activate(float, uint32_t) override {}
+    void deactivate() override {}
+    uint32_t process(const float* const* inputs, float* const* outputs,
+                     uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
+                     const guitarrackcraft::MidiEvent*, uint32_t,
+                     guitarrackcraft::MidiEvent*, uint32_t) override {
+        calls_->fetch_add(1, std::memory_order_relaxed);
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = 42.0f;
+            outputs[1][frame] = -42.0f;
+        }
+        return 0;
+    }
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+
+private:
+    std::shared_ptr<std::atomic<uint32_t>> calls_;
 };
 
 class PluginChainRealtimeTest : public ::testing::Test {
@@ -199,6 +270,7 @@ protected:
     void SetUp() override {
         ASSERT_EQ(chain_.addPlugin(std::make_unique<GainPlugin>()), 0);
         chain_.setSampleRate(48000.0f, 1024);
+        chain_.activate();
         for (std::size_t i = 0; i < inputLeft_.size(); ++i) {
             inputLeft_[i] = 0.25f;
             inputRight_[i] = -0.5f;
@@ -243,7 +315,7 @@ TEST_F(PluginChainRealtimeTest, SupportedFrameQuantaProcessWithoutAllocations) {
     }
 }
 
-TEST_F(PluginChainRealtimeTest, OversizedCallbackPassthroughsWithoutAllocating) {
+TEST_F(PluginChainRealtimeTest, OversizedCallbackClearsWithoutAllocating) {
     const uint32_t frames = 2048;
     const float* inputs[] = {inputLeft_.data(), inputRight_.data()};
     float* outputs[] = {outputLeft_.data(), outputRight_.data()};
@@ -259,8 +331,8 @@ TEST_F(PluginChainRealtimeTest, OversizedCallbackPassthroughsWithoutAllocating) 
 
     EXPECT_EQ(allocations, 0u);
     for (uint32_t frame = 0; frame < frames; ++frame) {
-        EXPECT_FLOAT_EQ(outputLeft_[frame], inputLeft_[frame]);
-        EXPECT_FLOAT_EQ(outputRight_[frame], inputRight_[frame]);
+        EXPECT_FLOAT_EQ(outputLeft_[frame], 0.0f);
+        EXPECT_FLOAT_EQ(outputRight_[frame], 0.0f);
     }
 }
 
@@ -268,6 +340,7 @@ TEST(PluginChainEmptyTest, InPlacePassesThroughWithoutAllocating) {
     constexpr uint32_t frames = 64;
     PluginChain chain;
     chain.setSampleRate(48000.0f, frames);
+    chain.activate();
 
     std::array<float, frames> left{};
     std::array<float, frames> right{};
@@ -295,238 +368,205 @@ TEST(PluginChainEmptyTest, InPlacePassesThroughWithoutAllocating) {
         EXPECT_EQ(right[frame], expectedRight[frame]);
     }
 }
-
-TEST(PluginChainContentionTest,
-     EmptyChainInPlaceContentionPassesThroughWithoutAllocating) {
+TEST_F(PluginChainRealtimeTest,
+       ConcurrentAddRemoveReorderAndRateChangesNeverForceDryFallback) {
     constexpr uint32_t frames = 64;
-    PluginChain chain;
-    chain.setSampleRate(48000.0f, frames);
-
     std::array<float, frames> left{};
     std::array<float, frames> right{};
-    for (uint32_t frame = 0; frame < frames; ++frame) {
-        left[frame] = 1.25f + static_cast<float>(frame) * 0.03125f;
-        right[frame] = -2.5f - static_cast<float>(frame) * 0.0625f;
-    }
-    const auto expectedLeft = left;
-    const auto expectedRight = right;
+    std::array<float, frames> outLeft{};
+    std::array<float, frames> outRight{};
+    left.fill(0.25f);
+    right.fill(-0.5f);
     const float* inputs[] = {left.data(), right.data()};
-    float* outputs[] = {left.data(), right.data()};
-
-    std::unique_lock controlLock(*chain.getChainMutex());
-    std::promise<void> processFinished;
-    std::future<void> completion = processFinished.get_future();
-    std::atomic<std::size_t> callbackAllocations{0};
-    std::thread callback([&] {
-        allocation_probe::NoAllocScope noAlloc;
-        chain.process(inputs, outputs, frames,
-                      guitarrackcraft::AudioProcessContext{},
-                      nullptr, 0, nullptr, 0);
-        callbackAllocations.store(noAlloc.count(), std::memory_order_release);
-        processFinished.set_value();
-    });
-
-    const bool completedWhileContended =
-        completion.wait_for(std::chrono::seconds(1)) ==
-        std::future_status::ready;
-    controlLock.unlock();
-    callback.join();
-
-    ASSERT_TRUE(completedWhileContended);
-    EXPECT_EQ(callbackAllocations.load(std::memory_order_acquire), 0u);
-    for (uint32_t frame = 0; frame < frames; ++frame) {
-        EXPECT_EQ(left[frame], expectedLeft[frame]);
-        EXPECT_EQ(right[frame], expectedRight[frame]);
-    }
-}
-
-
-TEST(PluginChainContentionTest,
-     ExclusiveControlContentionPassesDryInputWithoutBlocking) {
-    constexpr uint32_t frames = 64;
-    PluginChain chain;
-    ASSERT_EQ(chain.addPlugin(std::make_unique<TailOutputPlugin>()), 0);
-    chain.setSampleRate(48000.0f, frames);
-
-    std::array<float, frames> primeLeft{};
-    std::array<float, frames> primeRight{};
-    std::array<float, frames> primeOutputLeft{};
-    std::array<float, frames> primeOutputRight{};
-    primeLeft.fill(0.25f);
-    primeRight.fill(-0.5f);
-    const float* primeInputs[] = {primeLeft.data(), primeRight.data()};
-    float* primeOutputs[] = {primeOutputLeft.data(), primeOutputRight.data()};
-    chain.process(primeInputs, primeOutputs, frames,
-                  guitarrackcraft::AudioProcessContext{},
-                  nullptr, 0, nullptr, 0);
-    EXPECT_FLOAT_EQ(primeOutputLeft[0], 0.5f);
-    EXPECT_FLOAT_EQ(primeOutputRight[0], -1.0f);
-
-    std::array<float, frames> contendedInputLeft{};
-    std::array<float, frames> contendedInputRight{};
-    contendedInputLeft.fill(3.0f);
-    contendedInputRight.fill(-4.0f);
-    std::array<float, frames> tailOutputLeft{};
-    std::array<float, frames> tailOutputRight{};
-    const float* contendedInputs[] = {contendedInputLeft.data(), contendedInputRight.data()};
-    float* tailOutputs[] = {tailOutputLeft.data(), tailOutputRight.data()};
-
-    // This is the same control-plane exclusion used by add/remove/reorder.
-    std::unique_lock controlLock(*chain.getChainMutex());
-    std::promise<void> processFinished;
-    std::future<void> completion = processFinished.get_future();
-    std::thread callback([&] {
-        chain.process(contendedInputs, tailOutputs, frames,
-                      guitarrackcraft::AudioProcessContext{},
-                      nullptr, 0, nullptr, 0);
-        processFinished.set_value();
-    });
-
-    const bool completedWhileContended =
-        completion.wait_for(std::chrono::seconds(1)) ==
-        std::future_status::ready;
-    controlLock.unlock();
-    callback.join();
-
-    ASSERT_TRUE(completedWhileContended);
-    for (uint32_t frame = 0; frame < frames; ++frame) {
-        EXPECT_FLOAT_EQ(tailOutputLeft[frame], contendedInputLeft[frame]);
-        EXPECT_FLOAT_EQ(tailOutputRight[frame], contendedInputRight[frame]);
-    }
-}
-template <std::size_t PrimeFrames, std::size_t ContendedFrames>
-void assertVariableFrameContentionPassesDryInput() {
-    PluginChain chain;
-    ASSERT_EQ(chain.addPlugin(std::make_unique<TailOutputPlugin>()), 0);
-    // Allocate lifecycle-sized buffers for the larger callback while allowing
-    // the priming block to establish a shorter wet-history quantum.
-    chain.setSampleRate(48000.0f,
-                        static_cast<uint32_t>(
-                            PrimeFrames > ContendedFrames ? PrimeFrames
-                                                          : ContendedFrames));
-
-    std::array<float, PrimeFrames> primeLeft{};
-    std::array<float, PrimeFrames> primeRight{};
-    std::array<float, PrimeFrames> primeOutputLeft{};
-    std::array<float, PrimeFrames> primeOutputRight{};
-    for (std::size_t frame = 0; frame < PrimeFrames; ++frame) {
-        primeLeft[frame] = 0.25f + static_cast<float>(frame) * 0.01f;
-        primeRight[frame] = -0.5f - static_cast<float>(frame) * 0.02f;
-    }
-    const float* primeInputs[] = {primeLeft.data(), primeRight.data()};
-    float* primeOutputs[] = {primeOutputLeft.data(), primeOutputRight.data()};
-    chain.process(primeInputs, primeOutputs, static_cast<uint32_t>(PrimeFrames),
-                  guitarrackcraft::AudioProcessContext{},
-                  nullptr, 0, nullptr, 0);
-
-    std::array<float, ContendedFrames> contendedInputLeft{};
-    std::array<float, ContendedFrames> contendedInputRight{};
-    std::array<float, ContendedFrames> contendedOutputLeft{};
-    std::array<float, ContendedFrames> contendedOutputRight{};
-    contendedInputLeft.fill(7.0f);
-    contendedInputRight.fill(-7.0f);
-    const float* contendedInputs[] = {
-        contendedInputLeft.data(), contendedInputRight.data()};
-    float* contendedOutputs[] = {
-        contendedOutputLeft.data(), contendedOutputRight.data()};
-
-    // Hold the exclusive control lock so the callback must take the
-    // allocation-free try-lock continuity path.
-    std::unique_lock controlLock(*chain.getChainMutex());
-    std::promise<void> processFinished;
-    std::future<void> completion = processFinished.get_future();
-    std::atomic<std::size_t> callbackAllocations{0};
-    std::thread callback([&] {
-        allocation_probe::NoAllocScope noAlloc;
-        chain.process(contendedInputs, contendedOutputs,
-                      static_cast<uint32_t>(ContendedFrames),
-                      guitarrackcraft::AudioProcessContext{},
-                      nullptr, 0, nullptr, 0);
-        callbackAllocations.store(noAlloc.count(), std::memory_order_release);
-        processFinished.set_value();
-    });
-
-    const bool completedWhileContended =
-        completion.wait_for(std::chrono::seconds(1)) ==
-        std::future_status::ready;
-    controlLock.unlock();
-    callback.join();
-
-    ASSERT_TRUE(completedWhileContended);
-    EXPECT_EQ(callbackAllocations.load(std::memory_order_acquire), 0u);
-    for (std::size_t frame = 0; frame < ContendedFrames; ++frame) {
-        EXPECT_FLOAT_EQ(contendedOutputLeft[frame], contendedInputLeft[frame]);
-        EXPECT_FLOAT_EQ(contendedOutputRight[frame], contendedInputRight[frame]);
-    }
-}
-
-TEST(PluginChainContentionTest,
-     DifferentLargerCallbackPassesDryInputWithoutAllocating) {
-    assertVariableFrameContentionPassesDryInput<64, 128>();
-}
-
-TEST(PluginChainContentionTest,
-     DifferentSmallerCallbackPassesDryInputWithoutAllocating) {
-    assertVariableFrameContentionPassesDryInput<128, 64>();
-}
-
-TEST(PluginChainContentionTest,
-     ConcurrentSetSampleRateKeepsCallbackDryOrWetAndAllocationFree) {
-    PluginChain chain;
-    ASSERT_EQ(chain.addPlugin(std::make_unique<GainPlugin>()), 0);
-    chain.setSampleRate(48000.0f, 1024);
-
-    constexpr std::array<uint32_t, 4> capacities = {16, 64, 512, 1024};
-    constexpr std::array<uint32_t, 4> quanta = {16, 64, 512, 1024};
-    std::array<float, 1024> inputLeft{};
-    std::array<float, 1024> inputRight{};
-    std::array<float, 1024> outputLeft{};
-    std::array<float, 1024> outputRight{};
-    for (uint32_t frame = 0; frame < inputLeft.size(); ++frame) {
-        inputLeft[frame] = 0.1f + static_cast<float>(frame) * 0.001f;
-        inputRight[frame] = -0.3f - static_cast<float>(frame) * 0.002f;
-    }
-    const float* inputs[] = {inputLeft.data(), inputRight.data()};
-    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    float* outputs[] = {outLeft.data(), outRight.data()};
     std::atomic<bool> start{false};
     std::atomic<bool> invalidOutput{false};
+    std::atomic<uint32_t> invalidLeftBits{0};
+    std::atomic<uint32_t> invalidRightBits{0};
+    std::atomic<uint32_t> invalidFrame{0};
     std::atomic<std::size_t> callbackAllocations{0};
+    const auto isCompleteGain = [](float ratio) {
+        uint32_t bits = 0;
+        std::memcpy(&bits, &ratio, sizeof(bits));
+        return std::isfinite(ratio) && ratio >= 2.0f &&
+               (bits & 0x007fffffu) == 0u &&
+               ((bits >> 23u) & 0xffu) < 0xffu;
+    };
 
-    std::thread setter([&] {
-        while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+    std::thread controls([&] {
+        while (!start.load(std::memory_order_acquire))
+            std::this_thread::yield();
         for (uint32_t iteration = 0; iteration < 200; ++iteration) {
-            chain.setSampleRate(48000.0f, capacities[iteration % capacities.size()]);
-            if ((iteration & 7u) == 0u) std::this_thread::yield();
+            chain_.setSampleRate(48000.0f, 1024);
+            const int added =
+                chain_.addPlugin(std::make_unique<GainPlugin>());
+            if (added >= 1) {
+                if (chain_.getSize() >= 3)
+                    (void)chain_.reorderPlugins(1, 2);
+                (void)chain_.removePlugin(1);
+            }
         }
     });
-
     std::thread callback([&] {
-        while (!start.load(std::memory_order_acquire)) std::this_thread::yield();
+        while (!start.load(std::memory_order_acquire))
+            std::this_thread::yield();
         allocation_probe::NoAllocScope noAlloc;
         for (uint32_t iteration = 0; iteration < 2000; ++iteration) {
-            const uint32_t frames = quanta[iteration % quanta.size()];
-            chain.process(inputs, outputs, frames,
-                          guitarrackcraft::AudioProcessContext{},
-                          nullptr, 0, nullptr, 0);
-            bool dry = true;
-            bool wet = true;
+            chain_.process(inputs, outputs, frames,
+                           guitarrackcraft::AudioProcessContext{},
+                           nullptr, 0, nullptr, 0);
             for (uint32_t frame = 0; frame < frames; ++frame) {
-                dry = dry && outputLeft[frame] == inputLeft[frame] &&
-                      outputRight[frame] == inputRight[frame];
-                wet = wet && outputLeft[frame] == inputLeft[frame] * 2.0f &&
-                      outputRight[frame] == inputRight[frame] * 2.0f;
+                const float leftRatio = outLeft[frame] / left[frame];
+                const float rightRatio = outRight[frame] / right[frame];
+                const bool completeGain =
+                    leftRatio == rightRatio && isCompleteGain(leftRatio);
+                if (!completeGain &&
+                    !invalidOutput.exchange(true, std::memory_order_acq_rel)) {
+                    uint32_t leftBits = 0;
+                    uint32_t rightBits = 0;
+                    std::memcpy(&leftBits, &outLeft[frame], sizeof(leftBits));
+                    std::memcpy(&rightBits, &outRight[frame], sizeof(rightBits));
+                    invalidLeftBits.store(leftBits, std::memory_order_release);
+                    invalidRightBits.store(rightBits, std::memory_order_release);
+                    invalidFrame.store(frame, std::memory_order_release);
+                }
             }
-            if (!dry && !wet) invalidOutput.store(true, std::memory_order_release);
         }
         callbackAllocations.store(noAlloc.count(), std::memory_order_release);
     });
-
     start.store(true, std::memory_order_release);
     callback.join();
-    setter.join();
-    EXPECT_FALSE(invalidOutput.load(std::memory_order_acquire));
+    controls.join();
+
+    const auto bitsToFloat = [](uint32_t bits) {
+        float value = 0.0f;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    };
+    const uint32_t badLeftBits =
+        invalidLeftBits.load(std::memory_order_acquire);
+    const uint32_t badRightBits =
+        invalidRightBits.load(std::memory_order_acquire);
+    EXPECT_FALSE(invalidOutput.load(std::memory_order_acquire))
+        << "frame " << invalidFrame.load(std::memory_order_acquire)
+        << " produced " << bitsToFloat(badLeftBits) << ", "
+        << bitsToFloat(badRightBits);
     EXPECT_EQ(callbackAllocations.load(std::memory_order_acquire), 0u);
 }
+
+TEST_F(PluginChainRealtimeTest, StableInstanceIdControlsSurviveReorderAndRemoval) {
+    PluginChain chain;
+    ASSERT_EQ(chain.addPlugin(std::make_unique<ParameterPlugin>()), 0);
+    ASSERT_EQ(chain.addPlugin(std::make_unique<ParameterPlugin>()), 1);
+    const uint64_t firstId = chain.getPluginInstanceId(0);
+    const uint64_t secondId = chain.getPluginInstanceId(1);
+    ASSERT_NE(firstId, 0u);
+    ASSERT_NE(secondId, 0u);
+    ASSERT_NE(firstId, secondId);
+
+    ASSERT_TRUE(chain.submitParameter(firstId, 0, 0.25f));
+    ASSERT_TRUE(chain.reorderPlugins(0, 1));
+    EXPECT_FLOAT_EQ(chain.getParameter(firstId, 0), 0.25f);
+    ASSERT_TRUE(chain.submitParameter(firstId, 0, 0.875f));
+    EXPECT_FLOAT_EQ(chain.getParameter(firstId, 0), 0.875f);
+
+    ASSERT_TRUE(chain.removePlugin(1));
+    EXPECT_FALSE(chain.submitParameter(firstId, 0, 0.5f));
+    EXPECT_FLOAT_EQ(chain.getParameter(firstId, 0), 0.0f);
+    EXPECT_FALSE(chain.submitParameter(0xdeadbeefULL, 0, 0.5f));
+    EXPECT_FLOAT_EQ(chain.getParameter(0xdeadbeefULL, 0), 0.0f);
+}
+
+TEST_F(PluginChainRealtimeTest, RetiredPluginDestructionWaitsForAudioHazard) {
+    auto state = std::make_shared<DestructionState>();
+    PluginChain chain;
+    ASSERT_EQ(chain.addPlugin(std::make_unique<HazardPlugin>(state)), 0);
+    chain.setSampleRate(48000.0f, 64);
+    chain.activate();
+
+    std::array<float, 64> inputLeft{};
+    std::array<float, 64> inputRight{};
+    std::array<float, 64> outputLeft{};
+    std::array<float, 64> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    std::thread audio([&] {
+        chain.process(inputs, outputs, 64,
+                      guitarrackcraft::AudioProcessContext{},
+                      nullptr, 0, nullptr, 0);
+    });
+    for (uint32_t spin = 0;
+         spin < 100'000 && !state->entered.load(std::memory_order_acquire);
+         ++spin)
+        std::this_thread::yield();
+    if (!state->entered.load(std::memory_order_acquire)) {
+        state->release.store(true, std::memory_order_release);
+        audio.join();
+        FAIL() << "audio callback did not reach the hazard barrier";
+        return;
+    }
+
+    std::atomic<bool> removed{false};
+    std::thread remover([&] {
+        removed.store(chain.removePlugin(0), std::memory_order_release);
+    });
+    for (uint32_t spin = 0;
+         spin < 100'000 && !removed.load(std::memory_order_acquire);
+         ++spin)
+        std::this_thread::yield();
+    if (!removed.load(std::memory_order_acquire)) {
+        state->release.store(true, std::memory_order_release);
+        audio.join();
+        remover.join();
+        FAIL() << "plugin removal did not complete";
+        return;
+    }
+    EXPECT_FALSE(state->destroyed.load(std::memory_order_acquire));
+
+    state->release.store(true, std::memory_order_release);
+    audio.join();
+    remover.join();
+    ASSERT_EQ(chain.addPlugin(std::make_unique<GainPlugin>()), 0);
+    for (uint32_t spin = 0;
+         spin < 100'000 && !state->destroyed.load(std::memory_order_acquire);
+         ++spin)
+        std::this_thread::yield();
+    EXPECT_TRUE(state->destroyed.load(std::memory_order_acquire));
+}
+
+TEST_F(PluginChainRealtimeTest, OversizedQuantumIsRejectedWithoutPartialProcess) {
+    auto calls = std::make_shared<std::atomic<uint32_t>>(0);
+    PluginChain chain;
+    ASSERT_EQ(chain.addPlugin(std::make_unique<CountingPlugin>(calls)), 0);
+    chain.setSampleRate(48000.0f, 64);
+    chain.activate();
+
+    std::array<float, 65> inputLeft{};
+    std::array<float, 65> inputRight{};
+    std::array<float, 65> outputLeft{};
+    std::array<float, 65> outputRight{};
+    outputLeft.fill(-7.0f);
+    outputRight.fill(9.0f);
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+
+    chain.process(inputs, outputs, 65,
+                  guitarrackcraft::AudioProcessContext{},
+                  nullptr, 0, nullptr, 0);
+    EXPECT_EQ(calls->load(std::memory_order_acquire), 0u);
+    for (uint32_t frame = 0; frame < 65; ++frame) {
+        EXPECT_FLOAT_EQ(outputLeft[frame], 0.0f);
+        EXPECT_FLOAT_EQ(outputRight[frame], 0.0f);
+    }
+
+    chain.process(inputs, outputs, 64,
+                  guitarrackcraft::AudioProcessContext{},
+                  nullptr, 0, nullptr, 0);
+    EXPECT_EQ(calls->load(std::memory_order_acquire), 1u);
+    EXPECT_FLOAT_EQ(outputLeft[0], 42.0f);
+    EXPECT_FLOAT_EQ(outputRight[0], -42.0f);
+}
+
 
 
 

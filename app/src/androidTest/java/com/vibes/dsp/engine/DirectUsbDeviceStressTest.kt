@@ -2,22 +2,25 @@
  * Hardware-gated direct USB duplex stress/diagnostic instrumentation.
  *
  * This source set is never included in ordinary unit-test suites. The test
- * only proceeds when UsbManager reports an app-authorized USB Audio device;
- * otherwise it logs an exact SKIP line and uses JUnit Assume to skip cleanly.
+ * only proceeds when UsbManager reports a USB Audio device; probeFormats requests
+ * permission and denied access fails the test rather than being skipped.
  */
 package com.vibes.dsp.engine
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import com.vibes.dsp.tweaks.PerformanceTweaks
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
@@ -45,24 +48,106 @@ class DirectUsbDeviceStressTest {
         val selectedRates = argumentCsv(args, "direct_usb_rates", defaultRates, defaultRates)
         val selectedBuffers = argumentCsv(args, "direct_usb_buffers", defaultBuffers, allowedBuffers)
         val selectedMultipliers = argumentCsv(args, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
-        val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 2, 8)
-        val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 30_000L)
+        val requireLoopback = argumentBoolean(args, "direct_usb_require_loopback")
+        // Step 1 of the diagnostics ladder. Off by default: recording is cheap
+        // but the dump is verbose, and ordinary audit runs do not need it.
+        val flightRecorder = argumentBoolean(args, "direct_usb_flight_recorder")
+        // The validation loop allocates on every iteration - a stats object, a
+        // 57-long array from JNI, transport info and the track list - so at the
+        // default 10 ms it produces a steady stream of garbage in the process
+        // that owns the render thread. A collection pause deschedules that
+        // thread, which is a candidate for the clicks a listener reports at a
+        // rate unrelated to any driver counter. Raising this trades validation
+        // resolution for harness quiet.
+        val pollIntervalMs = argumentLong(args, "direct_usb_poll_ms", "poll_ms", 10L, 1L, 1_000L)
+        val discontinuityThreshold =
+            argumentDouble(args, "direct_usb_discontinuity", 0.05).toFloat()
+        // An interface that loops internally returns playback on the input pair
+        // fed by the playback pair, not on input one. Both default to the first
+        // pair and the first channel, which is the external-cable arrangement.
+        // Submitted OUT runway, in transfers. This is the reserve that survives
+        // a late completion, as distinct from PCM waiting in the ring, so a
+        // sweep over it needs no rebuild. Zero keeps the automatic policy.
+        // 0 waits for room, 1 paces by played frames. One build serves both.
+        val admissionPolicy = argumentInt(args, "direct_usb_admission", "admission", 0, 0, 1)
+        // Frames the producer may run ahead of the device under the credit
+        // policy. Zero is strict credit, which holds no lead at all.
+        val creditReserve = argumentInt(args, "direct_usb_credit_reserve", "credit_reserve", 0, 0, 1024)
+        // Write headroom, so the ceiling can be moved without moving the
+        // working level: the target sets where the pipeline sits, the headroom
+        // sets how far it may excurse before admission refuses. Zero keeps the
+        // automatic policy.
+        val writeHeadroom = argumentInt(args, "direct_usb_headroom", "headroom", 0, 0, 1024)
+        // Deliberate stalls fired once, a second into the steady window, so
+        // the pipeline is settled and the disturbance is the only variable.
+        // Separate knobs because a render stall and a service stall produce
+        // different symptoms, and a test that conflates them proves nothing.
+        // The transfer-continuity detector costs event-thread time; the others
+        // do not. Off by default so a measurement is not dominated by it.
+        val transferDetector = argumentBoolean(args, "direct_usb_transfer_detector")
+        val renderStallUs = argumentInt(args, "direct_usb_render_stall_us", "render_stall_us", 0, 0, 50000)
+        val serviceStallUs = argumentInt(args, "direct_usb_service_stall_us", "service_stall_us", 0, 0, 50000)
+        val transferCount = argumentInt(args, "direct_usb_transfers", "transfers", 0, 0, 8)
+        // Packets per transfer sets how many frames each completion carries,
+        // and the submitted runway is transfers times that. It is therefore a
+        // latency axis in its own right - and the opposite of the transfer
+        // count for event-thread load, since fewer packets means more
+        // completions a second. Zero keeps the saved policy.
+        val packetsPerTransfer = argumentInt(args, "direct_usb_packets", "packets", 0, 0, 8)
+        // Affinity as two independent factors. The syscall fix that made audio
+        // affinity reach the kernel made the UI affinity call reach it too, so
+        // every arm measured before this varied both at once. Default 1 keeps
+        // what the driver does on its own.
+        val audioAffinity = argumentInt(args, "direct_usb_audio_affinity", "audio_affinity", 1, 0, 1)
+        val uiAffinity = argumentInt(args, "direct_usb_ui_affinity", "ui_affinity", 1, 0, 1)
+        // 0 holds servicing to one core of the fast pool, 1 gives it the pool.
+        val servicePlacement = argumentInt(args, "direct_usb_service_cpus", "service_cpus", 1, 0, 2)
+        // Two vDSO clock reads a block, so on by default: it is the only
+        // figure that separates a graph that is slow from one that is
+        // descheduled, which the peak DSP number alone cannot.
+        val measureDspOffCpu = argumentInt(args, "direct_usb_dsp_off_cpu", "dsp_off_cpu", 1, 0, 1)
+        // The interface is part of the condition when it is open, but switching
+        // to it is not: bringing the activity up while audio is already running
+        // puts the launch and the first composition inside the measured window,
+        // and it is audible. The test raises it itself, before any session
+        // starts, and waits for it to settle.
+        // 0 silences ADPF, 1 is the old CPU-only signal, 2 reports wall and
+        // CPU separately. The old signal told the system a workload a hundred
+        // times faster than its deadline, which is an invitation to place it
+        // on a slow core; whether the newer one changes anything here is what
+        // this argument exists to find out.
+        val adpfMode = argumentInt(args, "direct_usb_adpf", "adpf", 1, 0, 2)
+        val openUi = argumentInt(args, "direct_usb_open_ui", "open_ui", 0, 0, 1)
+        // The interface's own periodic work, as two axes. Zero keeps whatever
+        // the app is configured for.
+        val uiMeterMs = argumentInt(args, "direct_usb_ui_meter_ms", "ui_meter_ms", 0, 0, 500)
+        val uiStatsMs = argumentInt(args, "direct_usb_ui_stats_ms", "ui_stats_ms", 0, 0, 5000)
+        // Tweaks to apply for the run and revert after it, by id. The
+        // privileged ones can only be reached from the app's own uid, so a
+        // shell cannot measure them and this harness can.
+        val applyTweaks = (args.getString("direct_usb_tweaks") ?: "")
+            .split(',').map { it.trim() }.filter { it.isNotEmpty() }
+        val uiFrameClock = argumentInt(args, "direct_usb_ui_frame_clock", "ui_frame_clock", -1, -1, 1)
+        // Transport readout cadence in ms; 0 reproduces the old per-display-frame
+        // behaviour, -1 leaves whatever the app is configured for.
+        val uiClockMs = argumentInt(args, "direct_usb_ui_clock_ms", "ui_clock_ms", -1, -1, 500)
+        val uiSettleMs = argumentLong(args, "direct_usb_ui_settle_ms", "ui_settle_ms", 4_000L, 0L, 30_000L)
+        val outputPair = argumentInt(args, "direct_usb_output_pair", "output_pair", 0, 0, 7)
+        val inputChannel = argumentInt(args, "direct_usb_input_channel", "input_channel", 0, 0, 15)
+        val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 1, 8)
+        val durationMs = argumentLong(args, "direct_usb_duration_ms", "duration_ms", 5_000L, 5_000L, 600_000L)
         val warmupMs = minOf(1_000L, (durationMs / 3L).coerceAtLeast(250L))
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val usb = context.getSystemService(Context.USB_SERVICE) as UsbManager
         val audioDevices = usb.deviceList.values.filter(::isUsbAudio)
-        val authorized = audioDevices.filter(usb::hasPermission)
-        if (authorized.isEmpty()) {
-            Log.i(tag, "SKIP reason=no-authorized-usb-audio-device discovered=${audioDevices.size}")
+        if (audioDevices.isEmpty()) {
+            Log.i(tag, "SKIP reason=no-usb-audio-device discovered=0")
         }
-        assumeTrue("SKIP reason=no-authorized-usb-audio-device", authorized.isNotEmpty())
+        assumeTrue("SKIP reason=no-usb-audio-device", audioDevices.isNotEmpty())
 
         val option = DirectUsbAudioManager.getAudioDevices(context)
-            .firstOrNull { candidate -> authorized.any { it.deviceId == candidate.id } }
-        if (option == null) {
-            Log.i(tag, "SKIP reason=authorized-device-not-exposed-by-manager")
-        }
-        assumeTrue("SKIP reason=authorized-device-not-exposed-by-manager", option != null)
+            .firstOrNull { candidate -> audioDevices.any { it.deviceId == candidate.id } }
+        assertTrue("USB audio device was not exposed by DirectUsbAudioManager", option != null)
 
         val engine = NativeEngine.getInstance()
         val originalDeviceId = AudioSettingsManager.getDirectUsbDeviceId(context)
@@ -75,18 +160,88 @@ class DirectUsbDeviceStressTest {
         val originalSubslot = AudioSettingsManager.getDirectUsbSubslot(context)
         val originalChannels = AudioSettingsManager.getDirectUsbChannels(context)
         val originalOutputPair = AudioSettingsManager.getDirectUsbOutputPair(context)
+        // Restored with the rest: a sweep that leaves the transfer count behind
+        // silently biases every later run on the device.
+        val originalTransferCount = AudioSettingsManager.getDirectUsbTransferCount(context)
+        val originalPacketsPerTransfer = AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)
+        val originalUiMeterMs = AudioSettingsManager.getUiMeterIntervalMs(context)
+        val originalUiStatsMs = AudioSettingsManager.getUiStatsIntervalMs(context)
+        val originalUiFrameClock = AudioSettingsManager.getUiTransportFrameClock(context)
+        val originalUiClockMs = AudioSettingsManager.getUiTransportClockMs(context)
+        val originalWriteHeadroom = AudioSettingsManager.getDirectUsbWriteHeadroom(context)
         val originalBuffer = AudioSettingsManager.getBufferSize(context)
         val originalMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
         var originalTransport: TransportInfo? = null
         val results = linkedMapOf<CaseKey, MutableList<CaseResult>>()
         var cases = 0
         try {
-            AudioSettingsManager.setDirectUsbOutputPair(context, 0)
+            AudioSettingsManager.setDirectUsbOutputPair(context, outputPair)
+            if (transferCount > 0) {
+                AudioSettingsManager.setDirectUsbTransferCount(context, transferCount)
+            }
+            if (packetsPerTransfer > 0) {
+                AudioSettingsManager.setDirectUsbPacketsPerTransfer(context, packetsPerTransfer)
+            }
+            // Set before the window is raised so it composes with the cadence
+            // under test rather than switching to it mid-run.
+            if (uiMeterMs > 0) AudioSettingsManager.setUiMeterIntervalMs(context, uiMeterMs)
+            if (uiStatsMs > 0) AudioSettingsManager.setUiStatsIntervalMs(context, uiStatsMs)
+            if (uiFrameClock >= 0) {
+                AudioSettingsManager.setUiTransportFrameClock(context, uiFrameClock == 1)
+            }
+            if (uiClockMs >= 0) AudioSettingsManager.setUiTransportClockMs(context, uiClockMs)
+            if (writeHeadroom > 0) {
+                AudioSettingsManager.setDirectUsbWriteHeadroom(context, writeHeadroom)
+            }
+            // Separate line, not a TELEMETRY field: the analyzer's schema is
+            // versioned and this is harness configuration, not a measurement.
+            Log.i(tag, "ADMISSION_POLICY policy=$admissionPolicy reserve=$creditReserve")
+            Log.i(tag, "LOOPBACK_CONFIG output_pair=$outputPair input_channel=$inputChannel " +
+                "transfers=${AudioSettingsManager.getDirectUsbTransferCount(context)} " +
+                "packets=${AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)}")
             EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
             assertTrue("Native engine initialization failed", EngineInitHelper.initEngine(context))
+            // After the library is loaded and before any session starts: the
+            // audio threads read these when they are created.
+            engine.nativeSetAudioAffinityEnabled(audioAffinity == 1)
+            engine.nativeSetUiAffinityEnabled(uiAffinity == 1)
+            engine.nativeSetServiceCpuPlacement(servicePlacement)
+            engine.nativeSetMeasureRunqueueWait(measureDspOffCpu == 1)
+            engine.nativeSetMeasureServiceRunqueue(measureDspOffCpu == 1)
+            engine.nativeSetAdpfMode(adpfMode)
+            val appliedTweaks = applyTweaks.mapNotNull { id ->
+                PerformanceTweaks.catalogue.firstOrNull { it.id == id }
+            }
+            appliedTweaks.forEach { tweak ->
+                val outcome = PerformanceTweaks.apply(context, tweak, true)
+                Log.i(tag, "TWEAK id=${tweak.id} state=${outcome.state} detail=${outcome.detail}")
+            }
+            Log.i(tag, "AFFINITY audio=$audioAffinity ui=$uiAffinity service_cpus=$servicePlacement adpf=$adpfMode ui_meter_ms=${AudioSettingsManager.getUiMeterIntervalMs(context)} ui_frame_clock=${AudioSettingsManager.getUiTransportFrameClock(context)} ui_clock_ms=${AudioSettingsManager.getUiTransportClockMs(context)} ui_stats_ms=${AudioSettingsManager.getUiStatsIntervalMs(context)}")
             originalTransport = runCatching { engine.getTransportInfo() }.getOrNull()
             val probe = runBlocking { DirectUsbAudioManager.probeFormats(context, option!!) }
             assertTrue("Direct USB probe failed: ${probe.exceptionOrNull()?.message}", probe.isSuccess)
+            assertTrue(
+                "USB permission was not granted after probing",
+                audioDevices.any { it.deviceId == option!!.id && usb.hasPermission(it) }
+            )
+            if (openUi == 1) {
+                // After the probe has claimed the USB interface and before any
+                // session: audio starts into a window that is already up, which
+                // is the order a person uses the app in and the only order that
+                // does not measure the app switch. Raising it before the probe
+                // was tried and Android then refused to open the interface.
+                val intent = context.packageManager
+                    .getLaunchIntentForPackage(context.packageName)
+                    ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (intent != null) {
+                    context.startActivity(intent)
+                    Log.i(tag, "UI_OPEN requested settle_ms=$uiSettleMs")
+                    SystemClock.sleep(uiSettleMs)
+                    Log.i(tag, "UI_OPEN settled")
+                } else {
+                    Log.i(tag, "UI_OPEN unavailable reason=no-launch-intent")
+                }
+            }
             // probeFormats may return manager fallbacks when native descriptors are empty.
             // Only native descriptor tuples are verified negotiated formats.
             val verifiedFormats = runCatching {
@@ -108,6 +263,9 @@ class DirectUsbDeviceStressTest {
                 .filter {
                     it.bits <= it.subslotBytes * 8 && it.channels >= 2 && it.channels % 2 == 0
                 }
+                // The requested pair and inspected channel must exist in the
+                // negotiated format, or the run measures a channel nobody feeds.
+                .filter { it.channels > outputPair * 2 + 1 && it.channels > inputChannel }
                 .distinctBy { FormatKey(it.sampleRate, it.bits, it.subslotBytes, it.channels) }
                 .sortedWith(
                     compareBy<DirectUsbFormat> { it.sampleRate }
@@ -129,7 +287,27 @@ class DirectUsbDeviceStressTest {
                         val bucket = results.getOrPut(key) { mutableListOf() }
                         for (cycle in 1..cycles) {
                             cases++
-                            bucket += runCase(context, engine, format, buffer, multiplier, cycle, durationMs, warmupMs)
+                            bucket += runCase(
+                                context,
+                                engine,
+                                format,
+                                buffer,
+                                multiplier,
+                                cycle,
+                                durationMs,
+                                warmupMs,
+                                requireLoopback,
+                                flightRecorder,
+                                pollIntervalMs,
+                                discontinuityThreshold,
+                                inputChannel,
+                                admissionPolicy,
+                                creditReserve,
+                                renderStallUs,
+                                serviceStallUs,
+                                transferDetector,
+                                appliedTweaks
+                            )
                         }
                     }
                 }
@@ -175,6 +353,23 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setDirectUsbFormat(context, originalRate, originalBits, originalSubslot, originalChannels)
             AudioSettingsManager.setBufferSize(context, originalBuffer)
             AudioSettingsManager.setDirectUsbOutputPair(context, originalOutputPair)
+            AudioSettingsManager.setDirectUsbTransferCount(context, originalTransferCount)
+            AudioSettingsManager.setDirectUsbPacketsPerTransfer(context, originalPacketsPerTransfer)
+            AudioSettingsManager.setUiMeterIntervalMs(context, originalUiMeterMs)
+            AudioSettingsManager.setUiStatsIntervalMs(context, originalUiStatsMs)
+            // Reverted whatever happened to the run: a tweak left applied
+            // would silently bias every later measurement on this device.
+            applyTweaks.mapNotNull { id ->
+                PerformanceTweaks.catalogue.firstOrNull { it.id == id }
+            }.forEach { tweak ->
+                val outcome = runCatching {
+                    PerformanceTweaks.apply(context, tweak, false)
+                }.getOrNull()
+                Log.i(tag, "TWEAK_REVERT id=${tweak.id} state=${outcome?.state}")
+            }
+            AudioSettingsManager.setUiTransportFrameClock(context, originalUiFrameClock)
+            AudioSettingsManager.setUiTransportClockMs(context, originalUiClockMs)
+            AudioSettingsManager.setDirectUsbWriteHeadroom(context, originalWriteHeadroom)
             AudioSettingsManager.setDirectUsbPeriodMultiplier(context, originalMultiplier)
             // Restore transport controls last. The exact frame cannot be restored
             // because no public API exposes a frame setter. Looping is a per-track
@@ -210,8 +405,38 @@ class DirectUsbDeviceStressTest {
             argumentCsv(Bundle().apply { putString("direct_usb_multipliers", "9") }, "direct_usb_multipliers", defaultMultipliers, allowedMultipliers)
         }
         assertTrue(invalidMultiplier.message?.contains("allowed=1,2,3,4,5,6,7,8") == true)
-    }
 
+        assertTrue(argumentBoolean(Bundle().apply { putString("direct_usb_require_loopback", "true") }, "direct_usb_require_loopback"))
+        assertTrue(!argumentBoolean(Bundle().apply { putString("direct_usb_require_loopback", "false") }, "direct_usb_require_loopback"))
+        val invalidLoopback = assertThrows(IllegalArgumentException::class.java) {
+            argumentBoolean(Bundle().apply { putString("direct_usb_require_loopback", "TRUE") }, "direct_usb_require_loopback")
+        }
+        assertTrue(invalidLoopback.message?.contains("must be true or false") == true)
+
+    }
+    @Test
+    fun directUsbCycleArgumentsRespectBounds() {
+        listOf(
+            "minimum" to ("1" to 1),
+            "below minimum clamps" to ("0" to 1),
+            "maximum" to ("8" to 8),
+            "above maximum clamps" to ("9" to 8),
+        ).forEach { (label, inputAndExpected) ->
+            val (input, expected) = inputAndExpected
+            assertEquals(
+                "direct_usb_cycles $label bound",
+                expected,
+                argumentInt(
+                    Bundle().apply { putString("direct_usb_cycles", input) },
+                    "direct_usb_cycles",
+                    "cycles",
+                    2,
+                    1,
+                    8,
+                ),
+            )
+        }
+    }
 
     private fun runCase(
         context: Context,
@@ -222,7 +447,19 @@ class DirectUsbDeviceStressTest {
         cycle: Int,
         durationMs: Long,
         warmupMs: Long,
+        requireLoopback: Boolean,
+        flightRecorder: Boolean,
+        pollIntervalMs: Long,
+        discontinuityThreshold: Float,
+        inputChannel: Int,
+        admissionPolicy: Int,
+        creditReserve: Int,
+        renderStallUs: Int,
+        serviceStallUs: Int,
+        transferDetector: Boolean,
+        lateTweaks: List<PerformanceTweaks.Tweak>,
     ): CaseResult {
+        val temporarySlot = 0
         val requestedBpm = 120.0
         var reason: String? = null
         var temporaryTrackId = 0L
@@ -233,12 +470,109 @@ class DirectUsbDeviceStressTest {
         var finalRaw = LongArray(0)
         var finalTransport: TransportInfo? = null
         var finalTrack: RackTrackInfo? = null
+        var maxInputPeak = 0.0f
+        var maxOutputPeak = 0.0f
         try {
             AudioSettingsManager.setBufferSize(context, buffer)
+            // Enable before the session starts so the first admission and the
+            // first completion are both recorded; enabling clears the history.
+            runCatching {
+                // Arm before enabling: the trigger keeps the run-up to the
+                // first refusal, which is the event the recorder exists for.
+                // Keeping only the newest records loses it - one cycle offers
+                // about 143000 events into a 4096 slot buffer.
+                // Thresholds first, and outside the recorder's block. A zero
+                // threshold disables the detector outright, so arming the
+                // loopback check without the recorder produced "detector never
+                // armed" while a listener could hear the breaks it was there
+                // to count. Detecting a fault and recording its context are
+                // separate requests.
+                //
+                // A click is a discontinuity in the signal. At 440 Hz and
+                // 48 kHz consecutive samples differ by at most 0.058 of the
+                // tone's amplitude, so anything well above that is a break.
+                engine.nativeSetDirectUsbDiscontinuityThreshold(
+                    discontinuityThreshold
+                )
+                // Relative to the loopback signal's own peak, so gain does not
+                // matter. A 440 Hz tone steps by 5.8% of its peak between
+                // samples; 30% is unambiguous.
+                engine.nativeSetDirectUsbCaptureDiscontinuityThreshold(0.30f)
+                // A steady tone must come back at a steady level. 8% is far
+                // above the RMS jitter of a clean loopback and far below the
+                // swing a drifting overlap produces.
+                engine.nativeSetDirectUsbCaptureModulationThreshold(0.08f)
+                // This one stays conditional on being asked for: it runs on
+                // the USB event thread over every frame of every drain, and
+                // was measured to be most of the difference between a worst
+                // service gap of 6.2 ms and one of 1.46 ms.
+                engine.nativeSetDirectUsbTransferDiscontinuityThreshold(
+                    if (transferDetector) discontinuityThreshold else 0.0f
+                )
+                if (flightRecorder) {
+                    // Keep only the anomalies. A four minute run offers about
+                    // 186000 events into a 4096 slot buffer, so recording the
+                    // routine completions leaves room for a few seconds of
+                    // history instead of a whole run's worth of faults.
+                    engine.nativeSetDirectUsbFlightRecorderEventMask(
+                        FlightRecord.ANOMALY_MASK
+                    )
+                    // A click is a discontinuity in the signal. At 440 Hz and
+                    // 48 kHz consecutive samples differ by at most 0.058 of
+                    // the tone's amplitude, so anything well above that is a
+                    // break. A quarter of full scale proved far too coarse:
+                    // it caught only the stop transient and missed the breaks
+                    // a listener reported, because a jump of ten samples of
+                    // phase still lands under it.
+                    // Off unless asked for. This one runs on the USB event
+                    // thread, unpacking and comparing every frame of every
+                    // drain - 48000 frames a second inside the completion
+                    // callback. Measured, it is most of the difference between
+                    // a worst service gap of 6.2 ms and one of 1.46 ms, so
+                    // leaving it on turns the instrument into the disturbance.
+                    // Relative to the loopback signal's own peak, so gain does
+                    // not matter. A 440 Hz tone steps by 5.8% of its peak
+                    // between samples; 30% is unambiguous.
+                    // A steady tone must come back at a steady level. 8% is
+                    // far above the RMS jitter of a clean loopback and far
+                    // below the swing a drifting overlap produces.
+                    // No freeze trigger: with the filter in place the whole run
+                    // fits, and freezing on the first refusal would hide every
+                    // deferral that followed it.
+                    engine.nativeSetDirectUsbFlightRecorderFreezeTrigger(
+                        FlightRecord.EVENT_UNKNOWN
+                    )
+                }
+                engine.nativeSetDirectUsbFlightRecorderEnabled(flightRecorder)
+            }.onFailure { error ->
+                Log.i(
+                    tag,
+                    "FLIGHT_SUMMARY enable_failed=1 " +
+                        "error=${error.javaClass.simpleName}-${error.message?.replace(Regex("[\r\n]"), " ")}"
+                )
+            }
+            // Before the session starts, so the very first decoded block is
+            // already inspected on the channel the loopback returns on.
+            runCatching { engine.nativeSetDirectUsbCaptureInspectChannel(inputChannel) }
+            runCatching { engine.nativeSetDirectUsbAdmissionPolicy(admissionPolicy) }
+            runCatching { engine.nativeSetDirectUsbCreditReserve(creditReserve) }
             DirectUsbAudioManager.startSelected(context, format)
-            val started = runBlocking { DirectUsbAudioManager.startConfigured(context) }
+            val started = runBlocking {
+                DirectUsbAudioManager.startConfigured(context)
+            }
             if (started.isFailure) {
                 reason = "start-failed detail=${started.exceptionOrNull()?.message ?: "unknown"}"
+            }
+            // Applied again now the audio threads exist. Some privileged
+            // tweaks set a policy on a thread rather than a limit on the
+            // process, and a thread that has not been created yet cannot be
+            // given one - applying only before the session would report
+            // success for something nobody holds.
+            lateTweaks.forEach { tweak ->
+                val outcome = runCatching {
+                    PerformanceTweaks.apply(context, tweak, true)
+                }.getOrNull()
+                Log.i(tag, "TWEAK_LATE id=${tweak.id} state=${outcome?.state} detail=${outcome?.detail}")
             }
             var runningStats: DirectUsbStats? = null
             if (reason == null) {
@@ -262,14 +596,14 @@ class DirectUsbDeviceStressTest {
                 temporaryTrackId = engine.addTrack()
                 if (temporaryTrackId <= 0L) {
                     reason = "temporary-track-create-failed"
-                } else if (!engine.setTrackTransportLooping(temporaryTrackId, true)) {
-                    reason = "track-looping-set-failed"
                 }
             }
             if (reason == null) {
                 wav = createStressWav(context.cacheDir, format.sampleRate)
                 if (!engine.loadTrackWav(temporaryTrackId, wav.absolutePath, wav.name)) {
                     reason = "track-wav-load-failed"
+                } else if (!engine.setClipLooping(temporaryTrackId, temporarySlot, true)) {
+                    reason = "track-looping-set-failed"
                 }
             }
             if (reason == null) {
@@ -277,7 +611,13 @@ class DirectUsbDeviceStressTest {
                     reason = "transport-bpm-set-failed"
                 } else if (!engine.restartTransport()) {
                     reason = "transport-start-failed"
-                } else if (!engine.setTrackTransportPlaying(temporaryTrackId, true, TrackLaunchQuantization.Sixteenth)) {
+                } else if (!engine.setClipTransportPlaying(
+                        temporaryTrackId,
+                        temporarySlot,
+                        true,
+                        TrackLaunchQuantization.Sixteenth
+                    )
+                ) {
                     reason = "track-play-set-failed"
                 } else if (!engine.setTransportPlaying(true)) {
                     reason = "transport-start-failed"
@@ -310,6 +650,9 @@ class DirectUsbDeviceStressTest {
             }
 
             if (reason == null && transport != null && track != null) {
+                var pollCount = 0L
+                var lastTransport: TransportInfo? = null
+                var lastTrack: RackTrackInfo? = null
                 val start = SystemClock.elapsedRealtime()
                 val deadline = start + durationMs
                 val warmupDeadline = start + warmupMs
@@ -319,13 +662,37 @@ class DirectUsbDeviceStressTest {
                 var samplePositionProgressed = false
                 var trackFrameProgressed = false
                 while (SystemClock.elapsedRealtime() < deadline && reason == null) {
-                    val stats = engine.getDirectUsbStats()
+                    val inputLevel = engine.getInputLevel()
+                    if (inputLevel.isFinite()) maxInputPeak = maxOf(maxInputPeak, inputLevel)
+                    val outputLevel = engine.getOutputLevel()
+                    if (outputLevel.isFinite()) maxOutputPeak = maxOf(maxOutputPeak, outputLevel)
+                    // One array per iteration, not two: getDirectUsbStats()
+                    // decodes the same JNI array this call returns.
                     val raw = engine.nativeGetDirectUsbStats()
+                    val stats = DirectUsbStats.fromRaw(raw)
                     reason = validateRunningStats(stats, raw, format, buffer, multiplier)
                     if (reason == null && stats.sequence < previousSequence) reason = "capture-sequence-regressed"
                     previousSequence = stats.sequence
-                    val current = engine.getTransportInfo()
-                    val currentTrack = engine.getTracks().firstOrNull { it.id == temporaryTrackId }
+                    // Transport and track state change at human speed, and
+                    // getTracks() builds an array of objects. Sampling it every
+                    // iteration was the harness's largest single allocation and
+                    // it produced audible artefacts in a driver that is clean
+                    // when the same configuration is used by hand.
+                    val sampleTransport =
+                        pollCount % TRANSPORT_POLL_DIVISOR == 0L || reason != null
+                    ++pollCount
+                    val current = if (sampleTransport) {
+                        lastTransport = engine.getTransportInfo()
+                        lastTransport
+                    } else {
+                        lastTransport
+                    } ?: engine.getTransportInfo()
+                    val currentTrack = if (sampleTransport) {
+                        engine.getTracks().firstOrNull { it.id == temporaryTrackId }
+                            .also { lastTrack = it }
+                    } else {
+                        lastTrack
+                    }
                     finalTrack = currentTrack ?: finalTrack
                     val durationFrames =
                         ceil((currentTrack?.wavDurationSec ?: 0.0) * format.sampleRate.toDouble()).toLong().coerceAtLeast(1L)
@@ -359,8 +726,42 @@ class DirectUsbDeviceStressTest {
                         if (raw.getOrZero(EVENT_THREAD_URGENT_AUDIO) != 1L || raw.getOrZero(RENDER_THREAD_URGENT_AUDIO) != 1L) {
                             reason = "urgent-audio-thread-not-enabled"
                         }
+                        // Startup is its own gate: the pipeline fills and the
+                        // first completions settle there, so a frame lost then
+                        // is still a frame lost, but its extrema describe a
+                        // different regime and must not be read as the steady
+                        // state envelope.
+                        // A refused admission is not a lost frame any more:
+                        // the block is held and published on the next cycle,
+                        // so this counter measures pressure while lostQuanta
+                        // measures damage. Only damage fails the run.
+                        if (reason == null && stats.lostQuanta > 0L) {
+                            reason = "startup-lost-quantum-${stats.lostQuanta}"
+                        }
+                        if (reason == null && stats.minAdmissionMarginFrames < 0L) {
+                            reason = "startup-admission-margin-${stats.minAdmissionMarginFrames}"
+                        }
+                        Log.i(tag, "STARTUP_ENVELOPE quantum_drops=${stats.playbackQuantumDrops} " +
+                            "min_admission_margin=${stats.minAdmissionMarginFrames} " +
+                            "max_completion_gap_ns=${stats.maxCompletionGapNs} " +
+                            "max_missing_drains=${stats.maxMissingDrains} " +
+                            "max_writes_between_drains=${stats.maxWritesBetweenDrains} " +
+                            "first_loss_ring=${stats.firstLossRing} " +
+                            "first_loss_queued=${stats.firstLossQueued} " +
+                            "first_loss_had_room=${stats.firstLossHadRoom} " +
+                            "first_loss_credit=${stats.firstLossCredit}")
+                        runCatching { engine.nativeResetDirectUsbEnvelope() }
+                        // Armed at the warmup boundary: the pipeline has
+                        // settled, so what follows is the stall and nothing
+                        // else.
+                        if (renderStallUs > 0 || serviceStallUs > 0) {
+                            runCatching {
+                                engine.nativeInjectDirectUsbStall(renderStallUs, serviceStallUs)
+                            }
+                            Log.i(tag, "STALL_INJECTED render_us=$renderStallUs service_us=$serviceStallUs")
+                        }
                     }
-                    SystemClock.sleep(10)
+                    SystemClock.sleep(pollIntervalMs)
                 }
                 finalStats = engine.getDirectUsbStats()
                 finalRaw = engine.nativeGetDirectUsbStats()
@@ -369,40 +770,137 @@ class DirectUsbDeviceStressTest {
                 val baseline = warmupStats ?: finalStats
                 val baselineRaw = warmupRaw ?: finalRaw
                 val actualXrunGrowth = (finalStats.actualXruns - baseline.actualXruns).coerceAtLeast(0L)
+                // The aggregate folds producer backpressure in with consumer
+                // starvation, so a run that only ran the playback ring up to
+                // its watermark reported the same verdict as one that starved
+                // the DAC. Split them: quantum drops mean the render block was
+                // refused because the ring was already at its target, while
+                // the remainder is transport loss and starvation.
+                val quantumDropGrowth =
+                    (finalStats.playbackQuantumDrops - baseline.playbackQuantumDrops).coerceAtLeast(0L)
+                val starvationGrowth = (actualXrunGrowth - quantumDropGrowth).coerceAtLeast(0L)
                 val deadlineMissGrowth = (finalStats.deadlineMisses - baseline.deadlineMisses).coerceAtLeast(0L)
-                val silentPacketGrowth = (finalStats.playbackSilentPackets - baseline.playbackSilentPackets).coerceAtLeast(0L)
-                val silentFrameGrowth = (finalStats.playbackSilentFrames - baseline.playbackSilentFrames).coerceAtLeast(0L)
+                val shortPacketGrowth = (finalStats.playbackShortPackets - baseline.playbackShortPackets).coerceAtLeast(0L)
+                val shortFrameGrowth = (finalStats.playbackShortFrames - baseline.playbackShortFrames).coerceAtLeast(0L)
                 val metadataFifoOverflowGrowth =
                     (finalRaw.getOrZero(METADATA_FIFO_OVERRUNS) - baselineRaw.getOrZero(METADATA_FIFO_OVERRUNS)).coerceAtLeast(0L)
                 val zeroRunwayGrowth =
                     (finalRaw.getOrZero(ZERO_RUNWAY_EVENTS) - baselineRaw.getOrZero(ZERO_RUNWAY_EVENTS)).coerceAtLeast(0L)
+                val captureDiscontinuityGrowth =
+                    (finalStats.captureDiscontinuities - baseline.captureDiscontinuities).coerceAtLeast(0L)
+                val signalDiscontinuityGrowth =
+                    (finalStats.signalDiscontinuities - baseline.signalDiscontinuities).coerceAtLeast(0L)
+                val transferDiscontinuityGrowth =
+                    (finalStats.transferDiscontinuities - baseline.transferDiscontinuities).coerceAtLeast(0L)
+                val implicitMetadataInvalidGrowth =
+                    (finalStats.implicitMetadataInvalid - baseline.implicitMetadataInvalid).coerceAtLeast(0L)
+                val lostQuantaGrowth =
+                    (finalStats.lostQuanta - baseline.lostQuanta).coerceAtLeast(0L)
+                val capturePartialReadGrowth =
+                    (finalStats.capturePartialReads - baseline.capturePartialReads).coerceAtLeast(0L)
+                // Deferral growth is deliberately NOT gated. It looked like the
+                // audible fault on two runs, but across four it varies by three
+                // orders of magnitude - 5 to 70855 - while a listener reports
+                // seven to nine clicks regardless, and most of it tracks how
+                // often this harness polls rather than anything the device
+                // hears. It stays in telemetry as a pressure indicator.
                 if (reason == null && !samplePositionProgressed) reason = "sample-position-did-not-advance"
                 if (reason == null && !trackFrameProgressed) reason = "track-frame-did-not-advance"
-                if (reason == null && actualXrunGrowth > 0L) reason = "actual-xrun-growth-exceeded"
+                if (reason == null && quantumDropGrowth > 0L && lostQuantaGrowth == 0L) {
+                    // Refusals without losses are pressure, not damage: the
+                    // held block was delivered a cycle late. Recorded, not
+                    // fatal, so the distinction stays visible in telemetry.
+                    Log.i(tag, "ADMISSION_PRESSURE refusals=$quantumDropGrowth held=${finalStats.heldQuanta}")
+                }
+                if (reason == null && starvationGrowth > 0L) {
+                    reason = "consumer-starvation-growth-exceeded-$starvationGrowth"
+                }
                 if (reason == null && deadlineMissGrowth > 0L) reason = "deadline-miss-growth-exceeded"
-                if (reason == null && (silentPacketGrowth > 0L || silentFrameGrowth > 0L)) {
-                    reason = "playback-silence-padding-growth-exceeded-packets=$silentPacketGrowth-frames=$silentFrameGrowth"
+                if (reason == null && (shortPacketGrowth > 0L || shortFrameGrowth > 0L)) {
+                    reason = "playback-short-packet-growth-exceeded-packets=$shortPacketGrowth-frames=$shortFrameGrowth"
                 }
                 if (reason == null && metadataFifoOverflowGrowth > 0L) {
                     reason = "metadata-fifo-overflow-growth-exceeded-$metadataFifoOverflowGrowth"
                 }
+                // Detector events now decide the verdict. A counter that only
+                // reaches the flight log protects nothing: this run reported
+                // 39 capture breaks and still passed on every other gate.
+                if (reason == null && captureDiscontinuityGrowth > 0L) {
+                    reason = "capture-discontinuity-growth-exceeded-$captureDiscontinuityGrowth"
+                }
+                if (reason == null && signalDiscontinuityGrowth > 0L) {
+                    reason = "signal-discontinuity-growth-exceeded-$signalDiscontinuityGrowth"
+                }
+                if (reason == null && transferDiscontinuityGrowth > 0L) {
+                    reason = "transfer-discontinuity-growth-exceeded-$transferDiscontinuityGrowth"
+                }
+                if (reason == null && lostQuantaGrowth > 0L) {
+                    // A rendered block that never reached the ring is frame
+                    // loss; it was counted only as a wait timeout before, so
+                    // nothing failed on it.
+                    reason = "lost-quantum-growth-exceeded-$lostQuantaGrowth"
+                }
+                if (reason == null && capturePartialReadGrowth > 0L) {
+                    // A short capture read used to hand the graph a zero tail,
+                    // which returned through the hardware loop as a capture
+                    // break and was blamed on the environment.
+                    reason = "capture-partial-read-growth-exceeded-$capturePartialReadGrowth"
+                }
+                if (reason == null && implicitMetadataInvalidGrowth > 0L) {
+                    reason = "implicit-metadata-invalid-growth-exceeded-$implicitMetadataInvalidGrowth"
+                }
+                if (reason == null && finalStats.minAdmissionMarginFrames < 0L) {
+                    // writable < quantum means the block was refused and its
+                    // 64 frames are gone. Gating on counter growth alone let
+                    // that pass whenever the loss landed outside the window.
+                    reason = "admission-margin-negative-${finalStats.minAdmissionMarginFrames}"
+                }
                 if (reason == null && zeroRunwayGrowth > 0L) {
                     reason = "zero-runway-growth-exceeded-$zeroRunwayGrowth"
                 }
+
+                // Reported last: backpressure is a real defect but a different
+                // one, and naming it separately keeps it from masquerading as
+                // an audible dropout when ranking configurations.
+                if (reason == null && quantumDropGrowth > 0L) {
+                    reason = "producer-quantum-drop-growth-exceeded-$quantumDropGrowth"
+                }
                 if (reason == null) reason = validateRunningStats(finalStats, finalRaw, format, buffer, multiplier)
+            }
+            if (reason == null && requireLoopback && maxOutputPeak < LOOPBACK_OUTPUT_MIN_PEAK) {
+                reason = "loopback-output-peak-below-threshold"
+            }
+            if (reason == null && requireLoopback && !finalStats.captureDetectorArmed) {
+                // The loop can be present and still too quiet for the detector
+                // to judge: below its arming level a silent run and a clean one
+                // are the same run. That is a bench failure, not a pass.
+                reason = "capture-detector-never-armed"
+            }
+            if (reason == null && requireLoopback && maxInputPeak < LOOPBACK_INPUT_MIN_PEAK) {
+                reason = "loopback-input-peak-below-threshold"
             }
         } catch (t: Throwable) {
             reason = "exception-${t.message?.replace(Regex("[\\r\\n]"), " ") ?: t.javaClass.simpleName}"
         } finally {
             runCatching { engine.setTransportPlaying(false) }
             if (temporaryTrackId > 0L) {
-                runCatching { engine.setTrackTransportPlaying(temporaryTrackId, false, TrackLaunchQuantization.Sixteenth) }
+                runCatching {
+                    engine.setClipTransportPlaying(
+                        temporaryTrackId,
+                        temporarySlot,
+                        false,
+                        TrackLaunchQuantization.Sixteenth
+                    )
+                }
                 runCatching { engine.unloadTrackWav(temporaryTrackId) }
                 runCatching { engine.removeTrack(temporaryTrackId) }
             }
             wav?.delete()
             runCatching { DirectUsbAudioManager.disable(context) }
         }
+        // Dump before anything else touches the engine: the records describe the
+        // run that just ended, and the recorder is cleared on the next enable.
+        if (flightRecorder) dumpFlightRecorder(engine, format, buffer, multiplier, cycle)
         val lifecycleStats = runCatching { engine.getDirectUsbStats() }.getOrDefault(finalStats)
         val lifecycleRaw = runCatching { engine.nativeGetDirectUsbStats() }.getOrDefault(finalRaw)
         val lifecycleOk = lifecycleStats.state == DirectUsbSessionState.Stopped &&
@@ -411,7 +909,23 @@ class DirectUsbDeviceStressTest {
         val transport = finalTransport ?: runCatching { engine.getTransportInfo() }.getOrNull()
         Log.i(
             tag,
-            telemetry(reason ?: "pass", cycle, format, buffer, multiplier, finalStats, finalRaw, lifecycleOk, transport, finalTrack, warmupStats, warmupRaw)
+            telemetry(
+                reason ?: "pass",
+                cycle,
+                format,
+                buffer,
+                multiplier,
+                finalStats,
+                finalRaw,
+                lifecycleOk,
+                transport,
+                finalTrack,
+                warmupStats,
+                warmupRaw,
+                requireLoopback,
+                maxInputPeak,
+                maxOutputPeak
+            )
         )
         Log.i(
             tag,
@@ -427,7 +941,10 @@ class DirectUsbDeviceStressTest {
                 transport,
                 finalTrack,
                 warmupStats,
-                warmupRaw
+                warmupRaw,
+                requireLoopback,
+                maxInputPeak,
+                maxOutputPeak
             )
         )
         return CaseResult(reason == null, reason)
@@ -473,6 +990,62 @@ class DirectUsbDeviceStressTest {
         return null
     }
 
+    /**
+     * Dumps the flight recorder as one FLIGHT line per event.
+     *
+     * This exists because aggregate counters could not settle the questions
+     * the campaigns kept raising: the same configuration reported twelve
+     * producer quantum drops in one run and four in the next. A refusal is
+     * only interpretable next to the accepted blocks around it, so every
+     * admission is emitted, not just the failures.
+     */
+    private fun dumpFlightRecorder(
+        engine: NativeEngine,
+        format: DirectUsbFormat,
+        buffer: Int,
+        multiplier: Int,
+        cycle: Int,
+    ) {
+        // Report the failure rather than swallowing it. The first run of this
+        // dump produced no output at all because the native library on the
+        // device was stale and the JNI method was missing; a silent return made
+        // that indistinguishable from "the recorder had nothing to say".
+        val snapshotResult = runCatching {
+            FlightRecorderSnapshot.decode(
+                engine.nativeGetDirectUsbFlightRecorderSnapshot(MAX_FLIGHT_RECORDS)
+            )
+        }
+        val snapshot = snapshotResult.getOrElse { error ->
+            Log.i(
+                tag,
+                "FLIGHT_SUMMARY rate=${format.sampleRate} buffer=$buffer " +
+                    "multiplier=$multiplier cycle=$cycle unavailable=1 " +
+                    "error=${error.javaClass.simpleName}-${error.message?.replace(Regex("[\r\n]"), " ")}"
+            )
+            return
+        }
+        val prefix = "rate=${format.sampleRate} buffer=$buffer multiplier=$multiplier cycle=$cycle"
+        // A frozen buffer means the trigger fired and the tail is the run-up to
+        // it; an unfrozen one means no refusal occurred during this cycle.
+        val frozen = runCatching {
+            engine.nativeIsDirectUsbFlightRecorderFrozen()
+        }.getOrDefault(false)
+        Log.i(
+            tag,
+            "FLIGHT_SUMMARY $prefix recorded=${snapshot.recorded} " +
+                "dropped=${snapshot.dropped} emitted=${snapshot.records.size} " +
+                "frozen=${if (frozen) 1 else 0}"
+        )
+        for (record in snapshot.records) {
+            Log.i(
+                tag,
+                "FLIGHT $prefix seq=${record.sequence} t_ns=${record.timestampNs} " +
+                    "event=${FlightRecord.eventName(record.event)} a=${record.a} b=${record.b} " +
+                    "ring_frames=${record.ringFrames} queued_frames=${record.queuedFrames}"
+            )
+        }
+    }
+
     private fun telemetry(
         reason: String,
         cycle: Int,
@@ -486,18 +1059,25 @@ class DirectUsbDeviceStressTest {
         track: RackTrackInfo?,
         warmup: DirectUsbStats?,
         warmupRaw: LongArray?,
+        requireLoopback: Boolean,
+        inputPeak: Float,
+        outputPeak: Float,
     ): String {
         val queueLatencyMs =
             if (stats.sampleRateHz > 0L) stats.knownHostLatencyFrames * 1_000.0 / stats.sampleRateHz else 0.0
         val actualXrunGrowth =
             (stats.actualXruns - (warmup?.actualXruns ?: stats.actualXruns)).coerceAtLeast(0L)
+        val quantumDropGrowth =
+            (stats.playbackQuantumDrops -
+                (warmup?.playbackQuantumDrops ?: stats.playbackQuantumDrops)).coerceAtLeast(0L)
+        val starvationGrowth = (actualXrunGrowth - quantumDropGrowth).coerceAtLeast(0L)
         val deadlineMissGrowth =
             (stats.deadlineMisses - (warmup?.deadlineMisses ?: stats.deadlineMisses)).coerceAtLeast(0L)
-        val silentPacketGrowth =
-            (stats.playbackSilentPackets - (warmup?.playbackSilentPackets ?: stats.playbackSilentPackets))
+        val shortPacketGrowth =
+            (stats.playbackShortPackets - (warmup?.playbackShortPackets ?: stats.playbackShortPackets))
                 .coerceAtLeast(0L)
-        val silentFrameGrowth =
-            (stats.playbackSilentFrames - (warmup?.playbackSilentFrames ?: stats.playbackSilentFrames))
+        val shortFrameGrowth =
+            (stats.playbackShortFrames - (warmup?.playbackShortFrames ?: stats.playbackShortFrames))
                 .coerceAtLeast(0L)
         val rawPlaybackXrunGrowth =
             (rawStats.getOrZero(RAW_PLAYBACK_XRUNS) -
@@ -516,15 +1096,19 @@ class DirectUsbDeviceStressTest {
                 (warmupRaw?.getOrZero(ZERO_RUNWAY_EVENTS) ?: rawStats.getOrZero(ZERO_RUNWAY_EVENTS)))
                 .coerceAtLeast(0L)
         return "TELEMETRY reason=$reason cycle=$cycle rate=${format.sampleRate} bits=${format.bits} bytes=${format.subslotBytes} channels=${format.channels} " +
+            "loopback_required=${if (requireLoopback) 1 else 0} input_peak=$inputPeak output_peak=$outputPeak " +
             "buffer=$buffer multiplier=$multiplier schema=${stats.schemaVersion} state=${stats.state} failure=${stats.failure} period_multiplier=${stats.periodMultiplier} " +
             "effective_quantum=${stats.effectiveQuantum} steady_target_frames=${stats.steadyTarget} startup_prime_frames=${stats.startupPrime} queued_out_frames=${stats.queuedOut} " +
             "known_host_latency_frames=${stats.knownHostLatencyFrames} estimated_host_queue_latency_ms=$queueLatencyMs sequence=${stats.sequence} " +
             "capture_overruns=${rawStats.getOrZero(CAPTURE_OVERRUNS)} capture_underruns=${rawStats.getOrZero(CAPTURE_UNDERRUNS)} " +
-            "capture_transfer_errors=${stats.captureTransferErrors} playback_transfer_errors=${stats.playbackTransferErrors} capture_wait_pressure=${stats.captureWaitPressure} " +
-            "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} aggregate_xruns=${stats.actualXruns} " +
-            "playback_backpressure=${stats.playbackBackpressure} playback_silent_packets=${stats.playbackSilentPackets} " +
-            "playback_silent_frames=${stats.playbackSilentFrames} playback_silent_packets_growth=$silentPacketGrowth " +
-            "playback_silent_frames_growth=$silentFrameGrowth performance_hint_active=${if (stats.performanceHintActive) 1 else 0} " +
+            "capture_transfer_errors=${stats.captureTransferErrors} playback_transfer_errors=${stats.playbackTransferErrors} " +
+            "capture_packet_drops=${stats.capturePacketDrops} capture_wait_pressure=${stats.captureWaitPressure} " +
+            "write_wait_pressure=${stats.writeWaitPressure} playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} " +
+            "playback_quantum_drops=${stats.playbackQuantumDrops} aggregate_xruns=${stats.actualXruns} " +
+            "starvation_growth=$starvationGrowth quantum_drop_growth=$quantumDropGrowth " +
+            "playback_backpressure=${stats.playbackBackpressure} playback_short_packets=${stats.playbackShortPackets} " +
+            "playback_short_frames=${stats.playbackShortFrames} playback_short_packets_growth=$shortPacketGrowth " +
+            "playback_short_frames_growth=$shortFrameGrowth performance_hint_active=${if (stats.performanceHintActive) 1 else 0} " +
             "lifecycle_failures=${rawStats.getOrZero(LIFECYCLE_FAILURES)} transport_failed=${rawStats.getOrZero(TRANSPORT_FAILED)} " +
             "capture_ring_frames=${rawStats.getOrZero(CAPTURE_RING_FRAMES)} playback_ring_frames=${rawStats.getOrZero(PLAYBACK_RING_FRAMES)} " +
             "implicit_fifo_depth=${rawStats.getOrZero(IMPLICIT_FIFO_DEPTH)} deferred_transfers=${rawStats.getOrZero(DEFERRED_TRANSFERS)} " +
@@ -533,7 +1117,36 @@ class DirectUsbDeviceStressTest {
             "pending_high_water=${rawStats.getOrZero(PENDING_HIGH_WATER)} max_pending_age_ns=${rawStats.getOrZero(MAX_PENDING_AGE_NS)} " +
             "zero_runway_events=${rawStats.getOrZero(ZERO_RUNWAY_EVENTS)} zero_runway_events_growth=$zeroRunwayGrowth " +
             "last_dsp_ns=${stats.lastDspNs} peak_dsp_ns=${stats.peakDspNs} " +
-            "last_cycle_ns=${stats.lastCycleNs} peak_cycle_ns=${stats.peakCycleNs} deadline_budget_ns=${stats.deadlineBudgetNs} deadline_misses=${stats.deadlineMisses} " +
+            "last_cycle_ns=${stats.lastCycleNs} peak_cycle_ns=${stats.peakCycleNs} deadline_budget_ns=${stats.deadlineBudgetNs} " +
+            "deadline_misses=${stats.deadlineMisses} scheduler_deadline_misses=${stats.schedulerDeadlineMisses} " +
+            "max_scheduler_lateness_ns=${stats.maxSchedulerLatenessNs} " +
+            "worst_dsp_off_cpu_ns=${stats.worstDspBlockOffCpuNs}" +
+            "worst_dsp_wall_ns=${stats.worstDspBlockWallNs} worst_service_off_cpu_ns=${stats.worstServiceOffCpuNs} service_runqueue_ns=${stats.serviceRunqueueWaitNs} max_callbacks_per_poll=${stats.maxCallbacksPerPoll} multi_collect_span_ns=${stats.worstMultiCollectSpanNs} multi_collect_runqueue_ns=${stats.worstMultiCollectRunqueueNs} capture_target_frames=${stats.captureTargetFrames} " +
+            "capture_headroom_frames=${stats.captureHeadroomFrames} capture_deadline_slack_frames=${stats.captureDeadlineSlackFrames} " +
+            "deferred_no_metadata=${stats.deferredNoMetadata} deferred_no_pcm=${stats.deferredNoPcm} " +
+            "queued_out_low_water=${stats.queuedOutLowWaterFrames} " +
+            "capture_discontinuities=${stats.captureDiscontinuities} " +
+            "signal_discontinuities=${stats.signalDiscontinuities} " +
+            "transfer_discontinuities=${stats.transferDiscontinuities} " +
+            "capture_modulations=${stats.captureModulations} " +
+            "capture_detector_armed=${if (stats.captureDetectorArmed) 1 else 0} " +
+            "implicit_metadata_invalid=${stats.implicitMetadataInvalid} " +
+            "ring_low_water=${stats.ringLowWaterFrames} ring_high_water=${stats.ringHighWaterFrames} " +
+            "drain_chunk_frames=${stats.drainChunkFrames} " +
+            "ring_p05=${stats.ringOccupancyP05} ring_p50=${stats.ringOccupancyP50} " +
+            "ring_p95=${stats.ringOccupancyP95} ring_samples=${stats.ringOccupancySamples} " +
+            "max_completion_gap_ns=${stats.maxCompletionGapNs} max_missing_drains=${stats.maxMissingDrains} " +
+            "drain_frames_min=${stats.drainFramesMin} drain_frames_max=${stats.drainFramesMax} " +
+            "max_writes_between_drains=${stats.maxWritesBetweenDrains} " +
+            "min_admission_margin=${stats.minAdmissionMarginFrames} " +
+            "capture_partial_reads=${stats.capturePartialReads} " +
+            "lost_quanta=${stats.lostQuanta} " +
+            "held_quanta=${stats.heldQuanta} " +
+            "live_queue_frames=${stats.liveQueueFrames} " +
+            "service_gaps=${stats.serviceGapCount} stalls_fired=${stats.stallsFired} " +
+            "work_deadline_misses=${stats.workDeadlineMisses} " +
+            "gap_inflight=${stats.worstGapInflight} gap_pending=${stats.worstGapPending} " +
+            "gap_ring=${stats.worstGapRing} " +
             "raw_written_frames=${rawStats.getOrZero(RAW_WRITTEN_FRAMES)} raw_played_frames=${rawStats.getOrZero(RAW_PLAYED_FRAMES)} " +
             "raw_playback_xruns=${rawStats.getOrZero(RAW_PLAYBACK_XRUNS)} raw_playback_xrun_growth=$rawPlaybackXrunGrowth " +
             "actual_xruns=${stats.actualXruns} actual_xrun_growth=$actualXrunGrowth deadline_miss_growth=$deadlineMissGrowth " +
@@ -572,6 +1185,20 @@ class DirectUsbDeviceStressTest {
         }
         return allowed.filter { it in requested }.toIntArray()
     }
+    private fun argumentDouble(args: Bundle, key: String, default: Double): Double {
+        val raw = args.getString(key)?.trim() ?: return default
+        return raw.toDoubleOrNull()?.takeIf { it > 0.0 && it.isFinite() }
+            ?: throw IllegalArgumentException("$key must be a positive number: '$raw'")
+    }
+
+    private fun argumentBoolean(args: Bundle, key: String, default: Boolean = false): Boolean {
+        val raw = args.getString(key)?.trim() ?: return default
+        return when (raw) {
+            "true" -> true
+            "false" -> false
+            else -> throw IllegalArgumentException("$key must be true or false: '$raw'")
+        }
+    }
 
     private fun argumentInt(args: Bundle, primary: String, secondary: String, default: Int, min: Int, max: Int): Int =
         (args.getString(primary) ?: args.getString(secondary))?.toIntOrNull()?.coerceIn(min, max) ?: default
@@ -590,9 +1217,19 @@ class DirectUsbDeviceStressTest {
     private data class CaseResult(val passed: Boolean, val reason: String?)
 
     private companion object {
-        const val TELEMETRY_SCHEMA_VERSION = 7L
-        const val RAW_STAT_COUNT = 46
+        const val TELEMETRY_SCHEMA_VERSION = 20L
+        const val RAW_STAT_COUNT = 55
         const val MAX_IMPLICIT_FIFO = 256L
+        // One 30 s cycle at a 64-frame quantum offers about 22500 quanta, so a
+        // full history does not fit a log dump. The recorder keeps the newest
+        // records, which is the tail leading up to whatever went wrong.
+        // Transport and track state are sampled at this fraction of the stats
+        // rate. Driver statistics stay at full resolution; the object-building
+        // accessors do not.
+        const val TRANSPORT_POLL_DIVISOR = 20L
+        const val MAX_FLIGHT_RECORDS = 4096
+        const val LOOPBACK_OUTPUT_MIN_PEAK = 0.05f
+        const val LOOPBACK_INPUT_MIN_PEAK = 0.005f
         const val CAPTURE_OVERRUNS = 1
         const val CAPTURE_UNDERRUNS = 2
         const val IMPLICIT_FIFO_DEPTH = 3

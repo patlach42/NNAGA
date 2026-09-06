@@ -1,0 +1,815 @@
+/*
+ * Copyright (C) 2026 patlach42
+ *
+ * This file is part of NNAGA.
+ *
+ * NNAGA is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * NNAGA is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with NNAGA. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package com.vibes.dsp.tweaks
+
+import android.content.Context
+import android.os.PowerManager
+
+/**
+ * What the app can do to help itself, and what it can only report.
+ *
+ * The measurements behind these are in CLAUDE_DRIVER_RECAP.md. Two of them
+ * shaped the whole list: steady-state DSP uses six tenths of a percent of the
+ * quantum budget, so nothing here is about making audio computation faster;
+ * and the audible faults that remained after every software fix came from
+ * outside the app, so most of the value is in removing interference rather
+ * than in tuning the engine.
+ */
+object PerformanceTweaks {
+
+    enum class Requirement { None, Root }
+
+    enum class Risk {
+        /** Reversible, scoped to this app, cannot affect anything else. */
+        Safe,
+
+        /** Affects the device beyond this app, but reverts on reboot. */
+        SystemWide,
+    }
+
+    enum class State { Unknown, Applied, NotApplied, Unavailable }
+
+    private const val STORE = "performance_tweaks"
+    private const val KEY_IRQ_AFFINITY = "original_irq_affinity"
+    private const val KEY_MIN_FREQ = "original_scaling_min_freq"
+    private const val KEY_SLACK = "original_timerslack_ns"
+    private const val KEY_CORE_CTL_MIN_CPUS = "original_core_ctl_min_cpus"
+
+    data class Tweak(
+        val id: String,
+        val title: String,
+        /** What it does and why, in the user's terms. */
+        val summary: String,
+        /** What could go wrong. Shown before anything is applied. */
+        val caution: String,
+        val requirement: Requirement,
+        val risk: Risk,
+        /** False when the system owns the state and the app can only ask. */
+        val supportsRevert: Boolean = true,
+    )
+
+    data class Outcome(val state: State, val detail: String)
+
+    val catalogue: List<Tweak> = listOf(
+        Tweak(
+            id = "wifi_off",
+            title = "Turn Wi-Fi off while playing",
+            summary = "Background Wi-Fi activity was measured on this hardware " +
+                "to interrupt USB audio about every thirty seconds. Turning " +
+                "the radio off removed it completely.",
+            caution = "You lose network until you turn it back on. Nothing else " +
+                "changes, and it is restored by turning Wi-Fi on again.",
+            requirement = Requirement.Root,
+            risk = Risk.SystemWide,
+        ),
+        Tweak(
+            id = "rt_priority",
+            title = "Real-time scheduling for the audio thread",
+            summary = "Lets the render thread run at a real-time priority the " +
+                "system normally reserves for itself, so ordinary work cannot " +
+                "push it aside. Without this it runs at a favourable but " +
+                "ordinary priority.",
+            caution = "A real-time thread that misbehaves can starve the rest " +
+                "of the system. The priority used here is the lowest real-time " +
+                "level and applies only to this app's audio threads, but a " +
+                "real-time thread competes with the whole device.",
+            requirement = Requirement.Root,
+            risk = Risk.SystemWide,
+        ),
+        Tweak(
+            id = "timer_slack",
+            title = "Tighten timer slack",
+            summary = "Android lets the kernel batch wakeups by delaying them " +
+                "slightly, which saves power and costs precision. Expect " +
+                "little from it here: this engine is woken by eventfd, and " +
+                "those wakeups do not wait for timer slack. Offered for the " +
+                "timeout paths and for measurement, not as a fix.",
+            caution = "Slightly higher battery use while the app runs. Scoped " +
+                "to this process and reset when it exits.",
+            requirement = Requirement.Root,
+            risk = Risk.Safe,
+        ),
+        Tweak(
+            id = "usb_irq_affinity",
+            title = "Pin the USB interrupt to a big core",
+            summary = "Moves the USB controller's interrupt onto a fast core, " +
+                "so servicing it does not wait behind work on a small one. " +
+                "The interrupt is found by name, not assumed: use Investigate " +
+                "first to see which one it is and how busy.",
+            caution = "The vendor's power service may move it back, which is " +
+                "why the new value is read back and reported. Reverts on " +
+                "reboot regardless.",
+            requirement = Requirement.Root,
+            risk = Risk.SystemWide,
+        ),
+        Tweak(
+            id = "big_cluster_floor",
+            title = "Raise the big cluster's minimum frequency",
+            summary = "Stops the fast cores dropping to their lowest clock " +
+                "between audio blocks, so a block does not begin on a core " +
+                "that is still ramping up.",
+            caution = "Runs warmer and uses more battery, and sustained heat " +
+                "eventually causes throttling that costs more than it gains. " +
+                "Raises the floor to a mid point, never to the maximum. " +
+                "Reverts on reboot.",
+            requirement = Requirement.Root,
+            risk = Risk.SystemWide,
+        ),
+        Tweak(
+            id = "audio_affinity",
+            title = "Keep the audio threads on the fast cores",
+            summary = "Asks for the fastest cluster for the render and USB " +
+                "servicing threads. Measured on this hardware it cut USB " +
+                "service interruptions about fourfold. Needs no permission " +
+                "and applies from the next session.",
+            caution = "A CPU mask is a bet that the platform will keep those " +
+                "cores available, and core policies differ between devices. " +
+                "If audio is worse with it on, turn it off - nothing else " +
+                "depends on it.",
+            requirement = Requirement.None,
+            risk = Risk.Safe,
+        ),
+        Tweak(
+            id = "core_ctl_min_cpus",
+            title = "Stop the fast cluster parking a core",
+            summary = "The vendor's core control keeps only one of the two " +
+                "fastest cores awake unless the cluster is over sixty percent " +
+                "busy, and audio holds it near seventeen. A parked core is " +
+                "online and runs nothing, so the audio threads queue behind " +
+                "each other on the one that is awake. This asks for both.",
+            caution = "Both fast cores stay awake while it is set, which uses " +
+                "more battery and runs warmer. Reverts on reboot, and the " +
+                "vendor's service may put it back sooner.",
+            requirement = Requirement.Root,
+            risk = Risk.SystemWide,
+        ),
+        Tweak(
+            id = "battery_exemption",
+            title = "Exempt from battery optimisation",
+            summary = "Stops the system throttling the app in the background. " +
+                "Opens the system dialog; the choice is yours.",
+            caution = "None beyond slightly higher battery use.",
+            requirement = Requirement.None,
+            risk = Risk.Safe,
+            supportsRevert = false,
+        ),
+    )
+
+    /**
+     * Applies or reverts a tweak and reports what the device says afterwards,
+     * never what was intended. Returns the fresh inspection so a caller cannot
+     * show success for a write that did not take.
+     */
+    fun apply(context: Context, tweak: Tweak, enable: Boolean): Outcome {
+        when (tweak.id) {
+            "audio_affinity" -> {
+                // A preference, not a system write: the threads read it when
+                // they start, so this takes effect at the next session and
+                // saying so beats reporting success for a mask nobody holds.
+                com.vibes.dsp.engine.AudioSettingsManager
+                    .setAudioAffinityEnabled(context, enable)
+            }
+
+            "core_ctl_min_cpus" -> {
+                val path = coreCtlMinCpusPath()
+                    ?: return Outcome(
+                        State.Unavailable,
+                        "this device does not expose core control for the fast cluster",
+                    )
+                if (enable) {
+                    val original = PrivilegedShell.readPrivileged(path)?.trim()
+                    if (!original.isNullOrEmpty()) {
+                        context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                            .edit().putString(KEY_CORE_CTL_MIN_CPUS, original).apply()
+                    }
+                }
+                val target = if (enable) "2" else
+                    context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                        .getString(KEY_CORE_CTL_MIN_CPUS, "1") ?: "1"
+                val result = PrivilegedShell.writePrivilegedAndVerify(path, target)
+                if (!result.ok) {
+                    return Outcome(State.NotApplied, result.output.trim().ifBlank {
+                        "core control refused the change"
+                    })
+                }
+            }
+
+            "wifi_off" -> {
+                val result = PrivilegedShell.runAsRoot(
+                    if (enable) "svc wifi disable" else "svc wifi enable"
+                )
+                if (!result.ok) {
+                    return Outcome(State.Unavailable, result.output.trim().ifBlank {
+                        "could not change Wi-Fi state"
+                    })
+                }
+            }
+
+            "rt_priority" -> {
+                // Raising the limit does not promote threads that already
+                // exist: each asks for its policy once, when it starts. So
+                // this only takes effect for an audio session started after
+                // it, and saying so is more useful than appearing to work.
+                val pid = android.os.Process.myPid()
+                // prlimit is not in every Android toybox. Say which is missing
+                // rather than reporting a bare failure, because the two need
+                // different answers: an absent tool is a device limitation,
+                // a refused call is a permission problem.
+                val available = PrivilegedShell.runAsRoot("command -v prlimit")
+                if (!available.ok || available.stdout.isBlank()) {
+                    // No prlimit here, and raising the limit is only a way to
+                    // let a thread ask for a policy it cannot ask for itself.
+                    // Root can set the policy on the thread directly instead,
+                    // which also works on threads that already exist - the
+                    // limit does not, because each asks once when it starts.
+                    return applyRealtimeViaChrt(pid, enable)
+                }
+                val result = PrivilegedShell.runAsRoot(
+                    if (enable) "prlimit --rtprio=1:1 --pid $pid"
+                    else "prlimit --rtprio=0:0 --pid $pid"
+                )
+                if (!result.ok) {
+                    return Outcome(State.NotApplied, result.output.trim().ifBlank {
+                        "prlimit refused the change"
+                    })
+                }
+                // Raising the limit promotes nothing by itself: each audio
+                // thread asks for its policy once, at startup. Say so instead
+                // of reporting success for something that takes effect later.
+                val soft = PrivilegedShell.readPrivileged("/proc/$pid/limits")
+                    ?.let { realtimeLimitOf(it) } ?: 0
+                if (enable && soft > 0) {
+                    return Outcome(
+                        State.Applied,
+                        "limit raised to $soft; audio threads take it up when " +
+                            "the next session starts",
+                    )
+                }
+            }
+
+            "timer_slack" -> {
+                // Per thread, not per process: writing to the group leader
+                // leaves the render and event threads untouched, which is
+                // where it would have to matter. And 0 is not "no slack" - the
+                // kernel reads it as "reset to the default" - so a tight value
+                // is 1, and reverting restores what was saved.
+                val pid = android.os.Process.myPid()
+                val tids = PrivilegedShell.runAsRoot(
+                    "for t in /proc/$pid/task/*; do " +
+                        "n=\$(cat \$t/comm 2>/dev/null); " +
+                        "case \"\$n\" in *Usb*|*udio*|*ender*) echo \${t##*/};; esac; done"
+                ).stdout.lines().mapNotNull { it.trim().takeIf(String::isNotEmpty) }
+                if (tids.isEmpty()) {
+                    return Outcome(
+                        State.Unavailable,
+                        "no audio threads found; start audio first",
+                    )
+                }
+                val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                var failure: String? = null
+                tids.forEach { tid ->
+                    val path = "/proc/$pid/task/$tid/timerslack_ns"
+                    if (enable && !prefs.contains(KEY_SLACK)) {
+                        PrivilegedShell.readPrivileged(path)?.trim()
+                            ?.let { prefs.edit().putString(KEY_SLACK, it).apply() }
+                    }
+                    val target = if (enable) {
+                        "1"
+                    } else {
+                        prefs.getString(KEY_SLACK, null) ?: "50000"
+                    }
+                    val result = PrivilegedShell.writePrivilegedAndVerify(path, target)
+                    if (!result.ok && failure == null) failure = result.output.trim()
+                }
+                failure?.let {
+                    return Outcome(State.NotApplied, it.ifBlank { "could not set timer slack" })
+                }
+            }
+
+            "battery_exemption" -> {
+                // The system decides this one; all the app can do is ask.
+                val shown = com.vibes.dsp.engine.AudioInterferenceAdvisor
+                    .requestBatteryOptimisationExemption(context)
+                if (!shown) {
+                    return inspect(context, tweak)
+                }
+                return Outcome(State.Unknown, "system dialog opened")
+            }
+
+            "usb_irq_affinity" -> {
+                val irq = usbInterruptNumber()
+                    ?: return Outcome(State.Unavailable, "no USB interrupt found")
+                // Remember what the system had before touching it. Reverting to
+                // a guessed "all CPUs" would discard the vendor's own choice
+                // and is wrong outright on a machine with more than eight cores.
+                val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                if (enable && !prefs.contains(KEY_IRQ_AFFINITY)) {
+                    PrivilegedShell.readPrivileged("/proc/irq/$irq/smp_affinity")
+                        ?.trim()?.let { prefs.edit().putString(KEY_IRQ_AFFINITY, it).apply() }
+                }
+                // Highest CPU is the fastest on every big.LITTLE layout seen
+                // here; the mask is a bitmask, so CPU n is 1 << n.
+                val target = if (enable) {
+                    bigCoreMask().ifEmpty {
+                        return Outcome(State.Unavailable, "CPU capacities unreadable")
+                    }
+                } else {
+                    prefs.getString(KEY_IRQ_AFFINITY, null)
+                        ?: return Outcome(State.Unavailable, "no saved affinity to restore")
+                }
+                val result = PrivilegedShell.writePrivilegedAndVerify(
+                    "/proc/irq/$irq/smp_affinity", target
+                )
+                if (!result.ok) {
+                    // A vendor balancer that reverts the write is the expected
+                    // failure here, and saying so is more useful than "failed".
+                    return Outcome(
+                        State.NotApplied,
+                        result.output.trim().ifBlank { "the system did not keep the value" },
+                    )
+                }
+            }
+
+            "big_cluster_floor" -> {
+                val policy = bigClusterPolicyPath()
+                    ?: return Outcome(State.Unavailable, "no cpufreq policy found")
+                val available = PrivilegedShell.readPrivileged(
+                    "$policy/scaling_available_frequencies"
+                )?.trim()?.split(Regex("\\s+"))?.mapNotNull { it.toLongOrNull() }?.sorted()
+                val prefs = context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                if (enable && !prefs.contains(KEY_MIN_FREQ)) {
+                    PrivilegedShell.readPrivileged("$policy/scaling_min_freq")
+                        ?.trim()?.let { prefs.edit().putString(KEY_MIN_FREQ, it).apply() }
+                }
+                val target = if (!enable) {
+                    // The value that was there, not the hardware floor: the
+                    // vendor or the user may have set something deliberately.
+                    prefs.getString(KEY_MIN_FREQ, null)
+                        ?: return Outcome(State.Unavailable, "no saved minimum to restore")
+                } else {
+                    // Strictly between the lowest and the highest. With only
+                    // two steps there is no middle, and taking the top would
+                    // contradict what this tweak promises.
+                    val middle = available?.takeIf { it.size >= 3 }
+                        ?.get(available.size / 2)
+                    middle?.toString()
+                        ?: return Outcome(
+                            State.Unavailable,
+                            "no intermediate frequency between the extremes",
+                        )
+                }
+                val result = PrivilegedShell.writePrivilegedAndVerify(
+                    "$policy/scaling_min_freq", target
+                )
+                if (!result.ok) {
+                    return Outcome(
+                        State.NotApplied,
+                        result.output.trim().ifBlank { "the system did not keep the value" },
+                    )
+                }
+            }
+
+            else -> return Outcome(State.Unknown, "unknown tweak")
+        }
+        return inspect(context, tweak)
+    }
+
+    /**
+     * The configuration measured to run clean, and how far the device is from
+     * it right now.
+     *
+     * A grid of quantum by multiplier by geometry, three runs of ninety
+     * seconds each, found exactly one point passing three of three with no
+     * discontinuity in the software path: quantum 64, multiplier 3, four
+     * transfers of eight packets, at a 9.00 ms host queue. The narrower 4x4
+     * geometry claims less latency and passes none of six, carrying a
+     * reproducible mid-run break the wider one never shows.
+     *
+     * These are also the shipped defaults, so this is a way back rather than a
+     * new profile - which matters because expert settings are easy to wander
+     * away from and hard to remember returning.
+     */
+    data class Profile(
+        val bufferFrames: Int,
+        val periodMultiplier: Int,
+        val transferCount: Int,
+        val packetsPerTransfer: Int,
+    )
+
+    val measuredGoodProfile = Profile(
+        bufferFrames = 64,
+        periodMultiplier = 3,
+        transferCount = 0,
+        packetsPerTransfer = 0,
+    )
+
+    /** Human-readable difference between the current settings and the above. */
+    fun profileDrift(context: Context): List<String> {
+        val drift = mutableListOf<String>()
+        val settings = com.vibes.dsp.engine.AudioSettingsManager
+        if (settings.getBufferSize(context) != measuredGoodProfile.bufferFrames) {
+            drift += "quantum ${settings.getBufferSize(context)} " +
+                "(measured good: ${measuredGoodProfile.bufferFrames})"
+        }
+        if (settings.getDirectUsbPeriodMultiplier(context) !=
+            measuredGoodProfile.periodMultiplier
+        ) {
+            drift += "multiplier ${settings.getDirectUsbPeriodMultiplier(context)} " +
+                "(measured good: ${measuredGoodProfile.periodMultiplier})"
+        }
+        val transfers = settings.getDirectUsbTransferCount(context)
+        val packets = settings.getDirectUsbPacketsPerTransfer(context)
+        // Zero means the automatic policy, which resolves to the measured
+        // point on this hardware; a positive value overrides it.
+        if (transfers != 0 || packets != 0) {
+            drift += "geometry ${transfers}x${packets} set by hand " +
+                "(measured good: automatic, which resolves to 4x8 here)"
+        }
+        return drift
+    }
+
+    /** Puts the four settings back to the measured configuration. */
+    fun restoreMeasuredProfile(context: Context) {
+        val settings = com.vibes.dsp.engine.AudioSettingsManager
+        settings.setBufferSize(context, measuredGoodProfile.bufferFrames)
+        settings.setDirectUsbPeriodMultiplier(context, measuredGoodProfile.periodMultiplier)
+        settings.setDirectUsbTransferCount(context, measuredGoodProfile.transferCount)
+        settings.setDirectUsbPacketsPerTransfer(context, measuredGoodProfile.packetsPerTransfer)
+    }
+
+    /**
+     * The interrupt number the USB controller uses, or null.
+     *
+     * Matched by name rather than assumed: the controller appears as xhci on
+     * some devices, dwc3 on others, and under a vendor string on a few.
+     */
+    private fun usbInterruptNumber(): String? {
+        // Not the first line that matches. A device can expose several USB
+        // interrupts, and some are shared or belong to a controller nothing is
+        // plugged into; pinning one of those achieves nothing while looking
+        // like it worked. Take two samples a second apart and pick whichever
+        // is actually firing, which during playback is the one carrying audio.
+        val sampled = PrivilegedShell.runAsRoot(
+            "grep -iE 'xhci|dwc3|usb' /proc/interrupts > /data/local/tmp/.nnaga_irq1; " +
+                "sleep 1; " +
+                "grep -iE 'xhci|dwc3|usb' /proc/interrupts > /data/local/tmp/.nnaga_irq2; " +
+                "cat /data/local/tmp/.nnaga_irq1; echo ---; cat /data/local/tmp/.nnaga_irq2; " +
+                "rm -f /data/local/tmp/.nnaga_irq1 /data/local/tmp/.nnaga_irq2"
+        )
+        if (!sampled.ok) return null
+        return busiestInterruptOf(sampled.stdout)
+    }
+
+    /**
+     * The interrupt whose count grew most between two samples of
+     * /proc/interrupts, separated by a line containing only dashes.
+     *
+     * Split out to be testable: the file is column-aligned, one column per
+     * CPU, and picking the wrong column or forgetting that a line may name a
+     * shared interrupt would silently choose the wrong one.
+     */
+    internal fun busiestInterruptOf(sampled: String): String? {
+        val halves = sampled.split(Regex("(?m)^---$"))
+        if (halves.size != 2) return null
+        fun totals(text: String): Map<String, Long> = text.lineSequence()
+            .mapNotNull { line ->
+                val irq = line.substringBefore(':', "").trim()
+                if (irq.isEmpty() || irq.toIntOrNull() == null) return@mapNotNull null
+                val counts = line.substringAfter(':').trim()
+                    .split(Regex("\\s+"))
+                    .mapNotNull { it.toLongOrNull() }
+                if (counts.isEmpty()) null else irq to counts.sum()
+            }
+            .toMap()
+
+        val before = totals(halves[0])
+        val after = totals(halves[1])
+        val growth = after.mapNotNull { (irq, later) ->
+            val earlier = before[irq] ?: return@mapNotNull null
+            val delta = later - earlier
+            if (delta > 0) irq to delta else null
+        }
+        return growth.maxByOrNull { it.second }?.first
+    }
+
+    /** Bitmask of the highest-capacity CPUs, as an affinity mask expects. */
+    private fun bigCoreMask(): String {
+        val caps = PrivilegedShell.runAsRoot(
+            "for c in /sys/devices/system/cpu/cpu[0-9]*; do " +
+                "printf \"%s %s\n\" \${c##*/cpu} \$(cat \$c/cpu_capacity 2>/dev/null || echo 0); done"
+        )
+        return bigCoreMaskOf(caps.stdout)
+    }
+
+    /**
+     * Affinity mask covering every CPU at the highest reported capacity.
+     *
+     * Split out from the shell call so it can be tested: an affinity mask is
+     * a bitmask in hex, and getting the shift or the base wrong silently pins
+     * an interrupt to the wrong cluster - a mistake that would look like the
+     * tweak working while making things worse.
+     *
+     * Falls back to every CPU when the topology cannot be read, which is the
+     * kernel default and therefore harmless.
+     */
+    internal fun bigCoreMaskOf(topology: String): String {
+        val entries = topology.lineSequence()
+            .mapNotNull { line ->
+                val parts = line.trim().split(Regex("\\s+"))
+                val cpu = parts.getOrNull(0)?.toIntOrNull()
+                val capacity = parts.getOrNull(1)?.toIntOrNull()
+                if (cpu != null && capacity != null && capacity > 0) cpu to capacity else null
+            }
+            .toList()
+        // No capacities means no way to tell clusters apart. Returning a
+        // mask covering everything would claim every core is fast and pin an
+        // interrupt on that basis, so refuse instead.
+        if (entries.isEmpty()) return ""
+        val best = entries.maxOf { it.second }
+        if (best <= 0) return ""
+        var mask = 0L
+        entries.filter { it.second == best }.forEach { mask = mask or (1L shl it.first) }
+        return java.lang.Long.toHexString(mask)
+    }
+
+    /**
+     * Soft real-time priority limit from the text of /proc/pid/limits.
+     *
+     * Split out so it can be tested: the file is column-aligned with variable
+     * spacing and the units column is absent for this row, so a naive split
+     * picks up the wrong field and would report a limit that is not there.
+     */
+    internal fun realtimeLimitOf(limits: String): Int? {
+        val line = limits.lineSequence()
+            .firstOrNull { it.contains("realtime priority", ignoreCase = true) }
+            ?: return null
+        // "Max realtime priority        0          0"
+        val tail = line.substringAfter("priority", "").trim()
+        val soft = tail.split(Regex("\\s+")).firstOrNull() ?: return null
+        return soft.toIntOrNull() ?: if (soft == "unlimited") Int.MAX_VALUE else null
+    }
+
+    /** cpufreq policy directory governing the highest-capacity cluster. */
+    /**
+     * Sets the audio threads' scheduling policy directly, for devices without
+     * prlimit. Servicing is given the higher of the two real-time priorities:
+     * it runs every half millisecond against the graph's one and a third, and
+     * a completion the device is waiting on cannot be made up later. Both sit
+     * at the bottom of the real-time band, well under anything the system
+     * reserves for itself.
+     */
+    private fun applyRealtimeViaChrt(pid: Int, enable: Boolean): Outcome {
+        if (!PrivilegedShell.runAsRoot("command -v chrt").let {
+                it.ok && it.stdout.isNotBlank()
+            }) {
+            return Outcome(
+                State.Unavailable,
+                "neither prlimit nor chrt is present, so the policy cannot be " +
+                    "set from here",
+            )
+        }
+        val applied = PrivilegedShell.runAsRoot(
+            "n=0; for t in /proc/$pid/task/*; do " +
+                "c=\$(cat \$t/comm 2>/dev/null); tid=\${t##*/}; " +
+                "case \"\$c\" in " +
+                "UsbIsoEvents) " + chrtCommand(enable, 3) + " && n=\$((n+1));; " +
+                "UsbAudioRender) " + chrtCommand(enable, 2) + " && n=\$((n+1));; " +
+                "esac; done; echo \$n"
+        )
+        val count = applied.stdout.trim().lines().lastOrNull()?.trim()?.toIntOrNull() ?: 0
+        return when {
+            !applied.ok -> Outcome(State.NotApplied, applied.output.trim().ifBlank {
+                "chrt refused the change"
+            })
+            // No audio thread means nothing to set, and reporting success for
+            // a policy nobody holds is the mistake the affinity code made for
+            // as long as it did.
+            count == 0 -> Outcome(
+                State.Unknown,
+                "no audio thread running; start a session and apply again",
+            )
+            enable -> Outcome(State.Applied, "real-time policy set on $count threads")
+            else -> Outcome(State.NotApplied, "policy returned to normal on $count threads")
+        }
+    }
+
+    // Toybox takes the pid before the priority - `chrt -p PID PRIORITY` - which
+    // is the reverse of util-linux, and passing them the other way round sets
+    // the policy on a pid that happens to equal the priority. Verified against
+    // a live thread before being used.
+    private fun chrtCommand(enable: Boolean, priority: Int): String =
+        if (enable) "chrt -f -p \$tid $priority 2>/dev/null"
+        else "chrt -o -p \$tid 0 2>/dev/null"
+
+    /**
+     * The core-control directory of the cluster holding the fastest CPU. Found
+     * rather than assumed: the prime cluster is not cpu6 everywhere, and a
+     * device without core control has no such directory at all.
+     */
+    private fun coreCtlMinCpusPath(): String? {
+        val result = PrivilegedShell.runAsRoot(
+            "for c in /sys/devices/system/cpu/cpu[0-9]*; do " +
+                "cap=\$(cat \$c/cpu_capacity 2>/dev/null || echo 0); " +
+                "printf \"%s %s\n\" \$cap \$c; done | sort -rn | head -1 | cut -d' ' -f2"
+        )
+        val cpu = result.stdout.trim().takeIf { result.ok && it.isNotEmpty() }
+            ?: return null
+        // Core control lives on the cluster's first CPU, not on its fastest
+        // one, and on this hardware those differ: cpu7 has the highest
+        // capacity while the directory is under cpu6. The cluster comes from
+        // the cpufreq policy's related_cpus - `core_siblings_list` was tried
+        // and names the whole package, 0-7 here, which walked the search onto
+        // the little cluster and applied the tweak to the wrong four cores.
+        val related = PrivilegedShell.readPrivileged("$cpu/cpufreq/related_cpus")
+            ?.trim().orEmpty()
+        val firstInCluster = related.split(Regex("[\\s,]+"))
+            .firstOrNull { it.isNotBlank() }?.substringBefore('-')?.toIntOrNull()
+        val candidates = buildList {
+            if (firstInCluster != null) add("/sys/devices/system/cpu/cpu$firstInCluster")
+            add(cpu)
+        }
+        for (base in candidates) {
+            val path = "$base/core_ctl/min_cpus"
+            val probe = PrivilegedShell.readPrivileged(path)
+            if (!probe.isNullOrBlank()) return path
+        }
+        return null
+    }
+
+    private fun bigClusterPolicyPath(): String? {
+        val result = PrivilegedShell.runAsRoot(
+            "for c in /sys/devices/system/cpu/cpu[0-9]*; do " +
+                "cap=\$(cat \$c/cpu_capacity 2>/dev/null || echo 0); " +
+                "printf \"%s %s\n\" \$cap \$c; done | sort -rn | head -1 | cut -d' ' -f2"
+        )
+        val cpu = result.stdout.trim().takeIf { result.ok && it.isNotEmpty() }
+            ?: return null
+        val related = PrivilegedShell.runAsRoot("readlink -f $cpu/cpufreq")
+        return related.stdout.trim().takeIf { related.ok && it.isNotEmpty() }
+    }
+
+    /** Everything the device currently reports about a tweak's state. */
+    fun inspect(context: Context, tweak: Tweak): Outcome = when (tweak.id) {
+        "wifi_off" -> {
+            val wifi = context.applicationContext
+                .getSystemService(android.net.wifi.WifiManager::class.java)
+            when (wifi?.isWifiEnabled) {
+                true -> Outcome(State.NotApplied, "Wi-Fi is on")
+                false -> Outcome(State.Applied, "Wi-Fi is off")
+                null -> Outcome(State.Unknown, "Wi-Fi state unavailable")
+            }
+        }
+
+        "rt_priority" -> {
+            // Read this process's own limit. `ulimit` inside `su -c` reports
+            // the root shell's limit, which is not the one that governs our
+            // audio threads and would have shown success regardless.
+            val pid = android.os.Process.myPid()
+            val limits = PrivilegedShell.readPrivileged("/proc/$pid/limits")
+            val soft = limits?.let { realtimeLimitOf(it) }
+            when {
+                limits == null -> Outcome(State.Unavailable, "needs root")
+                soft == null -> Outcome(State.Unknown, "limit not reported")
+                soft > 0 -> Outcome(State.Applied, "real-time priority up to $soft")
+                else -> Outcome(State.NotApplied, "real-time priority not permitted")
+            }
+        }
+
+        "timer_slack" -> {
+            // Report an audio thread's slack, not the group leader's: they are
+            // different values and only the former matters here.
+            val pid = android.os.Process.myPid()
+            val slack = PrivilegedShell.runAsRoot(
+                "for t in /proc/$pid/task/*; do " +
+                    "n=\$(cat \$t/comm 2>/dev/null); " +
+                    "case \"\$n\" in *Usb*|*udio*|*ender*) " +
+                    "cat \$t/timerslack_ns 2>/dev/null; break;; esac; done"
+            )
+            val value = slack.stdout.trim().toLongOrNull()
+            when {
+                !slack.ok -> Outcome(State.Unavailable, "needs root")
+                value == null -> Outcome(State.Unknown, "no audio thread running")
+                value <= 1L -> Outcome(State.Applied, "slack is $value ns")
+                else -> Outcome(State.NotApplied, "slack is $value ns")
+            }
+        }
+
+        "usb_irq_affinity" -> {
+            val irq = usbInterruptNumber()
+            val current = irq?.let {
+                PrivilegedShell.readPrivileged("/proc/irq/$it/smp_affinity")
+            }?.trim()
+            when {
+                irq == null -> Outcome(State.Unavailable, "no USB interrupt found")
+                current == null -> Outcome(State.Unavailable, "needs root")
+                current.trimStart('0').equals(bigCoreMask().trimStart('0'), true) ->
+                    Outcome(State.Applied, "IRQ $irq on mask $current")
+                else -> Outcome(State.NotApplied, "IRQ $irq on mask $current")
+            }
+        }
+
+        "big_cluster_floor" -> {
+            val policy = bigClusterPolicyPath()
+            val min = policy?.let { PrivilegedShell.readPrivileged("$it/scaling_min_freq") }
+            val hwMin = policy?.let { PrivilegedShell.readPrivileged("$it/cpuinfo_min_freq") }
+            when {
+                policy == null || min == null -> Outcome(State.Unavailable, "needs root")
+                hwMin != null && min.trim() != hwMin.trim() ->
+                    Outcome(State.Applied, "floor ${min.trim()} kHz")
+                else -> Outcome(State.NotApplied, "floor at hardware minimum ${min.trim()}")
+            }
+        }
+
+        "battery_exemption" -> {
+            val power = context.getSystemService(PowerManager::class.java)
+            val exempt = power?.isIgnoringBatteryOptimizations(context.packageName)
+            when (exempt) {
+                true -> Outcome(State.Applied, "exempt")
+                false -> Outcome(State.NotApplied, "optimised")
+                null -> Outcome(State.Unknown, "state unavailable")
+            }
+        }
+
+        "audio_affinity" -> {
+            // What the threads actually hold, read from our own process, not
+            // what the preference asked for: the whole reason this setting
+            // exists is that the two used to disagree without saying so.
+            val wanted = com.vibes.dsp.engine.AudioSettingsManager
+                .getAudioAffinityEnabled(context)
+            val masks = audioThreadCpuMasks()
+            when {
+                masks.isEmpty() && wanted ->
+                    Outcome(State.Unknown, "on; no audio thread running to check")
+                masks.isEmpty() ->
+                    Outcome(State.NotApplied, "off; no audio thread running")
+                else -> {
+                    val detail = masks.entries.joinToString(", ") { "${it.key} on ${it.value}" }
+                    val narrowed = masks.values.any { it != allCpusList() }
+                    when {
+                        wanted && narrowed -> Outcome(State.Applied, detail)
+                        wanted -> Outcome(State.NotApplied, "on, but not in force: $detail")
+                        else -> Outcome(State.NotApplied, "off; $detail")
+                    }
+                }
+            }
+        }
+
+        "core_ctl_min_cpus" -> {
+            val path = coreCtlMinCpusPath()
+            val value = path?.let { PrivilegedShell.readPrivileged(it)?.trim() }
+            val active = path?.let {
+                PrivilegedShell.readPrivileged(it.replace("min_cpus", "active_cpus"))?.trim()
+            }
+            when {
+                path == null -> Outcome(State.Unavailable, "no core control on this device")
+                value == null -> Outcome(State.Unavailable, "needs root")
+                value.toIntOrNull()?.let { it >= 2 } == true ->
+                    Outcome(State.Applied, "minimum $value, $active awake now")
+                else -> Outcome(State.NotApplied, "minimum $value, $active awake now")
+            }
+        }
+
+        else -> Outcome(State.Unknown, "unknown tweak")
+    }
+
+    private fun allCpusList(): String {
+        val count = Runtime.getRuntime().availableProcessors()
+        return if (count > 1) "0-${count - 1}" else "0"
+    }
+
+    /** The CPU list each audio thread currently holds, by thread name. */
+    private fun audioThreadCpuMasks(): Map<String, String> {
+        val tasks = java.io.File("/proc/self/task").listFiles() ?: return emptyMap()
+        val masks = LinkedHashMap<String, String>()
+        for (task in tasks) {
+            val name = runCatching {
+                java.io.File(task, "comm").readText().trim()
+            }.getOrNull() ?: continue
+            if (!name.startsWith("UsbAudioRender") && !name.startsWith("UsbIsoEvents")) continue
+            val list = runCatching {
+                java.io.File(task, "status").readLines()
+                    .firstOrNull { it.startsWith("Cpus_allowed_list:") }
+                    ?.substringAfter(':')?.trim()
+            }.getOrNull() ?: continue
+            masks[name] = list
+        }
+        return masks
+    }
+}
