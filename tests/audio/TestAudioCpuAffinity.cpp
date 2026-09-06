@@ -107,3 +107,71 @@ TEST(DeriveUiCpuMask, AlwaysReturnsSubsetOfAllowedSet) {
 
 } // namespace
 #endif
+
+#if defined(__linux__)
+namespace {
+
+// The mask helpers were always covered; the code that applies them was not,
+// and it spent its life returning early. The raw sched_getaffinity system call
+// answers with the number of bytes it wrote, so a check for zero treats every
+// success as a failure - which is invisible to a test that only ever asks what
+// mask the pure function would have computed.
+// Two threads handed the same pair of cores are free to be stacked on one of
+// them. The roles exist so each names a core of its own.
+TEST(AudioCpuRoleTest, BothRolesTakeTheWholePool) {
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    for (const int cpu : {0, 1, 2, 3, 4, 5, 6, 7}) CPU_SET(cpu, &allowed);
+    const cpu_set_t render = guitarrackcraft::deriveAudioRoleCpuMask(
+        allowed, guitarrackcraft::AudioCpuRole::Render);
+    const cpu_set_t service = guitarrackcraft::deriveAudioRoleCpuMask(
+        allowed, guitarrackcraft::AudioCpuRole::Service);
+    EXPECT_EQ(2, CPU_COUNT(&render)) << "the graph keeps the fast pair";
+    EXPECT_TRUE(CPU_ISSET(6, &render));
+    EXPECT_TRUE(CPU_ISSET(7, &render));
+    // The whole pool, not one core of it: core control parks a prime core when
+    // the cluster is quiet, and a thread pinned to the parked one waits.
+    EXPECT_EQ(2, CPU_COUNT(&service));
+    EXPECT_TRUE(CPU_ISSET(6, &service));
+    EXPECT_TRUE(CPU_ISSET(7, &service));
+}
+
+// A cpuset too small to spare a core has to keep working rather than pin
+// servicing onto no CPU at all.
+TEST(AudioCpuRoleTest, CollapsesWhenThereIsNoPool) {
+    cpu_set_t allowed;
+    CPU_ZERO(&allowed);
+    CPU_SET(3, &allowed);
+    const cpu_set_t service = guitarrackcraft::deriveAudioRoleCpuMask(
+        allowed, guitarrackcraft::AudioCpuRole::Service);
+    EXPECT_TRUE(CPU_ISSET(3, &service));
+}
+
+TEST(ApplyAudioAffinityTest, NarrowsTheRunningThreadToTheAudioCpus) {
+    cpu_set_t original;
+    CPU_ZERO(&original);
+    ASSERT_EQ(0, sched_getaffinity(0, sizeof(original), &original));
+    if (CPU_COUNT(&original) < 3) {
+        GTEST_SKIP() << "needs at least three runnable CPUs to narrow onto";
+    }
+    const cpu_set_t expected = guitarrackcraft::deriveAudioRoleCpuMask(
+        original, guitarrackcraft::AudioCpuRole::Service);
+    ASSERT_LT(CPU_COUNT(&expected), CPU_COUNT(&original))
+        << "the audio mask has to be a proper subset for this to prove anything";
+
+    guitarrackcraft::applyCurrentThreadAudioAffinity(
+        guitarrackcraft::AudioCpuRole::Service);
+    cpu_set_t applied;
+    CPU_ZERO(&applied);
+    ASSERT_EQ(0, sched_getaffinity(0, sizeof(applied), &applied));
+    const bool restored =
+        sched_setaffinity(0, sizeof(original), &original) == 0;
+
+    EXPECT_TRUE(CPU_EQUAL(&expected, &applied))
+        << "affinity was requested and not applied: " << CPU_COUNT(&applied)
+        << " CPUs allowed, expected " << CPU_COUNT(&expected);
+    EXPECT_TRUE(restored) << "failed to restore the original affinity";
+}
+
+}  // namespace
+#endif

@@ -448,3 +448,733 @@ Most cycles are marked FAIL, on the capture-break gate. That gate was left as it
 is rather than softened to fit the result: it correctly reports that the input
 signal was interrupted. But an interrupted input and a failing pipeline are
 different things, and the second did not happen once.
+
+## Two disturbances, opposite resources
+
+The stability qualification injected a render stall and a service stall and
+reported that both were survived. Sweeping the geometry underneath them says
+why they have to be treated as different faults rather than two samples of one.
+
+A **render stall** delays the producer while USB keeps draining. What covers it
+is stock: frames already written and not yet played. A **service stall** stops
+completions, so the ring stops draining while the producer keeps rendering.
+What covers it is room: free frames between the working level and the admission
+ceiling. Deepening the queue buys the first and spends the second.
+
+Measured on the reference device with four milliseconds injected, one stall per
+cycle, three cycles per arm, at 48 kHz and four channels:
+
+| target | admission | headroom | output latency | render 4 ms | service 4 ms |
+|---:|---|---:|---:|---|---|
+| 64 | credit 32 | auto 208 | 3.75 ms | starved | held |
+| 96 | credit 32 | auto 208 | 4.08 ms | starved | held |
+| 128 | credit 32 | auto 208 | 5.42 ms | held | - |
+| 256 | wait | auto 208 | 7.92 ms | - | **2 quanta lost** |
+| 256 | wait | 416 | 9.25 ms | - | held |
+
+The deep queue is the one that fails the service stall, and it fails it for a
+reason the shallow queues do not have: sitting near its ceiling, it has nowhere
+to put what the producer keeps rendering. Raising the headroom to 416 frames
+fixes it outright - zero lost, admission margin from 0 to 256 frames, held
+quanta from 939 to none - and changes nothing about the stall itself.
+
+## Output latency is exactly render-stall survival
+
+Stock is what is in the ring plus what has already been submitted to USB, and
+that sum is the output latency. So the survivable render stall and the latency
+are not two numbers to trade off against each other: they are the same number.
+
+The boundary falls exactly where the arithmetic puts it. Output latency 3.75 ms
+and 4.08 ms both starve on a 4 ms stall; 5.42 ms holds. At the designed optimum
+- quantum 32, target 128, credit with a 32 frame reserve, headroom 416 - output
+latency is 6.75 ms: it holds 4 ms of either kind and starves on 8 ms of render.
+
+This bounds the whole exercise. No admission rule, quantum or transfer count
+can survive a producer stall longer than the audio it is holding, so the
+minimum latency that is stable in given conditions is the worst render-side
+preemption those conditions produce. Geometry below that bound does not buy
+latency, it buys dropouts.
+
+Room behaves differently and is nearly free - it costs ring memory, not delay -
+but only under credit admission. Waiting for room lets the producer float up to
+the ceiling, so headroom turns into occupancy: the same 256 target measured
+7.92 ms of output latency at headroom 208 and 9.25 ms at 416. Credit pins the
+working level near the target and leaves the headroom as what it is for.
+
+## The scheduler levers that are actually available
+
+Checked on the reference device rather than assumed: `su` is absent and the
+app's `RLIMIT_RTPRIO` is 0, so `SCHED_FIFO` cannot be granted and the fallback
+to `nice -19` on the big cores is not a preference but the ceiling. The ADPF
+session already carries both the render and the libusb event thread, and has
+since the calibrated USB path was hardened - the remaining gap there was that
+it bound their thread ids once and never rebound them, which is now fixed.
+
+## The envelope that sets the floor
+
+Eight minutes of continuous duplex audio, eight cycles of one minute, nothing
+injected, on a queue deep enough that nothing could fail and the numbers
+describe the room rather than a collapse. Wi-Fi left up, because the question
+is what holds in the conditions the device is actually used in.
+
+Reported per cycle, which is the only way it means anything:
+
+| cycle | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| render lateness, ms | 5.42 | 1.79 | 2.93 | 1.44 | 1.55 | 2.18 | 1.52 | 2.28 |
+
+The first cycle is the session starting, not the environment: 5.42 ms against a
+2.93 ms worst among the other seven. Pooling them produced a figure nearly
+twice the steady one, and an earlier draft of this section did exactly that.
+The steady envelope with no interface open is under 3 ms; zero quanta were lost
+across the whole run, and the worst service gap was 5.08 ms with 283 gaps
+counted.
+
+Read against the bound above, an output latency near 3 ms covers the steady
+envelope of this sample. That is a sample, not the device: it is eight minutes
+on one machine with one set of things running.
+
+## Affinity was never applied at all
+
+Both audio threads ask for the two top-ranked CPUs when they start, and the
+main thread asks to be kept off them. Read back from `/proc/<tid>/status`
+while a session was running, every thread in the process - `UsbAudioRender`
+and `UsbIsoEvents` included - reported `Cpus_allowed_list: 0-7`. That held with
+the interface in front and with it closed, which ruled out the first guess that
+a cpuset transition was overwriting the mask.
+
+The cause is two faults in the same three lines, and the first hid the second.
+
+`applyCurrentThreadAudioAffinity` and its UI twin read the current mask with
+the raw `sched_getaffinity` system call and test the result against zero. The
+libc wrapper returns zero on success; the raw call returns **the number of
+bytes it copied**. So the test was true on every successful call and both
+functions returned before setting anything.
+
+Correcting that test exposed the second fault. The raw call writes only those
+bytes - eight of them on this machine - and leaves the rest of a 128 byte
+`cpu_set_t` holding whatever was on the stack. Measured directly: the call
+returns 8, `CPU_COUNT` on the result reads 47 on a 16 CPU host, the derived
+mask therefore names CPUs that do not exist, and `sched_setaffinity` refuses it
+with `EINVAL`. Zeroing the set before the call fixes it, and the mask then
+narrows as designed.
+
+So the pinning has never been in force, on any device, for either thread - and
+the fallback path around it, `nice -19` after Android refuses `SCHED_FIFO`, is
+all that has ever been running. The mask helpers had unit tests throughout;
+what had no test was the code that applies them, which is why a function that
+always returned early looked healthy for as long as it did. There is one now,
+and it fails on the old code.
+
+What this is worth in latency is not yet measured: the fix is in the tree and
+was not on the device when the envelopes above were taken.
+
+## What an open interface costs
+
+The same eight-minute measurement, same geometry, with the app's own interface
+brought to the front and left there. The activity is started a few seconds into
+the run rather than before it, because bringing it up first makes
+`am instrument` restart the process; the cycle it lands in therefore carries
+the activity launch and the first composition, and is reported but not read as
+steady state.
+
+| render lateness, ms | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| interface closed | 5.42 | 1.79 | 2.93 | 1.44 | 1.55 | 2.18 | 1.52 | 2.28 |
+| interface open | 10.13 | 6.55 | 2.72 | 3.12 | 3.40 | 4.82 | 4.32 | 4.17 |
+
+Discarding the launch cycle from each, the steady envelope goes from 2.93 ms to
+4.82 ms - and the second cycle of the open run still reads 6.55 ms, so the
+interface is not fully settled a minute in either. Service gaps counted rose
+from 283 to 505 and the worst from 5.08 ms to 6.38 ms.
+
+An open interface therefore costs roughly a factor of two on both envelopes,
+which by the bound above is a factor of two on the minimum latency that holds.
+This is a driver whose latency depends on whether its own window is visible.
+
+The mechanism is not the garbage collector. Both audio threads are plain
+`std::thread`s: there is no `AttachCurrentThread` anywhere in the native code
+and no `JNIEnv` in the engine at all, so ART never suspends them for a
+collection. Moving the engine to its own process would therefore buy nothing on
+that account, and would risk losing the top-app cpuset the process currently
+sits in while its activity is in front. What the interface costs is CPU
+contention and scheduler placement, which a process boundary does not remove.
+
+## Pinning the USB service thread
+
+With the affinity calls finally reaching the kernel, where to put the two
+threads became a real question rather than a dormant one. The comment on the
+mask helper had said since it was written that the render and event threads
+need separate performance cores; nothing had ever enforced it, because both
+threads were handed the same two-core pool and the placement left to the
+scheduler.
+
+Five arrangements, same geometry, interface open, five cycles each, first cycle
+discarded as the session starting:
+
+| arrangement | worst render lateness | worst USB gap | gaps per cycle | verdicts |
+|---|---:|---:|---:|---|
+| not pinned (the broken state) | 4.82 ms | 5.65 ms | 290-505 | clean |
+| both threads on {6,7} | 5.22 ms | 7.79 ms | 116-176 | clean |
+| render {7}, service {6} | 6.70 ms | 4.45 ms | - | 2 cycles starved |
+| service {5}, render {6,7} | 5.14 ms | 8.30 ms | ~1900 | every cycle failed |
+| **service {6}, render {6,7}** | 6.20 ms | 5.33 ms | **36-85** | 4 of 5 clean |
+
+Two things fell out of this that were not guesses beforehand.
+
+**The core below the pool is not a spare core.** This device runs six cores at
+3.63 GHz and two at 4.61. Moving USB servicing to the fastest of the slow six
+took the gap count from around 150 a cycle to around 1900 and failed every
+cycle. Whatever else servicing needs, it needs to stay on the fast pair.
+
+**The two threads should not be symmetric.** Giving each an exclusive core cut
+the worst gap to its best figure of the five, and cost the render thread the
+ability to migrate: it starved in two cycles out of five. Holding servicing to
+one core of the pair while the render thread keeps both is what worked - the
+gap count fell about fivefold against the unpinned state, nothing starved, and
+four of five cycles were clean.
+
+The asymmetry follows from what each thread can recover from. A completion the
+device is waiting on cannot be made up later; a late graph cycle is exactly
+what the queue is holding audio for. So servicing gets a core it never has to
+leave, and the render thread keeps somewhere to go.
+
+What is not claimed: that this lowers the latency floor. Render lateness reads
+higher in the winning arrangement than in the unpinned one, 6.20 ms against
+4.82 ms, and that difference is inside the run-to-run scatter seen repeatedly
+here. The gap count difference is an order of magnitude and is not. So the
+claim is about service gaps and starvation, and about those only.
+
+## The lateness column in that table does not mean what it says
+
+Reviewed with omp, and two of the objections stand.
+
+**`max_scheduler_lateness_ns` is not scheduler lateness.** The render loop
+records `finished - (began + quantumPeriod)`, and `began` is before the capture
+wait. The maximum therefore folds in capture pacing, descheduling, DSP, the
+credit wait, the room wait and publication. It is a cycle overrun, and naming
+it after one of its terms invited exactly the reading it got here. Scheduler
+latency would be the time between becoming runnable and running, which is not
+measured at all.
+
+**The two sides were not even the same epoch.** The harness resets the USB
+envelope at the warmup boundary; nothing reset the engine's own maxima, which
+were zeroed only when a session started. So the render figures covered startup
+and steady state together while the USB figures covered steady state alone -
+which is why the first cycle of every run read worst, and why the correction
+for that had to be applied by hand. Both sides are now reset at the same
+boundary.
+
+**And the unpinned arm was not a control.** The same syscall fix that let audio
+affinity reach the kernel also let the UI affinity call in `MainActivity`
+reach it for the first time. So "unpinned" against "pinned" compares no
+affinity at all against audio affinity *and* UI affinity together, and cannot
+attribute the difference to either. Separating them needs one binary with both
+switchable at runtime, which does not exist yet.
+
+What survives all three objections is the one number none of them touch.
+
+## The graph must not be allowed onto the slow cores
+
+`peak_dsp_ns` measures the graph's own execution time and nothing else - no
+waits, no pacing, no publication. Across five runs and three placements of the
+render thread, with the interface open and everything else held:
+
+| render thread allowed on | peak graph cycle |
+|---|---:|
+| the fast pair {6,7} | 120 us, 143 us |
+| the slow six {0-5} | 3596 us |
+| everything {0-7}, unpinned | 3273 us, 3444 us |
+
+Leaving the thread unpinned is not neutral: it produces the same result as
+pinning it to the slow cores, because that is where the platform puts it. The
+peak cycle rises about twenty-five fold, to roughly 3.4 ms against a 1.33 ms
+budget, and every cycle in those runs missed its deadline.
+
+The average says nothing here - a typical cycle costs about ten microseconds
+either way. It is the peak that has to fit in the quantum, and on the slow
+cluster it does not.
+
+This is the one placement result that does not rest on the disputed metric, and
+it is the opposite of what the platform's general advice would suggest. It also
+bounds what "don't set affinity" can mean for this driver: the graph needs the
+fast pair, whatever is decided about servicing.
+
+## The peak graph cycle was never the graph working
+
+`peak_dsp_ns` brackets the graph with a wall clock, so it charges the block for
+time the thread was not running. Reading the thread's own CPU clock over the
+same span separates the two, and both are vDSO reads, so the render thread pays
+almost nothing for the answer. The difference - wall minus CPU - is the block
+being descheduled mid-flight.
+
+Same geometry, interface open, five cycles, first discarded:
+
+| | peak graph block | of which off-CPU | CPU actually used |
+|---|---:|---:|---:|
+| render on the fast pair, servicing on one of it | 87-198 us | 77-180 us | ~20 us |
+| no affinity at all | 752-1738 us | 707-1713 us | ~30 us |
+
+Between 88% and 98% of the figure is preemption. The graph's own work is a few
+tens of microseconds either way and never came close to the 1.33 ms budget.
+
+This corrects the reading given earlier in this file, that the graph "has
+throughput to spare on average and none at the peak". It has throughput to
+spare at the peak too. What it does not have, unpinned, is uninterrupted
+possession of a core: the same block takes ten times longer because it is
+descheduled ten times more, not because the cores it lands on are slower.
+
+The practical conclusion does not change - the graph belongs on the fast pair -
+but the quantity to minimise does. Off-CPU time inside the block is the thing,
+and it is now measured directly instead of being inferred from a number that
+mixed it with work.
+
+## Which half of the affinity fix did the work
+
+The syscall fix enabled audio affinity and UI affinity together, so nothing
+measured before could attribute anything to either. With both switchable at
+runtime in one binary, four arms in randomised order, four cycles each, first
+discarded:
+
+| audio affinity | UI affinity | service gaps per cycle |
+|---|---|---:|
+| off | off | 330-441 |
+| off | on | 400-453 |
+| on | off | 99-135 |
+| on | on | 70-104 |
+
+Audio affinity is what cuts the gap count, by roughly a factor of four. UI
+affinity on its own does nothing measurable - if anything the arm reads
+slightly worse than no affinity at all - but on top of audio affinity it takes
+another quarter off.
+
+The arms in this square ran with the render thread unpinned, which the section
+above shows is the wrong place for it, so the square settles the attribution
+question and not the placement one.
+
+## The interface has to be open before the audio starts
+
+Raising the activity a few seconds into a run put the app switch and the first
+composition inside the measured window, and it was audible. The test now raises
+it itself, after the probe has claimed the USB interface and before any session
+starts, and waits for it to settle. Raising it before the probe was tried and
+Android then refused to open the interface, so the order is: claim the device,
+open the window, start the audio.
+
+Evidence rather than assumption: the runner samples the resumed activity while
+it measures. The runs below report the app in front for eighteen samples out of
+nineteen, the odd one being the moment it was raised.
+
+## Depth against starvation, with affinity working
+
+Quantum 32, five transfers, credit with a 32 frame reserve, headroom 416,
+interface open throughout, four cycles of 45 s per depth, first cycle included
+because it no longer carries the app switch.
+
+| target | ring, median | output latency | cycles starved | quanta lost |
+|---:|---:|---:|---:|---:|
+| 96 | 124-148 | 5.4 ms | 4 of 4 | 0 |
+| 128 | 188-212 | 6.6 ms | 1 of 4 | 0 |
+| 160 | 220-260 | 7.4 ms | 1 of 4 | 0 |
+| 192 | 244-268 | 8.1 ms | 1 of 4 | 0 |
+
+Not one rendered block was lost at any depth: the holding slot did its job
+everywhere. What fails is the other end - the device pulling from a ring that
+has nothing in it - and that is what the depth has to cover.
+
+Below 128 frames of target it fails every cycle. Above it the rate falls to
+about one cycle in four and stops improving with depth, which says the
+remaining failures are not a depth problem: the cycles that starve at 160 and
+192 are the ones carrying a 4.0 and 4.6 ms off-CPU spike, and no queue this
+side of ten milliseconds covers a spike that lands badly.
+
+So the honest reading is a floor around 6.6 ms of output latency for this
+device with its own interface open, and a residue of roughly one disturbed
+cycle in four that is the environment rather than the geometry. Whether that
+residue is acceptable is a product decision, not a measurement.
+
+## The signal the driver was giving ADPF
+
+The hint session reports `dspNs` as the work the period took. That figure is the
+graph's CPU cost, about ten microseconds against a target of thirteen hundred,
+so the system has been told for as long as this has existed that the workload
+finishes in under one percent of its deadline. Which is true, and is also an
+invitation to place it on a slow core and clock it down - the placement this
+file has spent several sections working around.
+
+API 35 has the call that says both things: a work period's wall time and the
+CPU time inside it, reported separately. It is now implemented and selectable,
+along with reporting nothing at all, so the three can be compared.
+
+At target 128, four cycles each, one run apiece:
+
+| ADPF signal | cycles starved | worst off-CPU block |
+|---|---:|---:|
+| off | 1 of 4 | 0.27 ms |
+| CPU cost only, as before | 1 of 4 | 0.41 ms |
+| wall and CPU separately | 2 of 4 | 1.52 ms |
+
+Nothing is separated at this sample size - one starved cycle against two is
+inside the scatter every arm in this file has shown. The default therefore
+stays on the old signal, which is what every other measurement here was taken
+with, and the new path stays available behind an argument. The argument for it
+remains a good one and is still unmeasured; a default is not the place for a
+hypothesis.
+
+## The interface's own cadence is most of the tail
+
+Two pieces of periodic work run in the process that owns the render thread: the
+rack polls four JNI meters every 17 ms, and the transport display writes Compose
+state on every display frame, which on this 120 Hz panel is 120 state changes a
+second. Both are now settable, so their cost is measurable rather than
+arguable.
+
+Quantum 32, target 128, interface open, four cycles of 45 s per run, the arms
+run back to back and repeated once each. Worst off-CPU inside a graph block,
+per cycle:
+
+| interface cadence | cycle 1 | 2 | 3 | 4 | starvation events |
+|---|---:|---:|---:|---:|---:|
+| meters 66 ms, no frame clock | 154 | 111 | 153 | 122 | 1 |
+| meters 66 ms, no frame clock | 229 | 81 | 471 | 72 | 1 |
+| meters 17 ms, frame clock on | 1625 | 2052 | 150 | 157 | 2 |
+| meters 17 ms, frame clock on | 70 | 79 | 262 | 3284 | 4 |
+
+Microseconds. No quiet cycle went above 0.5 ms; three of the eight loud cycles
+went above 1.6 ms, one to 3.3 ms. Starvation events follow: two across the
+quiet runs against six across the loud ones.
+
+The depth sweep above showed the residual failures were the cycles carrying a
+multi-millisecond off-CPU spike, and this is where a large part of those spikes
+come from. It is the app's own interface, not the system, and it is the first
+lever in this file that acts on the tail rather than absorbing it.
+
+Varying them separately says which one it is, and it is not the meters.
+
+| meters | frame clock | worst off-CPU per cycle, us | worst |
+|---|---|---|---:|
+| 66 ms | off | 154, 111, 153, 122 / 229, 81, 471, 72 | 471 |
+| 17 ms | off | 280, 136, 223, 225 | 280 |
+| 66 ms | on | 406, 3094, 1511, 1882 | 3094 |
+| 17 ms | on | 1625, 2052, 150, 157 / 70, 79, 262, 3284 | 3284 |
+
+Twelve cycles with the frame clock off, and not one above 0.5 ms. Twelve with
+it on, and six above 1.5 ms. The meter cadence makes no difference either way:
+sixty-hertz meters with the frame clock off are as quiet as fifteen-hertz ones.
+
+So the cost is the per-frame Compose state write, not the JNI polling, and the
+fix is correspondingly narrow. What the frame clock buys is a transport readout
+that moves smoothly between snapshots rather than stepping; it does not need a
+display frame to do that. Driving the same extrapolation from a timer at ten
+or fifteen hertz would keep a readout that reads seconds looking continuous
+while writing state a tenth as often, and the meters can stay where they are.
+
+That change is not made here: it is a change to how the interface looks, and it
+belongs to whoever owns that. What is established is which of the two candidates
+costs anything, and that it costs several milliseconds of render-thread tail.
+
+## Driving the transport readout from a timer instead of the frame clock
+
+The readout the frame clock feeds shows whole seconds - `formatElapsedTime`
+truncates with `toLong()` - and bars, beats and sixteenths, which at 240 BPM
+change sixteen times a second. It was being advanced 120 times a second. Around
+119 of every 120 updates changed nothing anyone could see.
+
+So this is not the product trade-off the previous section left open. The same
+extrapolation now runs from a 33 ms timer, above both readouts with room to
+spare, and the per-frame path is kept only so the measurement that condemned it
+can be reproduced. Same geometry, target 128, meters left at their usual 17 ms,
+interface open, four cycles a run:
+
+| transport clock | cycles starved, of 8 | worst off-CPU |
+|---|---:|---:|
+| every display frame | 6 | 3.28 ms |
+| off entirely | 2 (of 12) | 0.47 ms |
+| 33 ms timer | 1 | 1.74 ms, and 0.32 ms in the other seven |
+
+One run of the timer arm was the first fully clean run at this depth in the
+whole exercise: four cycles, no starvation, nothing to report. The other had a
+single starved cycle.
+
+So the timer keeps the feature and gets the quiet: it is as good as removing
+the readout's motion altogether, and it costs nothing visible. The meters were
+never the problem and are untouched at sixty hertz.
+
+## What the transport fix did to the floor
+
+The depth sweep before the fix put the floor at a target of 128 frames, because
+96 starved in every one of its four cycles. Repeated with the transport readout
+on its timer and nothing else changed, two runs of four cycles at each depth:
+
+| target | ring, median | output latency | cycles starved |
+|---:|---:|---:|---|
+| 64 | 100-148 | 4.6-5.6 ms | 4 of 4 |
+| 96 | 148-188 | 5.6-6.4 ms | 4 of 8 |
+| 128 | 180-220 | 6.3-7.1 ms | 1 of 8 |
+
+The first run at 96 starved in only one cycle of four and it was tempting to
+call the floor moved. The second starved in three, so the pair reads 4 of 8 and
+the floor has not moved: 128 is still where it holds. Recorded because the
+single run was written up here as progress before the repeat contradicted it,
+and one run at this scatter has now misled twice.
+
+What the fix did change is the character of the failures. At 64 the off-CPU
+figures are 75 to 203 microseconds - nothing is being descheduled, the queue is
+simply too shallow for the device, which is a geometry limit rather than an
+interference one. Before the fix the failures at every depth carried
+multi-millisecond spikes.
+
+So: floor still at a target of 128, about 6.6 ms of output latency, and the
+remaining failures at that depth are one cycle in eight rather than one in
+four.
+
+## The submitted runway is not slack
+
+Of the 6.6 ms at the floor, 2.5 ms is frames already handed to USB - five
+transfers of twenty-four. The obvious next millisecond is to submit four
+instead. Two runs of four cycles, target 128, everything else unchanged:
+
+| transfers | submitted | output latency | cycles starved |
+|---:|---:|---:|---|
+| 5 | 120 frames, 2.5 ms | 6.3-7.1 ms | 1 of 8 |
+| 4 | 96 frames, 2.0 ms | 5.4-5.8 ms | 7 of 8 |
+
+Half a millisecond of runway costs seven starved cycles against one. And it is
+not interference doing it: the off-CPU figures across the second run are 71, 85,
+890 and 80 microseconds, so nothing was being descheduled - the device simply
+ran out of submitted frames before the servicing thread put more in.
+
+That is the asymmetry between the two halves of the latency. Ring frames cover
+the render thread being late; submitted frames cover the *servicing* thread
+being late, and they are the only thing that does. Servicing is interrupted
+tens of times a cycle even in the quiet runs, so the runway is doing continuous
+work and has no spare depth in it.
+
+Which closes the obvious route down from 6.6 ms. Latency here is two reserves
+against two different faults, and neither has slack at this point: the ring
+starves at 96 frames of target, the runway starves at four transfers. Going
+lower means making the servicing thread late less often, not holding fewer
+frames against it.
+
+## Servicing is not preempted mid-work; it is waiting to run
+
+The render thread has had an off-CPU figure for a while. Servicing now has two.
+
+The first brackets the completion callback with the same wall-minus-CPU
+subtraction. Across four cycles it reads 34, 75, 203 and 56 microseconds, while
+the gap between successive callbacks in the same cycles reaches 3.4 to 6.9
+milliseconds. So the callback is not being descheduled halfway through
+resubmitting a transfer - whatever costs those milliseconds happens before the
+callback starts, not inside it.
+
+The second reads the thread's cumulative runqueue wait from
+`/proc/self/task/<tid>/schedstat`, sampled once a second from the policy thread
+and never from an audio thread. Over a 45 second cycle it accumulates 649 to
+959 ms - between one and a half and two percent of wall time spent runnable and
+not running. At roughly two thousand completions a second that averages about
+eight microseconds a wakeup.
+
+What this does and does not establish. It establishes that the servicing thread
+spends a real fraction of its life waiting for a CPU, on a device where it is
+pinned to a 4.6 GHz core and nothing else of ours may run there. It does not
+attribute the worst gaps: forty gaps of three milliseconds would be 120 ms,
+which fits inside the 700 ms total with room to spare, and so would an even
+spread of eight microseconds across ninety thousand wakeups. Cumulative
+schedstat cannot tell those apart, and the maximum single wait is not exposed
+by the kernel here.
+
+Separating them needs per-wakeup evidence - `sched_wakeup` against
+`sched_switch` for that one tid, which Perfetto can collect on this device for
+a short diagnostic run. That has not been done.
+
+## The completions are ready and nobody collects them
+
+A normal wakeup of the event loop collects one completion. Counting how many
+one wakeup actually collects, and recording the worst, answers what the gap
+alone could not.
+
+| cycle | completions collected by one wakeup | worst gap | callback off-CPU |
+|---:|---:|---:|---:|
+| 1 | 5 | 4.5 ms | 43 us |
+| 2 | 5 | 6.9 ms | 66 us |
+| 3 | 7 | 5.9 ms | 99 us |
+| 4 | 7 | 4.1 ms | 88 us |
+
+Five to seven at once, against a steady state of one. So during those
+milliseconds the device delivered the whole set of transfers in flight and they
+sat completed until something came back to take them. The bus was not quiet;
+the servicing thread was not there.
+
+Together with the callback's own off-CPU time - tens of microseconds while the
+gaps are milliseconds - that places the whole cost before the callback runs.
+The thread is not descheduled mid-work; it is not run at all for several
+milliseconds while work is waiting.
+
+This also explains why cutting the runway to four transfers failed so badly.
+The gaps consume the entire set in flight, so the depth of that set is exactly
+how long the device can be left alone. Five transfers survive a gap that takes
+five; four do not.
+
+Getting under the current floor therefore means making those wakeups happen,
+not holding more frames against them missing. What is left to establish is
+whether the thread is runnable and unscheduled or not woken at all, which needs
+`sched_wakeup` against `sched_switch` for that tid.
+
+Found on the way: the event loop existed as two identical copies, one in
+`ensureEventThread` and one inside the implicit-feedback capture path, and this
+device runs the second. The first attempt at this measurement instrumented the
+first and reported zero. They are now one function.
+
+## Runnable, and not given a CPU
+
+The event loop now reads its own thread's cumulative runqueue wait across each
+iteration, and records the pair for the longest iteration that collected more
+than one completion - that is, for the worst gap.
+
+| cycle | collected | iteration | of which runqueue wait |
+|---:|---:|---:|---:|
+| 1 | 6 | 4.99 ms | 4.45 ms |
+| 2 | 6 | 3.01 ms | 2.34 ms |
+| 3 | 6 | 4.95 ms | 4.43 ms |
+| 4 | 5 | 7.01 ms | 6.58 ms |
+
+Eighty-nine to ninety-four percent of the gap is the thread sitting on a
+runqueue. It was woken. It was not run.
+
+So the remaining question from the previous section is answered, and answered
+the less convenient way: this is not a wakeup that fails to arrive, it is a
+scheduler that does not dispatch. On a thread pinned to a 4.6 GHz prime core,
+at nice -19, in a process holding the top-app cpuset, with an ADPF session
+naming it.
+
+Which raises the obvious suspect. Servicing is held to core 6, and the render
+thread is allowed on 6 and 7. The two are the only threads of ours that may run
+there, and they are both nice -19. When measurement first tried giving them a
+core each, the split produced the best service gap of any arrangement - 4.45 ms
+against 7.79 for the shared pair - and was rejected because the render thread,
+left with one core, starved. The render thread's own tail has since fallen by
+an order of magnitude with the transport clock fixed, so that trade may no
+longer be the one it was.
+
+## It is not our render thread holding the core
+
+If the servicing thread waits on a runqueue for milliseconds, the first suspect
+is the only other thread of ours allowed there. Giving each an exclusive core
+tests it directly.
+
+| arrangement | runqueue wait at the worst gap | starvation events per cycle |
+|---|---:|---|
+| service {6}, render {6,7} | 4.4-6.6 ms | 0-1 across 8 cycles |
+| service {6} exclusive, render {7} | 3.9-4.0 ms | 25 to 52 |
+| service {6,7}, render {6,7} | 2.4-12.8 ms | 0 across 8 cycles |
+
+Moving the render thread off core 6 barely moved the servicing thread's
+runqueue wait - 3.9 ms against 4.4 - so the render thread was not what it was
+waiting behind. Whatever occupies that core for milliseconds at a time is not
+in this process, and without root there is nothing here that can move it.
+
+The split also collapsed for the reason it collapsed before: a render thread
+with one core and nowhere to migrate starves the device tens of times a cycle.
+
+Letting servicing use both prime cores is at least as good as holding it to
+one, and one of its cycles absorbed a 13.3 ms gap - 12.8 ms of it runqueue wait
+- without starving anything. Eight cycles each, no starvation either way, so
+the two are not separated by this and the default is left where it is. What is
+separated is the split, which is worse than both by a factor of thirty.
+
+## The core it waits for is idle
+
+If the servicing thread waits on a runqueue for milliseconds, something should
+be occupying the core. Per-CPU time over a run says otherwise.
+
+| cpu | user | system | irq | softirq | busy |
+|---:|---:|---:|---:|---:|---:|
+| 6 | 374 | 2221 | 131 | 1 | 17.2% |
+| 7 | 368 | 133 | 59 | 0 | 3.6% |
+| 0 | 2694 | 1916 | 900 | 410 | 39.3% |
+| 1 | 1463 | 762 | 1093 | 749 | 26.3% |
+
+Core 6 is eighty-three percent idle. Its system time dwarfs its user time and
+almost certainly is the servicing thread itself - reaping URBs is an ioctl, so
+our own work on that core is kernel time, and two thousand wakeups a second at
+seventy microseconds each comes to about what is there. Interrupt work lives on
+cores 0 and 1, not here.
+
+Nor is the process being held back by a bandwidth limit: the top-app cpu group
+has `cfs_quota_us` of -1, `nr_throttled` of zero, `uclamp.max` of max, and a
+cpuset of 0-7.
+
+So the measurements disagree with each other in a way this file cannot resolve.
+The thread is runnable for milliseconds; the core it is pinned to is idle; no
+quota is throttling it; the only other thread of ours allowed there was moved
+away and it changed nothing. Either the runqueue accounting means something
+narrower than it appears to, or the platform's scheduler is not dispatching a
+runnable thread onto an idle core it is affine to.
+
+That is where an application-level investigation ends. Separating those two
+needs `sched_wakeup` against `sched_switch` for the tid, which Perfetto can
+collect here, and it has not been done.
+
+## Core control was parking the core it was pinned to
+
+`/sys/devices/system/cpu/cpu6/core_ctl` on this device, with audio idle:
+
+```
+enable 1        active_cpus 1     need_cpus 1
+min_cpus 1      max_cpus 2        offline_delay_ms 100
+busy_up_thres 60                  busy_down_thres 30
+CPU: 6  Online: 1  Paused: 0
+CPU: 7  Online: 1  Paused: 1
+```
+
+Core control keeps one of the two prime cores parked unless the cluster passes
+sixty percent busy. Audio holds it at about seventeen. A parked core is online
+and runs nothing, and it is not always the same one.
+
+That is the whole contradiction resolved. A thread pinned to one prime core is
+runnable with nowhere to run every time core control parks that particular
+core; the core reads idle in `/proc/stat` because parked time is idle time; no
+quota is involved; and moving the other thread away could not help, because the
+other thread was never the obstacle.
+
+It also explains the two results that made no sense next to each other. Giving
+servicing both prime cores removed starvation entirely across eight cycles - it
+can use whichever one is awake. Giving each thread its own core was the worst
+arrangement measured, thirty times worse than either, because then both threads
+are pinned to single cores and one of those is parked at any moment.
+
+The rule that follows is narrow and portable: pin to a cluster, never to a
+core. A single-core mask is a bet that the platform will keep that core
+running, and this platform explicitly does not. The default is changed
+accordingly.
+
+Worth noting what this cost to find. The single-core placement looked best in
+the arm that first compared them, and the reasoning for it - servicing does
+little work and wants one fast core with no migrations - was sound and wrong.
+It took the callback-collection count to show the completions were piling up,
+the thread's own runqueue wait to show it was runnable through them, and the
+per-CPU breakdown to show the core was idle, before the contradiction was sharp
+enough to point at the platform rather than at us.
+
+## Widening past the prime cluster does not help either
+
+If core control leaves only one prime core awake and two audio threads want it,
+the obvious next move is to let them use the fastest core below the cluster as
+well. Measured, servicing on cpus 5-7 instead of 6-7:
+
+| servicing allowed on | service gaps per cycle | worst gap |
+|---|---:|---:|
+| 6-7 | 27-55 | 4.4-6.9 ms |
+| 5-7 | 962-1179 | 7.0-7.2 ms |
+
+Twenty times the gaps. This agrees with the earlier arm that pinned servicing to
+core 5 outright and saw about 1900 gaps a cycle: the mid cluster at 3.63 GHz is
+not a place USB servicing can live, and giving it the option is the same as
+sending it there.
+
+So the prime cluster is both the floor and the ceiling for these threads: a
+single core of it is a trap because core control parks cores, and anything
+outside it is too slow. The residual runqueue wait - four to six milliseconds
+at the worst gap - is what it costs to have two latency-critical threads and,
+much of the time, one awake core to run them on. Nothing available from an
+application changes that.

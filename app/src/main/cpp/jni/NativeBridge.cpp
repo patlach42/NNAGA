@@ -310,6 +310,66 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     return JNI_VERSION_1_6;
 }
 
+// Affinity switches, set before a session starts so the threads pick them up
+// when they are created. They exist so audio affinity and UI affinity can be
+// varied independently: the syscall fix turned both on at once, and no
+// comparison taken since can say which of them moved a number.
+// 0 silences the hint session, 1 keeps the old CPU-only signal, 2 reports the
+// period's wall time and CPU time separately. An A/B knob: which signal the
+// system responds best to is a measurement, not a guess.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetAdpfMode(
+        JNIEnv*, jobject, jint mode) {
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->setDirectUsbAdpfMode(static_cast<int>(mode));
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetMeasureServiceRunqueue(
+        JNIEnv*, jobject, jboolean enabled) {
+    if (g_ctx && g_ctx->directUsbOutput) {
+        g_ctx->directUsbOutput->setMeasureServiceRunqueue(enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetMeasureRunqueueWait(
+        JNIEnv*, jobject, jboolean enabled) {
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->setDirectUsbMeasureRunqueueWait(enabled == JNI_TRUE);
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetAudioAffinityEnabled(
+        JNIEnv*, jobject, jboolean enabled) {
+#if defined(__linux__)
+    guitarrackcraft::setAudioAffinityEnabled(enabled == JNI_TRUE);
+#endif
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetUiAffinityEnabled(
+        JNIEnv*, jobject, jboolean enabled) {
+#if defined(__linux__)
+    guitarrackcraft::setUiAffinityEnabled(enabled == JNI_TRUE);
+#endif
+}
+
+// 0 holds USB servicing to one core of the fast pool, 1 gives it the pool,
+// 2 gives it that core exclusively and moves the render thread off it.
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetServiceCpuPlacement(
+        JNIEnv*, jobject, jint placement) {
+#if defined(__linux__)
+    guitarrackcraft::setServiceCpuPlacement(
+        placement == 2 ? guitarrackcraft::ServiceCpuPlacement::ExclusiveSplit
+        : placement == 1 ? guitarrackcraft::ServiceCpuPlacement::WholePool
+                         : guitarrackcraft::ServiceCpuPlacement::OneCoreOfPool);
+#endif
+}
+
 JNIEXPORT void JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeApplyCurrentThreadUiAffinity(
         JNIEnv*, jobject) {
@@ -756,6 +816,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeResetDirectUsbEnvelope(
     if (g_ctx && g_ctx->directUsbOutput) {
         g_ctx->directUsbOutput->resetEnvelopeMetrics();
     }
+    // Both sides or neither: resetting only the USB envelope left the render
+    // maxima covering startup as well, which made the two incomparable and
+    // made every first cycle look like the worst one.
+    if (g_ctx && g_ctx->audioEngine) {
+        g_ctx->audioEngine->resetDirectUsbRealtimeEnvelope();
+    }
 }
 
 // Which capture channel the loopback detectors watch. An interface with an
@@ -864,7 +930,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 91;
+    constexpr jsize kStatCount = 98;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -951,6 +1017,32 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
             values[48] = static_cast<jlong>(stats.capturePacketDrops);
             values[49] = static_cast<jlong>(stats.playbackQuantumDrops);
             values[50] = static_cast<jlong>(stats.schedulerDeadlineMisses);
+            // The worst graph block by off-CPU time: wall time the block was
+            // charged that its own CPU clock did not advance. Unlike the cycle
+            // overrun beside it this excludes capture pacing and the admission
+            // waits, so it says whether a slow block was work or preemption.
+            values[91] = static_cast<jlong>(stats.worstDspBlockOffCpuNanoseconds);
+            // Cumulative, so the harness reads its growth across a cycle. Says
+            // how much of the gap between completions was the thread waiting
+            // for a CPU rather than the bus waiting for the device.
+            values[94] = static_cast<jlong>(stats.serviceRunqueueWaitNanoseconds);
+            // The wall time of that same block, so the two can be read as a
+            // ratio. Separate maxima would not have belonged to one block.
+            values[92] = static_cast<jlong>(stats.worstDspBlockWallNanoseconds);
+            // The same subtraction on the servicing side: the worst completion
+            // callback by time spent runnable and not running. The runway
+            // exists to cover exactly this, so it is worth naming.
+            values[93] = static_cast<jlong>(
+                g_ctx->directUsbOutput->worstServiceOffCpuNs());
+            values[95] = static_cast<jlong>(
+                g_ctx->directUsbOutput->maxCallbacksPerPoll());
+            // The pair that says what the servicing thread was doing through
+            // the worst multi-collect: how long the iteration took, and how
+            // much of that it spent runnable without a CPU.
+            values[96] = static_cast<jlong>(
+                g_ctx->directUsbOutput->worstMultiCollectSpanNs());
+            values[97] = static_cast<jlong>(
+                g_ctx->directUsbOutput->worstMultiCollectRunqueueNs());
             values[51] = static_cast<jlong>(
                 stats.maxSchedulerLatenessNanoseconds);
             values[52] = static_cast<jlong>(stats.captureTargetFrames);

@@ -1,0 +1,4 @@
+start 1788625607 buffer=64 multiplier=2 transfers=5 headroom=0 cycles=2 duration_ms=30000
+instrument rc=0
+log lines=2213
+end 1788625670

@@ -71,6 +71,13 @@ public:
         uint64_t playbackXruns = 0;
         uint64_t schedulerDeadlineMisses = 0;
         uint64_t maxSchedulerLatenessNanoseconds = 0;
+        // The worst graph block by time spent off the CPU, and the wall
+        // time of that same block. One block, so the two can be read against
+        // each other; separate maxima could come from different blocks.
+        uint64_t worstDspBlockOffCpuNanoseconds = 0;
+        uint64_t worstDspBlockWallNanoseconds = 0;
+        // Cumulative runqueue wait of the servicing thread, sampled off it.
+        uint64_t serviceRunqueueWaitNanoseconds = 0;
         bool performanceHintActive = false;
         bool thermalSafetyEnabled = false;
         bool thermalSafetyActive = false;
@@ -262,11 +269,41 @@ private:
     void directUsbRenderLoop();
     void directUsbThermalPolicyLoop();
     void stopDirectUsbThermalPolicy() noexcept;
+public:
+    // The USB envelope is reset at the warmup boundary so a measurement
+    // describes the steady window. The engine's own maxima were not, so the
+    // render figures spanned startup and the USB figures did not, and the two
+    // could not be read against each other. Same epoch or neither.
+    void resetDirectUsbRealtimeEnvelope() noexcept;
+    void setDirectUsbAdpfMode(int mode) noexcept {
+        directUsbAdpfMode_.store(mode, std::memory_order_relaxed);
+    }
+    void setDirectUsbMeasureRunqueueWait(bool enabled) noexcept {
+        // Kept for the instrumentation argument; the accounting is now two
+        // vDSO clock reads and cheap enough to leave on.
+        directUsbMeasureRunqueueWait_.store(enabled, std::memory_order_release);
+    }
+private:
     std::thread directUsbThermalPolicyThread_;
     std::mutex directUsbThermalPolicyMutex_;
     std::condition_variable directUsbThermalPolicyCv_;
     std::atomic<bool> directUsbThermalPolicyStop_{false};
     std::atomic<bool> directUsbThermalSafetyEnabled_{false};
+    // Off-CPU microseconds in the high half, wall microseconds in the low
+    // half, so the pair is published atomically.
+    std::atomic<uint64_t> directUsbWorstDspBlock_{0};
+    std::atomic<uint64_t> directUsbServiceRunqueueNs_{0};
+    // 0 off, 1 the CPU-only signal, 2 wall and CPU reported separately.
+    // Defaults to 1, which is what every measurement in DRIVER_FINDINGS was
+    // taken with. Mode 2 is built and switchable because the reasoning behind
+    // it is sound - a workload reported at a hundredth of its deadline invites
+    // the system to place it anywhere - but four cycles per arm could not
+    // separate the three, and a default is not the place for a hypothesis.
+    std::atomic<int> directUsbAdpfMode_{1};
+    // Two vDSO clock reads a block, so it is left on: the figure separates a
+    // graph that is slow from a graph that is descheduled, and nothing else
+    // does. The switch stays so a run can prove the reads cost nothing.
+    std::atomic<bool> directUsbMeasureRunqueueWait_{true};
     int32_t directUsbConfiguredWatermarkFrames_ = 0;
     int32_t directUsbConfiguredMultiplier_ = 0;
     std::atomic<bool> directUsbThermalSafetyActive_{false};

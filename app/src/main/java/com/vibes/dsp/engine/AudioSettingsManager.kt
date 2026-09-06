@@ -83,6 +83,9 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK = "directUsbCaptureDeadlineSlack"
     private const val KEY_DIRECT_USB_TRANSFER_COUNT = "directUsbTransferCount"
     private const val KEY_DIRECT_USB_PACKETS_PER_TRANSFER = "directUsbPacketsPerTransfer"
+    private const val KEY_UI_METER_INTERVAL_MS = "uiMeterIntervalMs"
+    private const val KEY_UI_TRANSPORT_FRAME_CLOCK = "uiTransportFrameClock"
+    private const val KEY_UI_TRANSPORT_CLOCK_MS = "uiTransportClockMs"
     private const val KEY_DIRECT_USB_RING_CAPACITY_KIB = "directUsbRingCapacityKiB"
     private const val KEY_DIRECT_USB_CALIBRATION_PREFIX = "directUsbCalibration:"
     private const val KEY_DIRECT_USB_THERMAL_SAFETY = "directUsbThermalSafety"
@@ -149,6 +152,32 @@ object AudioSettingsManager {
     fun setDirectUsbPacketsPerTransfer(context: Context, packets: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, packets.coerceIn(0, 8)).apply()
     }
+    // How often the rack polls the meters, and whether the transport display
+    // follows the display frame clock. Both are periodic work in the process
+    // that owns the render thread, and both are settable so their cost can be
+    // measured rather than argued about.
+    fun getUiMeterIntervalMs(context: Context): Int =
+        prefs(context).getInt(KEY_UI_METER_INTERVAL_MS, 17).coerceIn(4, 500)
+    fun setUiMeterIntervalMs(context: Context, ms: Int) {
+        prefs(context).edit().putInt(KEY_UI_METER_INTERVAL_MS, ms.coerceIn(4, 500)).apply()
+    }
+    fun getUiTransportFrameClock(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_UI_TRANSPORT_FRAME_CLOCK, true)
+    fun setUiTransportFrameClock(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_UI_TRANSPORT_FRAME_CLOCK, enabled).apply()
+    }
+    // How often the transport readout advances, in milliseconds. Zero means
+    // once per display frame, which is what it used to do and what a
+    // measurement needs to reproduce. The default is 33 ms: the elapsed readout
+    // is whole seconds and the musical one is sixteenths, which at 240 BPM
+    // change sixteen times a second, so thirty hertz is above both with room
+    // to spare.
+    fun getUiTransportClockMs(context: Context): Int =
+        prefs(context).getInt(KEY_UI_TRANSPORT_CLOCK_MS, 33).coerceIn(0, 500)
+    fun setUiTransportClockMs(context: Context, ms: Int) {
+        prefs(context).edit().putInt(KEY_UI_TRANSPORT_CLOCK_MS, ms.coerceIn(0, 500)).apply()
+    }
+
     fun getDirectUsbRingCapacityKiB(context: Context): Int =
         prefs(context).getInt(KEY_DIRECT_USB_RING_CAPACITY_KIB, 64)
             .takeIf { it == 0 || it in listOf(4, 8, 16, 32, 64, 128, 256, 512, 1024) } ?: 64

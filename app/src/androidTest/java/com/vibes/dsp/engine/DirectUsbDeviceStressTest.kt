@@ -8,6 +8,7 @@
 package com.vibes.dsp.engine
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.usb.UsbConstants
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
@@ -86,6 +87,44 @@ class DirectUsbDeviceStressTest {
         val renderStallUs = argumentInt(args, "direct_usb_render_stall_us", "render_stall_us", 0, 0, 50000)
         val serviceStallUs = argumentInt(args, "direct_usb_service_stall_us", "service_stall_us", 0, 0, 50000)
         val transferCount = argumentInt(args, "direct_usb_transfers", "transfers", 0, 0, 8)
+        // Packets per transfer sets how many frames each completion carries,
+        // and the submitted runway is transfers times that. It is therefore a
+        // latency axis in its own right - and the opposite of the transfer
+        // count for event-thread load, since fewer packets means more
+        // completions a second. Zero keeps the saved policy.
+        val packetsPerTransfer = argumentInt(args, "direct_usb_packets", "packets", 0, 0, 8)
+        // Affinity as two independent factors. The syscall fix that made audio
+        // affinity reach the kernel made the UI affinity call reach it too, so
+        // every arm measured before this varied both at once. Default 1 keeps
+        // what the driver does on its own.
+        val audioAffinity = argumentInt(args, "direct_usb_audio_affinity", "audio_affinity", 1, 0, 1)
+        val uiAffinity = argumentInt(args, "direct_usb_ui_affinity", "ui_affinity", 1, 0, 1)
+        // 0 holds servicing to one core of the fast pool, 1 gives it the pool.
+        val servicePlacement = argumentInt(args, "direct_usb_service_cpus", "service_cpus", 1, 0, 2)
+        // Two vDSO clock reads a block, so on by default: it is the only
+        // figure that separates a graph that is slow from one that is
+        // descheduled, which the peak DSP number alone cannot.
+        val measureDspOffCpu = argumentInt(args, "direct_usb_dsp_off_cpu", "dsp_off_cpu", 1, 0, 1)
+        // The interface is part of the condition when it is open, but switching
+        // to it is not: bringing the activity up while audio is already running
+        // puts the launch and the first composition inside the measured window,
+        // and it is audible. The test raises it itself, before any session
+        // starts, and waits for it to settle.
+        // 0 silences ADPF, 1 is the old CPU-only signal, 2 reports wall and
+        // CPU separately. The old signal told the system a workload a hundred
+        // times faster than its deadline, which is an invitation to place it
+        // on a slow core; whether the newer one changes anything here is what
+        // this argument exists to find out.
+        val adpfMode = argumentInt(args, "direct_usb_adpf", "adpf", 1, 0, 2)
+        val openUi = argumentInt(args, "direct_usb_open_ui", "open_ui", 0, 0, 1)
+        // The interface's own periodic work, as two axes. Zero keeps whatever
+        // the app is configured for.
+        val uiMeterMs = argumentInt(args, "direct_usb_ui_meter_ms", "ui_meter_ms", 0, 0, 500)
+        val uiFrameClock = argumentInt(args, "direct_usb_ui_frame_clock", "ui_frame_clock", -1, -1, 1)
+        // Transport readout cadence in ms; 0 reproduces the old per-display-frame
+        // behaviour, -1 leaves whatever the app is configured for.
+        val uiClockMs = argumentInt(args, "direct_usb_ui_clock_ms", "ui_clock_ms", -1, -1, 500)
+        val uiSettleMs = argumentLong(args, "direct_usb_ui_settle_ms", "ui_settle_ms", 4_000L, 0L, 30_000L)
         val outputPair = argumentInt(args, "direct_usb_output_pair", "output_pair", 0, 0, 7)
         val inputChannel = argumentInt(args, "direct_usb_input_channel", "input_channel", 0, 0, 15)
         val cycles = argumentInt(args, "direct_usb_cycles", "cycles", 2, 1, 8)
@@ -117,6 +156,10 @@ class DirectUsbDeviceStressTest {
         // Restored with the rest: a sweep that leaves the transfer count behind
         // silently biases every later run on the device.
         val originalTransferCount = AudioSettingsManager.getDirectUsbTransferCount(context)
+        val originalPacketsPerTransfer = AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)
+        val originalUiMeterMs = AudioSettingsManager.getUiMeterIntervalMs(context)
+        val originalUiFrameClock = AudioSettingsManager.getUiTransportFrameClock(context)
+        val originalUiClockMs = AudioSettingsManager.getUiTransportClockMs(context)
         val originalWriteHeadroom = AudioSettingsManager.getDirectUsbWriteHeadroom(context)
         val originalBuffer = AudioSettingsManager.getBufferSize(context)
         val originalMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
@@ -128,6 +171,16 @@ class DirectUsbDeviceStressTest {
             if (transferCount > 0) {
                 AudioSettingsManager.setDirectUsbTransferCount(context, transferCount)
             }
+            if (packetsPerTransfer > 0) {
+                AudioSettingsManager.setDirectUsbPacketsPerTransfer(context, packetsPerTransfer)
+            }
+            // Set before the window is raised so it composes with the cadence
+            // under test rather than switching to it mid-run.
+            if (uiMeterMs > 0) AudioSettingsManager.setUiMeterIntervalMs(context, uiMeterMs)
+            if (uiFrameClock >= 0) {
+                AudioSettingsManager.setUiTransportFrameClock(context, uiFrameClock == 1)
+            }
+            if (uiClockMs >= 0) AudioSettingsManager.setUiTransportClockMs(context, uiClockMs)
             if (writeHeadroom > 0) {
                 AudioSettingsManager.setDirectUsbWriteHeadroom(context, writeHeadroom)
             }
@@ -135,9 +188,19 @@ class DirectUsbDeviceStressTest {
             // versioned and this is harness configuration, not a measurement.
             Log.i(tag, "ADMISSION_POLICY policy=$admissionPolicy reserve=$creditReserve")
             Log.i(tag, "LOOPBACK_CONFIG output_pair=$outputPair input_channel=$inputChannel " +
-                "transfers=${AudioSettingsManager.getDirectUsbTransferCount(context)}")
+                "transfers=${AudioSettingsManager.getDirectUsbTransferCount(context)} " +
+                "packets=${AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)}")
             EngineInitHelper.preloadLilv(context.applicationInfo.nativeLibraryDir)
             assertTrue("Native engine initialization failed", EngineInitHelper.initEngine(context))
+            // After the library is loaded and before any session starts: the
+            // audio threads read these when they are created.
+            engine.nativeSetAudioAffinityEnabled(audioAffinity == 1)
+            engine.nativeSetUiAffinityEnabled(uiAffinity == 1)
+            engine.nativeSetServiceCpuPlacement(servicePlacement)
+            engine.nativeSetMeasureRunqueueWait(measureDspOffCpu == 1)
+            engine.nativeSetMeasureServiceRunqueue(measureDspOffCpu == 1)
+            engine.nativeSetAdpfMode(adpfMode)
+            Log.i(tag, "AFFINITY audio=$audioAffinity ui=$uiAffinity service_cpus=$servicePlacement adpf=$adpfMode ui_meter_ms=${AudioSettingsManager.getUiMeterIntervalMs(context)} ui_frame_clock=${AudioSettingsManager.getUiTransportFrameClock(context)} ui_clock_ms=${AudioSettingsManager.getUiTransportClockMs(context)}")
             originalTransport = runCatching { engine.getTransportInfo() }.getOrNull()
             val probe = runBlocking { DirectUsbAudioManager.probeFormats(context, option!!) }
             assertTrue("Direct USB probe failed: ${probe.exceptionOrNull()?.message}", probe.isSuccess)
@@ -145,6 +208,24 @@ class DirectUsbDeviceStressTest {
                 "USB permission was not granted after probing",
                 audioDevices.any { it.deviceId == option!!.id && usb.hasPermission(it) }
             )
+            if (openUi == 1) {
+                // After the probe has claimed the USB interface and before any
+                // session: audio starts into a window that is already up, which
+                // is the order a person uses the app in and the only order that
+                // does not measure the app switch. Raising it before the probe
+                // was tried and Android then refused to open the interface.
+                val intent = context.packageManager
+                    .getLaunchIntentForPackage(context.packageName)
+                    ?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                if (intent != null) {
+                    context.startActivity(intent)
+                    Log.i(tag, "UI_OPEN requested settle_ms=$uiSettleMs")
+                    SystemClock.sleep(uiSettleMs)
+                    Log.i(tag, "UI_OPEN settled")
+                } else {
+                    Log.i(tag, "UI_OPEN unavailable reason=no-launch-intent")
+                }
+            }
             // probeFormats may return manager fallbacks when native descriptors are empty.
             // Only native descriptor tuples are verified negotiated formats.
             val verifiedFormats = runCatching {
@@ -256,6 +337,10 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setBufferSize(context, originalBuffer)
             AudioSettingsManager.setDirectUsbOutputPair(context, originalOutputPair)
             AudioSettingsManager.setDirectUsbTransferCount(context, originalTransferCount)
+            AudioSettingsManager.setDirectUsbPacketsPerTransfer(context, originalPacketsPerTransfer)
+            AudioSettingsManager.setUiMeterIntervalMs(context, originalUiMeterMs)
+            AudioSettingsManager.setUiTransportFrameClock(context, originalUiFrameClock)
+            AudioSettingsManager.setUiTransportClockMs(context, originalUiClockMs)
             AudioSettingsManager.setDirectUsbWriteHeadroom(context, originalWriteHeadroom)
             AudioSettingsManager.setDirectUsbPeriodMultiplier(context, originalMultiplier)
             // Restore transport controls last. The exact frame cannot be restored
@@ -974,7 +1059,9 @@ class DirectUsbDeviceStressTest {
             "last_dsp_ns=${stats.lastDspNs} peak_dsp_ns=${stats.peakDspNs} " +
             "last_cycle_ns=${stats.lastCycleNs} peak_cycle_ns=${stats.peakCycleNs} deadline_budget_ns=${stats.deadlineBudgetNs} " +
             "deadline_misses=${stats.deadlineMisses} scheduler_deadline_misses=${stats.schedulerDeadlineMisses} " +
-            "max_scheduler_lateness_ns=${stats.maxSchedulerLatenessNs} capture_target_frames=${stats.captureTargetFrames} " +
+            "max_scheduler_lateness_ns=${stats.maxSchedulerLatenessNs} " +
+            "worst_dsp_off_cpu_ns=${stats.worstDspBlockOffCpuNs}" +
+            "worst_dsp_wall_ns=${stats.worstDspBlockWallNs} worst_service_off_cpu_ns=${stats.worstServiceOffCpuNs} service_runqueue_ns=${stats.serviceRunqueueWaitNs} max_callbacks_per_poll=${stats.maxCallbacksPerPoll} multi_collect_span_ns=${stats.worstMultiCollectSpanNs} multi_collect_runqueue_ns=${stats.worstMultiCollectRunqueueNs} capture_target_frames=${stats.captureTargetFrames} " +
             "capture_headroom_frames=${stats.captureHeadroomFrames} capture_deadline_slack_frames=${stats.captureDeadlineSlackFrames} " +
             "deferred_no_metadata=${stats.deferredNoMetadata} deferred_no_pcm=${stats.deferredNoPcm} " +
             "queued_out_low_water=${stats.queuedOutLowWaterFrames} " +

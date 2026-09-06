@@ -251,6 +251,13 @@ data class DirectUsbStats(
      */
     val liveQueueFrames: Long = 0,
     /** Pipeline state at the first lost quantum; -1 when nothing was lost. */
+    val worstDspBlockOffCpuNs: Long = 0,
+    val worstDspBlockWallNs: Long = 0,
+    val worstServiceOffCpuNs: Long = 0,
+    val serviceRunqueueWaitNs: Long = 0,
+    val maxCallbacksPerPoll: Long = 0,
+    val worstMultiCollectSpanNs: Long = 0,
+    val worstMultiCollectRunqueueNs: Long = 0,
     val firstLossRing: Long = 0,
     val firstLossQueued: Long = 0,
     val firstLossHadRoom: Long = 0,
@@ -344,6 +351,13 @@ data class DirectUsbStats(
         private const val LOST_QUANTA = 78
         private const val HELD_QUANTA = 79
         private const val LIVE_QUEUE_FRAMES = 80
+        private const val WORST_DSP_OFF_CPU = 91
+        private const val WORST_DSP_WALL = 92
+        private const val WORST_SERVICE_OFF_CPU = 93
+        private const val SERVICE_RUNQUEUE_WAIT = 94
+        private const val MAX_CALLBACKS_PER_POLL = 95
+        private const val MULTI_COLLECT_SPAN = 96
+        private const val MULTI_COLLECT_RUNQUEUE = 97
         private const val FIRST_LOSS_RING = 81
         private const val FIRST_LOSS_QUEUED = 82
         private const val FIRST_LOSS_HAD_ROOM = 83
@@ -433,6 +447,13 @@ data class DirectUsbStats(
                 lostQuanta = at(LOST_QUANTA),
                 heldQuanta = at(HELD_QUANTA),
                 liveQueueFrames = at(LIVE_QUEUE_FRAMES),
+                worstDspBlockOffCpuNs = at(WORST_DSP_OFF_CPU),
+                worstDspBlockWallNs = at(WORST_DSP_WALL),
+                worstServiceOffCpuNs = at(WORST_SERVICE_OFF_CPU),
+                serviceRunqueueWaitNs = at(SERVICE_RUNQUEUE_WAIT),
+                maxCallbacksPerPoll = at(MAX_CALLBACKS_PER_POLL),
+                worstMultiCollectSpanNs = at(MULTI_COLLECT_SPAN),
+                worstMultiCollectRunqueueNs = at(MULTI_COLLECT_RUNQUEUE),
                 firstLossRing = at(FIRST_LOSS_RING),
                 firstLossQueued = at(FIRST_LOSS_QUEUED),
                 firstLossHadRoom = at(FIRST_LOSS_HAD_ROOM),
@@ -651,6 +672,13 @@ class NativeEngine private constructor() {
 
     /** Pins the calling UI thread away from CPUs reserved for Direct USB. */
     external fun nativeApplyCurrentThreadUiAffinity()
+    // Set before a session starts; the audio threads read them when created.
+    external fun nativeSetAdpfMode(mode: Int)
+    external fun nativeSetMeasureServiceRunqueue(enabled: Boolean)
+    external fun nativeSetMeasureRunqueueWait(enabled: Boolean)
+    external fun nativeSetAudioAffinityEnabled(enabled: Boolean)
+    external fun nativeSetUiAffinityEnabled(enabled: Boolean)
+    external fun nativeSetServiceCpuPlacement(placement: Int)
 
     /**
      * Set the path where LV2 bundles (e.g. Guitarix) are extracted.

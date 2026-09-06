@@ -5,6 +5,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.delay
+import com.vibes.dsp.engine.AudioSettingsManager
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.DisposableEffect
@@ -50,14 +53,34 @@ fun rememberFrameClockNanos(active: Boolean): Long {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
+    // Following the frame clock writes Compose state on every display frame,
+    // which on a 120 Hz panel is 120 state changes a second in the process that
+    // owns the render thread. Switchable so that cost can be measured; off, the
+    // transport simply stops extrapolating between snapshots.
+    val context = LocalContext.current
+    val frameClockEnabled = remember(context) {
+        AudioSettingsManager.getUiTransportFrameClock(context)
+    }
+    val clockIntervalMs = remember(context) {
+        AudioSettingsManager.getUiTransportClockMs(context)
+    }
     var frameNanos by remember { mutableLongStateOf(0L) }
-    LaunchedEffect(active, lifecycleStarted) {
-        if (!active || !lifecycleStarted) {
+    LaunchedEffect(active, lifecycleStarted, frameClockEnabled, clockIntervalMs) {
+        if (!active || !lifecycleStarted || !frameClockEnabled) {
             frameNanos = 0L
             return@LaunchedEffect
         }
-        while (true) {
-            withFrameNanos { frameNanos = it }
+        if (clockIntervalMs <= 0) {
+            // Once per display frame. Kept so the measurement that condemned it
+            // can be reproduced, not because anything needs it.
+            while (true) {
+                withFrameNanos { frameNanos = it }
+            }
+        } else {
+            while (true) {
+                frameNanos = System.nanoTime()
+                delay(clockIntervalMs.toLong())
+            }
         }
     }
     return frameNanos

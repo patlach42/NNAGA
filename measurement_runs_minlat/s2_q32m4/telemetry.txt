@@ -1,0 +1,6 @@
+09-06 03:10:34.228 27414 27444 I DirectUsbDeviceStress: ADMISSION_POLICY policy=1 reserve=32
+09-06 03:10:34.228 27414 27444 I DirectUsbDeviceStress: LOOPBACK_CONFIG output_pair=0 input_channel=0 transfers=5 packets=4
+09-06 03:10:34.255 27414 27444 I DirectUsbDeviceStress: AFFINITY audio=1 ui=1 service_cpus=0
+09-06 03:10:34.266 27414 27444 I DirectUsbDeviceStress: UI_OPEN requested settle_ms=4000
+09-06 03:10:38.269 27414 27444 I DirectUsbDeviceStress: UI_OPEN settled
+09-06 03:10:39.507 27414 27444 I DirectUsbDeviceStress: STARTUP_ENVELOPE quantum_drops=0 min_admission_margin=325 max_completion_gap_ns=5634428 max_missing_drains=11 max_writes_between_drains=5 first_loss_ring=-1 first_loss_queued=-1 first_loss_had_room=-1 first_loss_credit=0

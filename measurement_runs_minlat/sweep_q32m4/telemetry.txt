@@ -1,0 +1,5 @@
+09-06 02:58:17.888 15763 15799 I DirectUsbDeviceStress: ADMISSION_POLICY policy=1 reserve=32
+09-06 02:58:17.888 15763 15799 I DirectUsbDeviceStress: LOOPBACK_CONFIG output_pair=0 input_channel=0 transfers=5 packets=4
+09-06 02:58:17.915 15763 15799 I DirectUsbDeviceStress: AFFINITY audio=1 ui=1 service_cpus=0
+09-06 02:58:17.926 15763 15799 I DirectUsbDeviceStress: UI_OPEN requested settle_ms=4000
+09-06 02:58:21.926 15763 15799 I DirectUsbDeviceStress: UI_OPEN settled

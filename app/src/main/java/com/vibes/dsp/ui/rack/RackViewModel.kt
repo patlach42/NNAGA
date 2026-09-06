@@ -157,7 +157,14 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                 } else if (_meterState.value != MeterState()) {
                     _meterState.value = MeterState()
                 }
-                delay(17)
+                // Read each turn rather than captured once: the cadence is a
+                // measurement axis, and four JNI calls at sixty hertz in the
+                // process that owns the render thread is not obviously free.
+                delay(
+                    AudioSettingsManager
+                        .getUiMeterIntervalMs(getApplication())
+                        .toLong()
+                )
             }
         }
         // Control/status JNI may allocate or wait behind control locks. Keep it

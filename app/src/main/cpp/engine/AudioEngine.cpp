@@ -33,6 +33,7 @@
 #include <limits>
 #include <sys/resource.h>
 #include <sys/syscall.h>
+#include <fcntl.h>
 #include <pthread.h>
 #if defined(__aarch64__)
 #include <arm_neon.h>
@@ -107,6 +108,52 @@ AudioEngine::~AudioEngine() {
     if (cleanupWorker_.joinable()) cleanupWorker_.join();
 }
 
+namespace {
+
+// Cumulative time a task spent on a runqueue without running, from
+// /proc/self/task/<tid>/schedstat, second field, nanoseconds. Read from the
+// policy thread once a second and never from an audio thread: this is a procfs
+// read, and the point of it is to describe the servicing thread's scheduling
+// without becoming part of it.
+//
+// It answers the question the callback's own off-CPU figure cannot. That
+// figure is tens of microseconds while the gap between callbacks reaches
+// milliseconds, so the servicing thread is not being descheduled mid-work -
+// either it is not being woken promptly, which lands here, or the bus had
+// nothing to deliver, which does not.
+inline uint64_t readRunqueueWaitNs(int32_t tid) noexcept {
+    if (tid <= 0) return 0;
+    char path[64];
+    std::snprintf(path, sizeof(path), "/proc/self/task/%d/schedstat", tid);
+    const int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return 0;
+    char buf[96];
+    const ssize_t n = ::read(fd, buf, sizeof(buf) - 1);
+    ::close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+    const char* p = buf;
+    while (*p == ' ') ++p;
+    while (*p >= '0' && *p <= '9') ++p;
+    while (*p == ' ') ++p;
+    uint64_t wait = 0;
+    if (!(*p >= '0' && *p <= '9')) return 0;
+    while (*p >= '0' && *p <= '9') {
+        wait = wait * 10 + static_cast<uint64_t>(*p - '0');
+        ++p;
+    }
+    return wait;
+}
+
+}  // namespace
+
+void AudioEngine::resetDirectUsbRealtimeEnvelope() noexcept {
+    directUsbPeakCycleNs_.store(0, std::memory_order_relaxed);
+    directUsbPeakDspNs_.store(0, std::memory_order_relaxed);
+    directUsbMaxSchedulerLatenessNs_.store(0, std::memory_order_relaxed);
+    directUsbWorstDspBlock_.store(0, std::memory_order_relaxed);
+}
+
 void AudioEngine::stopDirectUsbThermalPolicy() noexcept {
     directUsbThermalPolicyStop_.store(true, std::memory_order_release);
     directUsbThermalPolicyCv_.notify_one();
@@ -175,6 +222,12 @@ void AudioEngine::directUsbThermalPolicyLoop() {
         }
         lock.unlock();
         if (!directUsbSession_.load(std::memory_order_acquire)) continue;
+        // Sampled here rather than on the servicing thread, once a second.
+        if (const int32_t serviceTid =
+                directUsbOutput_ ? directUsbOutput_->eventThreadTid() : 0) {
+            directUsbServiceRunqueueNs_.store(readRunqueueWaitNs(serviceTid),
+                                              std::memory_order_relaxed);
+        }
         // Either thread can be recreated inside a live session. A hint session
         // still holding the old tid boosts a thread that no longer exists and
         // reports nothing about it, so rebind whenever the pair moves.
@@ -334,6 +387,7 @@ bool AudioEngine::startDirectUsbSession(
     directUsbDeadlineMisses_.store(0, std::memory_order_relaxed);
     directUsbSchedulerDeadlineMisses_.store(0, std::memory_order_relaxed);
     directUsbMaxSchedulerLatenessNs_.store(0, std::memory_order_relaxed);
+    directUsbWorstDspBlock_.store(0, std::memory_order_relaxed);
     if (!directUsbOutput_->configureUserspaceBuffers(bufferConfig)) {
         directUsbFailureCode_.store(
             usbFailureCode(monotrypt::usb::StartError::Unknown),
@@ -661,6 +715,14 @@ AudioEngine::DirectUsbRuntimeStats AudioEngine::getDirectUsbRuntimeStats() const
         directUsbSchedulerDeadlineMisses_.load(std::memory_order_relaxed);
     out.maxSchedulerLatenessNanoseconds =
         directUsbMaxSchedulerLatenessNs_.load(std::memory_order_relaxed);
+    out.serviceRunqueueWaitNanoseconds =
+        directUsbServiceRunqueueNs_.load(std::memory_order_relaxed);
+    {
+        const uint64_t packed =
+            directUsbWorstDspBlock_.load(std::memory_order_relaxed);
+        out.worstDspBlockOffCpuNanoseconds = (packed >> 32) * 1000ull;
+        out.worstDspBlockWallNanoseconds = (packed & 0xFFFFFFFFull) * 1000ull;
+    }
     out.performanceHintActive =
         directUsbPerformanceHintActive_.load(std::memory_order_acquire);
     out.thermalSafetyEnabled =
@@ -1073,7 +1135,9 @@ bool AudioEngine::measureDirectUsbRoundTrip(
 void AudioEngine::directUsbRenderLoop() {
     directUsbRenderTid_.store(static_cast<int32_t>(getTid()), std::memory_order_release);
     directUsbRenderUrgentAudio_.store(
-        setCurrentThreadUrgentAudio("UsbAudioRender"), std::memory_order_release);
+        setCurrentThreadUrgentAudio("UsbAudioRender",
+                                    guitarrackcraft::AudioCpuRole::Render),
+        std::memory_order_release);
     const int32_t frames = static_cast<int32_t>(callbackFrameCount_);
     const auto period = std::chrono::duration<double>(
         static_cast<double>(frames) / static_cast<double>(sampleRate_));
@@ -1092,7 +1156,6 @@ void AudioEngine::directUsbRenderLoop() {
     float* const renderOutputPtrs[2] = {
         directUsbOutputLeft_.data(), directUsbOutputRight_.data()};
     int32_t failureCode = 0;
-
 
     while (directUsbSession_.load(std::memory_order_acquire)) {
         const auto began = std::chrono::steady_clock::now();
@@ -1241,6 +1304,9 @@ void AudioEngine::directUsbRenderLoop() {
         }
 
         const auto dspBegan = std::chrono::steady_clock::now();
+        // Zero when the clock is unavailable, which switches the off-CPU
+        // accounting below off rather than reporting a wrong number.
+        const uint64_t dspCpuBegan = guitarrackcraft::threadCpuNanoseconds();
         processRackBlock(
             renderInputPtrs,
             directUsbInputChannelCount_,
@@ -1346,6 +1412,28 @@ void AudioEngine::directUsbRenderLoop() {
             std::chrono::duration_cast<std::chrono::nanoseconds>(
                 std::chrono::steady_clock::now() - dspBegan).count());
         directUsbLastDspNs_.store(dspNs, std::memory_order_relaxed);
+        if (dspCpuBegan != 0 &&
+            directUsbMeasureRunqueueWait_.load(std::memory_order_relaxed)) {
+            // What the wall clock charged the graph that the CPU did not run:
+            // the graph was descheduled mid-block. This is the figure the peak
+            // DSP number conflates, and the one that says whether a slow peak
+            // was work or preemption.
+            const uint64_t dspCpuNs = guitarrackcraft::threadCpuNanoseconds() - dspCpuBegan;
+            const uint64_t offCpuNs = dspNs > dspCpuNs ? dspNs - dspCpuNs : 0;
+            // Both halves describe the same block, so they are published as
+            // one word: off-CPU microseconds above, wall microseconds below.
+            // Kept as independent maxima they could be read as a ratio between
+            // two different blocks, which is exactly the mistake this pair
+            // exists to prevent. Microseconds because the figures are tenths
+            // of a millisecond upward and thirty-two bits is four thousand
+            // seconds of headroom.
+            const uint64_t packed = (offCpuNs / 1000u) << 32 | (dspNs / 1000u);
+            uint64_t worst = directUsbWorstDspBlock_.load(
+                std::memory_order_relaxed);
+            while ((worst >> 32) < (packed >> 32) &&
+                   !directUsbWorstDspBlock_.compare_exchange_weak(
+                       worst, packed, std::memory_order_relaxed)) {}
+        }
         // ADPF must describe CPU work, not USB wait: dspNs excludes the
         // capture deadline wait and the nonblocking playback submission.
         // The session is owned by the thermal/ADPF policy thread; both stop
@@ -1356,7 +1444,25 @@ void AudioEngine::directUsbRenderLoop() {
         if (auto* hintSession = static_cast<PerformanceHintSession*>(
                 directUsbPerformanceHintSession_.load(
                     std::memory_order_acquire))) {
-            hintSession->reportActualWorkDuration(dspNs);
+            // Mode 0 says nothing at all. Mode 1 is the old signal: the CPU
+            // cost alone, which for this graph is a hundredth of its deadline
+            // and reads to the system as a workload that can be placed
+            // anywhere. Mode 2 reports the period's wall time and the CPU time
+            // inside it separately, which is the same truth without the
+            // invitation.
+            const int adpfMode =
+                directUsbAdpfMode_.load(std::memory_order_relaxed);
+            if (adpfMode == 2 && hintSession->canReportWorkDuration()) {
+                const uint64_t dspCpuNs = dspCpuBegan != 0
+                    ? guitarrackcraft::threadCpuNanoseconds() - dspCpuBegan : dspNs;
+                hintSession->reportWorkDuration(
+                    static_cast<int64_t>(
+                        std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            dspBegan.time_since_epoch()).count()),
+                    dspNs, dspCpuNs);
+            } else if (adpfMode != 0) {
+                hintSession->reportActualWorkDuration(dspNs);
+            }
         }
         uint64_t peak = directUsbPeakDspNs_.load(std::memory_order_relaxed);
         while (peak < dspNs && !directUsbPeakDspNs_.compare_exchange_weak(
@@ -1460,6 +1566,7 @@ void AudioEngine::directUsbRenderLoop() {
         // that was supposed to mean preemption, and it is the number runs were
         // being failed on.
         const auto blockedFor = waitEnded - waitBegan;
+
         const bool overranWithoutWaiting =
             finished > cycleDeadline &&
             (finished - cycleDeadline) > blockedFor;

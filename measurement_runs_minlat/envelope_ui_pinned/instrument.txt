@@ -1,0 +1,23 @@
+
+com.vibes.dsp.engine.DirectUsbDeviceStressTest:
+Error in duplexRateBufferLifecycleStress(com.vibes.dsp.engine.DirectUsbDeviceStressTest):
+java.lang.AssertionError: Direct USB buffer audit failed; inspect AUDIT_SUMMARY/TELEMETRY
+	at org.junit.Assert.fail(Assert.java:89)
+	at org.junit.Assert.assertTrue(Assert.java:42)
+	at com.vibes.dsp.engine.DirectUsbDeviceStressTest.duplexRateBufferLifecycleStress(DirectUsbDeviceStressTest.kt:258)
+
+Process crashed while executing duplexRateBufferLifecycleStress(com.vibes.dsp.engine.DirectUsbDeviceStressTest):
+android.app.RemoteServiceException$ForegroundServiceDidNotStartInTimeException: Context.startForegroundService() did not then call Service.startForeground(): ServiceRecord{f7f51b2 u0 com.vibes.dsp/.engine.AudioSessionService c:com.vibes.dsp}
+	at android.app.ActivityThread.generateForegroundServiceDidNotStartInTimeException(Unknown Source:16)
+	at android.app.ActivityThread.throwRemoteServiceException(Unknown Source:73)
+	at android.app.ActivityThread.-$$Nest$mthrowRemoteServiceException(Unknown Source:0)
+	at android.app.ActivityThread$H.handleMessage(Unknown Source:630)
+	at android.os.Handler.dispatchMessage(Unknown Source:21)
+	at android.os.Looper.loopOnce(Unknown Source:251)
+	at android.os.Looper.loop(Unknown Source:34)
+	at android.app.ActivityThread.main(Unknown Source:165)
+	at java.lang.reflect.Method.invoke(Native Method)
+	at com.android.internal.os.RuntimeInit$MethodAndArgsCaller.run(Unknown Source:9)
+	at com.android.internal.os.ZygoteInit.main(Unknown Source:406)
+INSTRUMENTATION_RESULT: shortMsg=Process crashed.
+INSTRUMENTATION_CODE: 0
