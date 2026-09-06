@@ -593,6 +593,16 @@ object DirectUsbAudioManager {
         engine.nativeSetAudioAffinityEnabled(
             AudioSettingsManager.getAudioAffinityEnabled(context)
         )
+        engine.nativeSetUiAffinityEnabled(
+            AudioSettingsManager.getUiAffinityEnabled(context)
+        )
+        // Placement is read when the servicing thread picks its mask, and the
+        // hint mode when the session is bound, so both belong here with the
+        // rest of the once-per-session environment.
+        engine.nativeSetServiceCpuPlacement(
+            AudioSettingsManager.getServiceCpuPlacement(context)
+        )
+        engine.nativeSetAdpfMode(AudioSettingsManager.getAdpfMode(context))
         // Also before the session: the first admission decision is made by the
         // first rendered block, and until now only the stress harness ever set
         // these - so every ordinary launch ran the wait-for-room policy no

@@ -83,7 +83,14 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK = "directUsbCaptureDeadlineSlack"
     private const val KEY_DIRECT_USB_TRANSFER_COUNT = "directUsbTransferCount"
     private const val KEY_DIRECT_USB_PACKETS_PER_TRANSFER = "directUsbPacketsPerTransfer"
+    // Asks for none of a term whose zero already means "derive one". Kept in
+    // step with kExplicitZeroFrames on the native side; the two ends of the
+    // same sentinel.
+    const val EXPLICIT_ZERO_FRAMES = -1
     private const val KEY_AUDIO_AFFINITY = "audioAffinityEnabled"
+    private const val KEY_UI_AFFINITY = "uiAffinityEnabled"
+    private const val KEY_SERVICE_CPU_PLACEMENT = "serviceCpuPlacement"
+    private const val KEY_ADPF_MODE = "adpfMode"
     private const val KEY_DIRECT_USB_ADMISSION = "directUsbAdmissionPolicy"
     private const val KEY_DIRECT_USB_CREDIT_RESERVE = "directUsbCreditReserve"
     private const val KEY_UI_STATS_INTERVAL_MS = "uiStatsIntervalMs"
@@ -132,28 +139,28 @@ object AudioSettingsManager {
     }
     fun getDirectUsbCaptureTarget(context: Context): Int =
         prefs(context).getInt(KEY_DIRECT_USB_CAPTURE_TARGET, 0)
-            .coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            .coerceIn(EXPLICIT_ZERO_FRAMES, MAX_DIRECT_USB_WATERMARK)
     fun setDirectUsbCaptureTarget(context: Context, frames: Int) {
         prefs(context).edit()
-            .putInt(KEY_DIRECT_USB_CAPTURE_TARGET, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK))
+            .putInt(KEY_DIRECT_USB_CAPTURE_TARGET, frames.coerceIn(EXPLICIT_ZERO_FRAMES, MAX_DIRECT_USB_WATERMARK))
             .apply()
     }
     fun getDirectUsbCaptureHeadroom(context: Context): Int =
         prefs(context).getInt(KEY_DIRECT_USB_CAPTURE_HEADROOM, 0)
-            .coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            .coerceIn(EXPLICIT_ZERO_FRAMES, MAX_DIRECT_USB_WATERMARK)
     fun setDirectUsbCaptureHeadroom(context: Context, frames: Int) {
         prefs(context).edit()
-            .putInt(KEY_DIRECT_USB_CAPTURE_HEADROOM, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK))
+            .putInt(KEY_DIRECT_USB_CAPTURE_HEADROOM, frames.coerceIn(EXPLICIT_ZERO_FRAMES, MAX_DIRECT_USB_WATERMARK))
             .apply()
     }
     fun getDirectUsbCaptureDeadlineSlack(context: Context): Int =
         prefs(context).getInt(KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK, 0)
-            .coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+            .coerceIn(EXPLICIT_ZERO_FRAMES, MAX_DIRECT_USB_WATERMARK)
     fun setDirectUsbCaptureDeadlineSlack(context: Context, frames: Int) {
         prefs(context).edit()
             .putInt(
                 KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK,
-                frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+                frames.coerceIn(EXPLICIT_ZERO_FRAMES, MAX_DIRECT_USB_WATERMARK)
             )
             .apply()
     }
@@ -200,6 +207,29 @@ object AudioSettingsManager {
         prefs(context).getBoolean(KEY_AUDIO_AFFINITY, true)
     fun setAudioAffinityEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUDIO_AFFINITY, enabled).apply()
+    }
+    fun getUiAffinityEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_UI_AFFINITY, true)
+    fun setUiAffinityEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_UI_AFFINITY, enabled).apply()
+    }
+    // 0 holds USB servicing to one core of the fast pool, 1 gives it the whole
+    // pool, 2 gives it that core exclusively and moves render off it. One is
+    // the default because servicing on the pool measured best: parking on a
+    // single core loses whenever core_ctl offlines that core.
+    fun getServiceCpuPlacement(context: Context): Int =
+        prefs(context).getInt(KEY_SERVICE_CPU_PLACEMENT, 1).coerceIn(0, 2)
+    fun setServiceCpuPlacement(context: Context, placement: Int) {
+        prefs(context).edit()
+            .putInt(KEY_SERVICE_CPU_PLACEMENT, placement.coerceIn(0, 2))
+            .apply()
+    }
+    // 0 silences the performance hint session, 1 reports CPU time only,
+    // 2 reports the period's wall time and CPU time separately.
+    fun getAdpfMode(context: Context): Int =
+        prefs(context).getInt(KEY_ADPF_MODE, 1).coerceIn(0, 2)
+    fun setAdpfMode(context: Context, mode: Int) {
+        prefs(context).edit().putInt(KEY_ADPF_MODE, mode.coerceIn(0, 2)).apply()
     }
 
     // How often the rack refreshes statistics, transport and clip slots. Much

@@ -63,6 +63,11 @@ public:
         uint64_t deadlineBudgetNanoseconds = 0;
         uint64_t deadlineMisses = 0;
         uint64_t captureWaitTimeouts = 0;
+        uint64_t captureWaitBlocked = 0;
+        uint64_t captureWaitTotalNanoseconds = 0;
+        uint64_t worstCaptureWaitNanoseconds = 0;
+        uint64_t captureSoftTimeouts = 0;
+        int32_t leastCaptureAtTimeout = -1;
         uint64_t writeWaitTimeouts = 0;
         uint64_t playbackQuantumDrops = 0;
         uint64_t capturePacketDrops = 0;
@@ -388,6 +393,16 @@ private:
     int32_t directUsbInputChannelCount_ = 0;
     std::vector<float> directUsbOutputLeft_;
     std::atomic<uint64_t> directUsbCaptureWaitTimeouts_{0};
+    // What the capture wait actually costs, and what a timeout actually means.
+    // The timeout count alone cannot tell a missed reserve from a missed
+    // quantum: after a timeout the render thread still proceeds when a whole
+    // quantum is present, which is the capture target being spent rather than
+    // held. Counting the two apart is what makes the target sweepable.
+    std::atomic<uint64_t> directUsbCaptureWaitBlocked_{0};
+    std::atomic<uint64_t> directUsbCaptureWaitTotalNs_{0};
+    std::atomic<uint64_t> directUsbWorstCaptureWaitNs_{0};
+    std::atomic<uint64_t> directUsbCaptureSoftTimeouts_{0};
+    std::atomic<int32_t> directUsbLeastCaptureAtTimeout_{-1};
     std::vector<float> directUsbStartupLeft_;
     std::vector<float> directUsbStartupRight_;
     int32_t directUsbStartupBlocks_ = 0;

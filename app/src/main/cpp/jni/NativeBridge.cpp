@@ -930,7 +930,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 99;
+    constexpr jsize kStatCount = 104;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -1048,6 +1048,15 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
                 g_ctx->directUsbOutput->worstMultiCollectSpanNs());
             values[97] = static_cast<jlong>(
                 g_ctx->directUsbOutput->worstMultiCollectRunqueueNs());
+            // Capture pacing, the five numbers a capture-target sweep is read
+            // from: how often the render thread actually blocked for input,
+            // what that cost, and whether a timeout still left a whole quantum
+            // - a spent reserve - or did not.
+            values[99] = static_cast<jlong>(stats.captureWaitBlocked);
+            values[100] = static_cast<jlong>(stats.captureWaitTotalNanoseconds);
+            values[101] = static_cast<jlong>(stats.worstCaptureWaitNanoseconds);
+            values[102] = static_cast<jlong>(stats.captureSoftTimeouts);
+            values[103] = static_cast<jlong>(stats.leastCaptureAtTimeout);
             values[51] = static_cast<jlong>(
                 stats.maxSchedulerLatenessNanoseconds);
             values[52] = static_cast<jlong>(stats.captureTargetFrames);

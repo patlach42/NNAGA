@@ -78,6 +78,22 @@ class DirectUsbDeviceStressTest {
         // sets how far it may excurse before admission refuses. Zero keeps the
         // automatic policy.
         val writeHeadroom = argumentInt(args, "direct_usb_headroom", "headroom", 0, 0, 1024)
+        // Capture pacing. The render thread blocks until it holds a quantum plus
+        // the capture target, so the target is input latency the pipeline
+        // carries on every block, not a ceiling it may reach. The driver reads
+        // zero as "derive it", which is why the low arm of a sweep is one frame
+        // rather than none: one frame asks for a quantum and nothing more.
+        // Minimum is the explicit-zero sentinel, not zero: zero is "derive it",
+        // so an arm asking for none of the reserve has to be able to say -1.
+        val captureTarget = argumentInt(
+            args, "direct_usb_capture_target", "capture_target",
+            0, AudioSettingsManager.EXPLICIT_ZERO_FRAMES, 1024)
+        val captureHeadroom = argumentInt(
+            args, "direct_usb_capture_headroom", "capture_headroom",
+            0, AudioSettingsManager.EXPLICIT_ZERO_FRAMES, 1024)
+        val captureSlack = argumentInt(
+            args, "direct_usb_capture_slack", "capture_slack",
+            0, AudioSettingsManager.EXPLICIT_ZERO_FRAMES, 1024)
         // Deliberate stalls fired once, a second into the steady window, so
         // the pipeline is settled and the disturbance is the only variable.
         // Separate knobs because a render stall and a service stall produce
@@ -169,6 +185,9 @@ class DirectUsbDeviceStressTest {
         val originalUiFrameClock = AudioSettingsManager.getUiTransportFrameClock(context)
         val originalUiClockMs = AudioSettingsManager.getUiTransportClockMs(context)
         val originalWriteHeadroom = AudioSettingsManager.getDirectUsbWriteHeadroom(context)
+        val originalCaptureTarget = AudioSettingsManager.getDirectUsbCaptureTarget(context)
+        val originalCaptureHeadroom = AudioSettingsManager.getDirectUsbCaptureHeadroom(context)
+        val originalCaptureSlack = AudioSettingsManager.getDirectUsbCaptureDeadlineSlack(context)
         val originalBuffer = AudioSettingsManager.getBufferSize(context)
         val originalMultiplier = AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
         var originalTransport: TransportInfo? = null
@@ -192,6 +211,15 @@ class DirectUsbDeviceStressTest {
             if (uiClockMs >= 0) AudioSettingsManager.setUiTransportClockMs(context, uiClockMs)
             if (writeHeadroom > 0) {
                 AudioSettingsManager.setDirectUsbWriteHeadroom(context, writeHeadroom)
+            }
+            if (captureTarget != 0) {
+                AudioSettingsManager.setDirectUsbCaptureTarget(context, captureTarget)
+            }
+            if (captureHeadroom != 0) {
+                AudioSettingsManager.setDirectUsbCaptureHeadroom(context, captureHeadroom)
+            }
+            if (captureSlack != 0) {
+                AudioSettingsManager.setDirectUsbCaptureDeadlineSlack(context, captureSlack)
             }
             // Separate line, not a TELEMETRY field: the analyzer's schema is
             // versioned and this is harness configuration, not a measurement.
@@ -370,6 +398,9 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setUiTransportFrameClock(context, originalUiFrameClock)
             AudioSettingsManager.setUiTransportClockMs(context, originalUiClockMs)
             AudioSettingsManager.setDirectUsbWriteHeadroom(context, originalWriteHeadroom)
+            AudioSettingsManager.setDirectUsbCaptureTarget(context, originalCaptureTarget)
+            AudioSettingsManager.setDirectUsbCaptureHeadroom(context, originalCaptureHeadroom)
+            AudioSettingsManager.setDirectUsbCaptureDeadlineSlack(context, originalCaptureSlack)
             AudioSettingsManager.setDirectUsbPeriodMultiplier(context, originalMultiplier)
             // Restore transport controls last. The exact frame cannot be restored
             // because no public API exposes a frame setter. Looping is a per-track
@@ -1123,6 +1154,9 @@ class DirectUsbDeviceStressTest {
             "worst_dsp_off_cpu_ns=${stats.worstDspBlockOffCpuNs}" +
             "worst_dsp_wall_ns=${stats.worstDspBlockWallNs} worst_service_off_cpu_ns=${stats.worstServiceOffCpuNs} service_runqueue_ns=${stats.serviceRunqueueWaitNs} max_callbacks_per_poll=${stats.maxCallbacksPerPoll} startup_capture_discard=${stats.startupCaptureDiscardFrames} multi_collect_span_ns=${stats.worstMultiCollectSpanNs} multi_collect_runqueue_ns=${stats.worstMultiCollectRunqueueNs} capture_target_frames=${stats.captureTargetFrames} " +
             "capture_headroom_frames=${stats.captureHeadroomFrames} capture_deadline_slack_frames=${stats.captureDeadlineSlackFrames} " +
+            "capture_wait_blocked=${stats.captureWaitBlocked} capture_wait_total_ns=${stats.captureWaitTotalNs} " +
+            "worst_capture_wait_ns=${stats.worstCaptureWaitNs} capture_soft_timeouts=${stats.captureSoftTimeouts} " +
+            "least_capture_at_timeout=${stats.leastCaptureAtTimeout} " +
             "deferred_no_metadata=${stats.deferredNoMetadata} deferred_no_pcm=${stats.deferredNoPcm} " +
             "queued_out_low_water=${stats.queuedOutLowWaterFrames} " +
             "capture_discontinuities=${stats.captureDiscontinuities} " +

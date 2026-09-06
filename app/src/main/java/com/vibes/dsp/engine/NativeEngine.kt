@@ -259,6 +259,14 @@ data class DirectUsbStats(
     val startupCaptureDiscardFrames: Long = 0,
     val worstMultiCollectSpanNs: Long = 0,
     val worstMultiCollectRunqueueNs: Long = 0,
+    /** Render blocks that actually waited for capture, and what the wait cost. */
+    val captureWaitBlocked: Long = 0,
+    val captureWaitTotalNs: Long = 0,
+    val worstCaptureWaitNs: Long = 0,
+    /** Timeouts that still left a whole quantum: the capture target spent, not lost. */
+    val captureSoftTimeouts: Long = 0,
+    /** Fewest frames ever present at a timeout, or -1 if none timed out. */
+    val leastCaptureAtTimeout: Long = -1,
     val firstLossRing: Long = 0,
     val firstLossQueued: Long = 0,
     val firstLossHadRoom: Long = 0,
@@ -360,6 +368,11 @@ data class DirectUsbStats(
         private const val STARTUP_CAPTURE_DISCARD = 98
         private const val MULTI_COLLECT_SPAN = 96
         private const val MULTI_COLLECT_RUNQUEUE = 97
+        private const val CAPTURE_WAIT_BLOCKED = 99
+        private const val CAPTURE_WAIT_TOTAL_NS = 100
+        private const val WORST_CAPTURE_WAIT_NS = 101
+        private const val CAPTURE_SOFT_TIMEOUTS = 102
+        private const val LEAST_CAPTURE_AT_TIMEOUT = 103
         private const val FIRST_LOSS_RING = 81
         private const val FIRST_LOSS_QUEUED = 82
         private const val FIRST_LOSS_HAD_ROOM = 83
@@ -457,6 +470,11 @@ data class DirectUsbStats(
                 startupCaptureDiscardFrames = at(STARTUP_CAPTURE_DISCARD),
                 worstMultiCollectSpanNs = at(MULTI_COLLECT_SPAN),
                 worstMultiCollectRunqueueNs = at(MULTI_COLLECT_RUNQUEUE),
+                captureWaitBlocked = at(CAPTURE_WAIT_BLOCKED),
+                captureWaitTotalNs = at(CAPTURE_WAIT_TOTAL_NS),
+                worstCaptureWaitNs = at(WORST_CAPTURE_WAIT_NS),
+                captureSoftTimeouts = at(CAPTURE_SOFT_TIMEOUTS),
+                leastCaptureAtTimeout = at(LEAST_CAPTURE_AT_TIMEOUT),
                 firstLossRing = at(FIRST_LOSS_RING),
                 firstLossQueued = at(FIRST_LOSS_QUEUED),
                 firstLossHadRoom = at(FIRST_LOSS_HAD_ROOM),

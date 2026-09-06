@@ -1606,3 +1606,83 @@ a trim after the handover still reports, so a render thread that stalls still
 says so. And it does not move capture later, which was the other candidate:
 implicit feedback needs those completions before the OUT plan exists, and the
 remaining gap would still contain thread start and ADPF setup.
+
+## Capture is not a credit problem, and the knob that matters is the target
+
+The question was whether the playback credit ledger has a counterpart on
+capture. It does not, and the reason is structural rather than an omission.
+
+Playback credit exists because the render thread is the **producer**: it can run
+ahead of the device, and the ledger's entire job is to stop it, which is what
+bounds output latency. On capture the roles reverse - the device produces, the
+render thread consumes - and a consumer cannot run ahead of its producer. There
+is nothing for a credit gate to withhold. The full ledger already exists as
+`captureHead_ - captureTail_`, and `waitForCaptureUntil` is the physical dual of
+the admission wait.
+
+What is real, and was never swept, is `captureTargetFrames`. The render thread
+will not read a block until it holds a quantum **plus** the target, so the target
+is input latency carried on every block. It is not, however, paying for the same
+thing as `captureFrameLimit()`:
+
+* `captureTargetFrames` is a **low-water** reserve against a late producer
+  (capture completions, USB servicing).
+* `captureFrameLimit()` is a **high-water** bound against a late consumer
+  (the render thread), enforced by trimming in `prepareCaptureRead`.
+
+Different faults, opposite ends of the same occupancy. And the target is not
+frozen: on a wait timeout the render thread drops the `quantum + target`
+requirement and proceeds whenever a whole quantum is present. So the target is a
+held reserve that is **spent on demand** after a deadline - which is exactly the
+property the credit ledger was built to give playback, already present here.
+
+`captureHeadroomFrames` turned out to have no runtime role at all. Its only uses
+are `checkedFrameBudgetFits` and the start-time admissibility check in
+`AudioEngine::startDirectUsbSession`; neither `captureFrameLimit()` nor the wait
+nor the read path reads it. It is a guard against configuring an impossible
+target, not a latency term, and does not belong in a sweep.
+
+## Zero could not mean zero, so the bottom of the sweep was unreachable
+
+`captureTargetFrames == 0` means *derive one*, and the derived value is
+`2 * captureTransferFrames` = 56 frames at packets=4. An arm asking for "no
+reserve" by writing zero therefore silently repeated the 56-frame arm. Added
+`kExplicitZeroFrames` (-1) and `resolveOptionalFrames`, threaded through the
+preference, the harness argument and the driver's validation, so the three
+capture terms have three states - derive, none, exact - instead of two. The
+settings screen renders the sentinel as "Off (0 frames)".
+
+## What a capture wait timeout actually means
+
+`capture_wait_pressure` counts wait timeouts and nothing else, which cannot tell
+a spent reserve from a lost quantum. Added five counters: `capture_wait_blocked`,
+`capture_wait_total_ns`, `worst_capture_wait_ns`, `capture_soft_timeouts` (the
+timeout still left a whole quantum) and `least_capture_at_timeout`.
+
+The first measurement with them says something worth recording: **essentially
+every render block blocks on capture** - 69000 blocked waits in a 45 s cycle out
+of the same number of blocks. That is not pressure, that is the stream's clock;
+capture is the implicit feedback source, so waiting for it *is* the pacing.
+`capture_wait_blocked` is therefore not a fault signal. The signals that mean
+something are `worst_capture_wait_ns` and the soft/hard split.
+
+## Capture target 56 -> 28: the ring follows, the timeouts do not
+
+Pinned geometry, UI open, loopback detectors armed, rt_priority, 4 cycles each.
+
+| target | capture ring frames | timeouts | soft | least at timeout | capture discontinuities |
+|---|---|---|---|---|---|
+| 56 (auto) | 61-70 | 0-5 | - | - | 0,0,1,1 |
+| 28 | 40-63 | 0-6 | all of them | 56-58 | 0,1,7,7 |
+
+Halving the target moved the capture ring down by roughly twenty frames - about
+0.4 ms of input latency - and **every timeout at 28 was soft**: the deadline
+expired with 56-58 frames present against a 32 frame quantum, `deadline_misses`
+stayed at zero and no partial read occurred. By the counters that measure loss,
+28 is clean.
+
+The reservation is `capture_discontinuities`, which grew by six in one cycle at
+28 against one in four cycles at 56. That cycle also carried the only output
+starvation of the run, so the disturbance may be common to both rather than
+caused by the target. Repeat arm running; a single cycle is not a verdict, and
+this project has been burned by treating one as one before.
