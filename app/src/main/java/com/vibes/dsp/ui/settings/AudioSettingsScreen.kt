@@ -279,6 +279,18 @@ private fun DirectUsbSessionSettings(
     var selectedWatermark by remember { mutableIntStateOf(0) }
     var selectedStartupPrime by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbStartupPrime(context)) }
     var selectedWriteHeadroom by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbWriteHeadroom(context)) }
+    var selectedCreditReserve by remember {
+        mutableIntStateOf(AudioSettingsManager.getDirectUsbCreditReserve(context))
+    }
+    var selectedUiMeterMs by remember {
+        mutableIntStateOf(AudioSettingsManager.getUiMeterIntervalMs(context))
+    }
+    var selectedUiClockMs by remember {
+        mutableIntStateOf(AudioSettingsManager.getUiTransportClockMs(context))
+    }
+    var selectedUiStatsMs by remember {
+        mutableIntStateOf(AudioSettingsManager.getUiStatsIntervalMs(context))
+    }
     var selectedCaptureLimit by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureLimit(context)) }
     var selectedCaptureTarget by remember {
         mutableIntStateOf(AudioSettingsManager.getDirectUsbCaptureTarget(context))
@@ -725,6 +737,49 @@ private fun DirectUsbSessionSettings(
         IntSelector("Write headroom", selectedWriteHeadroom, watermarkOptions, controlsEnabled) {
             selectedWriteHeadroom = it
             AudioSettingsManager.setDirectUsbWriteHeadroom(context, it)
+        }
+        // How far the producer may run ahead of the device under the credit
+        // policy. Zero forbids any lead, which was measured to starve; the
+        // reserve bounds the lead rather than removing it.
+        IntSelector(
+            "Producer lead (credit reserve)",
+            selectedCreditReserve,
+            listOf(0, 16, 32, 48, 64, 96, 128, 192, 256),
+            controlsEnabled,
+        ) {
+            selectedCreditReserve = it
+            AudioSettingsManager.setDirectUsbCreditReserve(context, it)
+        }
+        // The interface's own periodic work, in the process that owns the
+        // render thread. The transport readout used to advance on every
+        // display frame, which cost milliseconds of render-thread tail; the
+        // meters at sixty hertz cost nothing measurable.
+        IntSelector(
+            "Meter refresh, ms",
+            selectedUiMeterMs,
+            listOf(8, 17, 33, 66, 100, 250),
+            controlsEnabled,
+        ) {
+            selectedUiMeterMs = it
+            AudioSettingsManager.setUiMeterIntervalMs(context, it)
+        }
+        IntSelector(
+            "Transport readout, ms",
+            selectedUiClockMs,
+            listOf(0, 16, 33, 50, 100, 250),
+            controlsEnabled,
+        ) {
+            selectedUiClockMs = it
+            AudioSettingsManager.setUiTransportClockMs(context, it)
+        }
+        IntSelector(
+            "Statistics refresh, ms",
+            selectedUiStatsMs,
+            listOf(50, 100, 200, 500, 1000, 2000),
+            controlsEnabled,
+        ) {
+            selectedUiStatsMs = it
+            AudioSettingsManager.setUiStatsIntervalMs(context, it)
         }
         IntSelector("Capture queue limit", selectedCaptureLimit, watermarkOptions, controlsEnabled) {
             selectedCaptureLimit = it

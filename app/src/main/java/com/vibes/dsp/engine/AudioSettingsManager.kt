@@ -93,9 +93,15 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_RING_CAPACITY_KIB = "directUsbRingCapacityKiB"
     private const val KEY_DIRECT_USB_CALIBRATION_PREFIX = "directUsbCalibration:"
     private const val KEY_DIRECT_USB_THERMAL_SAFETY = "directUsbThermalSafety"
-    private const val DEFAULT_BUFFER_SIZE = 64
+    // Measured on the reference device with the audio threads holding a
+    // real-time priority: a 32 frame quantum with a multiplier of two - a
+    // target of 64 - ran three cycles with no starvation, no lost quanta and
+    // no audible break, at about 5.4 ms of output latency. Depths below that
+    // buy nothing, because the ring stops falling at 140 frames whichever
+    // target is asked for.
+    private const val DEFAULT_BUFFER_SIZE = 32
 
-    private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 3
+    private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 2
     private const val MIN_DIRECT_USB_PERIOD_MULTIPLIER = 1
     private const val MAX_DIRECT_USB_PERIOD_MULTIPLIER = 8
     private const val MAX_DIRECT_USB_WATERMARK = 4096
@@ -109,8 +115,13 @@ object AudioSettingsManager {
     fun setDirectUsbStartupPrime(context: Context, frames: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_STARTUP_PRIME, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)).apply()
     }
+    // The overdraft above the target. Under credit admission it is free room
+    // rather than occupancy, and it is what absorbs a service stall: the same
+    // geometry lost quanta at 208 frames of it and lost none at 416, with no
+    // latency difference because the producer is paced by the device rather
+    // than by the ceiling.
     fun getDirectUsbWriteHeadroom(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_WRITE_HEADROOM, 0).coerceIn(0, MAX_DIRECT_USB_WATERMARK)
+        prefs(context).getInt(KEY_DIRECT_USB_WRITE_HEADROOM, 416).coerceIn(0, MAX_DIRECT_USB_WATERMARK)
     fun setDirectUsbWriteHeadroom(context: Context, frames: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_WRITE_HEADROOM, frames.coerceIn(0, MAX_DIRECT_USB_WATERMARK)).apply()
     }
@@ -146,8 +157,12 @@ object AudioSettingsManager {
             )
             .apply()
     }
+    // Five, not the automatic policy: four was measured to bring back audible
+    // breaks even with a real-time priority, because fewer transfers means
+    // fewer capture URBs outstanding and no playback buffer covers input that
+    // never arrived.
     fun getDirectUsbTransferCount(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_TRANSFER_COUNT, 0).coerceIn(0, 8)
+        prefs(context).getInt(KEY_DIRECT_USB_TRANSFER_COUNT, 5).coerceIn(0, 8)
     fun setDirectUsbTransferCount(context: Context, count: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_TRANSFER_COUNT, count.coerceIn(0, 8)).apply()
     }
