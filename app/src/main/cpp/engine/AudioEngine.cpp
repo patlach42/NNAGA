@@ -1152,6 +1152,21 @@ void AudioEngine::directUsbRenderLoop() {
         std::max(0, directUsbOutput_->captureDeadlineSlackFrames()));
     const uint32_t captureRequiredFrames =
         static_cast<uint32_t>(frames) + captureTargetFrames;
+    // Capture has been filling since before the graph existed: it starts first
+    // because the OUT packet plan is sized from its completions, and by the
+    // time this thread exists there is a pre-roll of everything captured
+    // during activation, priming and thread start. Hand over here, keeping the
+    // window the first cycle wants and dropping the rest, so the stream the
+    // graph renders begins now rather than with a backlog the first read would
+    // have thrown away and counted as an overrun.
+    if (directUsbOutput_) {
+        const int discarded = directUsbOutput_->beginCaptureLive(
+            static_cast<int>(captureRequiredFrames));
+        if (discarded > 0) {
+            LOGI("capture handover: dropped %d pre-roll frames, keeping %u",
+                 discarded, captureRequiredFrames);
+        }
+    }
     const float peakDecay = meterDecayForBlock(frames, sampleRate_);
     const float* const* renderInputPtrs = directUsbInputPlanes_.data();
     float* const renderOutputPtrs[2] = {

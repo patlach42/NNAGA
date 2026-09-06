@@ -256,6 +256,7 @@ data class DirectUsbStats(
     val worstServiceOffCpuNs: Long = 0,
     val serviceRunqueueWaitNs: Long = 0,
     val maxCallbacksPerPoll: Long = 0,
+    val startupCaptureDiscardFrames: Long = 0,
     val worstMultiCollectSpanNs: Long = 0,
     val worstMultiCollectRunqueueNs: Long = 0,
     val firstLossRing: Long = 0,
@@ -356,6 +357,7 @@ data class DirectUsbStats(
         private const val WORST_SERVICE_OFF_CPU = 93
         private const val SERVICE_RUNQUEUE_WAIT = 94
         private const val MAX_CALLBACKS_PER_POLL = 95
+        private const val STARTUP_CAPTURE_DISCARD = 98
         private const val MULTI_COLLECT_SPAN = 96
         private const val MULTI_COLLECT_RUNQUEUE = 97
         private const val FIRST_LOSS_RING = 81
@@ -452,6 +454,7 @@ data class DirectUsbStats(
                 worstServiceOffCpuNs = at(WORST_SERVICE_OFF_CPU),
                 serviceRunqueueWaitNs = at(SERVICE_RUNQUEUE_WAIT),
                 maxCallbacksPerPoll = at(MAX_CALLBACKS_PER_POLL),
+                startupCaptureDiscardFrames = at(STARTUP_CAPTURE_DISCARD),
                 worstMultiCollectSpanNs = at(MULTI_COLLECT_SPAN),
                 worstMultiCollectRunqueueNs = at(MULTI_COLLECT_RUNQUEUE),
                 firstLossRing = at(FIRST_LOSS_RING),

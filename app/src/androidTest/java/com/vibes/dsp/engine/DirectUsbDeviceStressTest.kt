@@ -1121,7 +1121,7 @@ class DirectUsbDeviceStressTest {
             "deadline_misses=${stats.deadlineMisses} scheduler_deadline_misses=${stats.schedulerDeadlineMisses} " +
             "max_scheduler_lateness_ns=${stats.maxSchedulerLatenessNs} " +
             "worst_dsp_off_cpu_ns=${stats.worstDspBlockOffCpuNs}" +
-            "worst_dsp_wall_ns=${stats.worstDspBlockWallNs} worst_service_off_cpu_ns=${stats.worstServiceOffCpuNs} service_runqueue_ns=${stats.serviceRunqueueWaitNs} max_callbacks_per_poll=${stats.maxCallbacksPerPoll} multi_collect_span_ns=${stats.worstMultiCollectSpanNs} multi_collect_runqueue_ns=${stats.worstMultiCollectRunqueueNs} capture_target_frames=${stats.captureTargetFrames} " +
+            "worst_dsp_wall_ns=${stats.worstDspBlockWallNs} worst_service_off_cpu_ns=${stats.worstServiceOffCpuNs} service_runqueue_ns=${stats.serviceRunqueueWaitNs} max_callbacks_per_poll=${stats.maxCallbacksPerPoll} startup_capture_discard=${stats.startupCaptureDiscardFrames} multi_collect_span_ns=${stats.worstMultiCollectSpanNs} multi_collect_runqueue_ns=${stats.worstMultiCollectRunqueueNs} capture_target_frames=${stats.captureTargetFrames} " +
             "capture_headroom_frames=${stats.captureHeadroomFrames} capture_deadline_slack_frames=${stats.captureDeadlineSlackFrames} " +
             "deferred_no_metadata=${stats.deferredNoMetadata} deferred_no_pcm=${stats.deferredNoPcm} " +
             "queued_out_low_water=${stats.queuedOutLowWaterFrames} " +

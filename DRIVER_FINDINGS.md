@@ -1573,3 +1573,36 @@ What it cost: a conclusion that flooring credit on the intended runway is worse
 than flooring it on the live count. That comparison is void. The runner now
 pins packets per transfer like everything else, and the axis it was hiding is
 the same one the frontier turned out to sit on.
+
+## The startup xrun was a handover, not a fault
+
+Every session reported exactly one capture overrun - every run, every geometry,
+never two. Investigated with omp and a subagent, who reached the same place
+from different directions.
+
+It is structural rather than a race. Capture must start before the graph does,
+because the OUT packet plan is sized from capture completions. `captureTail_`
+then stays at zero through graph activation, playback priming and render thread
+start, so the first read finds every frame captured since the stream opened.
+That backlog always exceeds the logical window - about 228 frames, 4.75 ms,
+which startup always outlasts - so the read trims it in one action and counts
+one overrun. Geometry independence follows: startup wall time dominates the
+window at every setting.
+
+The counter had been carrying two different events. A packet that will not fit
+the physical ring is producer-side data loss. A consumer trim of stale history
+is timeline alignment. Folding both into `actual_xruns` is what failed sessions
+that were otherwise clean.
+
+There is now an explicit handover. The render thread calls `beginCaptureLive`
+once, just before its first read: keep the window the first cycle wants, drop
+the pre-roll behind it, record how much was dropped, and only then arm live
+overrun accounting. Measured across three cycles, `capture_overruns` and
+`actual_xruns` are zero where they had always been one, the discarded pre-roll
+reads 152 to 176 frames, and every cycle passes.
+
+Two things this deliberately does not do. It does not silence the counter -
+a trim after the handover still reports, so a render thread that stalls still
+says so. And it does not move capture later, which was the other candidate:
+implicit feedback needs those completions before the OUT plan exists, and the
+remaining gap would still contain thread start and ADPF setup.

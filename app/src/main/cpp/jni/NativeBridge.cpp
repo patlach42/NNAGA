@@ -930,7 +930,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 98;
+    constexpr jsize kStatCount = 99;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -1036,6 +1036,11 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
                 g_ctx->directUsbOutput->worstServiceOffCpuNs());
             values[95] = static_cast<jlong>(
                 g_ctx->directUsbOutput->maxCallbacksPerPoll());
+            // Capture pre-roll dropped at the handover to live capture. A
+            // classification, not a fault: it used to be counted as an overrun
+            // and failed every session that was otherwise clean.
+            values[98] = static_cast<jlong>(
+                g_ctx->directUsbOutput->startupCaptureDiscardFrames());
             // The pair that says what the servicing thread was doing through
             // the worst multi-collect: how long the iteration took, and how
             // much of that it spent runnable without a CPU.
