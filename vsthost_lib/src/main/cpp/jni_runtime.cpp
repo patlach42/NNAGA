@@ -387,6 +387,7 @@ Java_com_varcain_vsthost_NativeBridge_nativeKillInstaller(
     LOGW("nativeKillInstaller: terminating pid=%d", pid);
     g_installer->killHard();
     g_installer.reset();
+}
 
 // Read health/diagnostic fields without the live SharedRing. Active instances
 // use <filesDir>/tmp/vst_shm_v<uuid>_i<token>; normal teardown atomically

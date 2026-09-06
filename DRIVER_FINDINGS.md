@@ -1467,3 +1467,30 @@ omp also warns that the figure itself may be wrong: `ring_p50` is a histogram
 sampled at completion, which is neither time-weighted occupancy nor the level
 after a drain nor the level a block is published into. Output latency wants the
 occupancy before the write. That measurement does not exist yet either.
+
+## What fixing the wait actually moved
+
+Measured after the deadline stopped truncating to zero, same geometry as
+before - quantum 32, target 64, headroom 416, credit reserve 32, real-time
+policy, detectors armed:
+
+| | ring p05 | ring p50 | ring p95 |
+|---|---:|---:|---:|
+| before, wait never happened | 124-148 | 140-164 | 180 |
+| after, wait rounds up | 92-116 | 116-140 | 132-156 |
+
+Three cycles, all passing, no break, no starvation, no lost quantum, and held
+quanta down to four or five a cycle. The best cycle reads 116 frames of ring
+against 120 in flight, which is 4.9 ms of output latency where the floor had
+been 5.4.
+
+So the dead gate was real and worth fixing, and it was not the whole story. The
+ring still sits about seventy frames above a target of 64, and a gate that now
+works should have pulled it down to the target if the target were what governed
+it. Two of omp's four candidates remain untested - a startup capture surplus
+that the pipeline never sheds, and a credit debit that a held block skips - and
+so does his warning that `ring_p50` is sampled at completion and may not be the
+quantity to be reading at all.
+
+Recorded as a partial explanation. The honest summary is that the floor moved
+from 5.4 ms to about 4.9 ms and is still not understood.
