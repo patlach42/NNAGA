@@ -299,6 +299,9 @@ private fun DirectUsbSessionSettings(
     var thermalSafetyEnabled by remember {
         mutableStateOf(AudioSettingsManager.getDirectUsbThermalSafetyEnabled(context))
     }
+    var creditAdmission by remember {
+        mutableStateOf(AudioSettingsManager.getDirectUsbAdmissionPolicy(context) == 1)
+    }
     var calibrationProgress by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationProgress?>(null) }
     var calibrationResult by remember { mutableStateOf<com.vibes.dsp.engine.DirectUsbCalibrationResult?>(null) }
     var autoCalibrationResult by remember {
@@ -1294,6 +1297,40 @@ private fun DirectUsbSessionSettings(
         selectedPeriodMultiplier = multiplier
         AudioSettingsManager.setDirectUsbPeriodMultiplier(context, multiplier)
     }
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text("Pace the producer by played frames")
+            Text(
+                "Holds the queue at its target instead of letting it fill to the " +
+                    "ceiling. Measured at the same target: 7.9 ms of output latency " +
+                    "against 9.3 ms waiting for room.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        NnagaSwitch(
+            checked = creditAdmission,
+            onCheckedChange = {
+                creditAdmission = it
+                AudioSettingsManager.setDirectUsbAdmissionPolicy(context, if (it) 1 else 0)
+            },
+            enabled = controlsEnabled
+        )
+    }
+    Text(
+        if (creditAdmission) {
+            "Paced by the device, with a 32 frame lead. Applies on the next engine start."
+        } else {
+            "Waiting for room: the queue floats to the admission ceiling and the write " +
+                "headroom is spent on latency. Applies on the next engine start."
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant
+    )
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,

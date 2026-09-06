@@ -1178,3 +1178,27 @@ outside it is too slow. The residual runqueue wait - four to six milliseconds
 at the worst gap - is what it costs to have two latency-critical threads and,
 much of the time, one awake core to run them on. Nothing available from an
 application changes that.
+
+## The admission policy the app was actually running
+
+Credit admission has been selectable since it was added, and only the stress
+harness ever selected it. `nativeSetDirectUsbAdmissionPolicy` and its reserve
+had no caller outside the test, so every ordinary launch of the app ran
+wait-for-room - the policy measurement stopped recommending as soon as the two
+were compared, and the one that spends the write headroom on latency rather
+than leaving it as room.
+
+Both are now read from settings at session start, defaulting to credit with a
+32 frame reserve, which is what every arm in this file used. Verified through
+the ordinary launch rather than the harness: the app's own diagnostic reports
+`ring(playback=291)` against a target of 256, which is the target plus the
+reserve. Under wait-for-room the same geometry floats toward target plus
+headroom, 464.
+
+The affinity default arrives the same way and was checked in the same run: both
+audio threads report cpus 6-7.
+
+Worth naming the shape of this mistake, because it is the second of its kind
+here. A knob that only a test sets is a knob the product does not have, and
+both times the measurements were sound while the thing measured was not what
+shipped.

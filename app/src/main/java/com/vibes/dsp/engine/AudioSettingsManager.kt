@@ -84,6 +84,8 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_TRANSFER_COUNT = "directUsbTransferCount"
     private const val KEY_DIRECT_USB_PACKETS_PER_TRANSFER = "directUsbPacketsPerTransfer"
     private const val KEY_AUDIO_AFFINITY = "audioAffinityEnabled"
+    private const val KEY_DIRECT_USB_ADMISSION = "directUsbAdmissionPolicy"
+    private const val KEY_DIRECT_USB_CREDIT_RESERVE = "directUsbCreditReserve"
     private const val KEY_UI_METER_INTERVAL_MS = "uiMeterIntervalMs"
     private const val KEY_UI_TRANSPORT_FRAME_CLOCK = "uiTransportFrameClock"
     private const val KEY_UI_TRANSPORT_CLOCK_MS = "uiTransportClockMs"
@@ -153,6 +155,27 @@ object AudioSettingsManager {
     fun setDirectUsbPacketsPerTransfer(context: Context, packets: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, packets.coerceIn(0, 8)).apply()
     }
+    // How the producer is admitted to the ring. 1 paces it by frames the device
+    // has played, which holds the ring near its target and leaves the write
+    // headroom as free room rather than as occupancy; 0 simply waits for room,
+    // which lets the ring float up to the ceiling and costs the difference in
+    // latency. Measured on the reference device, the same target of 256 frames
+    // sat at 7.9 ms of output latency under credit and 9.3 ms waiting for room.
+    fun getDirectUsbAdmissionPolicy(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_ADMISSION, 1).coerceIn(0, 1)
+    fun setDirectUsbAdmissionPolicy(context: Context, policy: Int) {
+        prefs(context).edit().putInt(KEY_DIRECT_USB_ADMISSION, policy.coerceIn(0, 1)).apply()
+    }
+    // How far the producer may run ahead of the device under credit. Zero
+    // forbids any lead and was measured to starve; a reserve bounds the lead
+    // instead of removing it.
+    fun getDirectUsbCreditReserve(context: Context): Int =
+        prefs(context).getInt(KEY_DIRECT_USB_CREDIT_RESERVE, 32).coerceIn(0, 1024)
+    fun setDirectUsbCreditReserve(context: Context, frames: Int) {
+        prefs(context).edit()
+            .putInt(KEY_DIRECT_USB_CREDIT_RESERVE, frames.coerceIn(0, 1024)).apply()
+    }
+
     // Whether the audio threads ask for the fast cluster when they start.
     // On by default: it was measured to cut USB service gaps about fourfold.
     // Off is offered because a mask is a bet on the platform's core policy,

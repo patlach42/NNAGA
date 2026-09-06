@@ -593,6 +593,16 @@ object DirectUsbAudioManager {
         engine.nativeSetAudioAffinityEnabled(
             AudioSettingsManager.getAudioAffinityEnabled(context)
         )
+        // Also before the session: the first admission decision is made by the
+        // first rendered block, and until now only the stress harness ever set
+        // these - so every ordinary launch ran the wait-for-room policy no
+        // measurement had recommended since credit was added.
+        engine.nativeSetDirectUsbAdmissionPolicy(
+            AudioSettingsManager.getDirectUsbAdmissionPolicy(context)
+        )
+        engine.nativeSetDirectUsbCreditReserve(
+            AudioSettingsManager.getDirectUsbCreditReserve(context)
+        )
         if (!engine.nativeStartDirectUsbSession(
                 exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels,
                 outputPair, bufferFrames, periodMultiplier,
