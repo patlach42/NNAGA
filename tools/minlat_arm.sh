@@ -14,7 +14,7 @@
 #       <render_stall_us> <service_stall_us> <audio_affinity> <ui_affinity> \
 #       <service_cpus> <adpf_mode> <ui_meter_ms> <ui_frame_clock> <ui_clock_ms> \
 #       <ui_stats_ms> <tweaks|-> <require_loopback> <output_pair> <input_channel> \
-#       <cycles> <duration_ms> [<capture_target> <capture_headroom> <capture_slack>] \
+#       <cycles> <duration_ms> [<capture_target> <capture_headroom> <capture_slack> <playback_target>] \
 #       >/dev/null 2>&1 &'
 NAME=$1
 BUF=$2
@@ -78,11 +78,14 @@ DUR=$7
 CAP_TARGET=${8:-0}
 CAP_HEADROOM=${9:-0}
 CAP_SLACK=${10:-0}
+# Playback target. Appended for the same reason as the capture terms: zero keeps
+# whatever the app has saved for this device, format, buffer and multiplier.
+PB_TARGET=${11:-0}
 OUT=/data/local/tmp/minlat/$NAME
 rm -rf $OUT
 mkdir -p $OUT
 : > $OUT/status
-echo "start $(date +%s) buffer=$BUF multiplier=$MULT transfers=$TRANSFERS headroom=$HEADROOM admission=$ADMISSION reserve=$RESERVE render_stall_us=$RENDER_STALL service_stall_us=$SERVICE_STALL audio_affinity=$AUDIO_AFF ui_affinity=$UI_AFF service_cpus=$SVC_CPUS adpf=$ADPF ui_meter_ms=$UI_METER_MS ui_frame_clock=$UI_FRAME_CLOCK ui_clock_ms=$UI_CLOCK_MS ui_stats_ms=$UI_STATS_MS tweaks=$TWEAKS loopback=$LOOPBACK out_pair=$OUT_PAIR in_chan=$IN_CHAN packets=$PACKETS cycles=$CYCLES duration_ms=$DUR capture_target=$CAP_TARGET capture_headroom=$CAP_HEADROOM capture_slack=$CAP_SLACK" >> $OUT/status
+echo "start $(date +%s) buffer=$BUF multiplier=$MULT transfers=$TRANSFERS headroom=$HEADROOM admission=$ADMISSION reserve=$RESERVE render_stall_us=$RENDER_STALL service_stall_us=$SERVICE_STALL audio_affinity=$AUDIO_AFF ui_affinity=$UI_AFF service_cpus=$SVC_CPUS adpf=$ADPF ui_meter_ms=$UI_METER_MS ui_frame_clock=$UI_FRAME_CLOCK ui_clock_ms=$UI_CLOCK_MS ui_stats_ms=$UI_STATS_MS tweaks=$TWEAKS loopback=$LOOPBACK out_pair=$OUT_PAIR in_chan=$IN_CHAN packets=$PACKETS cycles=$CYCLES duration_ms=$DUR capture_target=$CAP_TARGET capture_headroom=$CAP_HEADROOM capture_slack=$CAP_SLACK playback_target=$PB_TARGET" >> $OUT/status
 
 am force-stop com.vibes.dsp
 sleep 2
@@ -95,6 +98,30 @@ logcat -c
 # lose a run to a ring that wrapped.
 logcat -v threadtime -s DirectUsbDeviceStress:I > $OUT/telemetry.txt 2>/dev/null &
 TAIL_PID=$!
+
+# The interface re-enumerates from time to time and Android then asks for USB
+# permission again. The dialog sits on top of everything and the test blocks on
+# the probe behind it, so an unattended arm stalls until someone notices - one
+# arm was lost that way, and the run before it reported "No configured USB audio
+# device" rather than anything about a dialog. Accept it and carry on; the
+# coordinates come from the dialog itself, not from a guess about the screen.
+(
+  while [ ! -f $OUT/instrument.txt ] || ! grep -q "^OK\|^FAILURES" $OUT/instrument.txt 2>/dev/null; do
+    if dumpsys activity activities 2>/dev/null |
+        grep -q "topResumedActivity.*UsbPermissionActivity"; then
+      uiautomator dump /data/local/tmp/minlat_perm.xml >/dev/null 2>&1
+      BOUNDS=$(tr '>' '\n' < /data/local/tmp/minlat_perm.xml 2>/dev/null |
+        grep 'text="OK"' | sed -n 's/.*bounds="\[\([0-9]*\),\([0-9]*\)\]\[\([0-9]*\),\([0-9]*\)\].*/\1 \2 \3 \4/p' | head -1)
+      if [ -n "$BOUNDS" ]; then
+        set -- $BOUNDS
+        input tap $((($1 + $3) / 2)) $((($2 + $4) / 2))
+        echo "usb_permission_accepted $(date +%s)" >> $OUT/status
+      fi
+    fi
+    sleep 3
+  done
+) &
+PERM_PID=$!
 
 # The interface is raised by the test itself, before it starts any audio, so
 # the app switch cannot land inside a measured window. This shell only watches
@@ -135,6 +162,7 @@ am instrument -w \
   -e direct_usb_capture_target $CAP_TARGET \
   -e direct_usb_capture_headroom $CAP_HEADROOM \
   -e direct_usb_capture_slack $CAP_SLACK \
+  -e direct_usb_target $PB_TARGET \
   -e direct_usb_cycles $CYCLES \
   -e direct_usb_duration_ms $DUR \
   -e direct_usb_poll_ms 250 \
@@ -144,6 +172,7 @@ kill $UI_PID 2>/dev/null
 echo "foreground_vibes=$(grep -c 'com.vibes.dsp' $OUT/foreground.txt 2>/dev/null) foreground_samples=$(wc -l < $OUT/foreground.txt 2>/dev/null)" >> $OUT/status
 
 kill $TAIL_PID 2>/dev/null
+kill $PERM_PID 2>/dev/null
 echo "telemetry lines=$(wc -l < $OUT/telemetry.txt 2>/dev/null)" >> $OUT/status
 # The wider dump is best effort and comes last, so a slow or wedged ring read
 # can no longer cost the run its telemetry.

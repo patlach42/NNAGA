@@ -1681,8 +1681,93 @@ expired with 56-58 frames present against a 32 frame quantum, `deadline_misses`
 stayed at zero and no partial read occurred. By the counters that measure loss,
 28 is clean.
 
-The reservation is `capture_discontinuities`, which grew by six in one cycle at
-28 against one in four cycles at 56. That cycle also carried the only output
-starvation of the run, so the disturbance may be common to both rather than
-caused by the target. Repeat arm running; a single cycle is not a verdict, and
-this project has been burned by treating one as one before.
+The reservation was `capture_discontinuities`, which grew by six in one cycle at
+28 against one in four cycles at 56. **The repeat cleared it**: a second four
+cycle arm at 28 passed all four with zero discontinuities, zero xruns, zero
+deadline misses and every timeout soft. The cluster was a disturbance that
+happened to land in that cycle, not the target being too thin. One cycle is not
+a verdict, and this project has been burned by treating one as one before.
+
+## The knee is between 28 and 16, and it is a hard deadline miss
+
+| target | capture ring | timeouts | hard | least at timeout | deadline misses | discontinuities | verdict |
+|---|---|---|---|---|---|---|---|
+| 56 (auto) | 61-70 | 0-5 | 0 | - | 0 | 0,0,1,1 | clean |
+| 28 | 39-54 | 0-4 | 0 | 32-58 | 0 | 0,0,0,0 | clean |
+| 16 | 27-43 | 0-3 | **1** | **29** | **1** | 1,2,2,2 | breaks |
+
+At 16 the first cycle timed out with 29 frames present against a 32 frame
+quantum: below the quantum, so the render thread could not read, `deadline_misses`
+went to one and the loopback detector heard it. That is the transition, and it
+arrives one step earlier than predicted - the prediction was that a real zero
+would be needed to provoke it.
+
+## Below a capture ring of 32 there is nothing left to win
+
+The round-trip figure is
+
+    knownHostLatencyFrames = max(Q, captureRing, captureTransfer) + Q + playbackTarget
+
+so the capture contribution **floors at max(Q, captureTransferFrames)** - 32 here,
+with Q=32 and a 28 frame capture transfer. Target 16 drove the ring to 27, below
+the floor, and bought nothing: its best cycle read 2.667 ms, which is exactly
+32 + 32 + 64 = 128 frames, the same number target 28 reaches whenever its ring
+dips to 32. It paid a hard deadline miss for latency the metric cannot express
+and the pipeline does not actually save.
+
+This also corrects a description this document has used loosely throughout:
+`out_ms` is **not** output-only. The capture ring enters it directly through that
+`max()`, so it is a host round-trip figure. The 56 -> 28 improvement is therefore
+a genuine input-side win of about 0.5 ms, not an output-side artifact - and the
+remaining floor of 2.667 ms is set by the graph quantum and the playback target,
+not by anything on the capture side.
+
+**Capture target 28 is the setting.** Below it latency stops improving because
+the quantum floors it, while faults begin.
+
+## Shipping the capture target: one wave, not two
+
+The automatic policy was `2 * captureTransferFrames`. Two was never measured
+against one; one now has been, so the automatic policy is one wave. It stays
+geometry-relative rather than a hardcoded 28, because the wave is what the
+device's negotiated endpoint decides.
+
+The lattice makes 28 a real boundary rather than a round number. The graph
+quantum and the capture chunk share a factor of eight, so a threshold of
+`quantum + one wave` = 60 is not crossed at 60 but at 64, leaving a whole
+quantum in hand after the read. A threshold one chunk lower - 56 - can be
+crossed at exactly 56, leaving 24, which is less than the quantum. That is why
+the sweep is not continued down to 24 for the sake of 83 microseconds.
+
+## The playback target does move latency now, and it costs the runway
+
+Earlier work concluded the ring does not follow the playback target below 64.
+That result predates the admission-wait, credit-floor and queued-out fixes and
+had to be re-taken. It is now wrong in its first half and right in its second.
+
+| playback target | cycles | round trip | zero runway events | actual xruns |
+|---|---|---|---|---|
+| 64 | 8 | 2.67-3.15 ms | 0 of 8 | 0 of 8 |
+| 48 | 4 | 2.50-2.83 ms | **2 of 4** | **2 of 4** |
+
+Latency does follow the target down now - about 0.2 ms - but at 48 the OUT
+runway reaches zero in half the cycles and an xrun follows each time. The audit
+still reported those cycles as passes, because the xrun landed outside the
+measured growth window; that is a gate artefact and not a clean result, and it
+is recorded here so the pass is not read as an endorsement.
+
+This is the predicted failure and it is the right one: with a smaller target the
+producer's lateness no longer fits in the ring reserve, so a refill arrives with
+no PCM behind it. A 56 frame arm is running to see whether the midpoint is clean.
+
+## The harness was losing arms to a dialog
+
+Two arms produced nothing. The first lost its telemetry to a post-run
+`logcat -d -t 40000` that hung in the detached shell until the ring wrapped; the
+runner now streams a filtered follower during the run instead, and the wide dump
+is best effort and last. The second stalled behind a systemui USB permission
+dialog: the interface had re-enumerated, Android asked again, the test blocked on
+the probe behind the dialog, and the only visible symptom was a later cycle
+reporting "No configured USB audio device". The runner now watches for that
+activity and accepts it, reading the button's own bounds rather than guessing at
+screen coordinates, and records it in the arm's status.

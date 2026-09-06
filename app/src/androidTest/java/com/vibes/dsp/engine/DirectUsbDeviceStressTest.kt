@@ -83,6 +83,11 @@ class DirectUsbDeviceStressTest {
         // carries on every block, not a ceiling it may reach. The driver reads
         // zero as "derive it", which is why the low arm of a sweep is one frame
         // rather than none: one frame asks for a quantum and nothing more.
+        // The playback target is stored per device, format, buffer and period
+        // multiplier, so an arm cannot set it once up front - it has to be
+        // written for the case that is about to run and restored afterwards.
+        val playbackTarget = argumentInt(args, "direct_usb_target", "target", 0, 0, 4096)
+
         // Minimum is the explicit-zero sentinel, not zero: zero is "derive it",
         // so an arm asking for none of the reserve has to be able to say -1.
         val captureTarget = argumentInt(
@@ -307,10 +312,26 @@ class DirectUsbDeviceStressTest {
             assumeTrue("SKIP reason=no-supported-44100-or-48000-format", matrix.isNotEmpty())
             assertTrue("USB interface exposes no capture channels", DirectUsbAudioManager.getInputChannelCount() > 0)
 
+            // Read after the probe: identity is what the session will key its
+            // watermark on, and before the probe it is whatever the last run left.
+            val targetVendorId = AudioSettingsManager.getDirectUsbVendorId(context)
+            val targetProductId = AudioSettingsManager.getDirectUsbProductId(context)
             for (multiplier in selectedMultipliers) {
                 AudioSettingsManager.setDirectUsbPeriodMultiplier(context, multiplier)
                 for (format in matrix) {
                     for (buffer in selectedBuffers) {
+                        val savedTarget = AudioSettingsManager.getDirectUsbWatermark(
+                            context, targetVendorId, targetProductId,
+                            format.sampleRate, format.bits, format.subslotBytes,
+                            format.channels, buffer, multiplier
+                        )
+                        if (playbackTarget > 0) {
+                            AudioSettingsManager.setDirectUsbWatermark(
+                                context, targetVendorId, targetProductId,
+                                format.sampleRate, format.bits, format.subslotBytes,
+                                format.channels, playbackTarget, buffer, multiplier
+                            )
+                        }
                         val key = CaseKey(format, multiplier, buffer)
                         val bucket = results.getOrPut(key) { mutableListOf() }
                         for (cycle in 1..cycles) {
@@ -334,7 +355,15 @@ class DirectUsbDeviceStressTest {
                                 renderStallUs,
                                 serviceStallUs,
                                 transferDetector,
-                                appliedTweaks
+                                appliedTweaks,
+                                playbackTarget
+                            )
+                        }
+                        if (playbackTarget > 0) {
+                            AudioSettingsManager.setDirectUsbWatermark(
+                                context, targetVendorId, targetProductId,
+                                format.sampleRate, format.bits, format.subslotBytes,
+                                format.channels, savedTarget, buffer, multiplier
                             )
                         }
                     }
@@ -489,6 +518,7 @@ class DirectUsbDeviceStressTest {
         serviceStallUs: Int,
         transferDetector: Boolean,
         lateTweaks: List<PerformanceTweaks.Tweak>,
+        requestedPlaybackTarget: Int,
     ): CaseResult {
         val temporarySlot = 0
         val requestedBpm = 120.0
@@ -621,7 +651,9 @@ class DirectUsbDeviceStressTest {
                     SystemClock.sleep(10)
                 }
                 if (reason == null && runningStats == null) reason = "session-not-running-within-1s"
-                if (reason == null) reason = runningStats?.let { validateConfiguration(it, format, buffer, multiplier) }
+                if (reason == null) reason = runningStats?.let {
+                    validateConfiguration(it, format, buffer, multiplier, requestedPlaybackTarget)
+                }
             }
             if (reason == null) {
                 temporaryTrackId = engine.addTrack()
@@ -701,7 +733,7 @@ class DirectUsbDeviceStressTest {
                     // decodes the same JNI array this call returns.
                     val raw = engine.nativeGetDirectUsbStats()
                     val stats = DirectUsbStats.fromRaw(raw)
-                    reason = validateRunningStats(stats, raw, format, buffer, multiplier)
+                    reason = validateRunningStats(stats, raw, format, buffer, multiplier, requestedPlaybackTarget)
                     if (reason == null && stats.sequence < previousSequence) reason = "capture-sequence-regressed"
                     previousSequence = stats.sequence
                     // Transport and track state change at human speed, and
@@ -896,7 +928,7 @@ class DirectUsbDeviceStressTest {
                 if (reason == null && quantumDropGrowth > 0L) {
                     reason = "producer-quantum-drop-growth-exceeded-$quantumDropGrowth"
                 }
-                if (reason == null) reason = validateRunningStats(finalStats, finalRaw, format, buffer, multiplier)
+                if (reason == null) reason = validateRunningStats(finalStats, finalRaw, format, buffer, multiplier, requestedPlaybackTarget)
             }
             if (reason == null && requireLoopback && maxOutputPeak < LOOPBACK_OUTPUT_MIN_PEAK) {
                 reason = "loopback-output-peak-below-threshold"
@@ -981,11 +1013,26 @@ class DirectUsbDeviceStressTest {
         return CaseResult(reason == null, reason)
     }
 
-    private fun validateConfiguration(stats: DirectUsbStats, format: DirectUsbFormat, buffer: Int, multiplier: Int): String? {
+    private fun validateConfiguration(
+        stats: DirectUsbStats,
+        format: DirectUsbFormat,
+        buffer: Int,
+        multiplier: Int,
+        requestedPlaybackTarget: Int
+    ): String? {
         if (stats.schemaVersion != TELEMETRY_SCHEMA_VERSION) return "unsupported-stats-schema-${stats.schemaVersion}"
         if (stats.periodMultiplier != multiplier.toLong()) return "period-multiplier-mismatch-${stats.periodMultiplier}"
         if (stats.effectiveQuantum != buffer.toLong()) return "effective-quantum-mismatch-${stats.effectiveQuantum}"
-        val configuredTarget = minOf(1024L, buffer.toLong() * multiplier)
+        // What the run asked for, not what the automatic policy would have
+        // derived. The guard exists so a session cannot quietly be given less
+        // queue than it requested; comparing an explicit request against the
+        // derived value instead made every arm below the derived target fail
+        // on the guard while the pipeline itself stayed clean.
+        val configuredTarget = if (requestedPlaybackTarget > 0) {
+            requestedPlaybackTarget.toLong()
+        } else {
+            minOf(1024L, buffer.toLong() * multiplier)
+        }
         if (stats.steadyTarget < configuredTarget) return "steady-target-below-configured-${stats.steadyTarget}"
         if (stats.startupPrime < stats.steadyTarget) return "startup-prime-below-steady-target-${stats.startupPrime}-${stats.steadyTarget}"
         if (stats.steadyTarget + stats.effectiveQuantum > ringFrameLimit(format)) return "steady-target-exceeds-ring-capacity-${stats.steadyTarget}"
@@ -997,10 +1044,17 @@ class DirectUsbDeviceStressTest {
         return null
     }
 
-    private fun validateRunningStats(stats: DirectUsbStats, rawStats: LongArray, format: DirectUsbFormat, buffer: Int, multiplier: Int): String? {
+    private fun validateRunningStats(
+        stats: DirectUsbStats,
+        rawStats: LongArray,
+        format: DirectUsbFormat,
+        buffer: Int,
+        multiplier: Int,
+        requestedPlaybackTarget: Int
+    ): String? {
         if (stats.state == DirectUsbSessionState.Failed) return "session-failed code=${stats.failure}"
         if (stats.state != DirectUsbSessionState.Running) return "session-state-${stats.state}"
-        validateConfiguration(stats, format, buffer, multiplier)?.let { return it }
+        validateConfiguration(stats, format, buffer, multiplier, requestedPlaybackTarget)?.let { return it }
         if (rawStats.size < RAW_STAT_COUNT) return "unsupported-raw-stats-count-${rawStats.size}"
         if (stats.deadlineBudgetNs <= 0L || stats.lastCycleNs <= 0L || stats.peakCycleNs < stats.lastCycleNs) return "invalid-cycle-timing"
         if (stats.captureTransferErrors != 0L || stats.playbackTransferErrors != 0L ||
