@@ -1302,6 +1302,12 @@ the Perfetto trace showed and what leaves both audio threads on one core. With
 The second and third cycles are silent. The seven in the first are the cycle
 that starts the session.
 
+Repeated, with the same tweak and the same geometry: capture breaks 0, 2 and 0,
+service gaps 4, 1 and 0, and all three cycles pass outright - the first time in
+this file that a full run has. Across the two runs with the tweak, six cycles
+carry nine breaks between them and five of the six are clean; across the run
+without it, three cycles carry forty-nine and none is clean.
+
 So the audible fault and the parked core are the same finding, and the tweak
 that addresses it needs root, which this device now grants to the app. Finding
 its sysfs path took two corrections worth recording: core control lives on the
@@ -1314,3 +1320,18 @@ mistake cost nothing.
 **Still open.** Two to four discontinuities per cycle in the rendered signal
 itself, before it reaches USB, in both arms. The track loops about once a
 second, so forty wraps a cycle, and these are not those. Not yet investigated.
+
+## The breaks in the rendered signal are the harness stopping
+
+The two to four discontinuities a cycle in the playback signal, left open above,
+are the session stop. The flight recorder places them exactly: they arrive in
+pairs 200 to 300 nanoseconds apart, one per channel, both at frame 0 of a
+block, with steps of 0.28 and 0.34 against an output peak of 0.366 - close to
+full scale. Their timestamps are 45.377 s apart in a run of 45 s cycles, and
+they land 2173728 frames into the session, which at 48 kHz is 45.29 s.
+
+One event per cycle, at the moment the harness stops the session, counted twice
+because both channels see it. Not a driver defect, and the reason to record it
+is that it consumed a line in the verdict for the whole run: a cycle that is
+otherwise clean fails on `signal-discontinuity-growth-exceeded` because it was
+switched off at the end.
