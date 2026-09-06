@@ -1411,3 +1411,37 @@ buffering covers input that was never delivered.
 
 So: 5.4 ms clean with root, 6.6 ms without it, and 4.4 ms available to anyone
 willing to trade roughly six audible breaks a minute for one millisecond.
+
+## What holds the last 2.9 ms is not admission
+
+Of the 5.4 ms floor, 2.5 ms is the submitted runway and 2.9 ms is the ring. The
+ring will not go below about 140 frames, and none of the three parameters that
+are supposed to govern it moves the figure.
+
+| | ring median |
+|---|---:|
+| target 64, headroom 416, reserve 32 | 140 |
+| target 32, headroom 416, reserve 32 | 140 |
+| target 64, headroom **96**, reserve 32 | 140 |
+| target 64, headroom 416, reserve **0** | 164 |
+
+Lowering the target does nothing. Lowering the headroom from 416 to 96 does
+nothing to the level, though it takes held quanta from about seven a cycle to
+878 and brings back a startup loss - so the ceiling is being reached, and the
+level still does not fall. Strict credit, which forbids any lead at all, leaves
+the ring *higher*.
+
+It is not an accounting artefact either: `drainRing` advances the tail when a
+transfer is filled, not when it completes, so the ring excludes the 120 frames
+in flight and the two do not double count.
+
+So the producer is holding about seventy frames more than its target and the
+admission rules are not what put them there. The remaining candidate is the
+cadence: the render loop is paced by capture, capture arrives in 24 frame
+chunks, and the graph writes 32 at a time, so the phase between the two may be
+carrying the difference. That is a hypothesis and has not been measured.
+
+Worth noting in passing: strict credit ran two clean cycles here with no
+starvation and no breaks. The earlier finding that it starves was measured
+before affinity worked and before the threads could hold a real-time priority,
+and should not be relied on as it stands.
