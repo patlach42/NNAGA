@@ -15,6 +15,7 @@ import android.hardware.usb.UsbManager
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
+import com.vibes.dsp.tweaks.PerformanceTweaks
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
@@ -121,6 +122,11 @@ class DirectUsbDeviceStressTest {
         // the app is configured for.
         val uiMeterMs = argumentInt(args, "direct_usb_ui_meter_ms", "ui_meter_ms", 0, 0, 500)
         val uiStatsMs = argumentInt(args, "direct_usb_ui_stats_ms", "ui_stats_ms", 0, 0, 5000)
+        // Tweaks to apply for the run and revert after it, by id. The
+        // privileged ones can only be reached from the app's own uid, so a
+        // shell cannot measure them and this harness can.
+        val applyTweaks = (args.getString("direct_usb_tweaks") ?: "")
+            .split(',').map { it.trim() }.filter { it.isNotEmpty() }
         val uiFrameClock = argumentInt(args, "direct_usb_ui_frame_clock", "ui_frame_clock", -1, -1, 1)
         // Transport readout cadence in ms; 0 reproduces the old per-display-frame
         // behaviour, -1 leaves whatever the app is configured for.
@@ -203,6 +209,13 @@ class DirectUsbDeviceStressTest {
             engine.nativeSetMeasureRunqueueWait(measureDspOffCpu == 1)
             engine.nativeSetMeasureServiceRunqueue(measureDspOffCpu == 1)
             engine.nativeSetAdpfMode(adpfMode)
+            val appliedTweaks = applyTweaks.mapNotNull { id ->
+                PerformanceTweaks.catalogue.firstOrNull { it.id == id }
+            }
+            appliedTweaks.forEach { tweak ->
+                val outcome = PerformanceTweaks.apply(context, tweak, true)
+                Log.i(tag, "TWEAK id=${tweak.id} state=${outcome.state} detail=${outcome.detail}")
+            }
             Log.i(tag, "AFFINITY audio=$audioAffinity ui=$uiAffinity service_cpus=$servicePlacement adpf=$adpfMode ui_meter_ms=${AudioSettingsManager.getUiMeterIntervalMs(context)} ui_frame_clock=${AudioSettingsManager.getUiTransportFrameClock(context)} ui_clock_ms=${AudioSettingsManager.getUiTransportClockMs(context)} ui_stats_ms=${AudioSettingsManager.getUiStatsIntervalMs(context)}")
             originalTransport = runCatching { engine.getTransportInfo() }.getOrNull()
             val probe = runBlocking { DirectUsbAudioManager.probeFormats(context, option!!) }
@@ -343,6 +356,16 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setDirectUsbPacketsPerTransfer(context, originalPacketsPerTransfer)
             AudioSettingsManager.setUiMeterIntervalMs(context, originalUiMeterMs)
             AudioSettingsManager.setUiStatsIntervalMs(context, originalUiStatsMs)
+            // Reverted whatever happened to the run: a tweak left applied
+            // would silently bias every later measurement on this device.
+            applyTweaks.mapNotNull { id ->
+                PerformanceTweaks.catalogue.firstOrNull { it.id == id }
+            }.forEach { tweak ->
+                val outcome = runCatching {
+                    PerformanceTweaks.apply(context, tweak, false)
+                }.getOrNull()
+                Log.i(tag, "TWEAK_REVERT id=${tweak.id} state=${outcome?.state}")
+            }
             AudioSettingsManager.setUiTransportFrameClock(context, originalUiFrameClock)
             AudioSettingsManager.setUiTransportClockMs(context, originalUiClockMs)
             AudioSettingsManager.setDirectUsbWriteHeadroom(context, originalWriteHeadroom)
@@ -456,6 +479,34 @@ class DirectUsbDeviceStressTest {
                 // first refusal, which is the event the recorder exists for.
                 // Keeping only the newest records loses it - one cycle offers
                 // about 143000 events into a 4096 slot buffer.
+                // Thresholds first, and outside the recorder's block. A zero
+                // threshold disables the detector outright, so arming the
+                // loopback check without the recorder produced "detector never
+                // armed" while a listener could hear the breaks it was there
+                // to count. Detecting a fault and recording its context are
+                // separate requests.
+                //
+                // A click is a discontinuity in the signal. At 440 Hz and
+                // 48 kHz consecutive samples differ by at most 0.058 of the
+                // tone's amplitude, so anything well above that is a break.
+                engine.nativeSetDirectUsbDiscontinuityThreshold(
+                    discontinuityThreshold
+                )
+                // Relative to the loopback signal's own peak, so gain does not
+                // matter. A 440 Hz tone steps by 5.8% of its peak between
+                // samples; 30% is unambiguous.
+                engine.nativeSetDirectUsbCaptureDiscontinuityThreshold(0.30f)
+                // A steady tone must come back at a steady level. 8% is far
+                // above the RMS jitter of a clean loopback and far below the
+                // swing a drifting overlap produces.
+                engine.nativeSetDirectUsbCaptureModulationThreshold(0.08f)
+                // This one stays conditional on being asked for: it runs on
+                // the USB event thread over every frame of every drain, and
+                // was measured to be most of the difference between a worst
+                // service gap of 6.2 ms and one of 1.46 ms.
+                engine.nativeSetDirectUsbTransferDiscontinuityThreshold(
+                    if (transferDetector) discontinuityThreshold else 0.0f
+                )
                 if (flightRecorder) {
                     // Keep only the anomalies. A four minute run offers about
                     // 186000 events into a 4096 slot buffer, so recording the
@@ -471,26 +522,18 @@ class DirectUsbDeviceStressTest {
                     // it caught only the stop transient and missed the breaks
                     // a listener reported, because a jump of ten samples of
                     // phase still lands under it.
-                    engine.nativeSetDirectUsbDiscontinuityThreshold(
-                        discontinuityThreshold
-                    )
                     // Off unless asked for. This one runs on the USB event
                     // thread, unpacking and comparing every frame of every
                     // drain - 48000 frames a second inside the completion
                     // callback. Measured, it is most of the difference between
                     // a worst service gap of 6.2 ms and one of 1.46 ms, so
                     // leaving it on turns the instrument into the disturbance.
-                    engine.nativeSetDirectUsbTransferDiscontinuityThreshold(
-                        if (transferDetector) discontinuityThreshold else 0.0f
-                    )
                     // Relative to the loopback signal's own peak, so gain does
                     // not matter. A 440 Hz tone steps by 5.8% of its peak
                     // between samples; 30% is unambiguous.
-                    engine.nativeSetDirectUsbCaptureDiscontinuityThreshold(0.30f)
                     // A steady tone must come back at a steady level. 8% is
                     // far above the RMS jitter of a clean loopback and far
                     // below the swing a drifting overlap produces.
-                    engine.nativeSetDirectUsbCaptureModulationThreshold(0.08f)
                     // No freeze trigger: with the filter in place the whole run
                     // fits, and freezing on the first refusal would hide every
                     // deferral that followed it.
