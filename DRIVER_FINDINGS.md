@@ -1536,3 +1536,40 @@ somewhere else is worth more suspicion than a number that gets worse.
 
 The last row is the one to keep. It is also the first configuration in this
 file where the holding slot is never used at all.
+
+## Where the rare breaks begin
+
+With the credit ledger and the admission wait both fixed, and the packet
+geometry pinned in the runner so arms are comparable, the frontier sits on the
+runway rather than on the target. Quantum 32, headroom 416, credit reserve 32,
+real-time policy, loopback detectors armed, 45 s cycles:
+
+| geometry | output latency | clean cycles | breaks |
+|---|---:|---|---:|
+| target 64, 5 transfers | 4.75-5.40 ms | 3 of 3 | 0 |
+| target 64, **4 transfers** | **3.25-3.92 ms** | 5 of 7 | 3 |
+| target 32, 5 transfers | 4.75-5.25 ms | 0 of 3 | 7 |
+
+Four transfers is the edge: about 1.4 ms cheaper than five, at roughly one
+audible break every two or three cycles, with no starvation and no lost quanta
+in either run. Before the ledger fixes the same geometry gave 8, 9 and 1 breaks
+a cycle, so most of what made four transfers unusable was accounting rather
+than physics.
+
+Lowering the target instead is strictly worse: 32 frames costs the same latency
+as 64 - the ring does not follow the target down - and brings back breaks and
+producer quantum drops in every cycle. The target axis is exhausted at 64.
+
+## A measurement that was not comparable
+
+Three geometry comparisons before this one were run with
+`directUsbPacketsPerTransfer` left at its automatic policy, which picks eight
+packets here: a 48 frame transfer and a runway of 192 to 240 frames instead of
+120. The runner set every other axis explicitly and not that one, so an
+interrupted run left a value behind and the next arm silently measured a
+different pipeline.
+
+What it cost: a conclusion that flooring credit on the intended runway is worse
+than flooring it on the live count. That comparison is void. The runner now
+pins packets per transfer like everything else, and the axis it was hiding is
+the same one the frontier turned out to sit on.

@@ -63,13 +63,18 @@ LOOPBACK=$2
 # that actually carries signal.
 OUT_PAIR=$3
 IN_CHAN=$4
-CYCLES=$5
-DUR=$6
+# Packets per transfer. Pinned rather than left automatic: the automatic policy
+# picks eight here, which makes a transfer 48 frames instead of 24 and doubles
+# the submitted runway. Leaving it unpinned let the geometry drift between arms
+# and invalidated a comparison.
+PACKETS=$5
+CYCLES=$6
+DUR=$7
 OUT=/data/local/tmp/minlat/$NAME
 rm -rf $OUT
 mkdir -p $OUT
 : > $OUT/status
-echo "start $(date +%s) buffer=$BUF multiplier=$MULT transfers=$TRANSFERS headroom=$HEADROOM admission=$ADMISSION reserve=$RESERVE render_stall_us=$RENDER_STALL service_stall_us=$SERVICE_STALL audio_affinity=$AUDIO_AFF ui_affinity=$UI_AFF service_cpus=$SVC_CPUS adpf=$ADPF ui_meter_ms=$UI_METER_MS ui_frame_clock=$UI_FRAME_CLOCK ui_clock_ms=$UI_CLOCK_MS ui_stats_ms=$UI_STATS_MS tweaks=$TWEAKS loopback=$LOOPBACK out_pair=$OUT_PAIR in_chan=$IN_CHAN cycles=$CYCLES duration_ms=$DUR" >> $OUT/status
+echo "start $(date +%s) buffer=$BUF multiplier=$MULT transfers=$TRANSFERS headroom=$HEADROOM admission=$ADMISSION reserve=$RESERVE render_stall_us=$RENDER_STALL service_stall_us=$SERVICE_STALL audio_affinity=$AUDIO_AFF ui_affinity=$UI_AFF service_cpus=$SVC_CPUS adpf=$ADPF ui_meter_ms=$UI_METER_MS ui_frame_clock=$UI_FRAME_CLOCK ui_clock_ms=$UI_CLOCK_MS ui_stats_ms=$UI_STATS_MS tweaks=$TWEAKS loopback=$LOOPBACK out_pair=$OUT_PAIR in_chan=$IN_CHAN packets=$PACKETS cycles=$CYCLES duration_ms=$DUR" >> $OUT/status
 
 am force-stop com.vibes.dsp
 sleep 2
@@ -110,6 +115,7 @@ am instrument -w \
   -e direct_usb_require_loopback $LOOPBACK \
   -e direct_usb_output_pair $OUT_PAIR \
   -e direct_usb_input_channel $IN_CHAN \
+  -e direct_usb_packets $PACKETS \
   -e direct_usb_cycles $CYCLES \
   -e direct_usb_duration_ms $DUR \
   -e direct_usb_poll_ms 250 \
