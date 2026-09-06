@@ -579,9 +579,26 @@ object PerformanceTweaks {
         )
         val cpu = result.stdout.trim().takeIf { result.ok && it.isNotEmpty() }
             ?: return null
-        val path = "$cpu/core_ctl/min_cpus"
-        val probe = PrivilegedShell.readPrivileged(path) ?: return null
-        return path.takeIf { probe.isNotBlank() }
+        // Core control lives on the cluster's first CPU, not on its fastest
+        // one, and on this hardware those differ: cpu7 has the highest
+        // capacity while the directory is under cpu6. The cluster comes from
+        // the cpufreq policy's related_cpus - `core_siblings_list` was tried
+        // and names the whole package, 0-7 here, which walked the search onto
+        // the little cluster and applied the tweak to the wrong four cores.
+        val related = PrivilegedShell.readPrivileged("$cpu/cpufreq/related_cpus")
+            ?.trim().orEmpty()
+        val firstInCluster = related.split(Regex("[\\s,]+"))
+            .firstOrNull { it.isNotBlank() }?.substringBefore('-')?.toIntOrNull()
+        val candidates = buildList {
+            if (firstInCluster != null) add("/sys/devices/system/cpu/cpu$firstInCluster")
+            add(cpu)
+        }
+        for (base in candidates) {
+            val path = "$base/core_ctl/min_cpus"
+            val probe = PrivilegedShell.readPrivileged(path)
+            if (!probe.isNullOrBlank()) return path
+        }
+        return null
     }
 
     private fun bigClusterPolicyPath(): String? {

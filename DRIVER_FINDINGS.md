@@ -1271,3 +1271,46 @@ reported from schedstat in the sections above were measured the same way, with
 adb polling alongside, and should be read as an upper bound that includes the
 instrument. The mechanism is unchanged; its magnitude in an undisturbed system
 is smaller than this file said.
+
+## The audible breaks, and what silenced them
+
+A listener reported breaks while the telemetry reported nothing. Both halves of
+that turned out to be true, and the second was a defect in its own right.
+
+**Nothing was listening.** All three signal detectors - capture discontinuity,
+capture modulation, playback discontinuity - returned early unless the flight
+recorder was armed, and the harness set their thresholds inside the same
+condition. A zero threshold disables a detector outright, so asking for the
+loopback check on its own reported `capture-detector-never-armed` in every
+cycle while a 0.40 peak signal sat on the inspected channel. Counting a fault
+and recording its context are separate requests, and they are separate now.
+
+With the detectors actually armed, the configuration that had reported nothing
+reported 31, 8 and 10 capture discontinuities across three cycles, with
+lost_quanta, starvation and xruns all zero throughout. The breaks were real and
+none of the counters that decide a verdict could see them.
+
+**What silenced them.** Core control keeps one prime core parked, which is what
+the Perfetto trace showed and what leaves both audio threads on one core. With
+`min_cpus` raised to two, same geometry, detectors armed, three cycles each:
+
+| | capture breaks per cycle | service gaps | worst gap |
+|---|---|---|---|
+| core control as shipped | 31, 8, 10 | 31, 13, 19 | 4.4, 3.1, 3.5 ms |
+| min_cpus = 2 | **7, 0, 0** | 6, 1, 1 | 4.3, 1.0, 1.0 ms |
+
+The second and third cycles are silent. The seven in the first are the cycle
+that starts the session.
+
+So the audible fault and the parked core are the same finding, and the tweak
+that addresses it needs root, which this device now grants to the app. Finding
+its sysfs path took two corrections worth recording: core control lives on the
+cluster's first CPU rather than its fastest, and the cluster comes from the
+cpufreq policy's `related_cpus` - `core_siblings_list` names the whole package
+here, which pointed the search at the little cluster and applied the change to
+the wrong four cores. The revert restored them, which is the only reason that
+mistake cost nothing.
+
+**Still open.** Two to four discontinuities per cycle in the rendered signal
+itself, before it reaches USB, in both arms. The track loops about once a
+second, so forty wraps a cycle, and these are not those. Not yet investigated.
