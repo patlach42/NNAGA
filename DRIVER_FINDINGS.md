@@ -1758,7 +1758,28 @@ is recorded here so the pass is not read as an endorsement.
 
 This is the predicted failure and it is the right one: with a smaller target the
 producer's lateness no longer fits in the ring reserve, so a refill arrives with
-no PCM behind it. A 56 frame arm is running to see whether the midpoint is clean.
+no PCM behind it.
+
+The midpoint is clean, and it is better than both:
+
+| playback target | cycles | round trip | zero runway | xruns | capture discontinuities |
+|---|---|---|---|---|---|
+| 64 | 8 | 2.67-3.15 ms | 0 | 0 | one cycle with 4 |
+| **56** | **8** | **2.50-3.00 ms** | **0** | **0** | **0** |
+| 48 | 4 | 2.50-2.83 ms | 2 of 4 | 2 of 4 | one cycle with 3 |
+
+Eight cycles at 56 passed with nothing on any fault counter at all - the only
+arm in this session to do that. It is both lower and cleaner than the 64 it
+replaces.
+
+56 is not expressible by the current automatic policy, which is
+`quantum * multiplier` and knows nothing about the drain chunk. 56 happens to be
+`quantum + drainChunk` here (32 + 24), which is a defensible rule - cover one
+quantum of render lateness plus one chunk of USB drain granularity - but it is
+one device, one geometry and eight cycles, which is not enough to rewrite the
+buffer policy every device inherits. It is recorded as a hypothesis. The value
+itself is reachable today: Playback target is a per-device preference and is in
+the settings screen.
 
 ## The harness was losing arms to a dialog
 
