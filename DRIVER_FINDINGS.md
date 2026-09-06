@@ -1378,3 +1378,36 @@ path, but it is not where the fault mostly lives.
 Service gap counts do not order the same way: the real-time arm shows 10 to 21
 gaps a cycle against 1 to 6 for core control, while producing far fewer audible
 breaks. Gaps are not the audible quantity and should stop being read as one.
+
+## The floor with a real-time policy
+
+The floor of 6.6 ms established earlier was set by preemption, so it had to be
+re-measured once the audio threads could actually hold a real-time priority.
+Quantum 32, five transfers, credit with a 32 frame reserve, headroom 416,
+interface open, detectors armed, three cycles a depth:
+
+| target | ring, median | output latency | breaks | starved | lost |
+|---:|---:|---:|---|---|---|
+| 32 | 140-164 | 5.4-5.9 ms | 0, 0, 0 | none | none |
+| 64 | 140-164 | 5.4-5.9 ms | 0, 0, 0 | none | none |
+| 96 | 164-188 | 5.9-6.4 ms | 7, 0, 0 | none | none |
+
+Every depth holds, including the two that could not hold at all before: 64
+starved in four cycles of four, and 96 in four of eight. Nine cycles here carry
+seven breaks between them, all in one startup cycle.
+
+The floor is no longer the target. Below 64 frames the ring stops falling - it
+sits at 140 whether the target is 64 or 32 - so the output latency bottoms out
+near 5.4 ms and further depth reductions buy nothing.
+
+**And the runway is no longer untouchable either, though it still costs.** Four
+transfers instead of five starved seven cycles of eight before; with the
+real-time policy it starves none, and loses nothing. What it does instead is
+bring back audible breaks - 8, 9 and 1 across three cycles - while taking the
+output latency to about 4.4 ms. The output path holds and the capture return
+does not, which is the same asymmetry as everywhere else in this file: fewer
+transfers means fewer capture URBs outstanding, and no amount of playback
+buffering covers input that was never delivered.
+
+So: 5.4 ms clean with root, 6.6 ms without it, and 4.4 ms available to anyone
+willing to trade roughly six audible breaks a minute for one millisecond.
