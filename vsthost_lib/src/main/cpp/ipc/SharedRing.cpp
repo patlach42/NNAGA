@@ -45,30 +45,61 @@ SharedRing::~SharedRing() {
 }
 
 
-int32_t SharedRing::pullAudio(float* outL, float* outR, int32_t maxFrames) {
+int32_t SharedRing::pullAudio(float* outL, float* outR, int32_t maxFrames,
+                              uint32_t reserveBlocks) {
     if (!data_ || !outL || !outR || maxFrames <= 0) return 0;
+    constexpr uint32_t kCapacity = VSTPOC_OUTPUT_BLOCK_CAPACITY;
+    const uint32_t reserve =
+        std::min<uint32_t>(reserveBlocks, kCapacity - 1u);
     const uint64_t want = static_cast<uint64_t>(maxFrames);
     uint64_t tail = __atomic_load_n(&data_->output_block_tail, __ATOMIC_RELAXED);
     const uint64_t head = __atomic_load_n(&data_->output_block_head, __ATOMIC_ACQUIRE);
     while (tail != head) {
         VstpocOutputBlock& block =
-            data_->output_blocks[tail & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
+            data_->output_blocks[tail & (kCapacity - 1u)];
         const uint64_t sequence = __atomic_load_n(&block.sequence, __ATOMIC_ACQUIRE);
-        if (sequence != tail + 1u) break; /* producer has not committed */
-        const uint32_t frames = block.frame_count;
-        const uint32_t offset = block.ring_offset;
-        ++tail; /* consumer owns descriptor from this point */
-        __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
-        const uint64_t audioTail =
-            __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
-        if (frames == 0 || frames > VSTPOC_MAX_BLOCK_FRAMES ||
-            offset >= VSTPOC_AUDIO_RING_FRAMES) {
+        if (sequence != tail + 1u) break; /* producer has not committed the head */
+
+        const uint64_t depth = head - tail;
+        // Discard only excess complete blocks, leaving reserve ready blocks
+        // behind the candidate. Malformed descriptors are always removable.
+        if (depth > reserve + 1u) {
+            const uint32_t frames = block.frame_count;
+            const uint64_t audioTail =
+                __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
+            ++tail;
+            __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
+            if (frames != 0 && frames <= VSTPOC_MAX_BLOCK_FRAMES &&
+                block.ring_offset < VSTPOC_AUDIO_RING_FRAMES) {
+                __atomic_store_n(&data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
+            }
             continue;
         }
-        if (frames != want || tail != head) {
-            __atomic_store_n(&data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
-            continue; /* trim stale/mismatched complete blocks, never partial */
+
+        const uint32_t frames = block.frame_count;
+        const uint32_t offset = block.ring_offset;
+        if (frames == 0 || frames > VSTPOC_MAX_BLOCK_FRAMES ||
+            offset >= VSTPOC_AUDIO_RING_FRAMES) {
+            ++tail;
+            __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
+            continue;
         }
+        // Do not claim the exact candidate while its committed depth is still
+        // within the reserve; this is the bounded jitter cushion.
+        if (frames != want) {
+            const uint64_t audioTail =
+                __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
+            ++tail;
+            __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
+            __atomic_store_n(&data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
+            continue;
+        }
+        if (depth <= reserve) return 0;
+
+        const uint64_t audioTail =
+            __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
+        ++tail;
+        __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
         const uint32_t first = std::min<uint32_t>(
             frames, VSTPOC_AUDIO_RING_FRAMES - offset);
         std::memcpy(outL, &data_->audio[0][offset], first * sizeof(float));
@@ -83,6 +114,7 @@ int32_t SharedRing::pullAudio(float* outL, float* outR, int32_t maxFrames) {
     }
     return 0;
 }
+
 
 bool SharedRing::inputWritable(uint32_t frames) const {
     if (!data_) return false;

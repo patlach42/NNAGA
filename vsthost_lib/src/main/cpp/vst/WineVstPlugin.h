@@ -22,9 +22,10 @@ namespace vsthost {
  * FEX-Emu translating x86_64 PE code) and back.
  *
  * Latency: at least one block of round-trip (push input now → pull output
- * next call). Acceptable for the use case; documented in the integration
- * plan. Never zero-pad short input — feeder upstream guarantees full
- * blocks (feedback_vst_host_no_zero_pad).
+ * next call), plus a bounded output reserve held to absorb scheduling jitter.
+ * Latest-only polling cannot reliably serve sub-ms quanta, so the reserve is
+ * reported to hosts rather than hiding those retained frames. Never zero-pad
+ * short input — feeder upstream guarantees full blocks (feedback_vst_host_no_zero_pad).
  */
 class WineVstPlugin : public guitarrackcraft::IPlugin {
 public:
@@ -95,9 +96,10 @@ private:
     std::string nativeLibDir_;
     std::string winePrefix_;
     int displayNumber_ = -1;
-
     float sampleRate_ = 48000.0f;
     uint32_t bufferSize_ = 0;
+    // Number of complete output blocks retained as a bounded RT jitter reserve.
+    uint32_t outputReserveBlocks_ = 0;
     std::atomic<bool> prepared_{false};
     // Admission is separate from preparation: a started guest is not
     // publishable until activation accepted a bounded nonzero quantum and the

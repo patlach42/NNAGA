@@ -359,6 +359,140 @@ TEST_F(SharedRingFixture, PullAudioAdvancesConsumerTailsButNeverProducerHeads) {
     EXPECT_EQ(LoadAcquire(&shared->audio_head), 23u);
 }
 
+TEST_F(SharedRingFixture, PullAudioReserveHoldsAtCommittedDepth) {
+    VstpocShared* shared = ring.raw();
+    constexpr uint32_t kQuantum = 4;
+    constexpr uint32_t kReserve = 2;
+    constexpr uint64_t kAudioStart = 17;
+
+    StoreRelease(&shared->audio_tail, kAudioStart);
+    StoreRelease(&shared->audio_head, kAudioStart);
+    StoreRelease(&shared->output_block_tail, 0u);
+    StoreRelease(&shared->output_block_head, 0u);
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 10.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 20.0f));
+
+    float left[kQuantum] = {91.0f, 92.0f, 93.0f, 94.0f};
+    float right[kQuantum] = {-91.0f, -92.0f, -93.0f, -94.0f};
+    EXPECT_EQ(ring.pullAudio(left, right, kQuantum, kReserve), 0);
+    for (uint32_t i = 0; i < kQuantum; ++i) {
+        EXPECT_FLOAT_EQ(left[i], 91.0f + static_cast<float>(i));
+        EXPECT_FLOAT_EQ(right[i], -91.0f - static_cast<float>(i));
+    }
+    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 0u);
+    EXPECT_EQ(LoadAcquire(&shared->audio_tail), kAudioStart);
+    EXPECT_EQ(LoadAcquire(&shared->output_block_head), kReserve);
+    EXPECT_EQ(LoadAcquire(&shared->audio_head),
+              kAudioStart + kReserve * kQuantum);
+}
+
+TEST_F(SharedRingFixture, PullAudioReserveReturnsOldestAndLeavesReserve) {
+    VstpocShared* shared = ring.raw();
+    constexpr uint32_t kQuantum = 4;
+    constexpr uint32_t kReserve = 2;
+    constexpr uint64_t kAudioStart = 29;
+
+    StoreRelease(&shared->audio_tail, kAudioStart);
+    StoreRelease(&shared->audio_head, kAudioStart);
+    StoreRelease(&shared->output_block_tail, 0u);
+    StoreRelease(&shared->output_block_head, 0u);
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 10.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 20.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 30.0f));
+
+    float left[kQuantum] = {};
+    float right[kQuantum] = {};
+    ASSERT_EQ(ring.pullAudio(left, right, kQuantum, kReserve), kQuantum);
+    for (uint32_t i = 0; i < kQuantum; ++i) {
+        EXPECT_FLOAT_EQ(left[i], 10.0f + static_cast<float>(i));
+        EXPECT_FLOAT_EQ(right[i], -10.0f - static_cast<float>(i));
+    }
+    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 1u);
+    EXPECT_EQ(LoadAcquire(&shared->audio_tail), kAudioStart + kQuantum);
+    EXPECT_EQ(LoadAcquire(&shared->output_block_head), 3u);
+    EXPECT_EQ(LoadAcquire(&shared->audio_head), kAudioStart + 3u * kQuantum);
+    EXPECT_FLOAT_EQ(shared->audio[0][AudioSlot(kAudioStart + kQuantum)],
+                    20.0f);
+    EXPECT_FLOAT_EQ(shared->audio[0][AudioSlot(kAudioStart + 2u * kQuantum)],
+                    30.0f);
+}
+
+TEST_F(SharedRingFixture,
+       PullAudioReserveTrimsOnlyExcessAndMismatchedBlocks) {
+    VstpocShared* shared = ring.raw();
+    constexpr uint32_t kQuantum = 4;
+    constexpr uint32_t kReserve = 2;
+    constexpr uint64_t kAudioStart = 41;
+
+    StoreRelease(&shared->audio_tail, kAudioStart);
+    StoreRelease(&shared->audio_head, kAudioStart);
+    StoreRelease(&shared->output_block_tail, 0u);
+    StoreRelease(&shared->output_block_head, 0u);
+    ASSERT_TRUE(TryStageOutputBlock(shared, 3, 10.0f));  // stale/mismatched
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 20.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 30.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 40.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 50.0f));
+
+    float left[kQuantum] = {};
+    float right[kQuantum] = {};
+    ASSERT_EQ(ring.pullAudio(left, right, kQuantum, kReserve), kQuantum);
+    for (uint32_t i = 0; i < kQuantum; ++i) {
+        EXPECT_FLOAT_EQ(left[i], 30.0f + static_cast<float>(i));
+        EXPECT_FLOAT_EQ(right[i], -30.0f - static_cast<float>(i));
+    }
+    // Two descriptors are excess (the mismatched block and block 20);
+    // block 30 is consumed, while blocks 40 and 50 remain reserved.
+    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 3u);
+    EXPECT_EQ(LoadAcquire(&shared->audio_tail),
+              kAudioStart + 3u + 2u * kQuantum);
+    EXPECT_EQ(LoadAcquire(&shared->output_block_head), 5u);
+    EXPECT_EQ(LoadAcquire(&shared->audio_head),
+              kAudioStart + 3u + 4u * kQuantum);
+    EXPECT_FLOAT_EQ(shared->audio[0][AudioSlot(kAudioStart + 3u + 2u * kQuantum)],
+                    40.0f);
+    EXPECT_FLOAT_EQ(shared->audio[0][AudioSlot(kAudioStart + 3u + 3u * kQuantum)],
+                    50.0f);
+}
+
+TEST_F(SharedRingFixture,
+       PullAudioReservePreservesDescriptorAndAudioWraparound) {
+    VstpocShared* shared = ring.raw();
+    constexpr uint32_t kQuantum = 257;  // Deliberately does not divide the ring.
+    constexpr uint32_t kReserve = 2;
+    const uint64_t blockStart = VSTPOC_OUTPUT_BLOCK_CAPACITY - 2u;
+    const uint64_t audioStart =
+        VSTPOC_AUDIO_RING_FRAMES - (kQuantum + 17u);
+
+    StoreRelease(&shared->audio_tail, audioStart);
+    StoreRelease(&shared->audio_head, audioStart);
+    StoreRelease(&shared->output_block_tail, blockStart);
+    StoreRelease(&shared->output_block_head, blockStart);
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 100.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 200.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 300.0f));
+    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 400.0f));
+
+    float left[kQuantum] = {};
+    float right[kQuantum] = {};
+    ASSERT_EQ(ring.pullAudio(left, right, kQuantum, kReserve), kQuantum);
+    for (uint32_t i = 0; i < kQuantum; ++i) {
+        EXPECT_FLOAT_EQ(left[i], 200.0f + static_cast<float>(i));
+        EXPECT_FLOAT_EQ(right[i], -200.0f - static_cast<float>(i));
+    }
+    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), blockStart + 2u);
+    EXPECT_EQ(LoadAcquire(&shared->audio_tail),
+              audioStart + 2u * kQuantum);
+    EXPECT_EQ(LoadAcquire(&shared->output_block_head), blockStart + 4u);
+    EXPECT_EQ(LoadAcquire(&shared->audio_head),
+              audioStart + 4u * kQuantum);
+    EXPECT_FLOAT_EQ(shared->audio[0][AudioSlot(audioStart + 2u * kQuantum)],
+                    300.0f);
+    EXPECT_FLOAT_EQ(shared->audio[0][AudioSlot(audioStart + 3u * kQuantum)],
+                    400.0f);
+}
+
+
 TEST_F(SharedRingFixture,
        PullAudioTrimsMismatchedBlocksAndConsumesWrappedNonDivisorQuantum) {
     VstpocShared* shared = ring.raw();

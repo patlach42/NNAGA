@@ -163,6 +163,7 @@ WineVstPlugin::~WineVstPlugin() {
 void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     lastStableLatencyFrames_.store(0, std::memory_order_release);
     realtimeReady_.store(false, std::memory_order_release);
+    outputReserveBlocks_ = 0;
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize;
     dryRampSamples_ = 0;
@@ -179,6 +180,14 @@ void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
         bufferSize == 0 || bufferSize > VSTPOC_MAX_BLOCK_FRAMES) {
         return;
     }
+    // Hold about 2 ms of complete guest output blocks. This bounded cushion
+    // prevents latest-only nonblocking polling from turning sub-ms quanta
+    // into avoidable underruns, while remaining fixed and RT-safe in process().
+    const double blocks = std::ceil(
+        (static_cast<double>(sampleRate) * 0.002) / static_cast<double>(bufferSize));
+    outputReserveBlocks_ = static_cast<uint32_t>(std::min(
+        blocks, static_cast<double>(VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)));
+    if (outputReserveBlocks_ == 0) outputReserveBlocks_ = 1;
     prepare();
     realtimeReady_.store(
         prepared_.load(std::memory_order_acquire) &&
@@ -337,6 +346,7 @@ void WineVstPlugin::deactivate() {
     // Clear admission before tearing down the ring so readers cannot observe
     // a dead guest as realtime-capable.
     realtimeReady_.store(false, std::memory_order_release);
+    outputReserveBlocks_ = 0;
     guestReadyForActivation_.store(false, std::memory_order_release);
     lastStableLatencyFrames_.store(0, std::memory_order_release);
     if (!prepared_.exchange(false)) return;
@@ -435,7 +445,9 @@ uint32_t WineVstPlugin::process(const float* const* inputs,
     //    transient stall. Zero-fill the gap (don't reuse stale data) and
     //    bump the underrun counter. Never zero-pad inputs upstream —
     //    feedback_vst_host_no_zero_pad.
-    const int32_t pulled = ring_->pullAudio(outputs[0], outputs[1], static_cast<int32_t>(numFrames));
+    const int32_t pulled = ring_->pullAudio(
+        outputs[0], outputs[1], static_cast<int32_t>(numFrames),
+        outputReserveBlocks_);
     if (pulled < static_cast<int32_t>(numFrames)) {
         if (!dryFallback_ || wetRampSamples_ > 0) dryRampSamples_ = 0;
         const float fromLeft =
@@ -508,9 +520,11 @@ uint32_t WineVstPlugin::getLatencyFrames() const noexcept {
         if (before == 0 || (before & 1u)) continue;
         const uint32_t plugin = shared->plugin_latency_frames;
         const uint32_t bridge = shared->bridge_quantum_frames;
+        const uint64_t reserveFrames =
+            static_cast<uint64_t>(outputReserveBlocks_) * bufferSize_;
+        const uint64_t total = static_cast<uint64_t>(plugin) + bridge + reserveFrames;
         const uint64_t after = __atomic_load_n(&shared->latency_seq, __ATOMIC_ACQUIRE);
         if (before == after && !(after & 1u)) {
-            const uint64_t total = static_cast<uint64_t>(plugin) + bridge;
             const uint32_t stable =
                 total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
             lastStableLatencyFrames_.store(stable, std::memory_order_release);

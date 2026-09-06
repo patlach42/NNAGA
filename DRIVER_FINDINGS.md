@@ -1445,3 +1445,25 @@ Worth noting in passing: strict credit ran two clean cycles here with no
 starvation and no breaks. The earlier finding that it starves was measured
 before affinity worked and before the threads could hold a real-time priority,
 and should not be relied on as it stands.
+
+## The gate that was never consulted
+
+The ring's operating point ignoring the target, the headroom and the credit
+reserve at once had one explanation left, and omp named it as one of four
+signatures worth separating: the admission deadline is one quantum period, and
+it was converted to milliseconds by truncation.
+
+At a 32 frame quantum that period is 0.667 ms. Truncated, it reads as zero, the
+wait returns without waiting, and the caller falls through to its ceiling test.
+Below a 64 frame quantum that is every block, on the room wait and on the
+credit wait alike. So the target gate was dead, which is why nothing that
+addressed the target moved the level.
+
+It is now taken in nanoseconds and rounded up. What that does to the operating
+point has not been measured yet - the device was busy - and until it is, the
+2.9 ms attributed to the ring stands unexplained rather than explained.
+
+omp also warns that the figure itself may be wrong: `ring_p50` is a histogram
+sampled at completion, which is neither time-weighted occupancy nor the level
+after a drain nor the level a block is published into. Output latency wants the
+occupancy before the write. That measurement does not exist yet either.

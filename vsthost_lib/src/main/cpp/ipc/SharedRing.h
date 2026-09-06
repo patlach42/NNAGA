@@ -24,9 +24,13 @@ public:
     const VstpocShared* raw() const { return data_; }
 
     // Host (audio thread): pull up to maxFrames stereo samples from the
-    // audio ring. Returns frames actually drained (may be < maxFrames on
-    // underrun). Non-blocking, lock-free, RT-safe.
-    int32_t pullAudio(float* outL, float* outR, int32_t maxFrames);
+    // audio ring. With reserveBlocks > 0, retain a bounded queue of ready
+    // blocks so a sub-ms quantum is not exposed to latest-only polling jitter:
+    // exact blocks are held until more than the reserve is committed.
+    // Returns frames actually drained (may be < maxFrames on underrun).
+    // Non-blocking, lock-free, and RT-safe.
+    int32_t pullAudio(float* outL, float* outR, int32_t maxFrames,
+                      uint32_t reserveBlocks = 0);
 
     bool publishTransport(uint64_t samplePosition, uint64_t transportFrame,
                           uint64_t loopEndFrame, double sampleRate,
