@@ -120,6 +120,7 @@ class DirectUsbDeviceStressTest {
         // The interface's own periodic work, as two axes. Zero keeps whatever
         // the app is configured for.
         val uiMeterMs = argumentInt(args, "direct_usb_ui_meter_ms", "ui_meter_ms", 0, 0, 500)
+        val uiStatsMs = argumentInt(args, "direct_usb_ui_stats_ms", "ui_stats_ms", 0, 0, 5000)
         val uiFrameClock = argumentInt(args, "direct_usb_ui_frame_clock", "ui_frame_clock", -1, -1, 1)
         // Transport readout cadence in ms; 0 reproduces the old per-display-frame
         // behaviour, -1 leaves whatever the app is configured for.
@@ -158,6 +159,7 @@ class DirectUsbDeviceStressTest {
         val originalTransferCount = AudioSettingsManager.getDirectUsbTransferCount(context)
         val originalPacketsPerTransfer = AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)
         val originalUiMeterMs = AudioSettingsManager.getUiMeterIntervalMs(context)
+        val originalUiStatsMs = AudioSettingsManager.getUiStatsIntervalMs(context)
         val originalUiFrameClock = AudioSettingsManager.getUiTransportFrameClock(context)
         val originalUiClockMs = AudioSettingsManager.getUiTransportClockMs(context)
         val originalWriteHeadroom = AudioSettingsManager.getDirectUsbWriteHeadroom(context)
@@ -177,6 +179,7 @@ class DirectUsbDeviceStressTest {
             // Set before the window is raised so it composes with the cadence
             // under test rather than switching to it mid-run.
             if (uiMeterMs > 0) AudioSettingsManager.setUiMeterIntervalMs(context, uiMeterMs)
+            if (uiStatsMs > 0) AudioSettingsManager.setUiStatsIntervalMs(context, uiStatsMs)
             if (uiFrameClock >= 0) {
                 AudioSettingsManager.setUiTransportFrameClock(context, uiFrameClock == 1)
             }
@@ -200,7 +203,7 @@ class DirectUsbDeviceStressTest {
             engine.nativeSetMeasureRunqueueWait(measureDspOffCpu == 1)
             engine.nativeSetMeasureServiceRunqueue(measureDspOffCpu == 1)
             engine.nativeSetAdpfMode(adpfMode)
-            Log.i(tag, "AFFINITY audio=$audioAffinity ui=$uiAffinity service_cpus=$servicePlacement adpf=$adpfMode ui_meter_ms=${AudioSettingsManager.getUiMeterIntervalMs(context)} ui_frame_clock=${AudioSettingsManager.getUiTransportFrameClock(context)} ui_clock_ms=${AudioSettingsManager.getUiTransportClockMs(context)}")
+            Log.i(tag, "AFFINITY audio=$audioAffinity ui=$uiAffinity service_cpus=$servicePlacement adpf=$adpfMode ui_meter_ms=${AudioSettingsManager.getUiMeterIntervalMs(context)} ui_frame_clock=${AudioSettingsManager.getUiTransportFrameClock(context)} ui_clock_ms=${AudioSettingsManager.getUiTransportClockMs(context)} ui_stats_ms=${AudioSettingsManager.getUiStatsIntervalMs(context)}")
             originalTransport = runCatching { engine.getTransportInfo() }.getOrNull()
             val probe = runBlocking { DirectUsbAudioManager.probeFormats(context, option!!) }
             assertTrue("Direct USB probe failed: ${probe.exceptionOrNull()?.message}", probe.isSuccess)
@@ -339,6 +342,7 @@ class DirectUsbDeviceStressTest {
             AudioSettingsManager.setDirectUsbTransferCount(context, originalTransferCount)
             AudioSettingsManager.setDirectUsbPacketsPerTransfer(context, originalPacketsPerTransfer)
             AudioSettingsManager.setUiMeterIntervalMs(context, originalUiMeterMs)
+            AudioSettingsManager.setUiStatsIntervalMs(context, originalUiStatsMs)
             AudioSettingsManager.setUiTransportFrameClock(context, originalUiFrameClock)
             AudioSettingsManager.setUiTransportClockMs(context, originalUiClockMs)
             AudioSettingsManager.setDirectUsbWriteHeadroom(context, originalWriteHeadroom)

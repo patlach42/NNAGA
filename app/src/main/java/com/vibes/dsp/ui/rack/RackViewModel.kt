@@ -192,7 +192,11 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }
                 }
-                delay(200)
+                delay(
+                    AudioSettingsManager
+                        .getUiStatsIntervalMs(getApplication())
+                        .toLong()
+                )
             }
         }
     }

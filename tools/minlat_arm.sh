@@ -13,6 +13,7 @@
 #       <multiplier> <transfers> <headroom> <admission> <reserve> \
 #       <render_stall_us> <service_stall_us> <audio_affinity> <ui_affinity> \
 #       <service_cpus> <adpf_mode> <ui_meter_ms> <ui_frame_clock> <ui_clock_ms> \
+#       <ui_stats_ms> \
 #       <cycles> <duration_ms> \
 #       >/dev/null 2>&1 &'
 NAME=$1
@@ -45,13 +46,15 @@ ADPF=$4
 UI_METER_MS=$5
 UI_FRAME_CLOCK=$6
 UI_CLOCK_MS=$7
-CYCLES=$8
-DUR=$9
+UI_STATS_MS=$8
+shift 8
+CYCLES=$1
+DUR=$2
 OUT=/data/local/tmp/minlat/$NAME
 rm -rf $OUT
 mkdir -p $OUT
 : > $OUT/status
-echo "start $(date +%s) buffer=$BUF multiplier=$MULT transfers=$TRANSFERS headroom=$HEADROOM admission=$ADMISSION reserve=$RESERVE render_stall_us=$RENDER_STALL service_stall_us=$SERVICE_STALL audio_affinity=$AUDIO_AFF ui_affinity=$UI_AFF service_cpus=$SVC_CPUS adpf=$ADPF ui_meter_ms=$UI_METER_MS ui_frame_clock=$UI_FRAME_CLOCK ui_clock_ms=$UI_CLOCK_MS cycles=$CYCLES duration_ms=$DUR" >> $OUT/status
+echo "start $(date +%s) buffer=$BUF multiplier=$MULT transfers=$TRANSFERS headroom=$HEADROOM admission=$ADMISSION reserve=$RESERVE render_stall_us=$RENDER_STALL service_stall_us=$SERVICE_STALL audio_affinity=$AUDIO_AFF ui_affinity=$UI_AFF service_cpus=$SVC_CPUS adpf=$ADPF ui_meter_ms=$UI_METER_MS ui_frame_clock=$UI_FRAME_CLOCK ui_clock_ms=$UI_CLOCK_MS ui_stats_ms=$UI_STATS_MS cycles=$CYCLES duration_ms=$DUR" >> $OUT/status
 
 am force-stop com.vibes.dsp
 sleep 2
@@ -87,6 +90,7 @@ am instrument -w \
   -e direct_usb_ui_meter_ms $UI_METER_MS \
   -e direct_usb_ui_frame_clock $UI_FRAME_CLOCK \
   -e direct_usb_ui_clock_ms $UI_CLOCK_MS \
+  -e direct_usb_ui_stats_ms $UI_STATS_MS \
   -e direct_usb_cycles $CYCLES \
   -e direct_usb_duration_ms $DUR \
   -e direct_usb_poll_ms 250 \
@@ -95,7 +99,10 @@ echo "instrument rc=$?" >> $OUT/status
 kill $UI_PID 2>/dev/null
 echo "foreground_vibes=$(grep -c 'com.vibes.dsp' $OUT/foreground.txt 2>/dev/null) foreground_samples=$(wc -l < $OUT/foreground.txt 2>/dev/null)" >> $OUT/status
 
-logcat -d > $OUT/logcat.txt 2>/dev/null
+# Bounded: an unbounded dump hung here once with the run already finished, and
+# a measurement that cannot be collected is a measurement lost. The tail is
+# generous enough for several cycles of telemetry.
+logcat -d -t 40000 > $OUT/logcat.txt 2>/dev/null
 echo "log lines=$(wc -l < $OUT/logcat.txt)" >> $OUT/status
 # Context, not the geometry of record. The test restores the saved buffer and
 # multiplier when it finishes, so this file says what the app is configured

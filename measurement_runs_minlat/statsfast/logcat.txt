@@ -1,0 +1,519 @@
+--------- beginning of main
+09-06 14:57:01.148 21491 21491 W dumpsys : Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: activity
+09-06 14:57:01.151  4403  8633 D CompatibilityInfo: mCompatibilityFlags - 0
+09-06 14:57:01.151  4403  8633 D CompatibilityInfo: applicationDensity - 520
+09-06 14:57:01.151  4403  8633 D CompatibilityInfo: applicationScale - 1.0
+09-06 14:57:01.152  4403  8633 D CompatibilityInfo: mCompatibilityFlags - 0
+09-06 14:57:01.152  4403  8633 D CompatibilityInfo: applicationDensity - 520
+09-06 14:57:01.152  4403  8633 D CompatibilityInfo: applicationScale - 1.0
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: mCompatibilityFlags - 0
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: applicationDensity - 520
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: applicationScale - 1.0
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: mCompatibilityFlags - 0
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: applicationDensity - 520
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: applicationScale - 1.0
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: mCompatibilityFlags - 0
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: applicationDensity - 520
+09-06 14:57:01.153  4403  8633 D CompatibilityInfo: applicationScale - 1.0
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: Write failure
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: java.io.IOException: write failed: EPIPE (Broken pipe)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at libcore.io.IoBridge.write(IoBridge.java:651)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at java.io.FileOutputStream.write(FileOutputStream.java:436)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.internal.util.FastPrintWriter.flushBytesLocked(Unknown Source:27)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.internal.util.FastPrintWriter.flushLocked(Unknown Source:68)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.internal.util.FastPrintWriter.appendLocked(Unknown Source:28)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.internal.util.FastPrintWriter.print(Unknown Source:15)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at java.io.PrintWriter.println(PrintWriter.java:839)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.ActivityRecord.dump(Unknown Source:397)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.ActivityRecord.dumpActivity(Unknown Source:174)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.TaskFragment.dump(Unknown Source:148)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.Task.dump(Unknown Source:10)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.RootWindowContainer.lambda$dumpActivities$51(Unknown Source:16)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.RootWindowContainer$$ExternalSyntheticLambda2.accept(Unknown Source:17)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.Task.forAllRootTasks(Unknown Source:6)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.WindowContainer.forAllRootTasks(Unknown Source:20)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.WindowContainer.forAllRootTasks(Unknown Source:20)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.WindowContainer.forAllRootTasks(Unknown Source:20)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.WindowContainer.forAllRootTasks(Unknown Source:20)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.WindowContainer.forAllRootTasks(Unknown Source:20)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.WindowContainer.forAllRootTasks(Unknown Source:20)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.WindowContainer.forAllRootTasks(Unknown Source:1)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.RootWindowContainer.dumpActivities(Unknown Source:86)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.ActivityTaskManagerService.dumpActivitiesLocked(Unknown Source:15)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.ActivityTaskManagerService.dumpActivitiesLocked(Unknown Source:14)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.wm.ActivityTaskManagerService$LocalService.dump(Unknown Source:242)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.am.ActivityManagerService.doDump(Unknown Source:3169)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.am.ActivityManagerService.-$$Nest$mdoDump(Unknown Source:0)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.am.ActivityManagerService$1.dump(Unknown Source:2)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.utils.PriorityDump.dump(Unknown Source:75)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.am.ActivityManagerService.dump(Unknown Source:2)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at android.os.Binder.doDump(Unknown Source:4)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at android.os.Binder.dump(Unknown Source:10)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at android.os.Binder.onTransact(Unknown Source:39)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at android.app.IActivityManager$Stub.onTransact(Unknown Source:25)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at com.android.server.am.ActivityManagerService.onTransact(Unknown Source:132)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at android.os.Binder.execTransactInternal(Unknown Source:108)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at android.os.Binder.execTransact(Unknown Source:36)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: Caused by: android.system.ErrnoException: write failed: EPIPE (Broken pipe)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at libcore.io.Linux.writeBytes(Native Method)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at libcore.io.Linux.write(Linux.java:336)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at libcore.io.ForwardingOs.write(ForwardingOs.java:948)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at libcore.io.BlockGuardOs.write(BlockGuardOs.java:448)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	at libcore.io.IoBridge.write(IoBridge.java:646)
+09-06 14:57:01.154  4403  8633 W FastPrintWriter: 	... 36 more
+09-06 14:57:01.154 21494 21494 W libprocessgroup: JoinCgroup: controller schedtune is not found
+09-06 14:57:01.154  4403  8633 D CompatibilityInfo: mCompatibilityFlags - 0
+09-06 14:57:01.154  4403  8633 D CompatibilityInfo: applicationDensity - 520
+09-06 14:57:01.154  4403  8633 D CompatibilityInfo: applicationScale - 1.0
+09-06 14:57:01.155 21494 21494 W libprocessgroup: SetCgroup::ExecuteForTask: failed to open /dev/cpuctl/top-app/tasks: Permission denied
+09-06 14:57:01.155 21494 21494 W libprocessgroup: SetCgroup::ExecuteForTask: failed to open /dev/blkio/tasks: Permission denied
+09-06 14:57:01.155 21494 21494 E libprocessgroup: set_timerslack_ns write failed: Operation not permitted
+--------- beginning of system
+09-06 14:57:01.184  4403  4662 D AurogonBandwidthController: skinTemperature:32.248
+09-06 14:57:01.186  3208  8046 I libsensor-boledalgo: dbv:46,lux:0.0,cct:1524.2,hsv:-1.0,CWB R:401.4,G:404.6,B:405.1Event R:8.1,G:6.6,B:4.2,C:14.9,W:144.1Cali R:2.6,G:2.1,B:0.5,C:4.4,W:3.3,DC:1
+09-06 14:57:01.186  4403  4973 I MiSensorServiceImpl: LightFovOptimizationSensor::screen_angle: 0.591625 -0.596411 9.763913 85.066086 0.000000 0.000000 1 0.000000 0 0.000000 0.000000
+09-06 14:57:01.227 21492 21492 W libc    : Access denied finding property "persist.vendor.audio.cpupror.schedDy"
+09-06 14:57:01.221 21492 21492 W app_process: type=1400 audit(0.0:1483505): avc:  denied  { read } for  name="u:object_r:vendor_audio_prop:s0" dev="tmpfs" ino=425 scontext=u:r:shell:s0 tcontext=u:object_r:vendor_audio_prop:s0 tclass=file permissive=0
+09-06 14:57:01.237 21492 21492 D AndroidRuntime: >>>>>> START com.android.internal.os.RuntimeInit uid 2000 <<<<<<
+09-06 14:57:01.241 21492 21492 I AndroidRuntime: Using default boot image
+09-06 14:57:01.241 21492 21492 I AndroidRuntime: Leaving lock profiling enabled
+09-06 14:57:01.242 21492 21492 I app_process: Using CollectorTypeCC GC.
+09-06 14:57:01.262 21492 21492 D nativeloader: InitDefaultPublicLibraries for_preload=1: libandroid.so:libaaudio.so:libamidi.so:libbinder_ndk.so:libc.so:libcamera2ndk.so:libdl.so:libEGL.so:libGLESv1_CM.so:libGLESv2.so:libGLESv3.so:libicu.so:libicui18n.so:libicuuc.so:libjnigraphics.so:liblog.so:libmediandk.so:libm.so:libnativehelper.so:libnativewindow.so:libOpenMAXAL.so:libOpenSLES.so:libRS.so:libstdc++.so:libsync.so:libvulkan.so:libwebviewchromium_plat_support.so:libz.so
+09-06 14:57:01.266 21492 21492 D nativeloader: Load libicu_jni.so using APEX ns com_android_art for caller /apex/com.android.art/javalib/core-oj.jar: ok
+09-06 14:57:01.266 21492 21492 D app_process: u_setTimeZoneFilesDirectory("/apex/com.android.tzdata/etc/tz/versioned/9/icu") succeeded. 
+09-06 14:57:01.266 21492 21492 D app_process: I18n APEX ICU file found: /apex/com.android.i18n/etc/icu/icudt76l.dat
+09-06 14:57:01.266 21492 21492 D nativeloader: Load libjavacore.so using APEX ns com_android_art for caller /apex/com.android.art/javalib/core-oj.jar: ok
+09-06 14:57:01.267 21492 21492 D nativeloader: Load libopenjdk.so using APEX ns com_android_art for caller /apex/com.android.art/javalib/core-oj.jar: ok
+09-06 14:57:01.272 11494 12139 I AudioEffect: getParameter: param: 5, param2: -1
+09-06 14:57:01.272  2136  6863 V EffectHandle: command(), cmdCode: 8, mHasControl: 1, mEffect: 0xb400007a788104d0
+09-06 14:57:01.272  2136  6863 V EffectModule: command, DAP_offload cmdCode: 8, mEffectInterface: 0xb4000078d8813cd0
+09-06 14:57:01.272 11494 12139 D MiEffectUtils: support google spatializer, getSpatialStatus: false
+09-06 14:57:01.273 11494 12139 I TouchFeatureUtil: current device and process support version:3
+09-06 14:57:01.273  2106 27774 D [AIDL] TouchFeatureImpl: getModeWhiteList mode: 10233
+09-06 14:57:01.273  2106 27774 D [AIDL] TouchFeatureImpl: 
+09-06 14:57:01.273 11494 12139 I AudioEffect: getParameter: param: 5, param2: -1
+09-06 14:57:01.273  2136  6863 V EffectHandle: command(), cmdCode: 8, mHasControl: 1, mEffect: 0xb400007a788104d0
+09-06 14:57:01.273  2136  6863 V EffectModule: command, DAP_offload cmdCode: 8, mEffectInterface: 0xb4000078d8813cd0
+09-06 14:57:01.274 11494 12139 D MiEffectUtils: support google spatializer, getSpatialStatus: false
+09-06 14:57:01.279 21492 21492 W libc    : Access denied finding property "ro.vendor.mtk.hbt_binfmt_misc_support"
+09-06 14:57:01.279 21492 21492 W libc    : Access denied finding property "ro.vendor.mtk.app32_boost_support"
+09-06 14:57:01.279 21492 21492 W libc    : Access denied finding property "ro.vendor.mtk.hbt_dyn_type"
+09-06 14:57:01.279 21492 21492 W libc    : Access denied finding property "persist.vendor.mtk.hbt_dyn_type"
+09-06 14:57:01.285 21492 21492 D nativeloader: Load libframework-connectivity-tiramisu-jni.so using APEX ns com_android_tethering for caller /apex/com.android.tethering/javalib/framework-connectivity-t.jar: ok
+09-06 14:57:01.285 21492 21492 D AndroidRuntime: Calling main entry com.android.commands.am.Am
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.admin.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.database.sqlite is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.power.feature.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.performance.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.contextualsearch.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.ondeviceintelligence.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.projection.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.companion is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.service.controls.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.text.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.providers.contactkeys.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.companion.virtualdevice.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.uprobestats.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.net.thread.platform.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.view.contentprotection.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.graphics.skia.ddreflags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.dreams is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.graphics.surfaceflinger.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.hardware.input is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.sdk is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.wm.shell.transition is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.input.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.tracing is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.biometrics is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.view.contentcapture.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.content.pm.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.job is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.content.res is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.net.platform.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.aconfig.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.graphics.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.server.app is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.speech.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.stats is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.hardware.biometrics is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.car.feature is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.adpf is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.location.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settingslib.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.managedprovisioning.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.assist.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.net is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settingslib.widget.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.internal.camera.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.hardware.libsensor.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.thirdappopt is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.internal.jank is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.providers.settings is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.multiuser is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.power.optimization is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.calllogbackup is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.battery is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.graphics.libvulkan.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.appfunctions.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.smartspace.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.providers.contacts.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.stability.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.shell.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.aaudio is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.hardware.radio is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: suspend_service.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.media.midi is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.libcore.readonly is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settingslib.widget.selectorwithwidgetpreference.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.service.notification is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.systemui.shared is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.jank is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.wearable is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.audio is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.service.chooser is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.compat is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.alarm is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.apex.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.service.quickaccesswallet is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.usage is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.accessibility is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app.supervision.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.utils is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.chre.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.content.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.media.codec is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.internal.os is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.nfc.nci.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.app is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.security.keystore2 is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.crashrecovery.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.tradeinmode.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.hardware.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.telecom.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settingslib.media.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.policy is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.media.audiopolicy is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.egg.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.internal.compat.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.security is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.service.autofill is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.example.android.aconfig.demo.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.view.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.companion.virtual.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.aconfig_new_storage is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.wm.shell.recents is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.feature.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.systemui is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.graphics.skia.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.power.batterysaver is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.widget.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.editing.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.codec.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.powerstats is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.graphics.egl.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.audioserver is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.deviceidle is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.nfc is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.logmanager is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.permission.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.service.voice.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.content.pm is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.power.hint is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.wm is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.navimmersive.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.os is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.service.dreams is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: xiaomi.platform.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.graphics.libgui.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.hardware.usb.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.provider is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.job is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.internal.foldables.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.internal.telephony.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.webkit is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.credentials.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.display.feature.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.notification is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.appwidget.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.frameworks.sensorservice.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.window.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.adaptiveauth is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.net.wifi.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.media.tv.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.usb.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.os.vibrator is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.hardware.devicestate.feature.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.usage is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.server is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.wm.shell is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.view.inputmethod is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.graphics.hwui.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.backup is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.internal.pm.pkg.component.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.view.accessibility is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.media.audio is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.am is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.media.playback.flags is mapped to system
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settings.accessibility is mapped to system_ext
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settings.keyboard is mapped to system_ext
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settings.factory_reset is mapped to system_ext
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.systemui.accessibility.accessibilitymenu is mapped to system_ext
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.server.policy.feature.flags is mapped to system_ext
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settings.flags is mapped to system_ext
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.settings.media_drm is mapped to system_ext
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.launcher3 is mapped to system_ext
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.graphics.pdf.flags is mapped to com.android.mediaprovider
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.providers.media.flags is mapped to com.android.mediaprovider
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.graphics.pdf.flags.readonly is mapped to com.android.mediaprovider
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.art.flags is mapped to com.android.art
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.libcore is mapped to com.android.art
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.adservices.ondevicepersonalization.flags is mapped to com.android.ondevicepersonalization
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.net.ct.flags is mapped to com.android.tethering
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.net.flags is mapped to com.android.tethering
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.net.vcn is mapped to com.android.tethering
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.nearby.flags is mapped to com.android.tethering
+09-06 14:57:01.290 21492 21492 I AconfigPackage: android.net.http is mapped to com.android.tethering
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.net.thread.flags is mapped to com.android.tethering
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.bluetooth.flags is mapped to com.android.bt
+09-06 14:57:01.290 21492 21492 I AconfigPackage: com.android.org.conscrypt.flags is mapped to com.android.conscrypt
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.permission.flags is mapped to com.android.permission
+09-06 14:57:01.291 21492 21492 I AconfigPackage: android.media.swcodec.flags is mapped to com.android.media.swcodec
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.system.virtualmachine.flags is mapped to com.android.virt
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.adservices.flags is mapped to com.android.adservices
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.sdksandbox.flags is mapped to com.android.adservices
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.healthfitness.flags is mapped to com.android.healthfitness
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.devicelock.flags is mapped to com.android.devicelock
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.ipsec.flags is mapped to com.android.ipsec
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.appsearch.flags is mapped to com.android.appsearch
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.uwb.flags is mapped to com.android.uwb
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.ranging.flags is mapped to com.android.uwb
+09-06 14:57:01.291 21492 21492 I AconfigPackage: android.os.profiling is mapped to com.android.profiling
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.icu is mapped to com.android.i18n
+09-06 14:57:01.291 21492 21492 I AconfigPackage: android.uprobestats.mainline.flags is mapped to com.android.uprobestats
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.wifi.flags is mapped to com.android.wifi
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.media.extractor.flags is mapped to com.android.media
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.media.mainline.flags is mapped to com.android.media
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.os.statsd.flags is mapped to com.android.os.statsd
+09-06 14:57:01.291 21492 21492 I AconfigPackage: android.provider.flags is mapped to com.android.configinfrastructure
+09-06 14:57:01.291 21492 21492 I AconfigPackage: com.android.server.deviceconfig is mapped to com.android.configinfrastructure
+09-06 14:57:01.291 21492 21492 E FeatureFlagsImplExport: android.os.flagging.AconfigStorageReadException: ERROR_PACKAGE_NOT_FOUND: package android.xr cannot be found on the device
+09-06 14:57:01.293 21492 21492 D UiAutomationConnection: Created on user UserHandle{0}
+09-06 14:57:01.293  4403  6657 I ActivityManager: Force stopping com.vibes.dsp appid=10359 user=0: start instr
+09-06 14:57:01.294  4403  6657 D MiuiEmbeddingWindow: blacklistedAppRunningOnPhone: package=com.vibes.dspisNotProjeciton=true isHavingJeppackDisabledConfig=false isRunningOnPhone=true isAppleConnection=false
+09-06 14:57:01.294  4403  6657 D MiuiEmbeddingWindow: MiuiEmbeddingWindowService: updateApplicationInfo for com.vibes.dsp, blacklistedAppRunningOnPhone updated: clear
+09-06 14:57:01.295  4403  6657 V GrammaticalInflectionUtils: AttributionSource: android.content.AttributionSource@1a40e6f4 does not have READ_SYSTEM_GRAMMATICAL_GENDER permission.
+09-06 14:57:01.295  4403  6657 I AppsFilter: interaction: PackageSetting{763e0eb com.android.microdroid.empty_payload/10258} -> PackageSetting{4aab109 com.vibes.dsp/10359} BLOCKED
+09-06 14:57:01.295  4403  6657 W ActivityManager: ProcessRecord{1d3c210 0:com.vibes.dsp/u0a359}: ART verification disabled
+09-06 14:57:01.296  4403  5316 D DouyinContentPagePolicy:  setRefreshRate:-1
+09-06 14:57:01.296 11171 11413 V OsAgent : broadcastSystemEvent - 7
+09-06 14:57:01.296  4403  5202 I MiuiNetworkPolicy: updateUidState uid = 10359, uidState = 19
+09-06 14:57:01.296 20972 22848 V BinderSender: Uid 10359 starts
+09-06 14:57:01.299 21508 21508 W dumpsys : Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: cpuinfo
+09-06 14:57:01.302 11494 12139 I libc    : kill: send 15 to pid 21508
+09-06 14:57:01.302 11494 12139 I libc    : debug pid reuse, real pid 21508
+09-06 14:57:01.302 11494 12139 E ScenarioCollectorUtils: getNodeState: /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/gpuclkjava.io.FileNotFoundException: /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/gpuclk: open failed: EACCES (Permission denied)
+09-06 14:57:01.297 11494 11494 W ThermalCollecto: type=1400 audit(0.0:1483506): avc:  denied  { read } for  name="gpuclk" dev="sysfs" ino=171351 scontext=u:r:system_app:s0 tcontext=u:object_r:vendor_sysfs_kgsl_gpuclk:s0 tclass=file permissive=0
+09-06 14:57:01.302 11494 12139 E ScenarioCollectorUtils: getNodeState: /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/max_gpuclkjava.io.FileNotFoundException: /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/max_gpuclk: open failed: EACCES (Permission denied)
+09-06 14:57:01.297 11494 11494 W ThermalCollecto: type=1400 audit(0.0:1483507): avc:  denied  { read } for  name="max_gpuclk" dev="sysfs" ino=171352 scontext=u:r:system_app:s0 tcontext=u:object_r:vendor_sysfs_kgsl:s0 tclass=file permissive=0
+09-06 14:57:01.302  1864  1864 D Zygote  : Forked child process 21514
+09-06 14:57:01.303  4403  4620 D MiuiProcessPolicyManager: promote com.vibes.dsp maxAdj to prev  + 1, maxProcState to + PER 
+09-06 14:57:01.303  4403  4620 I ActivityManager: Start proc 21514:com.vibes.dsp/u0a359 for added application com.vibes.dsp caller=android
+09-06 14:57:01.303  4403  4620 I ActivityManager: ProcessObserver broadcast disabled
+09-06 14:57:01.305 21514 21514 E Zygote  : process_name_ptr:21514 com.vibes.dsp
+09-06 14:57:01.305 21514 21514 E Zygote  : SetMemoryProtected process_name_ptr:21514 com.vibes.dsp
+09-06 14:57:01.305 11494 12139 I TrackerManager: 隐私未授权，禁止上报:PrivacyPolicy{mAllowTrack=false, mPubSubDisable=false, mInternational=true, mIsCloudControlAllow=true, mIsUserAllow=false, mIsPrivacyEnable=true, mRegion='US'}
+09-06 14:57:01.306 21514 21514 I libc    : SetHeapTaggingLevel: tag level set to 0
+09-06 14:57:01.306 11494 12139 I TrackerManager: 隐私未授权，禁止上报:PrivacyPolicy{mAllowTrack=false, mPubSubDisable=false, mInternational=true, mIsCloudControlAllow=true, mIsUserAllow=false, mIsPrivacyEnable=true, mRegion='US'}
+09-06 14:57:01.306 11494 12139 I TrackerManager: 隐私未授权，禁止上报:PrivacyPolicy{mAllowTrack=false, mPubSubDisable=false, mInternational=true, mIsCloudControlAllow=true, mIsUserAllow=false, mIsPrivacyEnable=true, mRegion='US'}
+09-06 14:57:01.307 11494 12139 I AudioEffect: getParameter: param: 5, param2: -1
+09-06 14:57:01.307  2136  6863 V EffectHandle: command(), cmdCode: 8, mHasControl: 1, mEffect: 0xb400007a788104d0
+09-06 14:57:01.307  2136  6863 V EffectModule: command, DAP_offload cmdCode: 8, mEffectInterface: 0xb4000078d8813cd0
+09-06 14:57:01.307 11494 12139 D MiEffectUtils: support google spatializer, getSpatialStatus: false
+09-06 14:57:01.308 11494 12139 I AudioEffect: getParameter: param: 5, param2: -1
+09-06 14:57:01.308  2136  6863 V EffectHandle: command(), cmdCode: 8, mHasControl: 1, mEffect: 0xb400007a788104d0
+09-06 14:57:01.308  2136  6863 V EffectModule: command, DAP_offload cmdCode: 8, mEffectInterface: 0xb4000078d8813cd0
+09-06 14:57:01.308 11494 12139 D MiEffectUtils: support google spatializer, getSpatialStatus: false
+09-06 14:57:01.308 21514 21514 I com.vibes.dsp: Late-enabling -Xcheck:jni
+09-06 14:57:01.325 21514 21514 I com.vibes.dsp: Using CollectorTypeCC GC.
+09-06 14:57:01.326 21520 21520 W dumpsys : Thread Pool max thread count is 0. Cannot cache binder as linkToDeath cannot be implemented. serviceName: cpuinfo
+09-06 14:57:01.327 31628 31635 I adbd    : jdwp connection from 21514
+09-06 14:57:01.328 11494 12139 I libc    : kill: send 15 to pid 21520
+09-06 14:57:01.328 11494 12139 I libc    : debug pid reuse, real pid 21520
+09-06 14:57:01.321 11494 11494 W ThermalCollecto: type=1400 audit(0.0:1483508): avc:  denied  { read } for  name="gpuclk" dev="sysfs" ino=171351 scontext=u:r:system_app:s0 tcontext=u:object_r:vendor_sysfs_kgsl_gpuclk:s0 tclass=file permissive=0
+09-06 14:57:01.329 11494 12139 E ScenarioCollectorUtils: getNodeState: /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/gpuclkjava.io.FileNotFoundException: /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/gpuclk: open failed: EACCES (Permission denied)
+09-06 14:57:01.329 11494 12139 E ScenarioCollectorUtils: getNodeState: /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/max_gpuclkjava.io.FileNotFoundException: /sys/devices/platform/soc/3d00000.qcom,kgsl-3d0/kgsl/kgsl-3d0/max_gpuclk: open failed: EACCES (Permission denied)
+09-06 14:57:01.321 11494 11494 W ThermalCollecto: type=1400 audit(0.0:1483509): avc:  denied  { read } for  name="max_gpuclk" dev="sysfs" ino=171352 scontext=u:r:system_app:s0 tcontext=u:object_r:vendor_sysfs_kgsl:s0 tclass=file permissive=0
+09-06 14:57:01.329 21514 21514 D nativeloader: Load libframework-connectivity-tiramisu-jni.so using APEX ns com_android_tethering for caller /apex/com.android.tethering/javalib/framework-connectivity-t.jar: ok
+09-06 14:57:01.331  4403  6657 D MiuiForceVkService: shouldUseVk, pkg=com.vibes.dsp useVk 0
+09-06 14:57:01.331 21514 21514 I ActivityThread: Current dynamic renderEngine type=0
+09-06 14:57:01.334  4403  6657 I SmartPower: com.vibes.dsp/10359(21514): died->background(2221256ms) R(process start ) adj=-10000.
+09-06 14:57:01.335  4403  6657 D CompatibilityInfo: mCompatibilityFlags - 0
+09-06 14:57:01.335  4403  6657 D CompatibilityInfo: applicationDensity - 520
+09-06 14:57:01.335  4403  6657 D CompatibilityInfo: applicationScale - 1.0
+09-06 14:57:01.336 21514 21514 E MQSEventManagerDelegate: failed to get MQSService.
+09-06 14:57:01.336 21514 21514 W ActivityThread: registerApplicationScoutThread result:false
+09-06 14:57:01.337 21514 21536 D MiuiDownscaleImpl: set override inverted scale : 1.0
+09-06 14:57:01.338 21514 21514 I RENDER_TURBO: onActivityThreadCreate not in white list, pkg=com.vibes.dsp, type=pudding
+09-06 14:57:01.343 21514 21514 D ActivityThread: setEmbeddedParam packageName=com.vibes.dsp processName=com.vibes.dsp isEmbedded=false isIsolated=false
+09-06 14:57:01.344 21514 21514 W ActivityThread: Package uses different ABI(s) than its instrumentation: package[com.vibes.dsp]: arm64-v8a, null instrumentation[com.vibes.dsp.test]: null, null
+09-06 14:57:01.345 21514 21514 D ApplicationLoaders: Returning zygote-cached class loader: /system/framework/android.test.base.jar
+09-06 14:57:01.355 21514 21514 W com.vibes.dsp: ClassLoaderContext classpath size mismatch. expected=0, found=4 (PCL[]{PCL[/system/framework/android.test.base.jar*2789897741]} | PCL[/system/framework/android.test.runner.jar*895143020:/system/framework/android.test.mock.jar*3361312393:/system/framework/android.test.base.jar*2789897741:/data/app/~~uqGcBhacEzqiWCRYMG6x6w==/com.vibes.dsp.test-ZcOgWsmFrFgCPmKfLEFl-Q==/base.apk*673712389]{PCL[/system/framework/android.test.base.jar*2789897741]})
+09-06 14:57:01.356 21514 21514 D nativeloader: Configuring clns-10 for other apk /system/framework/android.test.runner.jar:/system/framework/android.test.mock.jar:/system/framework/android.test.base.jar:/data/app/~~uqGcBhacEzqiWCRYMG6x6w==/com.vibes.dsp.test-ZcOgWsmFrFgCPmKfLEFl-Q==/base.apk:/data/app/~~EME7WG5WwXP37_Ddg-V3kg==/com.vibes.dsp-6bPkPkcHX7acPz4cVv-_hQ==/base.apk. target_sdk_version=28, uses_libraries=, library_path=/data/app/~~uqGcBhacEzqiWCRYMG6x6w==/com.vibes.dsp.test-ZcOgWsmFrFgCPmKfLEFl-Q==/lib/arm64:/data/app/~~EME7WG5WwXP37_Ddg-V3kg==/com.vibes.dsp-6bPkPkcHX7acPz4cVv-_hQ==/lib/arm64:/data/app/~~uqGcBhacEzqiWCRYMG6x6w==/com.vibes.dsp.test-ZcOgWsmFrFgCPmKfLEFl-Q==/base.apk!/lib/arm64-v8a:/data/app/~~EME7WG5WwXP37_Ddg-V3kg==/com.vibes.dsp-6bPkPkcHX7acPz4cVv-_hQ==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.vibes.dsp
+09-06 14:57:01.356 21514 21514 D nativeloader: Extending system_exposed_libraries: libbinauralrenderer_wrapper.qti.so:libhoaeffects.qti.so:libmisys_jni.xiaomi.so:libpag.hyperos.so:libffavc.hyperos.so:libxiaomi_modemdumpsdx55_jni.modem.so:libxiaomi_modemdump_jni.modem.so:libmodemsmartengine_jni.modem.so:libupdateprof.qti.so:libthermalclient.qti.so:libdiag_system.qti.so:libqape.qti.so:libqesdk_ndk_platform.qti.so:liblistenjni.qti.so:libautoui_image.xiaomi.so
+09-06 14:57:01.358 21514 21514 I com.vibes.dsp: AssetManager2(0x743ea0e638) locale list changing from [] to [en-US]
+09-06 14:57:01.359 21514 21514 D HWUI    : [HWUI] Flag vulkan_enhance_pipeline_cache enabled
+09-06 14:57:01.359 21514 21514 D HWUI    : [HWUI] EnhanceVkPipelineCache is enabled
+09-06 14:57:01.359 21514 21514 D HWUI    : [HWUI] Flag ddre enabled
+09-06 14:57:01.359 21514 21538 D MiuiMonitorThread: Shared singleton Thread for stability monitor start
+09-06 14:57:01.359 21514 21514 V GraphicsEnvironment: Currently set values for:
+09-06 14:57:01.359 21514 21514 V GraphicsEnvironment:   angle_gl_driver_selection_pkgs=[]
+09-06 14:57:01.359 21514 21514 V GraphicsEnvironment:   angle_gl_driver_selection_values=[]
+09-06 14:57:01.359 21514 21514 V GraphicsEnvironment: com.vibes.dsp is not listed in per-application setting
+09-06 14:57:01.360 21514 21514 V GraphicsEnvironment: ANGLE allowlist from config: com.dreamgames.royalmatch com.dts.freefiremax com.dxx.firenow com.gramgames.mergedragons com.ludo.king com.mojang.minecraftpe com.my.defense com.nintendo.zaka com.os.airforce com.playrix.fishdomdd.gplay io.teslatech.callbreak jp.konami.prospia net.peakgames.toonblast
+09-06 14:57:01.360 21514 21514 V GraphicsEnvironment: com.vibes.dsp is not listed in ANGLE allowlist or settings, returning default
+09-06 14:57:01.360 21514 21514 V GraphicsEnvironment: Updatable production driver is not supported on the device.
+09-06 14:57:01.360 21514 21541 E MQSEventManagerDelegate: failed to get MQSService.
+09-06 14:57:01.360 21514 21541 W MQSEventManagerDelegate: getReportAppLaunch getMQSService null
+09-06 14:57:01.360 21514 21540 E ashmem  : Pinning is deprecated since Android Q. Please use trim or other methods.
+09-06 14:57:01.360 21514 21514 D ApplicationLoaders: Returning zygote-cached class loader: /system/framework/android.test.base.jar
+09-06 14:57:01.361 21514 21538 I Perf    : Connecting to perf service.
+09-06 14:57:01.361 21514 21514 D nativeloader: Configuring clns-11 for other apk /system/framework/android.test.mock.jar. target_sdk_version=28, uses_libraries=ALL, library_path=/data/app/~~uqGcBhacEzqiWCRYMG6x6w==/com.vibes.dsp.test-ZcOgWsmFrFgCPmKfLEFl-Q==/lib/arm64:/data/app/~~EME7WG5WwXP37_Ddg-V3kg==/com.vibes.dsp-6bPkPkcHX7acPz4cVv-_hQ==/lib/arm64, permitted_path=/data:/mnt/expand
+09-06 14:57:01.361 21514 21514 D nativeloader: Extending system_exposed_libraries: libbinauralrenderer_wrapper.qti.so:libhoaeffects.qti.so:libmisys_jni.xiaomi.so:libpag.hyperos.so:libffavc.hyperos.so:libxiaomi_modemdumpsdx55_jni.modem.so:libxiaomi_modemdump_jni.modem.so:libmodemsmartengine_jni.modem.so:libupdateprof.qti.so:libthermalclient.qti.so:libdiag_system.qti.so:libqape.qti.so:libqesdk_ndk_platform.qti.so:liblistenjni.qti.so:libautoui_image.xiaomi.so
+09-06 14:57:01.361 21514 21514 D ApplicationLoaders: Returning zygote-cached class loader: /system/framework/android.test.base.jar
+09-06 14:57:01.361 21514 21514 D nativeloader: Configuring clns-12 for other apk /system/framework/android.test.runner.jar. target_sdk_version=28, uses_libraries=ALL, library_path=/data/app/~~uqGcBhacEzqiWCRYMG6x6w==/com.vibes.dsp.test-ZcOgWsmFrFgCPmKfLEFl-Q==/lib/arm64:/data/app/~~EME7WG5WwXP37_Ddg-V3kg==/com.vibes.dsp-6bPkPkcHX7acPz4cVv-_hQ==/lib/arm64, permitted_path=/data:/mnt/expand
+09-06 14:57:01.361 21514 21514 D nativeloader: Extending system_exposed_libraries: libbinauralrenderer_wrapper.qti.so:libhoaeffects.qti.so:libmisys_jni.xiaomi.so:libpag.hyperos.so:libffavc.hyperos.so:libxiaomi_modemdumpsdx55_jni.modem.so:libxiaomi_modemdump_jni.modem.so:libmodemsmartengine_jni.modem.so:libupdateprof.qti.so:libthermalclient.qti.so:libdiag_system.qti.so:libqape.qti.so:libqesdk_ndk_platform.qti.so:liblistenjni.qti.so:libautoui_image.xiaomi.so
+09-06 14:57:01.362 21514 21538 I ActivityThread: TrafficStats init done
+09-06 14:57:01.369 21514 21514 W com.vibes.dsp: ClassLoaderContext classpath size mismatch. expected=0, found=4 (PCL[]{PCL[/system/framework/android.test.base.jar*2789897741]} | PCL[/system/framework/android.test.runner.jar*895143020:/system/framework/android.test.mock.jar*3361312393:/system/framework/android.test.base.jar*2789897741:/data/app/~~uqGcBhacEzqiWCRYMG6x6w==/com.vibes.dsp.test-ZcOgWsmFrFgCPmKfLEFl-Q==/base.apk*673712389]{PCL[/system/framework/android.test.base.jar*2789897741]#PCL[/system/framework/android.test.mock.jar*3361312393]#PCL[/system/framework/android.test.runner.jar*895143020]{PCL[/system/framework/android.test.base.jar*2789897741]#PCL[/system/framework/android.test.mock.jar*3361312393]}};PCL[/system/framework/android.test.runner.jar*895143020:/system/framework/android.test.mock.jar*3361312393:/system/framework/android.test.base.jar*2789897741:/data/app/~~uqGcBhacEzqiWCRYMG6x6w==/com.vibes.dsp.test-ZcOgWsmFrFgCPmKfLEFl-Q==/base.apk*673712389:/data/app/~~EME7WG5WwXP37_Ddg-V3kg==/com.vibes.dsp-6bPkPkcHX7acPz4cVv-_hQ==/base.apk*2393052727]{PCL[/system/framework/android.test.base.jar*2789897741]})
+09-06 14:57:01.370 21514 21514 I com.vibes.dsp: AssetManager2(0x743ea175f8) locale list changing from [] to [en-US]
+09-06 14:57:01.371  4403  6657 D ForceDarkAppConfigProvider: cloudConfigVersion: -1   localConfigVersion:20251230
+09-06 14:57:01.371  4403  6657 I UiModeManager: systemserver package:com.vibes.dsp null
+09-06 14:57:01.371 21514 21538 I ForceDarkHelperStubImpl: initialize for com.vibes.dsp , ForceDarkAppConfig: null
+09-06 14:57:01.371 21514 21514 I MonitoringInstr: newApplication called!
+09-06 14:57:01.372 21514 21538 D nativeloader: Load libforcedarkimpl.so using system ns (caller=/system_ext/framework/miui-framework.jar): ok
+09-06 14:57:01.372 21514 21538 D HWUI    : JNI_OnLoad success
+09-06 14:57:01.372 21514 21538 I MiuiForceDarkConfig: setConfig density:3.250000, mainRule:0, secondaryRule:0, tertiaryRule:0
+09-06 14:57:01.373 21514 21514 D ResMonitorStub: The current process type is: third_party_app, process name is: com.vibes.dsp
+09-06 14:57:01.376 21514 21514 I MonitoringInstr: Instrumentation started!
+09-06 14:57:01.376 21514 21538 I ActivityThread: Miui Feature Init done
+09-06 14:57:01.387  3208  8046 I libsensor-boledalgo: dbv:46,lux:0.0,cct:3064.2,hsv:-1.0,CWB R:401.4,G:404.6,B:405.1Event R:8.2,G:6.9,B:4.3,C:14.4,W:143.6Cali R:2.6,G:2.1,B:0.5,C:4.4,W:3.3,DC:1
+09-06 14:57:01.387  4403  4973 I MiSensorServiceImpl: LightFovOptimizationSensor::screen_angle: 0.592224 -0.596411 9.774680 85.079124 0.000000 0.000000 1 0.000000 0 0.000000 0.000000
+09-06 14:57:01.391  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.391  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.391 21514 21514 I AndroidJUnitRunner: onCreate Bundle[{direct_usb_ui_stats_ms=33, direct_usb_audio_affinity=0, direct_usb_open_ui=1, direct_usb_duration_ms=45000, direct_usb_service_stall_us=0, direct_usb_credit_reserve=1, direct_usb_ui_frame_clock=17, class=com.vibes.dsp.engine.DirectUsbDeviceStressTest#duplexRateBufferLifecycleStress, direct_usb_poll_ms=250, direct_usb_rates=48000, direct_usb_admission=416, direct_usb_multipliers=32, direct_usb_ui_meter_ms=1, direct_usb_headroom=5, direct_usb_buffers=200, direct_usb_adpf=1, direct_usb_service_cpus=1, direct_usb_transfers=4, direct_usb_ui_affinity=1, direct_usb_cycles=4, direct_usb_render_stall_us=32, direct_usb_ui_clock_ms=1}]
+09-06 14:57:01.391 21514 21514 V TestEventClient: No service name argument was given (testDiscoveryService, testRunEventService or orchestratorService)
+09-06 14:57:01.392 21514 21514 I VstHostApplication: VstHostApplication.onCreate — staging wine on background thread
+09-06 14:57:01.392 21514 21545 D AndroidJUnitRunner: onStart is called.
+09-06 14:57:01.393  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.393  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.393  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.393  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.393  6529  6529 D ControlCenterHeaderExpandController: onExpansionChanged: progress =  0.0
+09-06 14:57:01.394 21514 21514 I ActivityThread: currentPkg not in xmlPackages
+09-06 14:57:01.394 21514 21514 W libc    : Access denied finding property "vendor.boostfwk.frameprefetcher"
+09-06 14:57:01.394 21514 21514 D FramePredict: FramePredict init: false
+09-06 14:57:01.394 11171 11413 V OsAgent : broadcastSystemEvent - 7
+09-06 14:57:01.395 21514 21514 I MonitoringInstr: No JSBridge.
+09-06 14:57:01.395  4403  5202 I MiuiNetworkPolicy: updateUidState uid = 10359, uidState = 4
+09-06 14:57:01.395 20972 22848 V BinderSender: Uid 10359 already starts
+09-06 14:57:01.395 20972 22972 V BinderSender: Uid 10359 already starts
+09-06 14:57:01.395  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.395  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.395  6529  6529 D ControlCenterHeaderExpandController: onExpansionChanged: progress =  0.0
+09-06 14:57:01.395  6529  6529 D ControlCenterHeaderExpandController: onExpansionChanged: progress =  0.0
+09-06 14:57:01.396  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.396  6529  6529 I MiuiStatusIconContainer: skipping child ( mobile ) not visible a1 = false  a2 = false a3 = false
+09-06 14:57:01.398 21514 21545 D TestRequestBuilder: Skipping class path scanning and directly running [com.vibes.dsp.engine.DirectUsbDeviceStressTest]
+09-06 14:57:01.408  2057  2540 I vendor.qti.hardware.display.composer-service: Sensor: notify citsensorservice to trigger cwb, misForced = 0, misPrimary 1
+09-06 14:57:01.408  3208  8015 D libsensor-parseRGB: threadTriggerDump Directly dump if cwb done before notify
+09-06 14:57:01.408  3208  8015 D libsensor-parseRGB: 236 Dump start setCWBOutputBuffer disp_id 1 
+09-06 14:57:01.408  2057  2885 I SDM     : CWB config passed by cwb_client: Tap_Point/Control_Flag: 0x1 CWB_ROI : (598.000000 136.000000 779.000000 317.000000) CWB_downscale_rect: (0.000000 0.000000 0.000000 0.000000) for display-0
+09-06 14:57:01.408  2057  2885 W SDM     : DisplayBase::ValidateCwbRoiWithOutputBuffer: Insufficient buffer(256x180) provided for cwb roi(598.000000, 136.000000, 779.000000, 317.000000). Thus, falling to buffer fit ROI.
+09-06 14:57:01.408 21514 21545 D AndroidJUnitRunner: Use the raw file system for managing file I/O.
+09-06 14:57:01.410 21514 21545 D TestExecutor: Adding listener androidx.test.internal.runner.listener.LogRunListener
+09-06 14:57:01.410 21514 21545 D TestExecutor: Adding listener androidx.test.internal.runner.listener.InstrumentationResultPrinter
+09-06 14:57:01.410 21514 21545 D TestExecutor: Adding listener androidx.test.internal.runner.listener.ActivityFinisherRunListener
+09-06 14:57:01.410 21514 21545 D TestExecutor: Adding listener androidx.test.internal.runner.listener.TraceRunListener
+09-06 14:57:01.412 21514 21545 I TestRunner: run started: 1 tests
+09-06 14:57:01.413 21514 21545 I TestRunner: started: duplexRateBufferLifecycleStress(com.vibes.dsp.engine.DirectUsbDeviceStressTest)
+09-06 14:57:01.415 21514 21545 E TestRunner: failed: duplexRateBufferLifecycleStress(com.vibes.dsp.engine.DirectUsbDeviceStressTest)
+09-06 14:57:01.415 21514 21545 E TestRunner: ----- begin exception -----
+09-06 14:57:01.416 21514 21545 E TestRunner: java.lang.IllegalArgumentException: direct_usb_buffers contains unsupported values 200; allowed=4,6,8,12,16,24,32,48,64,72,96,128,256,512,1024
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at com.vibes.dsp.engine.DirectUsbDeviceStressTest.argumentCsv(DirectUsbDeviceStressTest.kt:1127)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at com.vibes.dsp.engine.DirectUsbDeviceStressTest.duplexRateBufferLifecycleStress(DirectUsbDeviceStressTest.kt:48)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at java.lang.reflect.Method.invoke(Native Method)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.model.FrameworkMethod$1.runReflectiveCall(FrameworkMethod.java:59)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.internal.runners.model.ReflectiveCallable.run(ReflectiveCallable.java:12)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.model.FrameworkMethod.invokeExplosively(FrameworkMethod.java:56)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.internal.runners.statements.InvokeMethod.evaluate(InvokeMethod.java:17)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.BlockJUnit4ClassRunner$1.evaluate(BlockJUnit4ClassRunner.java:100)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner.runLeaf(ParentRunner.java:366)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:103)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.BlockJUnit4ClassRunner.runChild(BlockJUnit4ClassRunner.java:63)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at androidx.test.ext.junit.runners.AndroidJUnit4.run(AndroidJUnit4.java:162)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.Suite.runChild(Suite.java:128)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.Suite.runChild(Suite.java:27)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$4.run(ParentRunner.java:331)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$1.schedule(ParentRunner.java:79)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner.runChildren(ParentRunner.java:329)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner.access$100(ParentRunner.java:66)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$2.evaluate(ParentRunner.java:293)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner$3.evaluate(ParentRunner.java:306)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runners.ParentRunner.run(ParentRunner.java:413)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runner.JUnitCore.run(JUnitCore.java:137)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at org.junit.runner.JUnitCore.run(JUnitCore.java:115)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at androidx.test.internal.runner.TestExecutor.execute(TestExecutor.java:67)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at androidx.test.internal.runner.TestExecutor.execute(TestExecutor.java:58)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at androidx.test.runner.AndroidJUnitRunner.onStart(AndroidJUnitRunner.java:446)
+09-06 14:57:01.416 21514 21545 E TestRunner: 	at android.app.Instrumentation$InstrumentationThread.run(Unknown Source:49)
+09-06 14:57:01.416 21514 21545 E TestRunner: ----- end exception -----
+09-06 14:57:01.417 21514 21545 I TestRunner: finished: duplexRateBufferLifecycleStress(com.vibes.dsp.engine.DirectUsbDeviceStressTest)
+09-06 14:57:01.418 21514 21545 I TestRunner: run finished: 1 tests, 1 failed, 0 ignored
+09-06 14:57:01.422  4403  6762 I ActivityManager: Force stopping com.vibes.dsp appid=10359 user=0: finished inst
+09-06 14:57:01.422 21492 21492 I app_process: System.exit called, status: 0
+09-06 14:57:01.422 21492 21492 I AndroidRuntime: VM exiting with result code 0.
+09-06 14:57:01.422  4403  5280 E ProcessManager: error write exception log
+09-06 14:57:01.422  4403  6762 E ActivityManager: Unable to freeze binder for 21514: -11
+09-06 14:57:01.423  4403  6762 I Process : Sending signal. PID: 21514 SIG: 9
+09-06 14:57:01.423  4403  6762 I libc    : kill: send 9 to pid 21514
+09-06 14:57:01.423  4403  6762 I libc    : debug pid reuse, real pid 21514
+09-06 14:57:01.423  4403  6762 I ActivityManager: Killing 21514 for binder freeze failed but process frozen
+09-06 14:57:01.424  4403  6762 I ActivityManager: Killing 21514:com.vibes.dsp/u0a359 (adj 0): stop com.vibes.dsp due to finished inst
+09-06 14:57:01.424  4403  5265 D ExternalInterface: setUidState, uid = 10359 allow = true
+09-06 14:57:01.424  4403  5265 D MiSensorServiceImpl: PowerKeeperSensor resume iUid:10359 but app has not in Controlled
+09-06 14:57:01.424  4403  6762 I libc    : kill: send 9 to pid 21514
+09-06 14:57:01.424  4403  6762 I libc    : debug pid reuse, real pid 21514
+09-06 14:57:01.424  4403  6762 I libc    : kill: send 9 to pid -21514
+09-06 14:57:01.424  4403  6762 I libc    : debug pid reuse, real pid -21514
+09-06 14:57:01.425  2062  2062 I vendor.qti.hardware.servicetrackeraidl-service: killProcess is called for pid : 21514
+09-06 14:57:01.425  4403  6762 W AppContinuityRouterStub: mNotificationPolicyService is null.
+09-06 14:57:01.425 12229 12548 D PowerInsight_DataCollectService: uid 10359 pid 21514 pkg com.vibes.dsp died!
+09-06 14:57:01.425  4403  4504 I NetworkBoostStatusManager: onUidGone uid: 10359
+09-06 14:57:01.425 25462 25479 D ProcessObserverV15: onProcessDied:pid = 21514,died-uid=10359
+09-06 14:57:01.425  4403  6707 I SLM-SRV-SLSAppLib: SLM_Ai_Mode EVENT_CHECK_GMAE_AI_MODE_STATUS
+09-06 14:57:01.425  4403  6707 I SLM-SRV-SLSAppLib: SLM_Ai_Mode checkGameAiModeStatus mGameAiModeCloudControl:false mLinkTurboAiModeSwitch:false mGameAiModeInterfaceReady:false mGameStartBattle:false powerMgrGameUid:0
+09-06 14:57:01.426  4403  4621 I libc    : kill: send 9 to pid -21514
+09-06 14:57:01.426  4403  4621 I libc    : debug pid reuse, real pid -21514
+09-06 14:57:01.426  4403  4621 I libc    : kill: send 9 to pid -21514
+09-06 14:57:01.426  4403  4621 I libc    : debug pid reuse, real pid -21514
+09-06 14:57:01.426  4403  5316 D DouyinContentPagePolicy:  setRefreshRate:-1
+09-06 14:57:01.426 11171 11413 V OsAgent : broadcastSystemEvent - 7
+09-06 14:57:01.426 20972 22848 V BinderSender: Uid 10359 already starts
+09-06 14:57:01.426 20972 22972 V BinderSender: Uid 10359 dead
+09-06 14:57:01.426  4403  5202 I MiuiNetworkPolicy: removeUidState uid = 10359
+09-06 14:57:01.427  2057  2864 I SDM     : DemuraTnCaptureIntfImpl::ProcessCapturePanelData: 0x2100000000af:Screen capture status = 0
+09-06 14:57:01.427  2057  2864 I SDM     : InterVmIpcUvmIntfImpl::ProcessOps: client: 1, cmd: 1
+09-06 14:57:01.431 21423 21423 I libc    : kill: send 15 to pid 21490
+09-06 14:57:01.431 21423 21423 I libc    : debug pid reuse, real pid 21490
+09-06 14:57:01.434 31628 31628 I adbd    : Remote process closed the socket (on MSG_PEEK)
+09-06 14:57:01.435  1864  1864 I Zygote  : Process 21514 exited due to signal 9 (Killed)
+09-06 14:57:01.437  4403  4621 I libprocessgroup: Removed cgroup /sys/fs/cgroup/apps/uid_10359/pid_21514

@@ -1,0 +1,5 @@
+start 1788681418 buffer=200 multiplier=32 transfers=4 headroom=5 admission=416 reserve=1 render_stall_us=32 service_stall_us=0 audio_affinity=0 ui_affinity=1 service_cpus=1 adpf=1 ui_meter_ms=1 ui_frame_clock=17 ui_clock_ms=1 ui_stats_ms=33 cycles=4 duration_ms=45000
+instrument rc=0
+foreground_vibes=0 foreground_samples=1
+log lines=519
+end 1788681421

@@ -86,6 +86,7 @@ object AudioSettingsManager {
     private const val KEY_AUDIO_AFFINITY = "audioAffinityEnabled"
     private const val KEY_DIRECT_USB_ADMISSION = "directUsbAdmissionPolicy"
     private const val KEY_DIRECT_USB_CREDIT_RESERVE = "directUsbCreditReserve"
+    private const val KEY_UI_STATS_INTERVAL_MS = "uiStatsIntervalMs"
     private const val KEY_UI_METER_INTERVAL_MS = "uiMeterIntervalMs"
     private const val KEY_UI_TRANSPORT_FRAME_CLOCK = "uiTransportFrameClock"
     private const val KEY_UI_TRANSPORT_CLOCK_MS = "uiTransportClockMs"
@@ -184,6 +185,15 @@ object AudioSettingsManager {
         prefs(context).getBoolean(KEY_AUDIO_AFFINITY, true)
     fun setAudioAffinityEnabled(context: Context, enabled: Boolean) {
         prefs(context).edit().putBoolean(KEY_AUDIO_AFFINITY, enabled).apply()
+    }
+
+    // How often the rack refreshes statistics, transport and clip slots. Much
+    // heavier per turn than the meters and much slower, so the prior is that it
+    // costs nothing; settable so that can be measured rather than assumed.
+    fun getUiStatsIntervalMs(context: Context): Int =
+        prefs(context).getInt(KEY_UI_STATS_INTERVAL_MS, 200).coerceIn(20, 5000)
+    fun setUiStatsIntervalMs(context: Context, ms: Int) {
+        prefs(context).edit().putInt(KEY_UI_STATS_INTERVAL_MS, ms.coerceIn(20, 5000)).apply()
     }
 
     // How often the rack polls the meters, and whether the transport display

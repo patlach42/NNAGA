@@ -1202,3 +1202,31 @@ Worth naming the shape of this mistake, because it is the second of its kind
 here. A knob that only a test sets is a knob the product does not have, and
 both times the measurements were sound while the thing measured was not what
 shipped.
+
+## Two things closed by measuring them
+
+**The statistics poll costs nothing.** The rack refreshes stats, transport and
+clip slots every 200 ms, and it does far more per turn than the meters do. Made
+settable and compared at 200 ms against 2000 ms, four cycles each: worst
+off-CPU per cycle 214, 2212, 187, 252 microseconds against 1838, 253, 304, 279.
+One outlier apiece and nothing between them; no starvation either way. The
+cadence stays.
+
+That is what the meters showed too, and it sharpens the earlier result rather
+than repeating it: sixty-hertz JNI polling is free and so is this, while a
+per-display-frame Compose state write costs milliseconds. The cost was never
+the polling rate. It was writing state on the frame callback.
+
+**The startup click no longer reproduces.** Credit admission used to lose a
+quantum during the fill phase - a held block whose wait for room expired - and
+it appeared wherever admission was tight, on credit and on a small headroom
+alike. Run now at the geometry the app ships with, quantum 64, multiplier 4,
+headroom 208, credit with a 32 frame reserve: `first_loss_ring` reads -1 in
+every cycle, no quantum drops, admission margin 112 to 120 frames.
+
+No mechanism was found for it and none is claimed. What changed underneath it
+is that the audio threads are now actually on the fast cluster and the
+interface no longer takes milliseconds off the render thread, so the fill phase
+finishes without a block waiting long enough to expire. Recorded as not
+reproducing rather than as fixed, and worth re-checking if either of those
+regresses.
