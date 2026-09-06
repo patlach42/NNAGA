@@ -1,4 +1,5 @@
 #include "WineVstPlugin.h"
+#include "../ipc/VstInstancePaths.h"
 #include "../util/log.h"
 #include "../x11/X11NativeDisplay.h"
 #include <algorithm>
@@ -163,7 +164,6 @@ WineVstPlugin::~WineVstPlugin() {
 void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     lastStableLatencyFrames_.store(0, std::memory_order_release);
     realtimeReady_.store(false, std::memory_order_release);
-    outputReserveBlocks_ = 0;
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize;
     dryRampSamples_ = 0;
@@ -172,22 +172,13 @@ void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     lastOutputLeft_ = 0.0f;
     lastOutputRight_ = 0.0f;
     haveLastOutput_ = false;
-
-    // The transport and guest host only support a bounded, nonzero quantum.
-    // Keep admission false for invalid activation rather than publishing a
-    // plugin that can only remain on the dry fallback path.
+    outputPrimed_ = false;
+    audioAdapter_.reset();
     if (!std::isfinite(sampleRate) || sampleRate <= 0.0f ||
-        bufferSize == 0 || bufferSize > VSTPOC_MAX_BLOCK_FRAMES) {
+        bufferSize == 0 || bufferSize > VSTPOC_MAX_BLOCK_FRAMES ||
+        !audioAdapter_.configure(bufferSize)) {
         return;
     }
-    // Hold about 2 ms of complete guest output blocks. This bounded cushion
-    // prevents latest-only nonblocking polling from turning sub-ms quanta
-    // into avoidable underruns, while remaining fixed and RT-safe in process().
-    const double blocks = std::ceil(
-        (static_cast<double>(sampleRate) * 0.002) / static_cast<double>(bufferSize));
-    outputReserveBlocks_ = static_cast<uint32_t>(std::min(
-        blocks, static_cast<double>(VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)));
-    if (outputReserveBlocks_ == 0) outputReserveBlocks_ = 1;
     prepare();
     realtimeReady_.store(
         prepared_.load(std::memory_order_acquire) &&
@@ -202,22 +193,25 @@ void WineVstPlugin::prepare() {
     realtimeReady_.store(false, std::memory_order_release);
     guestReadyForActivation_.store(false, std::memory_order_release);
 
-    // Per-plugin shm + picker files. Naming matches vstpoc convention so
-    // wine-side env vars + tmpfs lookups behave the same. The "_v" + uuid
-    // suffix keeps multiple VstFactory plugins from colliding.
-    const std::string tmpDir     = filesDir_ + "/tmp";
-    ::mkdir(tmpDir.c_str(), 0700);  // idempotent — ignore EEXIST
-    const std::string shmPath    = tmpDir + "/vst_shm_v" + entry_.uuid + ".dat";
-    const std::string pickerPath = tmpDir + "/vst_picker_v" + entry_.uuid + ".dat";
-
-    ring_ = std::make_unique<SharedRing>(shmPath);
-    if (!ring_->valid()) {
-        LOGE("WineVstPlugin[%s]: shared ring at %s invalid",
-             entry_.displayName.c_str(), shmPath.c_str());
-        ring_.reset();
+    const std::string tmpDir = filesDir_ + "/tmp";
+    ::mkdir(tmpDir.c_str(), 0700);
+    auto reserved = reserveVstInstancePaths(tmpDir, entry_.uuid);
+    if (!reserved) {
+        LOGE("WineVstPlugin[%s]: cannot reserve unique IPC paths", entry_.displayName.c_str());
         return;
     }
-    picker_ = std::make_unique<PickerChannel>(pickerPath);
+    instancePaths_.emplace(std::move(*reserved));
+    const std::string& shmPath = instancePaths_->shmPath;
+    const std::string& pickerPath = instancePaths_->pickerPath;
+    ring_ = std::make_unique<SharedRing>(shmPath, instancePaths_->releaseShmFd());
+    if (!ring_->valid() || !ring_->wakeReady()) {
+        LOGE("WineVstPlugin[%s]: shared ring/wake endpoint unavailable",
+             entry_.displayName.c_str());
+        ring_.reset();
+        instancePaths_.reset();
+        return;
+    }
+    picker_ = std::make_unique<PickerChannel>(pickerPath, instancePaths_->releasePickerFd());
     if (!picker_->valid()) {
         LOGW("WineVstPlugin[%s]: picker channel invalid; native picker disabled",
              entry_.displayName.c_str());
@@ -230,10 +224,9 @@ void WineVstPlugin::prepare() {
     cfg.wineBinary        = wineRoot_ + "/bin/wine";
     cfg.wineserverBinary  = wineRoot_ + "/bin/wineserver";
     cfg.wineDllPath       = wineRoot_ + "/lib/wine/aarch64-windows";
-    // Shared "activation environment" prefix (manager-installed plugins point
-    // at their environment's wineprefix_e<uuid>); empty => legacy per-plugin
-    // wineprefix_v<uuid>. shm/picker/display stay keyed by uuid (see below) so
-    // two plugins sharing a prefix still get distinct IPC + X11 displays.
+    // Shared activation-environment prefixes may host several instances.
+    // Their shm, picker, wake socket and log names are independently reserved
+    // above, so sharing the Wine prefix never aliases realtime IPC.
     winePrefix_           = entry_.prefixPath.empty()
                               ? (filesDir_ + "/wineprefix_v" + entry_.uuid)
                               : entry_.prefixPath;
@@ -242,8 +235,9 @@ void WineVstPlugin::prepare() {
     cfg.primaryExe        = assetsDir_ + (entry_.is64Bit ? "/vst_host.exe" : "/vst_host_x86.exe");
     cfg.shmPath           = shmPath;
     if (picker_) cfg.pickerShmPath = pickerPath;
+    cfg.logSuffix         = instancePaths_->logSuffix;
+    instanceLogPath_      = cfg.cacheDir + "/vst_host_" + cfg.logSuffix + ".log";
     cfg.pluginPaths       = { entry_.dllPath };
-    cfg.logSuffix         = "v" + entry_.uuid;
 
     // vstpoc experiment hook (2026-06-02, BIAS FX 2 / CEF editors): inject extra
     // host argv WITHOUT a rebuild. vst3_host.exe reads only argv[1]=shm + argv[2]=
@@ -300,8 +294,12 @@ void WineVstPlugin::prepare() {
         guest_.reset();
         ring_.reset();
         picker_.reset();
+        if (!instanceLogPath_.empty()) ::unlink(instanceLogPath_.c_str());
+        instanceLogPath_.clear();
+        instancePaths_.reset();
         return;
     }
+    ring_->setExpectedWakePeer(guest_->pid());
 
     // Tell the ring we're feeding live input (vs. wine's internal sawtooth
     // test signal). Without this, the guest's vst_host loop reads from a
@@ -328,7 +326,11 @@ void WineVstPlugin::prepare() {
                  entry_.displayName.c_str());
         } else if (shared) {
             guestReadyForActivation_.store(true, std::memory_order_release);
-            paramMirror_.assign(static_cast<size_t>(std::max(0, shared->param_count)), 0.5f);
+            paramMirror_.assign(
+                static_cast<size_t>(std::max(
+                    0, std::min<int32_t>(
+                        shared->param_count, VSTPOC_MAX_PARAMS))),
+                0.5f);
             std::vector<float> guestValues;
             if (readGuestParamSnapshot(ring_.get(), guestValues)) {
                 paramMirror_ = std::move(guestValues);
@@ -346,11 +348,12 @@ void WineVstPlugin::deactivate() {
     // Clear admission before tearing down the ring so readers cannot observe
     // a dead guest as realtime-capable.
     realtimeReady_.store(false, std::memory_order_release);
-    outputReserveBlocks_ = 0;
     guestReadyForActivation_.store(false, std::memory_order_release);
-    lastStableLatencyFrames_.store(0, std::memory_order_release);
+    outputPrimed_ = false;
+    audioAdapter_.reset();
     if (!prepared_.exchange(false)) return;
     if (guest_) {
+        if (ring_) ring_->signalStop();
         if (!guest_->waitFor(3000)) {
             LOGW("WineVstPlugin[%s]: guest didn't exit on stop_flag, killing",
                  entry_.displayName.c_str());
@@ -360,6 +363,16 @@ void WineVstPlugin::deactivate() {
     ring_.reset();
     picker_.reset();
     guest_.reset();
+    if (instancePaths_) instancePaths_->retainPostmortem();
+    instancePaths_.reset();
+    if (!instanceLogPath_.empty()) {
+        const std::string legacyLog =
+            filesDir_ + "/../cache/vst_host_v" + entry_.uuid + ".log";
+        if (::rename(instanceLogPath_.c_str(), legacyLog.c_str()) != 0) {
+            ::unlink(instanceLogPath_.c_str());
+        }
+        instanceLogPath_.clear();
+    }
     /* Tear down the X11 server for this plugin so port 6000+N is freed.
      * Without this, the listening socket leaks: removing the plugin from
      * the rack leaves the X11NativeDisplay alive in g_displays, its
@@ -393,14 +406,8 @@ uint32_t WineVstPlugin::process(const float* const* inputs,
                 if (dryRampSamples_ < 64) ++dryRampSamples_;
                 const float dryGain = static_cast<float>(dryRampSamples_) / 64.0f;
                 const float wetGain = 1.0f - dryGain;
-                if (outputs[0]) {
-                    outputs[0][i] =
-                        fromLeft * wetGain + (inL ? inL[i] : 0.0f) * dryGain;
-                }
-                if (outputs[1]) {
-                    outputs[1][i] =
-                        fromRight * wetGain + (inR ? inR[i] : 0.0f) * dryGain;
-                }
+                if (outputs[0]) outputs[0][i] = fromLeft * wetGain + (inL ? inL[i] : 0.0f) * dryGain;
+                if (outputs[1]) outputs[1][i] = fromRight * wetGain + (inR ? inR[i] : 0.0f) * dryGain;
             }
             if (numFrames > 0 && outputs[0] && outputs[1]) {
                 lastOutputLeft_ = outputs[0][numFrames - 1];
@@ -413,96 +420,92 @@ uint32_t WineVstPlugin::process(const float* const* inputs,
         underruns_.fetch_add(1, std::memory_order_relaxed);
         underrunFrames_.fetch_add(missingFrames, std::memory_order_relaxed);
         const uint32_t count = std::min(midiEventCount, outputCapacity);
-        if (outputEvents && midiEvents) {
-            std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
-        }
+        if (outputEvents && midiEvents) std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
         return count;
     };
-    if (!ring_ || !outputs) return renderDryFallback(numFrames);
-    if (bufferSize_ == 0 || numFrames > bufferSize_ ||
+    if (!ring_ || !outputs || !audioAdapter_.valid()) {
+        return renderDryFallback(numFrames);
+    }
+    if (bufferSize_ == 0 || numFrames != bufferSize_ ||
         numFrames > VSTPOC_MAX_BLOCK_FRAMES) {
         return renderDryFallback(numFrames);
     }
-
-    if (!ring_->inputWritable(numFrames)) return renderDryFallback(numFrames);
-    if (!ring_->publishTransport(context.samplePosition, context.transportFrame,
-                                 context.loopEndFrame, context.sampleRate,
-                                 context.beatsPerMinute, context.playing,
-                                 context.looping, numFrames,
-                                 midiEvents, midiEventCount)) {
+    if (audioAdapter_.inputReady()) {
+        if (!ring_->inputWritable(audioAdapter_.guestFrames()) ||
+            !ring_->publishTransport(audioAdapter_.inputContext().samplePosition,
+                audioAdapter_.inputContext().transportFrame, audioAdapter_.inputContext().loopEndFrame,
+                audioAdapter_.inputContext().sampleRate, audioAdapter_.inputContext().beatsPerMinute,
+                audioAdapter_.inputContext().playing, audioAdapter_.inputContext().looping,
+                audioAdapter_.guestFrames(), audioAdapter_.inputMidi(), audioAdapter_.inputMidiCount()) ||
+            ring_->pushInput(audioAdapter_.inputLeft(), audioAdapter_.inputRight(),
+                             static_cast<int32_t>(audioAdapter_.guestFrames())) !=
+                static_cast<int32_t>(audioAdapter_.guestFrames()))
+            return renderDryFallback(numFrames);
+        audioAdapter_.consumeInput();
+    }
+    if (!audioAdapter_.appendInput(inputs, context, midiEvents, midiEventCount))
+        return renderDryFallback(numFrames);
+    if (audioAdapter_.inputReady()) {
+        if (!ring_->inputWritable(audioAdapter_.guestFrames()) ||
+            !ring_->publishTransport(audioAdapter_.inputContext().samplePosition,
+                audioAdapter_.inputContext().transportFrame, audioAdapter_.inputContext().loopEndFrame,
+                audioAdapter_.inputContext().sampleRate, audioAdapter_.inputContext().beatsPerMinute,
+                audioAdapter_.inputContext().playing, audioAdapter_.inputContext().looping,
+                audioAdapter_.guestFrames(), audioAdapter_.inputMidi(), audioAdapter_.inputMidiCount()) ||
+            ring_->pushInput(audioAdapter_.inputLeft(), audioAdapter_.inputRight(),
+                             static_cast<int32_t>(audioAdapter_.guestFrames())) !=
+                static_cast<int32_t>(audioAdapter_.guestFrames()))
+            return renderDryFallback(numFrames);
+        audioAdapter_.consumeInput();
+    }
+    // Keep the adapter's two complete output slots filled opportunistically.
+    // Pull FIFO blocks with their descriptor-paired MIDI snapshots.
+    if (audioAdapter_.outputWriteAvailable()) {
+        uint32_t count = 0;
+        const int32_t pulled = ring_->pullAudioBlock(
+            audioAdapter_.outputLeft(), audioAdapter_.outputRight(),
+            static_cast<int32_t>(audioAdapter_.guestFrames()),
+            audioAdapter_.outputMidi(), VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK,
+            &count, true);
+        if (pulled == static_cast<int32_t>(audioAdapter_.guestFrames()))
+            (void)audioAdapter_.commitOutput(audioAdapter_.outputMidi(), count);
+    }
+    if (!outputPrimed_) {
+        if (audioAdapter_.outputBlockCount() <
+            audioAdapter_.outputSlotCapacity())
+            return renderDryFallback(numFrames);
+        outputPrimed_ = true;
+    } else if (!audioAdapter_.outputReady()) {
+        outputPrimed_ = false;
         return renderDryFallback(numFrames);
     }
-    // 1) push planar input into wine (mono input is duplicated).
-    const float* inL = (inputs && inputs[0]) ? inputs[0] : silentInput_.data();
-    const float* inR = (inputs && inputs[1]) ? inputs[1] : inL;
-    if (ring_->pushInput(inL, inR, static_cast<int32_t>(numFrames)) !=
-        static_cast<int32_t>(numFrames)) {
-        return renderDryFallback(numFrames);
-    }
-
-    // 2) pull processed output. There's a ≥1-block round-trip latency by
-    //    design; pulled < numFrames is expected at startup and on any
-    //    transient stall. Zero-fill the gap (don't reuse stale data) and
-    //    bump the underrun counter. Never zero-pad inputs upstream —
-    //    feedback_vst_host_no_zero_pad.
-    const int32_t pulled = ring_->pullAudio(
-        outputs[0], outputs[1], static_cast<int32_t>(numFrames),
-        outputReserveBlocks_);
-    if (pulled < static_cast<int32_t>(numFrames)) {
-        if (!dryFallback_ || wetRampSamples_ > 0) dryRampSamples_ = 0;
-        const float fromLeft =
-            pulled > 0 ? outputs[0][pulled - 1] : (haveLastOutput_ ? lastOutputLeft_ : 0.0f);
-        const float fromRight =
-            pulled > 0 && outputs[1]
-                ? outputs[1][pulled - 1]
-                : (haveLastOutput_ ? lastOutputRight_ : 0.0f);
-        for (int32_t i = pulled; i < static_cast<int32_t>(numFrames); ++i) {
-            if (dryRampSamples_ < 64) ++dryRampSamples_;
-            const float dryGain = static_cast<float>(dryRampSamples_) / 64.0f;
-            const float wetGain = 1.0f - dryGain;
-            outputs[0][i] = fromLeft * wetGain + inL[i] * dryGain;
-            if (outputs[1]) {
-                outputs[1][i] = fromRight * wetGain + inR[i] * dryGain;
-            }
+    const uint32_t outCount = audioAdapter_.copyOutput(outputs[0], outputs[1], outputEvents, outputCapacity);
+    if (audioAdapter_.outputBlockCount() == 0) outputPrimed_ = false;
+    if (dryFallback_) {
+        uint32_t frame = 0;
+        const float* inL = inputs && inputs[0] ? inputs[0] : silentInput_.data();
+        const float* inR = inputs && inputs[1] ? inputs[1] : inL;
+        while (frame < numFrames && wetRampSamples_ < 64) {
+            ++wetRampSamples_;
+            const float wetGain = static_cast<float>(wetRampSamples_) / 64.0f;
+            const float dryGain = 1.0f - wetGain;
+            if (outputs[0]) outputs[0][frame] = outputs[0][frame] * wetGain + inL[frame] * dryGain;
+            if (outputs[1]) outputs[1][frame] = outputs[1][frame] * wetGain + inR[frame] * dryGain;
+            ++frame;
         }
-        dryFallback_ = true;
-        wetRampSamples_ = 0;
-        underruns_.fetch_add(1, std::memory_order_relaxed);
-        underrunFrames_.fetch_add(
-                static_cast<uint64_t>(numFrames - static_cast<uint32_t>(pulled)),
-                std::memory_order_relaxed);
-    } else {
-        if (dryFallback_) {
-            uint32_t frame = 0;
-            while (frame < numFrames && wetRampSamples_ < 64) {
-                ++wetRampSamples_;
-                const float wetGain = static_cast<float>(wetRampSamples_) / 64.0f;
-                const float dryGain = 1.0f - wetGain;
-                outputs[0][frame] = outputs[0][frame] * wetGain + inL[frame] * dryGain;
-                if (outputs[1]) {
-                    outputs[1][frame] =
-                        outputs[1][frame] * wetGain + inR[frame] * dryGain;
-                }
-                ++frame;
-            }
-            if (wetRampSamples_ >= 64) {
-                dryFallback_ = false;
-                dryRampSamples_ = 0;
-                wetRampSamples_ = 0;
-            }
-        }
+        if (wetRampSamples_ >= 64) { dryFallback_ = false; dryRampSamples_ = 0; wetRampSamples_ = 0; }
     }
-    uint32_t outCount = ring_->readMidiOutput(outputEvents, outputCapacity);
+    uint32_t returned = outCount;
     if (outCount == 0 && outputEvents && midiEvents) {
-        outCount = std::min(midiEventCount, outputCapacity);
-        std::memcpy(outputEvents, midiEvents, outCount * sizeof(*outputEvents));
+        returned = std::min(midiEventCount, outputCapacity);
+        if (returned) std::memcpy(outputEvents, midiEvents, returned * sizeof(*outputEvents));
     }
     if (numFrames > 0 && outputs[0] && outputs[1]) {
         lastOutputLeft_ = outputs[0][numFrames - 1];
         lastOutputRight_ = outputs[1][numFrames - 1];
         haveLastOutput_ = true;
     }
-    return outCount;
+    return returned;
 }
 int32_t WineVstPlugin::getEditorWidth() const {
     return (ring_ && ring_->raw()) ? ring_->raw()->editor_width : 0;
@@ -520,11 +523,11 @@ uint32_t WineVstPlugin::getLatencyFrames() const noexcept {
         if (before == 0 || (before & 1u)) continue;
         const uint32_t plugin = shared->plugin_latency_frames;
         const uint32_t bridge = shared->bridge_quantum_frames;
-        const uint64_t reserveFrames =
-            static_cast<uint64_t>(outputReserveBlocks_) * bufferSize_;
-        const uint64_t total = static_cast<uint64_t>(plugin) + bridge + reserveFrames;
         const uint64_t after = __atomic_load_n(&shared->latency_seq, __ATOMIC_ACQUIRE);
         if (before == after && !(after & 1u)) {
+            const uint64_t total = static_cast<uint64_t>(plugin) + bridge +
+                                   audioAdapter_.accumulationLatencyFrames() +
+                                   audioAdapter_.outputReserveLatencyFrames();
             const uint32_t stable =
                 total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
             lastStableLatencyFrames_.store(stable, std::memory_order_release);

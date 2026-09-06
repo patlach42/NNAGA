@@ -8,8 +8,10 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-PickerChannel::PickerChannel(const std::string& path) : path_(path) {
-    fd_ = ::open(path.c_str(), O_RDWR | O_CREAT, 0600);
+PickerChannel::PickerChannel(const std::string& path, int reservedFd) : path_(path) {
+    fd_ = reservedFd >= 0
+        ? reservedFd
+        : ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (fd_ < 0) {
         LOGE("PickerChannel: open(%s) failed: %s", path.c_str(), std::strerror(errno));
         return;

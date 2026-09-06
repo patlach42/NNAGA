@@ -1165,13 +1165,13 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetRealtimeStats(
         JNIEnv* env, jobject) {
-    // Schema v1; order mirrors AudioRealtimeStats.fromRaw.
-    constexpr jsize kCount = 26;
+    // Schema v2; order mirrors AudioRealtimeStats.fromRaw.
+    constexpr jsize kCount = 27;
     const auto stats = g_ctx && g_ctx->audioEngine
         ? g_ctx->audioEngine->getRealtimeStatsSnapshot()
         : AudioEngine::RealtimeStatsSnapshot{};
     const jlong values[kCount] = {
-        1, static_cast<jlong>(stats.callbackCount),
+        2, static_cast<jlong>(stats.callbackCount),
         static_cast<jlong>(stats.callbackFrames),
         static_cast<jlong>(stats.frameCapacityViolations),
         static_cast<jlong>(stats.inputUnderflowFrames),
@@ -1196,6 +1196,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRealtimeStats(
         static_cast<jlong>(stats.peakCallbackNanoseconds),
         static_cast<jlong>(stats.callbackDeadlineBudgetNanoseconds),
         static_cast<jlong>(stats.callbackDeadlineMisses),
+        static_cast<jlong>(stats.vstGuestFramesProduced),
     };
     jlongArray out = env->NewLongArray(kCount);
     if (out) env->SetLongArrayRegion(out, 0, kCount, values);

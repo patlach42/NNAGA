@@ -9,6 +9,17 @@ add_executable(vst_parameter_tests
     TestVstParameters.cpp
     ${VSTHOST_CPP_DIR}/ipc/SharedRing.cpp
 )
+add_executable(wine_audio_block_adapter_tests
+    TestWineAudioBlockAdapter.cpp
+)
+
+target_include_directories(wine_audio_block_adapter_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${VSTHOST_CPP_DIR}
+)
+
+target_link_libraries(wine_audio_block_adapter_tests PRIVATE GTest::gtest_main pthread)
+
 
 target_include_directories(vst_parameter_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -19,9 +30,12 @@ target_link_libraries(vst_parameter_tests PRIVATE GTest::gtest_main pthread)
 
 add_executable(wine_plugin_path_tests
     TestWinePluginPath.cpp
+    ${VSTHOST_CPP_DIR}/ipc/SharedRing.cpp
+    ${VSTHOST_CPP_DIR}/ipc/PickerChannel.cpp
 )
 
 target_include_directories(wine_plugin_path_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
     ${VSTHOST_CPP_DIR}
 )
 
@@ -40,4 +54,5 @@ target_link_libraries(vst_transport_tests PRIVATE GTest::gtest_main pthread)
 include(GoogleTest)
 gtest_discover_tests(vst_transport_tests)
 gtest_discover_tests(vst_parameter_tests)
+gtest_discover_tests(wine_audio_block_adapter_tests)
 gtest_discover_tests(wine_plugin_path_tests)

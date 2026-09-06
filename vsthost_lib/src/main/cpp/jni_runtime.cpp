@@ -21,6 +21,7 @@ extern "C" {
 
 #include <jni.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -29,6 +30,7 @@ extern "C" {
 #include <string>
 #include <fstream>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -385,14 +387,10 @@ Java_com_varcain_vsthost_NativeBridge_nativeKillInstaller(
     LOGW("nativeKillInstaller: terminating pid=%d", pid);
     g_installer->killHard();
     g_installer.reset();
-}
 
-// Read the health/diagnostics fields out of a plugin's VstpocShared mmap
-// file WITHOUT going through the live SharedRing (which is owned by the
-// :app-side WineVstPlugin and not reachable from here). The shm file at
-// <filesDir>/tmp/vst_shm_v<uuid>.dat persists after the wine subprocess
-// exits, so this works both live (running plugin) and post-mortem
-// (crashed/closed plugin) — the debugging-infra use case.
+// Read health/diagnostic fields without the live SharedRing. Active instances
+// use <filesDir>/tmp/vst_shm_v<uuid>_i<token>; normal teardown atomically
+// retains the newest snapshot as vst_shm_v<uuid>.dat for post-mortem reads.
 //
 // Returns a long[] of the health fields in a fixed order, or null if the
 // file can't be read. The Kotlin side (NativeBridge.getPluginHealth)
@@ -423,16 +421,24 @@ Java_com_varcain_vsthost_NativeBridge_nativeReadPluginHealth(
     std::string path(c);
     env->ReleaseStringUTFChars(jShmPath, c);
 
-    int fd = ::open(path.c_str(), O_RDONLY);
+    int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd < 0) {
         // Not an error worth logging loudly — a never-activated plugin
         // simply has no shm file yet.
         return nullptr;
     }
-    // mmap read-only. The struct is large (audio rings); we only need the
-    // trailing health fields, but mapping the whole thing is simplest and
-    // the kernel only faults in the pages we touch.
-    void* p = ::mmap(nullptr, sizeof(VstpocShared), PROT_READ, MAP_SHARED, fd, 0);
+    struct stat fileStat {};
+    constexpr size_t kRequiredBytes =
+        offsetof(VstpocShared, wm_user_storm_per_second) +
+        sizeof(VstpocShared::wm_user_storm_per_second);
+    if (::fstat(fd, &fileStat) != 0 ||
+        fileStat.st_size < static_cast<off_t>(kRequiredBytes)) {
+        ::close(fd);
+        return nullptr;
+    }
+    const size_t mapBytes = std::min<size_t>(
+        static_cast<size_t>(fileStat.st_size), sizeof(VstpocShared));
+    void* p = ::mmap(nullptr, mapBytes, PROT_READ, MAP_SHARED, fd, 0);
     ::close(fd);
     if (p == MAP_FAILED) {
         LOGW("nativeReadPluginHealth: mmap(%s) failed: %s",
@@ -456,7 +462,7 @@ Java_com_varcain_vsthost_NativeBridge_nativeReadPluginHealth(
     vals[11] = static_cast<jlong>(s->load_status);
     vals[12] = static_cast<jlong>(s->guest_ready);
 
-    ::munmap(p, sizeof(VstpocShared));
+    ::munmap(p, mapBytes);
 
     jlongArray arr = env->NewLongArray(13);
     if (!arr) return nullptr;

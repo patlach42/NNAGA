@@ -109,6 +109,7 @@ public:
         uint64_t peakCallbackNanoseconds = 0;
         uint64_t callbackDeadlineBudgetNanoseconds = 0;
         uint64_t callbackDeadlineMisses = 0;
+        uint64_t vstGuestFramesProduced = 0;
     };
     RealtimeStatsSnapshot getRealtimeStatsSnapshot() const noexcept;
     AudioEngine();

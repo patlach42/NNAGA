@@ -31,6 +31,9 @@ extern "C" {
 #endif
 
 /* Wine + Windows headers (we're a Windows PE running under wine). */
+#include <winsock2.h>
+#include <afunix.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <tlhelp32.h>
 #include <stdio.h>
@@ -68,12 +71,52 @@ using namespace Steinberg::Vst;
 /* Logging — same pattern as vst_host.c: prefix-then-flush so we get
  * partial lines even if the host crashes mid-message. */
 #define LOG(...) do { fprintf(stderr, "[vst3_host] " __VA_ARGS__); fflush(stderr); } while (0)
-
-/* Shared-memory pointer for the VEH to use during crash logging. */
 static volatile VstpocShared* g_shm = NULL;
+static SOCKET g_wake_socket = INVALID_SOCKET;
+static char g_wake_path[108] = {};
+static DWORD g_wake_retry_at = 0;
+static void wake_init(const char* shm_path) {
+    WSADATA ws;
+    if (WSAStartup(MAKEWORD(2, 2), &ws) != 0) return;
+    int n = snprintf(g_wake_path, sizeof(g_wake_path), "%s.wake", shm_path);
+    if (n < 0 || (size_t)n >= sizeof(g_wake_path)) g_wake_path[0] = '\0';
+    g_wake_retry_at = GetTickCount();
+}
+static void wake_close() {
+    if (g_wake_socket != INVALID_SOCKET) {
+        closesocket(g_wake_socket);
+        g_wake_socket = INVALID_SOCKET;
+    }
+}
+static void wake_poll() {
+    if (!g_wake_path[0] || !g_shm ||
+        !(g_shm->shared_feature_bits & VSTPOC_FEATURE_WAKE_SOCKET)) return;
+    const DWORD now = GetTickCount();
+    if (g_wake_socket == INVALID_SOCKET && (LONG)(now - g_wake_retry_at) >= 0) {
+        sockaddr_un addr{};
+        addr.sun_family = AF_UNIX;
+        snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", g_wake_path);
+        SOCKET sock = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (sock != INVALID_SOCKET) {
+            if (connect(sock, (sockaddr*)&addr, sizeof(addr)) == 0) {
+                DWORD timeout = 10;
+                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+                g_wake_socket = sock;
+            } else closesocket(sock);
+        }
+        g_wake_retry_at = now + 250;
+    }
+    if (g_wake_socket != INVALID_SOCKET) {
+        char byte;
+        int n = recv(g_wake_socket, &byte, 1, 0);
+        if (n == 0 || (n < 0 && WSAGetLastError() != WSAETIMEDOUT &&
+                       WSAGetLastError() != WSAEWOULDBLOCK)) wake_close();
+    }
+}
 static void wait_wake_or_sleep() {
-    if (g_shm) __atomic_exchange_n(&g_shm->wake_requested, 0u, __ATOMIC_ACQ_REL);
-    Sleep(1);
+    if (g_shm && __atomic_exchange_n(&g_shm->wake_requested, 0u, __ATOMIC_ACQ_REL)) return;
+    wake_poll();
+    if (g_wake_socket == INVALID_SOCKET) Sleep(1);
 }
 
 struct HostTransport {
@@ -90,7 +133,7 @@ static HostTransport g_transport{};
 static bool read_transport(const VstpocShared* shm) {
     if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V8_SIZE) { g_transport.valid = false; return false; }
+        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V9_SIZE) { g_transport.valid = false; return false; }
     uint64 tail = __atomic_load_n(&shm->transport_queue_tail, __ATOMIC_RELAXED);
     uint64 head = __atomic_load_n(&shm->transport_queue_head, __ATOMIC_ACQUIRE);
     if (tail == head) return false;
@@ -1077,13 +1120,13 @@ static VstpocShared* map_shared(const char* path)
     if (!shm) return NULL;
     if (shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V8_SIZE ||
+        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V9_SIZE ||
         (shm->shared_feature_bits & VSTPOC_FEATURE_PLANAR_AUDIO) == 0) {
         LOG("incompatible shared layout/features: magic=%llx version=%u size=%u features=%llx expected=%u\n",
             (unsigned long long)shm->shared_layout_magic,
             (unsigned)shm->shared_layout_version,
             (unsigned)shm->shared_layout_size,
-            (unsigned long long)shm->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V8_SIZE);
+            (unsigned long long)shm->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V9_SIZE);
         UnmapViewOfFile(shm);
         return NULL;
     }
@@ -2405,6 +2448,9 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
                 break;
             }
             audioConfigured = true;
+            publish_latency(
+                (VstpocShared*)g_shm, processor,
+                static_cast<uint32_t>(blockFrames));
             __atomic_store_n(
                 &g_shm->guest_state, VSTPOC_GUEST_STATE_RUNNING, __ATOMIC_RELEASE);
         } else if (g_transport.sampleRate != g_configured_rate ||
@@ -2483,6 +2529,21 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
                 bh & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
             d->frame_count = (uint32_t)blockFrames;
             d->ring_offset = (uint32_t)slot;
+            volatile VstpocOutputMidiBlock* mb = &g_shm->output_midi_blocks[
+                bh & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
+            uint32_t midiCount = g_shm->midi_output_count;
+            if (midiCount > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK)
+                midiCount = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+            mb->event_count = midiCount;
+            for (uint32_t i = 0; i < midiCount; ++i) {
+                mb->events[i].frame_offset =
+                    g_shm->midi_output_events[i].frame_offset;
+                mb->events[i].status = g_shm->midi_output_events[i].status;
+                mb->events[i].data1 = g_shm->midi_output_events[i].data1;
+                mb->events[i].data2 = g_shm->midi_output_events[i].data2;
+                mb->events[i].reserved = 0;
+            }
+            __atomic_store_n(&mb->sequence, bh + 1u, __ATOMIC_RELEASE);
             __atomic_store_n(&d->sequence, bh + 1u, __ATOMIC_RELEASE);
             __atomic_store_n(&g_shm->audio_head, oh + (uint64_t)blockFrames, __ATOMIC_RELEASE);
             __atomic_store_n(&g_shm->output_block_head, bh + 1u, __ATOMIC_RELEASE);
@@ -2534,6 +2595,7 @@ int main(int argc, char** argv)
     /* Wire up SHM first so errors are visible to the launcher even if
      * the plugin never loads. */
     g_shm = map_shared(argv[1]);
+    wake_init(argv[1]);
     if (!g_shm) {
         LOG("shared-memory mapping failed; running detached\n");
         /* Continue anyway — for diagnostics-only runs. */

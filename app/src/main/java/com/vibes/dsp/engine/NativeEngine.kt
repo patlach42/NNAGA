@@ -496,18 +496,33 @@ data class AudioRealtimeStats(
     val peakCallbackNs: Long,
     val callbackDeadlineBudgetNs: Long,
     val callbackDeadlineMisses: Long,
+    val vstGuestFramesProduced: Long,
 ) {
     companion object {
-        private const val VERSION = 1L
-        private const val SIZE = 26
+        private const val V1 = 1L
+        private const val V2 = 2L
+        private const val V1_SIZE = 26
+        private const val V2_SIZE = 27
         fun fromRaw(raw: LongArray): AudioRealtimeStats {
-            require(raw.size >= SIZE) { "Realtime stats payload is truncated" }
-            require(raw[0] == VERSION) { "Unsupported realtime stats schema: ${raw[0]}" }
+            require(raw.isNotEmpty()) { "Realtime stats payload is truncated" }
+            val guestFramesProduced = when (raw[0]) {
+                V1 -> {
+                    require(raw.size >= V1_SIZE) { "Realtime stats payload is truncated" }
+                    0L
+                }
+                V2 -> {
+                    require(raw.size >= V2_SIZE) { "Realtime stats payload is truncated" }
+                    raw[26]
+                }
+                else -> throw IllegalArgumentException(
+                    "Unsupported realtime stats schema: ${raw[0]}"
+                )
+            }
             return AudioRealtimeStats(
                 raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
                 raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14],
                 raw[15], raw[16], raw[17], raw[18], raw[19], raw[20], raw[21],
-                raw[22], raw[23], raw[24], raw[25]
+                raw[22], raw[23], raw[24], raw[25], guestFramesProduced
             )
         }
     }

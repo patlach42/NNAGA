@@ -5,11 +5,36 @@
 #include <cstring>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
-
-SharedRing::SharedRing(const std::string& path) {
-    fd_ = ::open(path.c_str(), O_RDWR | O_CREAT, 0600);
+SharedRing::SharedRing(const std::string& path, int reservedFd) {
+    wake_path_ = path + ".wake";
+    if (wake_path_.size() >= sizeof(((sockaddr_un*)nullptr)->sun_path)) {
+        LOGE("SharedRing: wake path too long (%zu)", wake_path_.size());
+    } else {
+        wake_listener_fd_ = ::socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        if (wake_listener_fd_ >= 0) {
+            sockaddr_un addr{};
+            addr.sun_family = AF_UNIX;
+            std::memcpy(addr.sun_path, wake_path_.c_str(), wake_path_.size() + 1);
+            ::unlink(wake_path_.c_str());
+            if (::bind(wake_listener_fd_, reinterpret_cast<sockaddr*>(&addr),
+                       sizeof(addr)) != 0 || ::listen(wake_listener_fd_, 4) != 0) {
+                LOGE("SharedRing: wake endpoint setup failed: %s", std::strerror(errno));
+                ::close(wake_listener_fd_);
+                wake_listener_fd_ = -1;
+                ::unlink(wake_path_.c_str());
+            } else {
+                wake_running_.store(true, std::memory_order_release);
+                wake_thread_ = std::thread(&SharedRing::wakeAcceptLoop, this);
+            }
+        }
+    }
+    fd_ = reservedFd >= 0
+        ? reservedFd
+        : ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0600);
     if (fd_ < 0) {
         LOGE("SharedRing: open(%s) failed: %s", path.c_str(), std::strerror(errno));
         return;
@@ -34,72 +59,100 @@ SharedRing::SharedRing(const std::string& path) {
     __atomic_store_n(&data_->shared_layout_version, VSTPOC_SHARED_LAYOUT_VERSION, __ATOMIC_RELAXED);
     data_->shared_feature_bits = VSTPOC_FEATURE_PLANAR_AUDIO |
                                  VSTPOC_FEATURE_MIDI_EVENTS |
-                                 VSTPOC_FEATURE_MIDI_OUTPUT;
-    __atomic_store_n(&data_->shared_layout_size, static_cast<uint32_t>(VSTPOC_SHARED_LAYOUT_V8_SIZE),
+                                 VSTPOC_FEATURE_MIDI_OUTPUT |
+                                 VSTPOC_FEATURE_OUTPUT_BLOCK_MIDI |
+                                 (wakeReady() ? VSTPOC_FEATURE_WAKE_SOCKET : 0);
+    __atomic_store_n(&data_->shared_layout_size, static_cast<uint32_t>(VSTPOC_SHARED_LAYOUT_V9_SIZE),
                      __ATOMIC_RELEASE);
     LOGI("SharedRing: mapped %s (%zu bytes)", path.c_str(), sizeof(VstpocShared));
 }
+void SharedRing::wakeAcceptLoop() {
+    while (wake_running_.load(std::memory_order_acquire)) {
+        int fd = ::accept4(wake_listener_fd_, nullptr, nullptr, SOCK_CLOEXEC);
+        if (fd < 0) {
+            if (!wake_running_.load(std::memory_order_acquire)) break;
+            if (errno == EINTR) continue;
+            usleep(1000);
+            continue;
+        }
+        struct ucred cred{};
+        socklen_t len = sizeof(cred);
+        const pid_t expected = expected_wake_peer_.load(std::memory_order_acquire);
+        if (expected <= 0 || ::getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0 ||
+            cred.pid != expected) {
+            ::close(fd);
+            continue;
+        }
+        int expectedFd = -1;
+        if (!wake_connection_fd_.compare_exchange_strong(
+                expectedFd, fd, std::memory_order_acq_rel)) {
+            ::close(fd);
+        }
+    }
+}
+void SharedRing::signalWake() noexcept {
+    const int fd = wake_connection_fd_.load(std::memory_order_acquire);
+    if (fd < 0) return;
+    const unsigned char byte = 1;
+    const ssize_t sent = ::send(fd, &byte, sizeof(byte), MSG_DONTWAIT | MSG_NOSIGNAL);
+    if (sent < 0 && (errno == EPIPE || errno == ECONNRESET || errno == ENOTCONN)) {
+        int expected = fd;
+        if (wake_connection_fd_.compare_exchange_strong(expected, -1,
+                                                         std::memory_order_acq_rel)) {
+            ::close(fd);
+        }
+    }
+}
 SharedRing::~SharedRing() {
+    wake_running_.store(false, std::memory_order_release);
+    if (wake_listener_fd_ >= 0) {
+        ::shutdown(wake_listener_fd_, SHUT_RDWR);
+        ::close(wake_listener_fd_);
+        wake_listener_fd_ = -1;
+    }
+    if (wake_thread_.joinable()) wake_thread_.join();
+    int wakeFd = wake_connection_fd_.exchange(-1, std::memory_order_acq_rel);
+    if (wakeFd >= 0) ::close(wakeFd);
+    if (!wake_path_.empty()) ::unlink(wake_path_.c_str());
     if (data_) ::munmap(data_, sizeof(VstpocShared));
     if (fd_ >= 0) ::close(fd_);
 }
 
 
-int32_t SharedRing::pullAudio(float* outL, float* outR, int32_t maxFrames,
-                              uint32_t reserveBlocks) {
+int32_t SharedRing::pullAudio(float* outL, float* outR, int32_t maxFrames) {
+    return pullAudioBlock(outL, outR, maxFrames, nullptr, 0, nullptr, false);
+}
+
+int32_t SharedRing::pullAudioBlock(float* outL, float* outR, int32_t maxFrames,
+                                   guitarrackcraft::MidiEvent* midi,
+                                   uint32_t midiCapacity, uint32_t* midiCount,
+                                   bool oldest) {
+    if (midiCount) *midiCount = 0;
     if (!data_ || !outL || !outR || maxFrames <= 0) return 0;
-    constexpr uint32_t kCapacity = VSTPOC_OUTPUT_BLOCK_CAPACITY;
-    const uint32_t reserve =
-        std::min<uint32_t>(reserveBlocks, kCapacity - 1u);
     const uint64_t want = static_cast<uint64_t>(maxFrames);
     uint64_t tail = __atomic_load_n(&data_->output_block_tail, __ATOMIC_RELAXED);
     const uint64_t head = __atomic_load_n(&data_->output_block_head, __ATOMIC_ACQUIRE);
     while (tail != head) {
-        VstpocOutputBlock& block =
-            data_->output_blocks[tail & (kCapacity - 1u)];
+        VstpocOutputBlock& block = data_->output_blocks[
+            tail & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
         const uint64_t sequence = __atomic_load_n(&block.sequence, __ATOMIC_ACQUIRE);
-        if (sequence != tail + 1u) break; /* producer has not committed the head */
-
-        const uint64_t depth = head - tail;
-        // Discard only excess complete blocks, leaving reserve ready blocks
-        // behind the candidate. Malformed descriptors are always removable.
-        if (depth > reserve + 1u) {
-            const uint32_t frames = block.frame_count;
-            const uint64_t audioTail =
-                __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
-            ++tail;
-            __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
-            if (frames != 0 && frames <= VSTPOC_MAX_BLOCK_FRAMES &&
-                block.ring_offset < VSTPOC_AUDIO_RING_FRAMES) {
-                __atomic_store_n(&data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
-            }
-            continue;
-        }
-
+        if (sequence != tail + 1u) break;
         const uint32_t frames = block.frame_count;
         const uint32_t offset = block.ring_offset;
+        ++tail;
+        const uint64_t audioTail = __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
         if (frames == 0 || frames > VSTPOC_MAX_BLOCK_FRAMES ||
             offset >= VSTPOC_AUDIO_RING_FRAMES) {
-            ++tail;
-            __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
+            __atomic_store_n(
+                &data_->output_block_tail, tail, __ATOMIC_RELEASE);
             continue;
         }
-        // Do not claim the exact candidate while its committed depth is still
-        // within the reserve; this is the bounded jitter cushion.
-        if (frames != want) {
-            const uint64_t audioTail =
-                __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
-            ++tail;
-            __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
+        if (frames != want || (!oldest && tail != head)) {
             __atomic_store_n(&data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
+            __atomic_store_n(
+                &data_->output_block_tail, tail, __ATOMIC_RELEASE);
             continue;
         }
-        if (depth <= reserve) return 0;
-
-        const uint64_t audioTail =
-            __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
-        ++tail;
-        __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
         const uint32_t first = std::min<uint32_t>(
             frames, VSTPOC_AUDIO_RING_FRAMES - offset);
         std::memcpy(outL, &data_->audio[0][offset], first * sizeof(float));
@@ -109,12 +162,33 @@ int32_t SharedRing::pullAudio(float* outL, float* outR, int32_t maxFrames,
             std::memcpy(outL + first, data_->audio[0], second * sizeof(float));
             std::memcpy(outR + first, data_->audio[1], second * sizeof(float));
         }
-        __atomic_store_n(&data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
+        if (midi && midiCapacity && midiCount) {
+            VstpocOutputMidiBlock& mb = data_->output_midi_blocks[
+                (tail - 1u) & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
+            if (__atomic_load_n(&mb.sequence, __ATOMIC_ACQUIRE) == tail) {
+                uint32_t count = mb.event_count;
+                if (count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) count = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+                if (count > midiCapacity) count = midiCapacity;
+                for (uint32_t i = 0; i < count; ++i) {
+                    const VstpocMidiEvent& in = mb.events[i];
+                    midi[i].frameOffset = in.frame_offset;
+                    midi[i].status = in.status;
+                    midi[i].data1 = in.data1;
+                    midi[i].data2 = in.data2;
+                }
+                __atomic_thread_fence(__ATOMIC_ACQUIRE);
+                if (__atomic_load_n(&mb.sequence, __ATOMIC_ACQUIRE) == tail)
+                    *midiCount = count;
+            }
+        }
+        __atomic_store_n(
+            &data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
+        __atomic_store_n(
+            &data_->output_block_tail, tail, __ATOMIC_RELEASE);
         return static_cast<int32_t>(frames);
     }
     return 0;
 }
-
 
 bool SharedRing::inputWritable(uint32_t frames) const {
     if (!data_) return false;
@@ -160,8 +234,30 @@ bool SharedRing::publishTransport(uint64_t samplePosition, uint64_t transportFra
     __atomic_store_n(&data_->block_deadline_ns, deadlineBudgetNs, __ATOMIC_RELAXED);
     __atomic_store_n(&data_->transport_queue_head, qh + 1u, __ATOMIC_RELEASE);
     __atomic_store_n(&data_->transport_seq, qh + 2u, __ATOMIC_RELEASE);
-    if (qh == qt) __atomic_store_n(&data_->wake_requested, 1u, __ATOMIC_RELEASE);
+    if (__atomic_exchange_n(&data_->wake_requested, 1u, __ATOMIC_ACQ_REL) == 0u)
+        signalWake();
     return true;
+}
+int32_t SharedRing::pushInput(const float* left, const float* right, int32_t numFrames) {
+    if (!data_ || !left || !right || numFrames <= 0) return 0;
+    const uint64_t head = __atomic_load_n(&data_->audio_in_head, __ATOMIC_RELAXED);
+    const uint64_t tail = __atomic_load_n(&data_->audio_in_tail, __ATOMIC_ACQUIRE);
+    const uint64_t want = static_cast<uint64_t>(numFrames);
+    if (head - tail + want > VSTPOC_AUDIO_RING_FRAMES) return 0;
+    constexpr uint64_t mask = VSTPOC_AUDIO_RING_FRAMES - 1u;
+    const uint64_t slot = head & mask;
+    const uint64_t first = std::min<uint64_t>(want, VSTPOC_AUDIO_RING_FRAMES - slot);
+    std::memcpy(&data_->audio_in[0][slot], left, first * sizeof(float));
+    std::memcpy(&data_->audio_in[1][slot], right, first * sizeof(float));
+    const uint64_t second = want - first;
+    if (second != 0) {
+        std::memcpy(data_->audio_in[0], left + first, second * sizeof(float));
+        std::memcpy(data_->audio_in[1], right + first, second * sizeof(float));
+    }
+    __atomic_store_n(&data_->audio_in_head, head + want, __ATOMIC_RELEASE);
+    if (__atomic_exchange_n(&data_->wake_requested, 1u, __ATOMIC_ACQ_REL) == 0u)
+        signalWake();
+    return numFrames;
 }
 
 uint32_t SharedRing::readMidiOutput(guitarrackcraft::MidiEvent* outputEvents,
@@ -183,27 +279,6 @@ uint32_t SharedRing::readMidiOutput(guitarrackcraft::MidiEvent* outputEvents,
     return count;
 }
 
-int32_t SharedRing::pushInput(const float* left, const float* right, int32_t numFrames) {
-    if (!data_ || !left || !right || numFrames <= 0) return 0;
-    const uint64_t head = __atomic_load_n(&data_->audio_in_head, __ATOMIC_RELAXED);
-    const uint64_t tail = __atomic_load_n(&data_->audio_in_tail, __ATOMIC_ACQUIRE);
-    const uint64_t want = static_cast<uint64_t>(numFrames);
-    if (head - tail + want > VSTPOC_AUDIO_RING_FRAMES) return 0;
-
-    constexpr uint64_t mask = VSTPOC_AUDIO_RING_FRAMES - 1u;
-    const uint64_t slot = head & mask;
-    const uint64_t first = std::min<uint64_t>(want, VSTPOC_AUDIO_RING_FRAMES - slot);
-    std::memcpy(&data_->audio_in[0][slot], left, first * sizeof(float));
-    std::memcpy(&data_->audio_in[1][slot], right, first * sizeof(float));
-    const uint64_t second = want - first;
-    if (second != 0) {
-        std::memcpy(data_->audio_in[0], left + first, second * sizeof(float));
-        std::memcpy(data_->audio_in[1], right + first, second * sizeof(float));
-    }
-    __atomic_store_n(&data_->audio_in_head, head + want, __ATOMIC_RELEASE);
-    if (head == tail) __atomic_store_n(&data_->wake_requested, 1u, __ATOMIC_RELEASE);
-    return numFrames;
-}
 
 void SharedRing::setMicActive(bool active) {
     if (!data_) return;
@@ -212,22 +287,22 @@ void SharedRing::setMicActive(bool active) {
 
 void SharedRing::pushParam(int32_t index, float value) {
     if (!data_ || index < 0 || index >= static_cast<int32_t>(VSTPOC_MAX_PARAMS)) return;
-    // v7 uses one lossless latest-value mailbox per parameter. Publish the
-    // value before the release sequence increment so the guest control thread
-    // observes a coherent value and can never lose the newest drag position.
     data_->param_desired_values[index] = value;
     __atomic_add_fetch(&data_->param_desired_seq[index], UINT64_C(1), __ATOMIC_RELEASE);
-    __atomic_store_n(&data_->wake_requested, 1u, __ATOMIC_RELEASE);
+    if (__atomic_exchange_n(&data_->wake_requested, 1u, __ATOMIC_ACQ_REL) == 0u)
+        signalWake();
 }
 
 void SharedRing::signalStop() {
     if (!data_) return;
     __atomic_store_n(&data_->stop_flag, 1, __ATOMIC_RELEASE);
-    __atomic_store_n(&data_->wake_requested, 1u, __ATOMIC_RELEASE);
+    if (__atomic_exchange_n(&data_->wake_requested, 1u, __ATOMIC_ACQ_REL) == 0u)
+        signalWake();
 }
 
 void SharedRing::notifyGuest() {
-    if (data_) __atomic_store_n(&data_->wake_requested, 1u, __ATOMIC_RELEASE);
+    if (data_ && __atomic_exchange_n(&data_->wake_requested, 1u, __ATOMIC_ACQ_REL) == 0u)
+        signalWake();
 }
 bool SharedRing::guestReady() const {
     if (!data_) return false;

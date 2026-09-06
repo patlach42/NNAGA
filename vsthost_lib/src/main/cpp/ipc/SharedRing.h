@@ -1,65 +1,33 @@
 #pragma once
-
 #include "../../../../../app/src/main/cpp/plugin/IPlugin.h"
+#include <atomic>
 #include <cstdint>
 #include <string>
-
+#include <thread>
+#include <sys/types.h>
 extern "C" {
 #include "../../../../external/shared_layout.h"
 }
-
-// Host-side accessor for the mmap'd VstpocShared region exchanged with the
-// x86_64 guest. Creates and zeroes the backing file on construction; unmaps
-// and closes (but does not delete) on destruction.
 class SharedRing {
 public:
-    explicit SharedRing(const std::string& path);
+    explicit SharedRing(const std::string& path, int reservedFd = -1);
     ~SharedRing();
-
     SharedRing(const SharedRing&) = delete;
     SharedRing& operator=(const SharedRing&) = delete;
-
     bool valid() const { return data_ != nullptr; }
     VstpocShared* raw() { return data_; }
     const VstpocShared* raw() const { return data_; }
-
-    // Host (audio thread): pull up to maxFrames stereo samples from the
-    // audio ring. With reserveBlocks > 0, retain a bounded queue of ready
-    // blocks so a sub-ms quantum is not exposed to latest-only polling jitter:
-    // exact blocks are held until more than the reserve is committed.
-    // Returns frames actually drained (may be < maxFrames on underrun).
-    // Non-blocking, lock-free, and RT-safe.
-    int32_t pullAudio(float* outL, float* outR, int32_t maxFrames,
-                      uint32_t reserveBlocks = 0);
-
-    bool publishTransport(uint64_t samplePosition, uint64_t transportFrame,
-                          uint64_t loopEndFrame, double sampleRate,
-                          double beatsPerMinute, bool playing, bool looping,
-                          uint32_t blockFrames,
-                          const guitarrackcraft::MidiEvent* midiEvents,
-                          uint32_t midiEventCount);
-    // Host (audio thread): read guest-produced MIDI for the latest block.
-    // Returns bounded count; events are copied without allocation.
-    uint32_t readMidiOutput(guitarrackcraft::MidiEvent* outputEvents,
-                            uint32_t outputCapacity) const;
-
-    // Host (UI thread): enqueue a parameter change for the guest.
-    // Drops the message silently if the param ring is full.
+    int32_t pullAudio(float* outL, float* outR, int32_t maxFrames);
+    int32_t pullAudioBlock(float* outL, float* outR, int32_t maxFrames,
+                           guitarrackcraft::MidiEvent* midi, uint32_t midiCapacity,
+                           uint32_t* midiCount, bool oldest);
+    bool publishTransport(uint64_t samplePosition, uint64_t transportFrame, uint64_t loopEndFrame, double sampleRate, double beatsPerMinute, bool playing, bool looping, uint32_t blockFrames, const guitarrackcraft::MidiEvent* midiEvents, uint32_t midiEventCount);
+    uint32_t readMidiOutput(guitarrackcraft::MidiEvent* outputEvents, uint32_t outputCapacity) const;
     void pushParam(int32_t index, float value);
-
-    // Host (RT input thread): push planar stereo samples.
     bool inputWritable(uint32_t frames) const;
-    // Returns frames actually pushed; RT-safe and lock-free.
     int32_t pushInput(const float* left, const float* right, int32_t numFrames);
-
-    // Host: declare that the input ring is being fed by a live mic stream.
-    // Guest checks this flag — if set, it reads from audio_in; otherwise
-    // it generates a test signal (sawtooth). Cleared on stop.
     void setMicActive(bool active);
-
-    // Host: ask the guest to exit its loop. Sets the shared stop_flag.
     void signalStop();
-
     bool guestReady() const;
     uint64_t guestFramesProduced() const;
     uint64_t starvationCount() const noexcept;
@@ -67,7 +35,18 @@ public:
     uint64_t guestDeadlineNs() const noexcept;
     uint64_t deadlineMissCount() const noexcept;
     void notifyGuest();
+    void setExpectedWakePeer(pid_t pid) noexcept { expected_wake_peer_.store(pid, std::memory_order_release); }
+    bool wakeReady() const noexcept { return wake_listener_fd_ >= 0; }
+    const std::string& wakePath() const noexcept { return wake_path_; }
 private:
+    void wakeAcceptLoop();
+    void signalWake() noexcept;
     int fd_ = -1;
     VstpocShared* data_ = nullptr;
+    int wake_listener_fd_ = -1;
+    std::atomic<int> wake_connection_fd_{-1};
+    std::atomic<bool> wake_running_{false};
+    std::atomic<pid_t> expected_wake_peer_{-1};
+    std::thread wake_thread_;
+    std::string wake_path_;
 };

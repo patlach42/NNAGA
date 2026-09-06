@@ -5,10 +5,13 @@
 #include "VstFactory.h"
 #include "../ipc/SharedRing.h"
 #include "../ipc/PickerChannel.h"
+#include "../ipc/VstInstancePaths.h"
+#include "WineAudioBlockAdapter.h"
 #include "../launcher/WineHostProcess.h"
 #include <array>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -22,10 +25,9 @@ namespace vsthost {
  * FEX-Emu translating x86_64 PE code) and back.
  *
  * Latency: at least one block of round-trip (push input now → pull output
- * next call), plus a bounded output reserve held to absorb scheduling jitter.
- * Latest-only polling cannot reliably serve sub-ms quanta, so the reserve is
- * reported to hosts rather than hiding those retained frames. Never zero-pad
- * short input — feeder upstream guarantees full blocks (feedback_vst_host_no_zero_pad).
+ * next call). Acceptable for the use case; documented in the integration
+ * plan. Never zero-pad short input — feeder upstream guarantees full
+ * blocks (feedback_vst_host_no_zero_pad).
  */
 class WineVstPlugin : public guitarrackcraft::IPlugin {
 public:
@@ -57,6 +59,7 @@ public:
         if (ring_) {
             counters.inputStarvations = ring_->starvationCount();
             counters.guestDeadlineMisses = ring_->deadlineMissCount();
+            counters.guestFramesProduced = ring_->guestFramesProduced();
         }
         counters.outputUnderrunFrames = underrunFrames_.load(std::memory_order_relaxed);
         return counters;
@@ -96,17 +99,19 @@ private:
     std::string nativeLibDir_;
     std::string winePrefix_;
     int displayNumber_ = -1;
+
     float sampleRate_ = 48000.0f;
     uint32_t bufferSize_ = 0;
-    // Number of complete output blocks retained as a bounded RT jitter reserve.
-    uint32_t outputReserveBlocks_ = 0;
     std::atomic<bool> prepared_{false};
     // Admission is separate from preparation: a started guest is not
     // publishable until activation accepted a bounded nonzero quantum and the
     // guest completed its startup handshake.
     std::atomic<bool> guestReadyForActivation_{false};
     std::atomic<bool> realtimeReady_{false};
+    std::optional<VstInstancePaths> instancePaths_;
+    std::string instanceLogPath_;
     std::unique_ptr<SharedRing>      ring_;
+    WineAudioBlockAdapter audioAdapter_;
     std::unique_ptr<PickerChannel>   picker_;
     std::unique_ptr<WineHostProcess> guest_;
     // Permanent silent plane for nullable host inputs. Keeps transport,
@@ -136,6 +141,7 @@ private:
     float lastOutputLeft_ = 0.0f;
     float lastOutputRight_ = 0.0f;
     bool haveLastOutput_ = false;
+    bool outputPrimed_ = false;
 };
 
 } // namespace vsthost

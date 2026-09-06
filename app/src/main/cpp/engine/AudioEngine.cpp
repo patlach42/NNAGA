@@ -955,6 +955,7 @@ AudioEngine::RealtimeStatsSnapshot AudioEngine::getRealtimeStatsSnapshot() const
     out.vstInputStarvations = pluginStats.inputStarvations;
     out.vstOutputUnderrunFrames = pluginStats.outputUnderrunFrames;
     out.vstGuestDeadlineMisses = pluginStats.guestDeadlineMisses;
+    out.vstGuestFramesProduced = pluginStats.guestFramesProduced;
     out.midiEventDrops = rackGraph_.getMidiEventDrops();
     out.planPublishDeferrals = rackGraph_.getPlanPublishDeferrals();
     out.xRunCount = static_cast<uint64_t>(std::max(0, getXRunCount()));

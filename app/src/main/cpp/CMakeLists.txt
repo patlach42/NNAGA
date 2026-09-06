@@ -335,13 +335,23 @@ if(HAS_VST_HOST)
     # AGP's flavor-scoped Prefab package exposes headers as an INTERFACE target
     # but omits libvsthost.so from INTERFACE_LINK_LIBRARIES. The full flavor
     # builds :vsthost_lib before this target; link its generated JNI artifact.
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        set(VSTHOST_GRADLE_VARIANT "debug")
+    else()
+        set(VSTHOST_GRADLE_VARIANT "release")
+    endif()
     file(GLOB VSTHOST_LIBRARY
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../../vsthost_lib/build/intermediates/library_jni/*/copy*JniLibsProjectOnly/jni/${ANDROID_ABI}/libvsthost.so")
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../../vsthost_lib/build/intermediates/library_jni/${VSTHOST_GRADLE_VARIANT}/copy*JniLibsProjectOnly/jni/${ANDROID_ABI}/libvsthost.so")
     if(NOT VSTHOST_LIBRARY)
         message(FATAL_ERROR "libvsthost.so was not produced by :vsthost_lib")
     endif()
-    list(SORT VSTHOST_LIBRARY)
-    list(GET VSTHOST_LIBRARY -1 VSTHOST_LIBRARY)
+    list(GET VSTHOST_LIBRARY 0 VSTHOST_LIBRARY)
+    add_custom_target(refresh_vsthost ALL
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${VSTHOST_LIBRARY}" "$<TARGET_FILE_DIR:guitarrackcraft>/libvsthost.so"
+        DEPENDS "${VSTHOST_LIBRARY}"
+        VERBATIM)
+    add_dependencies(guitarrackcraft refresh_vsthost)
     target_include_directories(guitarrackcraft PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/../../../../vsthost_lib/src/main/cpp")
     target_link_libraries(guitarrackcraft "${VSTHOST_LIBRARY}")

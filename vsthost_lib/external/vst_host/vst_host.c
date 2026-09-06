@@ -20,14 +20,16 @@
  * it as a Windows program. Its argv[0] will be /opt/wine/bin/wine and the
  * actual .exe path comes via Z:\ drive mapping for Linux file paths.
  */
-
+#include <winsock2.h>
+#include <afunix.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <string.h>
 #include <setjmp.h>
-
+#include <stdint.h>
 #include "vst2.h"
 #include "shared_layout.h"
 
@@ -251,11 +253,55 @@ static int g_pluginCount = 0;
  * whose params we publish to Android over the shared-memory ring.
  * Subsequent commits will extend the param ring to route per-plugin. */
 static volatile VstpocShared* g_shm = NULL;
-static void wait_wake_or_sleep(void) {
-    if (g_shm) __atomic_exchange_n(&g_shm->wake_requested, 0u, __ATOMIC_ACQ_REL);
-    Sleep(1);
+static SOCKET g_wake_socket = INVALID_SOCKET;
+static char g_wake_path[108] = {0};
+static DWORD g_wake_retry_at = 0;
+static void wake_init(const char* shm_path) {
+    WSADATA ws;
+    if (WSAStartup(MAKEWORD(2, 2), &ws) != 0) return;
+    int n = snprintf(g_wake_path, sizeof(g_wake_path), "%s.wake", shm_path);
+    if (n < 0 || (size_t)n >= sizeof(g_wake_path)) g_wake_path[0] = '\0';
+    g_wake_retry_at = GetTickCount();
 }
-
+static void wake_close(void) {
+    if (g_wake_socket != INVALID_SOCKET) {
+        closesocket(g_wake_socket);
+        g_wake_socket = INVALID_SOCKET;
+    }
+}
+static void wake_poll(void) {
+    if (!g_wake_path[0] || !g_shm ||
+        !(g_shm->shared_feature_bits & VSTPOC_FEATURE_WAKE_SOCKET)) return;
+    const DWORD now = GetTickCount();
+    if (g_wake_socket == INVALID_SOCKET && (LONG)(now - g_wake_retry_at) >= 0) {
+        struct sockaddr_un addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sun_family = AF_UNIX;
+        snprintf(addr.sun_path, sizeof(addr.sun_path), "%s", g_wake_path);
+        SOCKET sock = socket(AF_UNIX, SOCK_STREAM, 0);
+        if (sock != INVALID_SOCKET) {
+            if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+                DWORD timeout = 10;
+                setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+                g_wake_socket = sock;
+            } else {
+                closesocket(sock);
+            }
+        }
+        g_wake_retry_at = now + 250;
+    }
+    if (g_wake_socket != INVALID_SOCKET) {
+        char byte;
+        int n = recv(g_wake_socket, &byte, 1, 0);
+        if (n == 0 || (n < 0 && WSAGetLastError() != WSAETIMEDOUT &&
+                       WSAGetLastError() != WSAEWOULDBLOCK)) wake_close();
+    }
+}
+static void wait_wake_or_sleep(void) {
+    if (g_shm && __atomic_exchange_n(&g_shm->wake_requested, 0u, __ATOMIC_ACQ_REL)) return;
+    wake_poll();
+    if (g_wake_socket == INVALID_SOCKET) Sleep(1);
+}
 typedef struct {
     uint64_t sample_position, transport_frame, loop_end_frame;
     double sample_rate, tempo;
@@ -277,6 +323,16 @@ static void publish_midi_output(void) {
     for (uint32_t i = 0; i < count; ++i) g_shm->midi_output_events[i] = g_chain_midi[i];
     g_shm->midi_output_count = count;
     __atomic_store_n((uint64_t*)&g_shm->midi_output_seq, seq + 1u, __ATOMIC_RELEASE);
+}
+
+static void publish_output_midi_block(uint64_t sequence) {
+    volatile VstpocOutputMidiBlock* block = &g_shm->output_midi_blocks[
+        (sequence - 1u) & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
+    uint32_t count = g_chain_midi_count;
+    if (count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) count = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+    block->event_count = count;
+    for (uint32_t i = 0; i < count; ++i) block->events[i] = g_chain_midi[i];
+    __atomic_store_n(&block->sequence, sequence, __ATOMIC_RELEASE);
 }
 
 
@@ -307,7 +363,7 @@ static int g_transport_pending = 0;
 static int read_transport(const VstpocShared* shm) {
     if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V8_SIZE) { g_transport.valid = 0; return 0; }
+        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V9_SIZE) { g_transport.valid = 0; return 0; }
     uint64_t tail = __atomic_load_n(&shm->transport_queue_tail, __ATOMIC_RELAXED);
     uint64_t head = __atomic_load_n(&shm->transport_queue_head, __ATOMIC_ACQUIRE);
     if (tail == head) return 0;
@@ -825,12 +881,12 @@ static VstpocShared* map_shared(const char* path) {
     }
     if (s->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         s->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        s->shared_layout_size < VSTPOC_SHARED_LAYOUT_V8_SIZE ||
+        s->shared_layout_size < VSTPOC_SHARED_LAYOUT_V9_SIZE ||
         (s->shared_feature_bits & VSTPOC_FEATURE_PLANAR_AUDIO) == 0) {
         LOG("incompatible shared layout/features: magic=%llx version=%u size=%u features=%llx expected=%u\n",
             (unsigned long long)s->shared_layout_magic,
             (unsigned)s->shared_layout_version, (unsigned)s->shared_layout_size,
-            (unsigned long long)s->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V8_SIZE);
+            (unsigned long long)s->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V9_SIZE);
         UnmapViewOfFile(s);
         return NULL;
     }
@@ -1446,7 +1502,6 @@ int main(int argc, char** argv) {
 
     /* Spawn rpcss.exe so the RPC service is reachable when plugins call
      * CoInitialize / CoCreateInstance during VSTPluginMain. Without this,
-     * wine's ole32 logs 'Failed to open RpcSs service' and any plugin that
      * needs COM (Amplitube 5 spawns a worker thread that deadlocks on a
      * CS waiting for COM init to complete) hangs in VSTPluginMain. We
      * don't wait for rpcss to finish initializing — it runs as a sibling
@@ -1497,6 +1552,7 @@ int main(int argc, char** argv) {
         g_load_on_editor_thread = (lt && *lt && *lt != '0');
     }
     g_shm = shm;  /* editor threads poll stop_flag during option-2 load */
+    wake_init(shm_path);
 
     if (!g_load_on_editor_thread) {
         /* Default: load each plugin from argv on the main thread, compacting
@@ -1647,7 +1703,10 @@ int main(int argc, char** argv) {
         LOG("audio thread: editor_open_done=%d after %dms\n",
             (int)g_editor_open_done, waited_ms);
     }
-
+    if (!SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL)) {
+        LOG("audio thread: SetThreadPriority(TIME_CRITICAL) failed: %lu\n",
+            (unsigned long)GetLastError());
+    }
 
     LOG("entering process loop\n");
     int audio_configured = 0;
@@ -1819,6 +1878,7 @@ int main(int argc, char** argv) {
                 (VstpocOutputBlock*)&shm->output_blocks[bh & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
             d->frame_count = (uint32_t)blockFrames;
             d->ring_offset = (uint32_t)slot;
+            publish_output_midi_block(bh + 1u);
             __atomic_store_n(&d->sequence, bh + 1u, __ATOMIC_RELEASE);
             __atomic_store_n(&shm->audio_head, ah + (uint64_t)blockFrames, __ATOMIC_RELEASE);
             __atomic_store_n(&shm->output_block_head, bh + 1u, __ATOMIC_RELEASE);
