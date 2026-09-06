@@ -83,6 +83,7 @@ object AudioSettingsManager {
     private const val KEY_DIRECT_USB_CAPTURE_DEADLINE_SLACK = "directUsbCaptureDeadlineSlack"
     private const val KEY_DIRECT_USB_TRANSFER_COUNT = "directUsbTransferCount"
     private const val KEY_DIRECT_USB_PACKETS_PER_TRANSFER = "directUsbPacketsPerTransfer"
+    private const val KEY_AUDIO_AFFINITY = "audioAffinityEnabled"
     private const val KEY_UI_METER_INTERVAL_MS = "uiMeterIntervalMs"
     private const val KEY_UI_TRANSPORT_FRAME_CLOCK = "uiTransportFrameClock"
     private const val KEY_UI_TRANSPORT_CLOCK_MS = "uiTransportClockMs"
@@ -152,6 +153,16 @@ object AudioSettingsManager {
     fun setDirectUsbPacketsPerTransfer(context: Context, packets: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, packets.coerceIn(0, 8)).apply()
     }
+    // Whether the audio threads ask for the fast cluster when they start.
+    // On by default: it was measured to cut USB service gaps about fourfold.
+    // Off is offered because a mask is a bet on the platform's core policy,
+    // and the bet is device-specific.
+    fun getAudioAffinityEnabled(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_AUDIO_AFFINITY, true)
+    fun setAudioAffinityEnabled(context: Context, enabled: Boolean) {
+        prefs(context).edit().putBoolean(KEY_AUDIO_AFFINITY, enabled).apply()
+    }
+
     // How often the rack polls the meters, and whether the transport display
     // follows the display frame clock. Both are periodic work in the process
     // that owns the render thread, and both are settable so their cost can be

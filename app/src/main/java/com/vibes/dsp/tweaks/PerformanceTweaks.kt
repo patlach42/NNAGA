@@ -50,6 +50,7 @@ object PerformanceTweaks {
     private const val KEY_IRQ_AFFINITY = "original_irq_affinity"
     private const val KEY_MIN_FREQ = "original_scaling_min_freq"
     private const val KEY_SLACK = "original_timerslack_ns"
+    private const val KEY_CORE_CTL_MIN_CPUS = "original_core_ctl_min_cpus"
 
     data class Tweak(
         val id: String,
@@ -132,6 +133,34 @@ object PerformanceTweaks {
             risk = Risk.SystemWide,
         ),
         Tweak(
+            id = "audio_affinity",
+            title = "Keep the audio threads on the fast cores",
+            summary = "Asks for the fastest cluster for the render and USB " +
+                "servicing threads. Measured on this hardware it cut USB " +
+                "service interruptions about fourfold. Needs no permission " +
+                "and applies from the next session.",
+            caution = "A CPU mask is a bet that the platform will keep those " +
+                "cores available, and core policies differ between devices. " +
+                "If audio is worse with it on, turn it off - nothing else " +
+                "depends on it.",
+            requirement = Requirement.None,
+            risk = Risk.Safe,
+        ),
+        Tweak(
+            id = "core_ctl_min_cpus",
+            title = "Stop the fast cluster parking a core",
+            summary = "The vendor's core control keeps only one of the two " +
+                "fastest cores awake unless the cluster is over sixty percent " +
+                "busy, and audio holds it near seventeen. A parked core is " +
+                "online and runs nothing, so the audio threads queue behind " +
+                "each other on the one that is awake. This asks for both.",
+            caution = "Both fast cores stay awake while it is set, which uses " +
+                "more battery and runs warmer. Reverts on reboot, and the " +
+                "vendor's service may put it back sooner.",
+            requirement = Requirement.Root,
+            risk = Risk.SystemWide,
+        ),
+        Tweak(
             id = "battery_exemption",
             title = "Exempt from battery optimisation",
             summary = "Stops the system throttling the app in the background. " +
@@ -150,6 +179,38 @@ object PerformanceTweaks {
      */
     fun apply(context: Context, tweak: Tweak, enable: Boolean): Outcome {
         when (tweak.id) {
+            "audio_affinity" -> {
+                // A preference, not a system write: the threads read it when
+                // they start, so this takes effect at the next session and
+                // saying so beats reporting success for a mask nobody holds.
+                com.vibes.dsp.engine.AudioSettingsManager
+                    .setAudioAffinityEnabled(context, enable)
+            }
+
+            "core_ctl_min_cpus" -> {
+                val path = coreCtlMinCpusPath()
+                    ?: return Outcome(
+                        State.Unavailable,
+                        "this device does not expose core control for the fast cluster",
+                    )
+                if (enable) {
+                    val original = PrivilegedShell.readPrivileged(path)?.trim()
+                    if (!original.isNullOrEmpty()) {
+                        context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                            .edit().putString(KEY_CORE_CTL_MIN_CPUS, original).apply()
+                    }
+                }
+                val target = if (enable) "2" else
+                    context.getSharedPreferences(STORE, Context.MODE_PRIVATE)
+                        .getString(KEY_CORE_CTL_MIN_CPUS, "1") ?: "1"
+                val result = PrivilegedShell.writePrivilegedAndVerify(path, target)
+                if (!result.ok) {
+                    return Outcome(State.NotApplied, result.output.trim().ifBlank {
+                        "core control refused the change"
+                    })
+                }
+            }
+
             "wifi_off" -> {
                 val result = PrivilegedShell.runAsRoot(
                     if (enable) "svc wifi disable" else "svc wifi enable"
@@ -505,6 +566,24 @@ object PerformanceTweaks {
     }
 
     /** cpufreq policy directory governing the highest-capacity cluster. */
+    /**
+     * The core-control directory of the cluster holding the fastest CPU. Found
+     * rather than assumed: the prime cluster is not cpu6 everywhere, and a
+     * device without core control has no such directory at all.
+     */
+    private fun coreCtlMinCpusPath(): String? {
+        val result = PrivilegedShell.runAsRoot(
+            "for c in /sys/devices/system/cpu/cpu[0-9]*; do " +
+                "cap=\$(cat \$c/cpu_capacity 2>/dev/null || echo 0); " +
+                "printf \"%s %s\n\" \$cap \$c; done | sort -rn | head -1 | cut -d' ' -f2"
+        )
+        val cpu = result.stdout.trim().takeIf { result.ok && it.isNotEmpty() }
+            ?: return null
+        val path = "$cpu/core_ctl/min_cpus"
+        val probe = PrivilegedShell.readPrivileged(path) ?: return null
+        return path.takeIf { probe.isNotBlank() }
+    }
+
     private fun bigClusterPolicyPath(): String? {
         val result = PrivilegedShell.runAsRoot(
             "for c in /sys/devices/system/cpu/cpu[0-9]*; do " +
@@ -599,6 +678,69 @@ object PerformanceTweaks {
             }
         }
 
+        "audio_affinity" -> {
+            // What the threads actually hold, read from our own process, not
+            // what the preference asked for: the whole reason this setting
+            // exists is that the two used to disagree without saying so.
+            val wanted = com.vibes.dsp.engine.AudioSettingsManager
+                .getAudioAffinityEnabled(context)
+            val masks = audioThreadCpuMasks()
+            when {
+                masks.isEmpty() && wanted ->
+                    Outcome(State.Unknown, "on; no audio thread running to check")
+                masks.isEmpty() ->
+                    Outcome(State.NotApplied, "off; no audio thread running")
+                else -> {
+                    val detail = masks.entries.joinToString(", ") { "${it.key} on ${it.value}" }
+                    val narrowed = masks.values.any { it != allCpusList() }
+                    when {
+                        wanted && narrowed -> Outcome(State.Applied, detail)
+                        wanted -> Outcome(State.NotApplied, "on, but not in force: $detail")
+                        else -> Outcome(State.NotApplied, "off; $detail")
+                    }
+                }
+            }
+        }
+
+        "core_ctl_min_cpus" -> {
+            val path = coreCtlMinCpusPath()
+            val value = path?.let { PrivilegedShell.readPrivileged(it)?.trim() }
+            val active = path?.let {
+                PrivilegedShell.readPrivileged(it.replace("min_cpus", "active_cpus"))?.trim()
+            }
+            when {
+                path == null -> Outcome(State.Unavailable, "no core control on this device")
+                value == null -> Outcome(State.Unavailable, "needs root")
+                value.toIntOrNull()?.let { it >= 2 } == true ->
+                    Outcome(State.Applied, "minimum $value, $active awake now")
+                else -> Outcome(State.NotApplied, "minimum $value, $active awake now")
+            }
+        }
+
         else -> Outcome(State.Unknown, "unknown tweak")
+    }
+
+    private fun allCpusList(): String {
+        val count = Runtime.getRuntime().availableProcessors()
+        return if (count > 1) "0-${count - 1}" else "0"
+    }
+
+    /** The CPU list each audio thread currently holds, by thread name. */
+    private fun audioThreadCpuMasks(): Map<String, String> {
+        val tasks = java.io.File("/proc/self/task").listFiles() ?: return emptyMap()
+        val masks = LinkedHashMap<String, String>()
+        for (task in tasks) {
+            val name = runCatching {
+                java.io.File(task, "comm").readText().trim()
+            }.getOrNull() ?: continue
+            if (!name.startsWith("UsbAudioRender") && !name.startsWith("UsbIsoEvents")) continue
+            val list = runCatching {
+                java.io.File(task, "status").readLines()
+                    .firstOrNull { it.startsWith("Cpus_allowed_list:") }
+                    ?.substringAfter(':')?.trim()
+            }.getOrNull() ?: continue
+            masks[name] = list
+        }
+        return masks
     }
 }

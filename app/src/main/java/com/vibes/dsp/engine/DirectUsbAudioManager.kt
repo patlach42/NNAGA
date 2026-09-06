@@ -588,6 +588,11 @@ object DirectUsbAudioManager {
             AudioSettingsManager.getDirectUsbPeriodMultiplier(context)
     ): Result<Unit> {
         val engine = NativeEngine.getInstance()
+        // Before the session, because the audio threads read it once when they
+        // are created. A thread already running keeps whatever it started with.
+        engine.nativeSetAudioAffinityEnabled(
+            AudioSettingsManager.getAudioAffinityEnabled(context)
+        )
         if (!engine.nativeStartDirectUsbSession(
                 exact.sampleRate, exact.bits, exact.subslotBytes, exact.channels,
                 outputPair, bufferFrames, periodMultiplier,
