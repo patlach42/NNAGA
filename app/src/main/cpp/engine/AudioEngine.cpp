@@ -1530,7 +1530,12 @@ void AudioEngine::directUsbRenderLoop() {
             // quantum of lead: three or four of them put 192 to 256 frames of
             // unaccounted stock in the pipeline, which is more than any of the
             // reserves being compared and is why none of them mattered.
-            directUsbOutput_->takePlaybackCredit(frames);
+            // Charged, not requested. Asking could be refused, and a refusal
+            // here dropped the debt rather than the block: the audio went out
+            // on the next cycle regardless, unpaid, and the lead it bought was
+            // never returned. Strict credit made it worse rather than better,
+            // which is what a refusal that costs nothing looks like.
+            directUsbOutput_->chargePlaybackCredit(frames);
             std::copy(directUsbOutputLeft_.begin(),
                       directUsbOutputLeft_.begin() + frames,
                       directUsbHeldLeft_.begin());

@@ -1494,3 +1494,45 @@ quantity to be reading at all.
 
 Recorded as a partial explanation. The honest summary is that the floor moved
 from 5.4 ms to about 4.9 ms and is still not understood.
+
+## Why no reserve setting ever mattered
+
+Two faults in the credit ledger, each hiding the other, and between them the
+answer to a question this file has asked three times: why the ring's operating
+point answered to neither the target, nor the headroom, nor the reserve.
+
+**A held block was never charged.** Entering the holding slot asked for credit
+rather than taking it, and the ask could be refused - at which point nothing
+was subtracted, the block went out on the next cycle anyway, and the lead it
+bought was never returned. That is a leak that grants a whole quantum each
+time. It also explains the result that made no sense: strict credit left the
+ring *higher* than a reserve of 32, because a smaller reserve means more
+refusals and a refusal cost nothing.
+
+**The floor was comparing the wrong thing.** The ledger is written minus
+played, so in steady state it sits at minus the entire pipeline - the ring, the
+frames already handed to USB, and a held block if there is one, about 228
+frames here. Comparing that against minus the reserve asks whether the whole
+pipeline fits inside the reserve, which it never does. With the leak closed the
+gate could not open at all: 69000 held quanta a cycle, against the four or five
+that path exists for. The intended depth belongs in the floor; the reserve is
+the lead permitted beyond it.
+
+The four measured states, quantum 32, target 64, real-time policy, three cycles
+each, all with no break, no starvation and no lost quantum:
+
+| | ring p50 | held per cycle | output latency |
+|---|---:|---:|---:|
+| as it was | 140-164 | 4-5 | 5.4-5.9 ms |
+| admission wait no longer truncated | 116-140 | 4-5 | 4.9-5.4 ms |
+| debt recorded, floor unchanged | 76-92 | **69000** | see below |
+| debt recorded, floor on the pipeline | 108-132 | **0** | 4.75-5.25 ms |
+
+The third row is the trap. Its ring is the lowest of the four and it is not
+faster: every block was sitting in the holding slot, outside the ring and a
+cycle late, so the pipeline was the same length and the measurement had stopped
+counting part of it. A number that improves because the thing it counts moved
+somewhere else is worth more suspicion than a number that gets worse.
+
+The last row is the one to keep. It is also the first configuration in this
+file where the holding slot is never used at all.
