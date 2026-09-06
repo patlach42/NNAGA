@@ -1230,3 +1230,44 @@ interface no longer takes milliseconds off the render thread, so the fill phase
 finishes without a block waiting long enough to expire. Recorded as not
 reproducing rather than as fixed, and worth re-checking if either of those
 regresses.
+
+## Ground truth from the scheduler
+
+Perfetto records `sched_switch` and `sched_wakeup` on this device without root,
+and trace_processor reads the result locally. Twenty seconds with audio running
+at the current defaults, nothing else touched during the recording.
+
+Per CPU over those twenty seconds:
+
+| cpu | idle | busy | longest unbroken idle |
+|---|---:|---:|---:|
+| 4 | 16930 ms | 3022 ms | 55 ms |
+| 5 | 16936 ms | 2985 ms | 44 ms |
+| 6 | 19656 ms | **128 ms** | **508 ms** |
+| 7 | 14854 ms | 4961 ms | 17 ms |
+
+A core idle for 508 ms without interruption is not a quiet core, it is a core
+taken out of service. Core control parks cpu6 for essentially the whole trace,
+and both audio threads consequently live on cpu7: servicing ran 3143 ms there
+against 103 ms on cpu6, the graph 1260 ms against 14 ms.
+
+So the two latency-critical threads share one core because the platform only
+offers one, and they wait for each other on it: 40055 runnable waits totalling
+828 ms. During the longest of them the trace shows cpu6 sitting in `swapper`
+and cpu7 held by the display's `crtc_commit` thread or by our own.
+
+This also settles why each placement behaved as it did. Both threads on the
+pool is the only arrangement that works because the pool has one usable core in
+it; giving each an exclusive core pins one of them to a parked core and starves
+the device; and moving the render thread away changed nothing because the two
+were never on separate cores to begin with.
+
+**A correction to the figures above.** The worst runnable wait in this clean
+trace is 1.38 ms, and the mean across forty thousand waits is 20 microseconds.
+An earlier trace, recorded while this session was polling the device over adb,
+showed 6.4 ms - and the trace names the cause: `grep` and `dumpsys`, our own
+monitoring, running on cpu6 during the worst wait. The four to six milliseconds
+reported from schedstat in the sections above were measured the same way, with
+adb polling alongside, and should be read as an upper bound that includes the
+instrument. The mechanism is unchanged; its magnitude in an undisturbed system
+is smaller than this file said.
