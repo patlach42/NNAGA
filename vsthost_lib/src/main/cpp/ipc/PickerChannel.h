@@ -17,7 +17,7 @@ extern "C" {
  * VSTPOC_PICKER_PATH env var. */
 class PickerChannel {
 public:
-    explicit PickerChannel(const std::string& path);
+    explicit PickerChannel(const std::string& path, int reservedFd = -1);
     ~PickerChannel();
 
     PickerChannel(const PickerChannel&) = delete;

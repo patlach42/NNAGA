@@ -153,6 +153,7 @@ struct PluginRealtimeCounters {
     uint64_t inputStarvations = 0;
     uint64_t outputUnderrunFrames = 0;
     uint64_t guestDeadlineMisses = 0;
+    uint64_t guestFramesProduced = 0;
 };
 
 

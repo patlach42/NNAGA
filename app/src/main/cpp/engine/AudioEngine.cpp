@@ -356,9 +356,12 @@ bool AudioEngine::startDirectUsbSession(
         bufferConfig.startupPrimeFrames < 0 ||
         bufferConfig.writeHeadroomFrames < 0 ||
         bufferConfig.captureLimitFrames < 0 ||
-        bufferConfig.captureTargetFrames < 0 ||
-        bufferConfig.captureHeadroomFrames < 0 ||
-        bufferConfig.captureDeadlineSlackFrames < 0) {
+        bufferConfig.captureTargetFrames <
+            monotrypt::usb::kExplicitZeroFrames ||
+        bufferConfig.captureHeadroomFrames <
+            monotrypt::usb::kExplicitZeroFrames ||
+        bufferConfig.captureDeadlineSlackFrames <
+            monotrypt::usb::kExplicitZeroFrames) {
         directUsbFailureCode_.store(
             usbFailureCode(monotrypt::usb::StartError::Unknown),
             std::memory_order_release);
@@ -479,6 +482,11 @@ bool AudioEngine::startDirectUsbSession(
     directUsbOutputPair_.store(outputPair, std::memory_order_release);
     directUsbStartupBlocks_ = startupBlocks;
     directUsbCaptureWaitTimeouts_.store(0, std::memory_order_relaxed);
+    directUsbCaptureWaitBlocked_.store(0, std::memory_order_relaxed);
+    directUsbCaptureWaitTotalNs_.store(0, std::memory_order_relaxed);
+    directUsbWorstCaptureWaitNs_.store(0, std::memory_order_relaxed);
+    directUsbCaptureSoftTimeouts_.store(0, std::memory_order_relaxed);
+    directUsbLeastCaptureAtTimeout_.store(-1, std::memory_order_relaxed);
     directUsbWriteWaitTimeouts_.store(0, std::memory_order_relaxed);
     rackGraph_.setSampleRate(sampleRate_, callbackFrameCount_);
     rackGraph_.setAvailableInputChannelCount(directUsbInputChannelCount_);
@@ -686,6 +694,16 @@ AudioEngine::DirectUsbRuntimeStats AudioEngine::getDirectUsbRuntimeStats() const
     out.deadlineBudgetNanoseconds = directUsbDeadlineBudgetNs_.load(std::memory_order_relaxed);
     out.deadlineMisses = directUsbDeadlineMisses_.load(std::memory_order_relaxed);
     out.captureWaitTimeouts = directUsbCaptureWaitTimeouts_.load(std::memory_order_relaxed);
+    out.captureWaitBlocked =
+        directUsbCaptureWaitBlocked_.load(std::memory_order_relaxed);
+    out.captureWaitTotalNanoseconds =
+        directUsbCaptureWaitTotalNs_.load(std::memory_order_relaxed);
+    out.worstCaptureWaitNanoseconds =
+        directUsbWorstCaptureWaitNs_.load(std::memory_order_relaxed);
+    out.captureSoftTimeouts =
+        directUsbCaptureSoftTimeouts_.load(std::memory_order_relaxed);
+    out.leastCaptureAtTimeout =
+        directUsbLeastCaptureAtTimeout_.load(std::memory_order_relaxed);
     out.writeWaitTimeouts = directUsbWriteWaitTimeouts_.load(std::memory_order_relaxed);
     out.captureTransferFrames = directCaptureTransferFrames_.load(
         std::memory_order_acquire);
@@ -955,6 +973,7 @@ AudioEngine::RealtimeStatsSnapshot AudioEngine::getRealtimeStatsSnapshot() const
     out.vstInputStarvations = pluginStats.inputStarvations;
     out.vstOutputUnderrunFrames = pluginStats.outputUnderrunFrames;
     out.vstGuestDeadlineMisses = pluginStats.guestDeadlineMisses;
+    out.vstGuestFramesProduced = pluginStats.guestFramesProduced;
     out.midiEventDrops = rackGraph_.getMidiEventDrops();
     out.planPublishDeferrals = rackGraph_.getPlanPublishDeferrals();
     out.xRunCount = static_cast<uint64_t>(std::max(0, getXRunCount()));
@@ -1151,6 +1170,21 @@ void AudioEngine::directUsbRenderLoop() {
         std::max(0, directUsbOutput_->captureDeadlineSlackFrames()));
     const uint32_t captureRequiredFrames =
         static_cast<uint32_t>(frames) + captureTargetFrames;
+    // Capture has been filling since before the graph existed: it starts first
+    // because the OUT packet plan is sized from its completions, and by the
+    // time this thread exists there is a pre-roll of everything captured
+    // during activation, priming and thread start. Hand over here, keeping the
+    // window the first cycle wants and dropping the rest, so the stream the
+    // graph renders begins now rather than with a backlog the first read would
+    // have thrown away and counted as an overrun.
+    if (directUsbOutput_) {
+        const int discarded = directUsbOutput_->beginCaptureLive(
+            static_cast<int>(captureRequiredFrames));
+        if (discarded > 0) {
+            LOGI("capture handover: dropped %d pre-roll frames, keeping %u",
+                 discarded, captureRequiredFrames);
+        }
+    }
     const float peakDecay = meterDecayForBlock(frames, sampleRate_);
     const float* const* renderInputPtrs = directUsbInputPlanes_.data();
     float* const renderOutputPtrs[2] = {
@@ -1185,12 +1219,56 @@ void AudioEngine::directUsbRenderLoop() {
             directUsbOutput_->waitForCaptureUntil(
                 static_cast<int>(captureRequiredFrames), deadline);
         const auto waitEnded = std::chrono::steady_clock::now();
+        {
+            // A wait that returns without blocking costs nothing and says the
+            // stock was already there; only the blocked ones are the capture
+            // target doing work. Recorded for every block, not only the
+            // failures, because the question the target sweep asks is how
+            // often the render thread has to wait at all.
+            //
+            // Twenty microseconds, not any positive duration: taking two clock
+            // samples around a call that returns immediately still measures a
+            // few hundred nanoseconds, so "greater than zero" would count
+            // every block as blocked. A wait that really blocks waits for the
+            // next completion, which is a whole microframe away.
+            constexpr uint64_t kBlockedThresholdNs = 20'000;
+            const uint64_t waitNs = static_cast<uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    waitEnded - waitBegan).count());
+            if (waitNs >= kBlockedThresholdNs) {
+                directUsbCaptureWaitBlocked_.fetch_add(
+                    1, std::memory_order_relaxed);
+                directUsbCaptureWaitTotalNs_.fetch_add(
+                    waitNs, std::memory_order_relaxed);
+                uint64_t worst = directUsbWorstCaptureWaitNs_.load(
+                    std::memory_order_relaxed);
+                while (waitNs > worst &&
+                       !directUsbWorstCaptureWaitNs_.compare_exchange_weak(
+                           worst, waitNs, std::memory_order_relaxed)) {
+                }
+            }
+        }
         if (!captureTargetReady) {
             directUsbCaptureWaitTimeouts_.fetch_add(
                 1, std::memory_order_relaxed);
             const int available = directUsbOutput_
                 ? directUsbOutput_->captureAvailableFrames()
                 : 0;
+            // The distinction the raw timeout count hides. Missing the target
+            // while still holding a whole quantum is the reserve being spent
+            // on demand - the pipeline renders and nothing is lost. Missing
+            // the quantum is the fault. A sweep that cannot tell them apart
+            // reads the first as damage and stops too early.
+            if (available >= static_cast<int>(frames)) {
+                directUsbCaptureSoftTimeouts_.fetch_add(
+                    1, std::memory_order_relaxed);
+            }
+            int least = directUsbLeastCaptureAtTimeout_.load(
+                std::memory_order_relaxed);
+            while ((least < 0 || available < least) &&
+                   !directUsbLeastCaptureAtTimeout_.compare_exchange_weak(
+                       least, available, std::memory_order_relaxed)) {
+            }
             if (!directUsbOutput_ ||
                 !directUsbOutput_->driverStreaming()) {
                 failureCode = usbFailureCode(
@@ -1529,7 +1607,12 @@ void AudioEngine::directUsbRenderLoop() {
             // quantum of lead: three or four of them put 192 to 256 frames of
             // unaccounted stock in the pipeline, which is more than any of the
             // reserves being compared and is why none of them mattered.
-            directUsbOutput_->takePlaybackCredit(frames);
+            // Charged, not requested. Asking could be refused, and a refusal
+            // here dropped the debt rather than the block: the audio went out
+            // on the next cycle regardless, unpaid, and the lead it bought was
+            // never returned. Strict credit made it worse rather than better,
+            // which is what a refusal that costs nothing looks like.
+            directUsbOutput_->chargePlaybackCredit(frames);
             std::copy(directUsbOutputLeft_.begin(),
                       directUsbOutputLeft_.begin() + frames,
                       directUsbHeldLeft_.begin());

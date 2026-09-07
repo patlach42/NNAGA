@@ -1,5 +1,6 @@
 package com.varcain.vsthost
 
+import java.io.File
 object NativeBridge {
     init {
         System.loadLibrary("vsthost")
@@ -172,11 +173,11 @@ object NativeBridge {
     external fun nativeInjectX11Key(displayNumber: Int, action: Int, keycode: Int, state: Int)
 
     // ── Health / diagnostics ─────────────────────────────────────────────
-    /** Read the health fields out of a plugin's VstpocShared mmap file at
-     *  [shmPath] (typically `<filesDir>/tmp/vst_shm_v<uuid>.dat`). Works
-     *  live AND post-mortem — the file persists after the wine subprocess
-     *  exits. Returns the raw long[] (see index layout in jni_runtime.cpp's
-     *  nativeReadPluginHealth) or null if the file can't be read.
+    /** Read the health fields from one VstpocShared mmap file. Live instances
+     *  use `<filesDir>/tmp/vst_shm_v<uuid>_i<token>`; normal teardown retains
+     *  one legacy-named post-mortem snapshot. Returns the raw long[] (see the
+     *  index layout in jni_runtime.cpp) or null if the file is unreadable or
+     *  too short for the health prefix.
      *
      *  Prefer [getPluginHealth] which unpacks this into [PluginHealth]. */
     external fun nativeReadPluginHealth(shmPath: String): LongArray?
@@ -184,26 +185,34 @@ object NativeBridge {
     /** Read + decode a plugin's health snapshot. [filesDir] is the app's
      *  filesDir absolute path, [uuid] the imported-VST uuid (registry.json
      *  key). Returns null if the plugin was never activated (no shm file)
-     *  or the read failed. */
+     *  or the read failed. When multiple instance snapshots exist, newest wins. */
     fun getPluginHealth(filesDir: String, uuid: String): PluginHealth? {
-        val shmPath = "$filesDir/tmp/vst_shm_v$uuid.dat"
-        val v = nativeReadPluginHealth(shmPath) ?: return null
-        if (v.size < 13) return null
-        return PluginHealth(
-            layoutVersion = v[0].toInt(),
-            dxvkInitStatus = v[1].toInt(),
-            d3d11DeviceStatus = v[2].toInt(),
-            renderApiUsed = v[3].toInt(),
-            lastMemAllocFailedSize = v[4],
-            lastMemAllocFailedTypes = v[5].toInt(),
-            lastMemAllocFailedCount = v[6],
-            paintRequestCount = v[7],
-            wmPaintCount = v[8],
-            vehPatternsHitBitmask = v[9],
-            wmUserStormPerSecond = v[10].toInt(),
-            loadStatus = v[11].toInt(),
-            guestReady = v[12] != 0L,
-        )
+        val tmp = File(filesDir, "tmp")
+        val legacyName = "vst_shm_v$uuid.dat"
+        val uniquePrefix = "vst_shm_v${uuid}_i"
+        val candidates = tmp.listFiles { file ->
+            file.isFile && (file.name == legacyName || file.name.startsWith(uniquePrefix))
+        }?.sortedByDescending { it.lastModified() }.orEmpty()
+        for (shm in candidates) {
+            val v = nativeReadPluginHealth(shm.absolutePath) ?: continue
+            if (v.size < 13) continue
+            return PluginHealth(
+                layoutVersion = v[0].toInt(),
+                dxvkInitStatus = v[1].toInt(),
+                d3d11DeviceStatus = v[2].toInt(),
+                renderApiUsed = v[3].toInt(),
+                lastMemAllocFailedSize = v[4],
+                lastMemAllocFailedTypes = v[5].toInt(),
+                lastMemAllocFailedCount = v[6],
+                paintRequestCount = v[7],
+                wmPaintCount = v[8],
+                vehPatternsHitBitmask = v[9],
+                wmUserStormPerSecond = v[10].toInt(),
+                loadStatus = v[11].toInt(),
+                guestReady = v[12] != 0L,
+            )
+        }
+        return null
     }
 }
 

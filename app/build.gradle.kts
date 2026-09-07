@@ -592,6 +592,19 @@ tasks.configureEach {
     }
 }
 
+// app's CMake imports libvsthost.so by path. Make its configure/build tasks wait
+// for the library module; otherwise AGP can package the previous invocation's
+// copy even though :vsthost_lib rebuilt later in the same Gradle graph.
+tasks.configureEach {
+    when {
+        name.startsWith("configureCMakeDebug") || name.startsWith("buildCMakeDebug") ->
+            dependsOn(":vsthost_lib:copyDebugJniLibsProjectOnly")
+        name.startsWith("configureCMakeRelWithDebInfo") ||
+            name.startsWith("buildCMakeRelWithDebInfo") ->
+            dependsOn(":vsthost_lib:copyReleaseJniLibsProjectOnly")
+    }
+}
+
 dependencies {
     // X11 plugin UIs: native EGL + ANativeWindow (see app/src/main/cpp/x11/)
 

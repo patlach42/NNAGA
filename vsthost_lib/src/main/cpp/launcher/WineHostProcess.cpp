@@ -14,7 +14,6 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
-#include <sched.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -77,55 +76,6 @@ const PerfHintApi& perf_hint_api() {
     return api;
 }
 
-// Compute the "big-core" cpu_set on this heterogeneous CPU. Heuristic:
-// any core whose cpuinfo_max_freq is within 10% of the highest observed.
-// On a typical Snapdragon 8 Gen 2 this yields the X3+A715 cluster
-// (cores 5-7) and excludes the A510 efficiency cores. Falls back to
-// "all cores" if /sys is unreadable. Cached after first call.
-static const cpu_set_t& big_core_set() {
-    static cpu_set_t cached;
-    static bool computed = false;
-    if (computed) return cached;
-    CPU_ZERO(&cached);
-    const long n = ::sysconf(_SC_NPROCESSORS_ONLN);
-    long max_freqs[64] = {0};
-    long highest = 0;
-    const int probe = (n > 0 && n < 64) ? (int)n : 64;
-    for (int i = 0; i < probe; ++i) {
-        char path[160];
-        std::snprintf(path, sizeof(path),
-            "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", i);
-        FILE* f = std::fopen(path, "r");
-        if (f) {
-            long v = 0;
-            if (std::fscanf(f, "%ld", &v) == 1 && v > 0) {
-                max_freqs[i] = v;
-                if (v > highest) highest = v;
-            }
-            std::fclose(f);
-        }
-    }
-    if (highest <= 0) {
-        for (int i = 0; i < probe; ++i) CPU_SET(i, &cached);
-    } else {
-        const long threshold = (highest * 9) / 10;
-        for (int i = 0; i < probe; ++i)
-            if (max_freqs[i] >= threshold) CPU_SET(i, &cached);
-    }
-    computed = true;
-    return cached;
-}
-
-// Pin the calling thread to the big cores. Returns the bitmask we set,
-// for logging (0 on failure).
-unsigned long set_big_core_affinity() {
-    const cpu_set_t& set = big_core_set();
-    if (::sched_setaffinity(0, sizeof(set), &set) != 0) return 0;
-    unsigned long mask = 0;
-    for (int i = 0; i < 64; ++i) if (CPU_ISSET(i, &set)) mask |= (1UL << i);
-    return mask;
-}
-
 static char asciiLower(char c) {
     return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c;
 }
@@ -165,15 +115,6 @@ static void vstpocApplyPluginEnvDefaults(const WineHostProcess::Config& cfg) {
             ::setenv("VSTPOC_STACK_PCT", "400", 1);
         }
     }
-}
-
-// vstpoc 2026-05-24 (Fix A.2): re-pin a SPECIFIC tid to the big-core set.
-// Used by the watchdog every few seconds to defeat Android cgroup
-// demotion of background-spawned threads. Per-tid mask is silently
-// ignored if the tid no longer exists (process race ok).
-static void pin_tid_to_big_cores(int tid) {
-    const cpu_set_t& set = big_core_set();
-    ::sched_setaffinity(tid, sizeof(set), &set);
 }
 
 // vstpoc 2026-05-24 (Fix C): dump kernel-side state for a stuck thread.
@@ -1333,16 +1274,6 @@ bool WineHostProcess::start() {
                 std::strerror(errno));
         }
 
-        // Pin to the big-core cluster so the audio worker isn't migrated to
-        // an A510 mid-callback.
-        unsigned long mask = set_big_core_affinity();
-        if (mask) {
-            std::fprintf(stderr, "[launcher] big-core mask=0x%lx\n", mask);
-        } else {
-            std::fprintf(stderr, "[launcher] sched_setaffinity failed: %s\n",
-                std::strerror(errno));
-        }
-
         /* vstpoc: re-apply file env overrides LAST (after the WINEDEBUG/FEX/DXVK
          * setenvs above) so wine_env.txt can also override WINEDEBUG — e.g.
          * "WINEDEBUG=+gdi,+tid" to trace the BIAS FX 2 tid 00a0 runaway recursion
@@ -1467,15 +1398,14 @@ void WineHostProcess::killHard() {
     waitFor(500);
 }
 
-/* vstpoc watchdog: per-thread CPU-time/state poller for diagnosing the
- * "wine thread stuck" symptom. Reads /proc/<pid>/task/<tid>/stat for
- * every task in the host process every 1 s; if a task's utime+stime
- * stays flat for ≥ 2 consecutive polls AND its state is R (runnable
- * — i.e. genuinely stuck in CPU-bound code without progressing) or D
- * (uninterruptible wait), logs a warning. Distinguishes "blocked on
- * futex" (state=S, fine, expected) from "looping in FEX JIT" (state=R,
- * total time not advancing — suspicious). Free / no perf cost when no
- * thread is stuck. */
+/* vstpoc watchdog: per-thread CPU-time/state poller for diagnostics only.
+ * Reads /proc/<pid>/task/<tid>/stat for every task in the host process every
+ * 1 s; if a task's utime+stime stays flat for ≥ 2 consecutive polls AND its
+ * state is R (runnable — i.e. genuinely stuck in CPU-bound code without
+ * progressing) or D (uninterruptible wait), logs a warning. Distinguishes
+ * "blocked on futex" (state=S, fine, expected) from "looping in FEX JIT"
+ * (state=R, total time not advancing — suspicious). Never changes thread
+ * affinity or scheduling. Free / no perf cost when no thread is stuck. */
 void WineHostProcess::startWatchdog() {
     if (pid_ <= 0) return;
     watchdogRunning_ = true;
@@ -1484,10 +1414,8 @@ void WineHostProcess::startWatchdog() {
             long lastTotal = -1;
             int  stuckPolls = 0;
             char lastState = '?';
-            bool pinned = false;   /* big-core affinity already applied? */
         };
         std::unordered_map<int, TS> states;
-        int pollCount = 0;
         /* vstpoc 2026-05-25: ESC-on-touch hot detection. Track cumulative
          * process CPU each poll (sum of all tasks' utime+stime). A jiffy
          * is 10 ms on Bionic, so 100 jiffies/s = 100% of one core. We
@@ -1501,7 +1429,6 @@ void WineHostProcess::startWatchdog() {
         while (watchdogRunning_.load()) {
             std::this_thread::sleep_for(std::chrono::seconds(1));
             if (!watchdogRunning_.load()) break;
-            pollCount++;
 
             char taskDir[64];
             std::snprintf(taskDir, sizeof(taskDir), "/proc/%d/task", pid);
@@ -1517,16 +1444,6 @@ void WineHostProcess::startWatchdog() {
                 int tid = std::atoi(ent->d_name);
                 if (tid <= 0) continue;
                 seenTids.insert(tid);
-
-                /* vstpoc 2026-05-24 (Fix A.2): pin each tid to big cores
-                 * on first sight, then re-pin every 5 s. Defeats Android
-                 * cgroup demotion of background-spawned threads (which
-                 * causes 30-50 s stalls under TH-U popup-dismiss load). */
-                auto& sRef = states[tid];
-                if (!sRef.pinned || (pollCount % 5) == 0) {
-                    pin_tid_to_big_cores(tid);
-                    sRef.pinned = true;
-                }
 
                 char statPath[128];
                 std::snprintf(statPath, sizeof(statPath),

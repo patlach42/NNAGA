@@ -12,9 +12,10 @@
 
 namespace {
 
-static_assert(VSTPOC_SHARED_LAYOUT_VERSION == 8u);
-static_assert(VSTPOC_SHARED_LAYOUT_MAGIC == UINT64_C(0x565354504f435338));
+static_assert(VSTPOC_SHARED_LAYOUT_VERSION == 9u);
+static_assert(VSTPOC_SHARED_LAYOUT_MAGIC == UINT64_C(0x565354504f435339));
 static_assert(sizeof(VstpocParamMetadata) == 36u);
+static_assert(sizeof(VstpocOutputMidiBlock) == 1088u);
 static_assert(offsetof(VstpocShared, param_metadata_seq) == 1442624u);
 static_assert(offsetof(VstpocShared, param_metadata) == 1442688u);
 static_assert(offsetof(VstpocShared, param_display_values) == 1479552u);
@@ -22,7 +23,12 @@ static_assert(offsetof(VstpocShared, param_desired_seq) == 1545088u);
 static_assert(offsetof(VstpocShared, param_desired_values) == 1553280u);
 static_assert(offsetof(VstpocShared, latency_seq) == 1557376u);
 static_assert(offsetof(VstpocShared, deadline_miss_count) == 1557760u);
-static_assert(sizeof(VstpocShared) == 1560704u);
+static_assert(offsetof(VstpocShared, output_midi_blocks) == 1560704u);
+static_assert(offsetof(VstpocShared, output_midi_blocks) ==
+              VSTPOC_SHARED_LAYOUT_V8_SIZE);
+static_assert(VSTPOC_SHARED_LAYOUT_V8_SIZE == 1560704u);
+static_assert(VSTPOC_SHARED_LAYOUT_V9_SIZE == 1700032u);
+static_assert(sizeof(VstpocShared) == 1700032u);
 
 class TempBackingFile {
 public:

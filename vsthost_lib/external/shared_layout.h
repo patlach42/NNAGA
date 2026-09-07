@@ -28,13 +28,14 @@
 #define VSTPOC_PARAM_UNIT_LEN      24     /* display unit, e.g. dB/Hz/ms */
 #define VSTPOC_PARAM_DISPLAY_LEN   64     /* current plugin-formatted value */
 
-#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435338) /* "VSTPOCS8" */
-#define VSTPOC_SHARED_LAYOUT_VERSION 8u
+#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435339) /* "VSTPOCS9" */
+#define VSTPOC_SHARED_LAYOUT_VERSION 9u
 #define VSTPOC_TRANSPORT_QUEUE_CAPACITY 1024u
 #define VSTPOC_FEATURE_PLANAR_AUDIO (UINT64_C(1) << 0)
-#define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1) /* reserved; wake is atomic in v8 */
+#define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1)
 #define VSTPOC_FEATURE_MIDI_EVENTS (UINT64_C(1) << 2)
 #define VSTPOC_FEATURE_MIDI_OUTPUT (UINT64_C(1) << 3)
+#define VSTPOC_FEATURE_OUTPUT_BLOCK_MIDI (UINT64_C(1) << 4)
 #define VSTPOC_GUEST_STATE_STARTING 1u
 #define VSTPOC_GUEST_STATE_RUNNING  2u
 #define VSTPOC_GUEST_STATE_STARVED  3u
@@ -56,6 +57,14 @@ typedef struct {
     uint8_t data2;
     uint8_t reserved;
 } VstpocMidiEvent;
+
+typedef struct {
+    uint64_t sequence;
+    uint32_t event_count;
+    uint32_t reserved;
+    VstpocMidiEvent events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
+    uint8_t reserved_padding[48];
+} VstpocOutputMidiBlock;
 
 /* Native file-picker channel sizes. Wine-side GetOpenFileNameA hook writes
  * the request, Android-side SAF listener writes the response. */
@@ -302,9 +311,13 @@ typedef struct {
     _Alignas(VSTPOC_CACHELINE) uint64_t parameter_error;
     _Alignas(VSTPOC_CACHELINE) uint64_t error_generation;
     uint8_t reserved_v8[64];
+    /* V9 append-only MIDI snapshots paired with output descriptors. */
+    _Alignas(VSTPOC_CACHELINE) VstpocOutputMidiBlock output_midi_blocks[VSTPOC_OUTPUT_BLOCK_CAPACITY];
+    uint8_t reserved_v9[64];
 } VstpocShared;
 
-#define VSTPOC_SHARED_LAYOUT_V8_SIZE sizeof(VstpocShared)
+#define VSTPOC_SHARED_LAYOUT_V8_SIZE offsetof(VstpocShared, output_midi_blocks)
+#define VSTPOC_SHARED_LAYOUT_V9_SIZE sizeof(VstpocShared)
 
 /* Native file-picker channel — lives in its OWN mmap file
  * (vst_picker_pN.dat next to vst_shm_pN.dat) so wine's comdlg32 hook

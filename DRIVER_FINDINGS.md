@@ -1445,3 +1445,397 @@ Worth noting in passing: strict credit ran two clean cycles here with no
 starvation and no breaks. The earlier finding that it starves was measured
 before affinity worked and before the threads could hold a real-time priority,
 and should not be relied on as it stands.
+
+## The gate that was never consulted
+
+The ring's operating point ignoring the target, the headroom and the credit
+reserve at once had one explanation left, and omp named it as one of four
+signatures worth separating: the admission deadline is one quantum period, and
+it was converted to milliseconds by truncation.
+
+At a 32 frame quantum that period is 0.667 ms. Truncated, it reads as zero, the
+wait returns without waiting, and the caller falls through to its ceiling test.
+Below a 64 frame quantum that is every block, on the room wait and on the
+credit wait alike. So the target gate was dead, which is why nothing that
+addressed the target moved the level.
+
+It is now taken in nanoseconds and rounded up. What that does to the operating
+point has not been measured yet - the device was busy - and until it is, the
+2.9 ms attributed to the ring stands unexplained rather than explained.
+
+omp also warns that the figure itself may be wrong: `ring_p50` is a histogram
+sampled at completion, which is neither time-weighted occupancy nor the level
+after a drain nor the level a block is published into. Output latency wants the
+occupancy before the write. That measurement does not exist yet either.
+
+## What fixing the wait actually moved
+
+Measured after the deadline stopped truncating to zero, same geometry as
+before - quantum 32, target 64, headroom 416, credit reserve 32, real-time
+policy, detectors armed:
+
+| | ring p05 | ring p50 | ring p95 |
+|---|---:|---:|---:|
+| before, wait never happened | 124-148 | 140-164 | 180 |
+| after, wait rounds up | 92-116 | 116-140 | 132-156 |
+
+Three cycles, all passing, no break, no starvation, no lost quantum, and held
+quanta down to four or five a cycle. The best cycle reads 116 frames of ring
+against 120 in flight, which is 4.9 ms of output latency where the floor had
+been 5.4.
+
+So the dead gate was real and worth fixing, and it was not the whole story. The
+ring still sits about seventy frames above a target of 64, and a gate that now
+works should have pulled it down to the target if the target were what governed
+it. Two of omp's four candidates remain untested - a startup capture surplus
+that the pipeline never sheds, and a credit debit that a held block skips - and
+so does his warning that `ring_p50` is sampled at completion and may not be the
+quantity to be reading at all.
+
+Recorded as a partial explanation. The honest summary is that the floor moved
+from 5.4 ms to about 4.9 ms and is still not understood.
+
+## Why no reserve setting ever mattered
+
+Two faults in the credit ledger, each hiding the other, and between them the
+answer to a question this file has asked three times: why the ring's operating
+point answered to neither the target, nor the headroom, nor the reserve.
+
+**A held block was never charged.** Entering the holding slot asked for credit
+rather than taking it, and the ask could be refused - at which point nothing
+was subtracted, the block went out on the next cycle anyway, and the lead it
+bought was never returned. That is a leak that grants a whole quantum each
+time. It also explains the result that made no sense: strict credit left the
+ring *higher* than a reserve of 32, because a smaller reserve means more
+refusals and a refusal cost nothing.
+
+**The floor was comparing the wrong thing.** The ledger is written minus
+played, so in steady state it sits at minus the entire pipeline - the ring, the
+frames already handed to USB, and a held block if there is one, about 228
+frames here. Comparing that against minus the reserve asks whether the whole
+pipeline fits inside the reserve, which it never does. With the leak closed the
+gate could not open at all: 69000 held quanta a cycle, against the four or five
+that path exists for. The intended depth belongs in the floor; the reserve is
+the lead permitted beyond it.
+
+The four measured states, quantum 32, target 64, real-time policy, three cycles
+each, all with no break, no starvation and no lost quantum:
+
+| | ring p50 | held per cycle | output latency |
+|---|---:|---:|---:|
+| as it was | 140-164 | 4-5 | 5.4-5.9 ms |
+| admission wait no longer truncated | 116-140 | 4-5 | 4.9-5.4 ms |
+| debt recorded, floor unchanged | 76-92 | **69000** | see below |
+| debt recorded, floor on the pipeline | 108-132 | **0** | 4.75-5.25 ms |
+
+The third row is the trap. Its ring is the lowest of the four and it is not
+faster: every block was sitting in the holding slot, outside the ring and a
+cycle late, so the pipeline was the same length and the measurement had stopped
+counting part of it. A number that improves because the thing it counts moved
+somewhere else is worth more suspicion than a number that gets worse.
+
+The last row is the one to keep. It is also the first configuration in this
+file where the holding slot is never used at all.
+
+## Where the rare breaks begin
+
+With the credit ledger and the admission wait both fixed, and the packet
+geometry pinned in the runner so arms are comparable, the frontier sits on the
+runway rather than on the target. Quantum 32, headroom 416, credit reserve 32,
+real-time policy, loopback detectors armed, 45 s cycles:
+
+| geometry | output latency | clean cycles | breaks |
+|---|---:|---|---:|
+| target 64, 5 transfers | 4.75-5.40 ms | 3 of 3 | 0 |
+| target 64, **4 transfers** | **3.25-3.92 ms** | 5 of 7 | 3 |
+| target 32, 5 transfers | 4.75-5.25 ms | 0 of 3 | 7 |
+
+Four transfers is the edge: about 1.4 ms cheaper than five, at roughly one
+audible break every two or three cycles, with no starvation and no lost quanta
+in either run. Before the ledger fixes the same geometry gave 8, 9 and 1 breaks
+a cycle, so most of what made four transfers unusable was accounting rather
+than physics.
+
+Lowering the target instead is strictly worse: 32 frames costs the same latency
+as 64 - the ring does not follow the target down - and brings back breaks and
+producer quantum drops in every cycle. The target axis is exhausted at 64.
+
+## A measurement that was not comparable
+
+Three geometry comparisons before this one were run with
+`directUsbPacketsPerTransfer` left at its automatic policy, which picks eight
+packets here: a 48 frame transfer and a runway of 192 to 240 frames instead of
+120. The runner set every other axis explicitly and not that one, so an
+interrupted run left a value behind and the next arm silently measured a
+different pipeline.
+
+What it cost: a conclusion that flooring credit on the intended runway is worse
+than flooring it on the live count. That comparison is void. The runner now
+pins packets per transfer like everything else, and the axis it was hiding is
+the same one the frontier turned out to sit on.
+
+## The startup xrun was a handover, not a fault
+
+Every session reported exactly one capture overrun - every run, every geometry,
+never two. Investigated with omp and a subagent, who reached the same place
+from different directions.
+
+It is structural rather than a race. Capture must start before the graph does,
+because the OUT packet plan is sized from capture completions. `captureTail_`
+then stays at zero through graph activation, playback priming and render thread
+start, so the first read finds every frame captured since the stream opened.
+That backlog always exceeds the logical window - about 228 frames, 4.75 ms,
+which startup always outlasts - so the read trims it in one action and counts
+one overrun. Geometry independence follows: startup wall time dominates the
+window at every setting.
+
+The counter had been carrying two different events. A packet that will not fit
+the physical ring is producer-side data loss. A consumer trim of stale history
+is timeline alignment. Folding both into `actual_xruns` is what failed sessions
+that were otherwise clean.
+
+There is now an explicit handover. The render thread calls `beginCaptureLive`
+once, just before its first read: keep the window the first cycle wants, drop
+the pre-roll behind it, record how much was dropped, and only then arm live
+overrun accounting. Measured across three cycles, `capture_overruns` and
+`actual_xruns` are zero where they had always been one, the discarded pre-roll
+reads 152 to 176 frames, and every cycle passes.
+
+Two things this deliberately does not do. It does not silence the counter -
+a trim after the handover still reports, so a render thread that stalls still
+says so. And it does not move capture later, which was the other candidate:
+implicit feedback needs those completions before the OUT plan exists, and the
+remaining gap would still contain thread start and ADPF setup.
+
+## Capture is not a credit problem, and the knob that matters is the target
+
+The question was whether the playback credit ledger has a counterpart on
+capture. It does not, and the reason is structural rather than an omission.
+
+Playback credit exists because the render thread is the **producer**: it can run
+ahead of the device, and the ledger's entire job is to stop it, which is what
+bounds output latency. On capture the roles reverse - the device produces, the
+render thread consumes - and a consumer cannot run ahead of its producer. There
+is nothing for a credit gate to withhold. The full ledger already exists as
+`captureHead_ - captureTail_`, and `waitForCaptureUntil` is the physical dual of
+the admission wait.
+
+What is real, and was never swept, is `captureTargetFrames`. The render thread
+will not read a block until it holds a quantum **plus** the target, so the target
+is input latency carried on every block. It is not, however, paying for the same
+thing as `captureFrameLimit()`:
+
+* `captureTargetFrames` is a **low-water** reserve against a late producer
+  (capture completions, USB servicing).
+* `captureFrameLimit()` is a **high-water** bound against a late consumer
+  (the render thread), enforced by trimming in `prepareCaptureRead`.
+
+Different faults, opposite ends of the same occupancy. And the target is not
+frozen: on a wait timeout the render thread drops the `quantum + target`
+requirement and proceeds whenever a whole quantum is present. So the target is a
+held reserve that is **spent on demand** after a deadline - which is exactly the
+property the credit ledger was built to give playback, already present here.
+
+`captureHeadroomFrames` turned out to have no runtime role at all. Its only uses
+are `checkedFrameBudgetFits` and the start-time admissibility check in
+`AudioEngine::startDirectUsbSession`; neither `captureFrameLimit()` nor the wait
+nor the read path reads it. It is a guard against configuring an impossible
+target, not a latency term, and does not belong in a sweep.
+
+## Zero could not mean zero, so the bottom of the sweep was unreachable
+
+`captureTargetFrames == 0` means *derive one*, and the derived value is
+`2 * captureTransferFrames` = 56 frames at packets=4. An arm asking for "no
+reserve" by writing zero therefore silently repeated the 56-frame arm. Added
+`kExplicitZeroFrames` (-1) and `resolveOptionalFrames`, threaded through the
+preference, the harness argument and the driver's validation, so the three
+capture terms have three states - derive, none, exact - instead of two. The
+settings screen renders the sentinel as "Off (0 frames)".
+
+## What a capture wait timeout actually means
+
+`capture_wait_pressure` counts wait timeouts and nothing else, which cannot tell
+a spent reserve from a lost quantum. Added five counters: `capture_wait_blocked`,
+`capture_wait_total_ns`, `worst_capture_wait_ns`, `capture_soft_timeouts` (the
+timeout still left a whole quantum) and `least_capture_at_timeout`.
+
+The first measurement with them says something worth recording: **essentially
+every render block blocks on capture** - 69000 blocked waits in a 45 s cycle out
+of the same number of blocks. That is not pressure, that is the stream's clock;
+capture is the implicit feedback source, so waiting for it *is* the pacing.
+`capture_wait_blocked` is therefore not a fault signal. The signals that mean
+something are `worst_capture_wait_ns` and the soft/hard split.
+
+## Capture target 56 -> 28: the ring follows, the timeouts do not
+
+Pinned geometry, UI open, loopback detectors armed, rt_priority, 4 cycles each.
+
+| target | capture ring frames | timeouts | soft | least at timeout | capture discontinuities |
+|---|---|---|---|---|---|
+| 56 (auto) | 61-70 | 0-5 | - | - | 0,0,1,1 |
+| 28 | 40-63 | 0-6 | all of them | 56-58 | 0,1,7,7 |
+
+Halving the target moved the capture ring down by roughly twenty frames - about
+0.4 ms of input latency - and **every timeout at 28 was soft**: the deadline
+expired with 56-58 frames present against a 32 frame quantum, `deadline_misses`
+stayed at zero and no partial read occurred. By the counters that measure loss,
+28 is clean.
+
+The reservation was `capture_discontinuities`, which grew by six in one cycle at
+28 against one in four cycles at 56. **The repeat cleared it**: a second four
+cycle arm at 28 passed all four with zero discontinuities, zero xruns, zero
+deadline misses and every timeout soft. The cluster was a disturbance that
+happened to land in that cycle, not the target being too thin. One cycle is not
+a verdict, and this project has been burned by treating one as one before.
+
+## The knee is between 28 and 16, and it is a hard deadline miss
+
+| target | capture ring | timeouts | hard | least at timeout | deadline misses | discontinuities | verdict |
+|---|---|---|---|---|---|---|---|
+| 56 (auto) | 61-70 | 0-5 | 0 | - | 0 | 0,0,1,1 | clean |
+| 28 | 39-54 | 0-4 | 0 | 32-58 | 0 | 0,0,0,0 | clean |
+| 16 | 27-43 | 0-3 | **1** | **29** | **1** | 1,2,2,2 | breaks |
+
+At 16 the first cycle timed out with 29 frames present against a 32 frame
+quantum: below the quantum, so the render thread could not read, `deadline_misses`
+went to one and the loopback detector heard it. That is the transition, and it
+arrives one step earlier than predicted - the prediction was that a real zero
+would be needed to provoke it.
+
+## Below a capture ring of 32 there is nothing left to win
+
+The round-trip figure is
+
+    knownHostLatencyFrames = max(Q, captureRing, captureTransfer) + Q + playbackTarget
+
+so the capture contribution **floors at max(Q, captureTransferFrames)** - 32 here,
+with Q=32 and a 28 frame capture transfer. Target 16 drove the ring to 27, below
+the floor, and bought nothing: its best cycle read 2.667 ms, which is exactly
+32 + 32 + 64 = 128 frames, the same number target 28 reaches whenever its ring
+dips to 32. It paid a hard deadline miss for latency the metric cannot express
+and the pipeline does not actually save.
+
+This also corrects a description this document has used loosely throughout:
+`out_ms` is **not** output-only. The capture ring enters it directly through that
+`max()`, so it is a host round-trip figure. The 56 -> 28 improvement is therefore
+a genuine input-side win of about 0.5 ms, not an output-side artifact - and the
+remaining floor of 2.667 ms is set by the graph quantum and the playback target,
+not by anything on the capture side.
+
+**Capture target 28 is the setting.** Below it latency stops improving because
+the quantum floors it, while faults begin.
+
+## Shipping the capture target: one wave, not two
+
+The automatic policy was `2 * captureTransferFrames`. Two was never measured
+against one; one now has been, so the automatic policy is one wave. It stays
+geometry-relative rather than a hardcoded 28, because the wave is what the
+device's negotiated endpoint decides.
+
+The lattice makes 28 a real boundary rather than a round number. The graph
+quantum and the capture chunk share a factor of eight, so a threshold of
+`quantum + one wave` = 60 is not crossed at 60 but at 64, leaving a whole
+quantum in hand after the read. A threshold one chunk lower - 56 - can be
+crossed at exactly 56, leaving 24, which is less than the quantum. That is why
+the sweep is not continued down to 24 for the sake of 83 microseconds.
+
+## The playback target does move latency now, and it costs the runway
+
+Earlier work concluded the ring does not follow the playback target below 64.
+That result predates the admission-wait, credit-floor and queued-out fixes and
+had to be re-taken. It is now wrong in its first half and right in its second.
+
+| playback target | cycles | round trip | zero runway events | actual xruns |
+|---|---|---|---|---|
+| 64 | 8 | 2.67-3.15 ms | 0 of 8 | 0 of 8 |
+| 48 | 4 | 2.50-2.83 ms | **2 of 4** | **2 of 4** |
+
+Latency does follow the target down now - about 0.2 ms - but at 48 the OUT
+runway reaches zero in half the cycles and an xrun follows each time. The audit
+still reported those cycles as passes, because the xrun landed outside the
+measured growth window; that is a gate artefact and not a clean result, and it
+is recorded here so the pass is not read as an endorsement.
+
+This is the predicted failure and it is the right one: with a smaller target the
+producer's lateness no longer fits in the ring reserve, so a refill arrives with
+no PCM behind it.
+
+The midpoint is clean, and it is better than both:
+
+| playback target | cycles | round trip | zero runway | xruns | capture discontinuities |
+|---|---|---|---|---|---|
+| 64 | 8 | 2.67-3.15 ms | 0 | 0 | one cycle with 4 |
+| **56** | **8** | **2.50-3.00 ms** | **0** | **0** | **0** |
+| 48 | 4 | 2.50-2.83 ms | 2 of 4 | 2 of 4 | one cycle with 3 |
+
+Eight cycles at 56 passed with nothing on any fault counter at all - the only
+arm in this session to do that. It is both lower and cleaner than the 64 it
+replaces.
+
+56 is not expressible by the current automatic policy, which is
+`quantum * multiplier` and knows nothing about the drain chunk. 56 happens to be
+`quantum + drainChunk` here (32 + 24), which is a defensible rule - cover one
+quantum of render lateness plus one chunk of USB drain granularity - but it is
+one device, one geometry and eight cycles, which is not enough to rewrite the
+buffer policy every device inherits. It is recorded as a hypothesis. The value
+itself is reachable today: Playback target is a per-device preference and is in
+the settings screen.
+
+## The harness was losing arms to a dialog
+
+Two arms produced nothing. The first lost its telemetry to a post-run
+`logcat -d -t 40000` that hung in the detached shell until the ring wrapped; the
+runner now streams a filtered follower during the run instead, and the wide dump
+is best effort and last. The second stalled behind a systemui USB permission
+dialog: the interface had re-enumerated, Android asked again, the test blocked on
+the probe behind the dialog, and the only visible symptom was a later cycle
+reporting "No configured USB audio device". The runner now watches for that
+activity and accepts it, reading the button's own bounds rather than guessing at
+screen coordinates, and records it in the arm's status.
+
+## The measured configuration is now what the app ships
+
+Three defaults moved. Two were already right and are listed so the shipped
+geometry is stated in one place rather than reconstructed from the sweep.
+
+| knob | was | is | why |
+|---|---|---|---|
+| packets per transfer | automatic (8) | **4** | automatic makes a transfer 48 frames instead of 24 and doubles the submitted runway; every arm behind these numbers pinned four, so the app had never run the geometry that was measured |
+| automatic capture target | 2 waves (56) | **1 wave (28)** | about 0.5 ms of round trip, every timeout still soft |
+| automatic playback target | quantum x multiplier (64) | **quantum + drain chunk (56)** | eight cycles with nothing on any fault counter, against a discontinuity cluster at 64 |
+| buffer, multiplier, transfers, headroom | 32, 2, 5, 416 | unchanged | already the measured values |
+| admission, credit reserve | credit, 32 | unchanged | already the measured values |
+
+The playback rule cost two wrong answers before it was right, both caught by the
+derived number rather than by reading the code, and both worth recording because
+the failure mode is quiet:
+
+* `exactInitialPacketFrames_` is the **first** packet plan, not the settled one.
+  It reads 16 at configuration time and grows to 24 once implicit feedback has
+  converged, so a target derived from it came out 48 - exactly the value this
+  geometry was measured to break at. The nominal chunk has to come from the
+  negotiated rate and packet count, which do not move.
+* The nominal chunk must be read from `format_` and `microframesPerSec_`, the
+  playback endpoint's own numbers. The first attempt used the capture format
+  struct.
+
+A regression test now drives `setUserspaceBufferConfig` with the geometry pinned
+and asserts 56, so the derivation is covered end to end and not only in the
+arithmetic helper.
+
+### What is verified on the device and what is not
+
+`packets=4` and `capture_target_frames=28` were both read back from a run on the
+interface. The playback target rule is verified by test through the real driver
+path but **not yet on the device**: the interface began dropping its session on
+every start part way through the verification and needs a physical reconnect.
+
+Two harness hazards surfaced while chasing it, and both cost arms:
+
+* A saved per-device watermark pref outranks the automatic policy, so a stale
+  48 left behind by a crashed arm silently masked the new rule for three runs.
+  A defaults verification has to clear `directUsbWatermark:` first.
+* The app pins a USB device id (`bus * 1000 + device`) that goes stale whenever
+  the interface re-enumerates, and the harness restores the stale one in its
+  finally block. The symptom is "No configured USB audio device" some cycles
+  later, which names neither the id nor the re-enumeration.

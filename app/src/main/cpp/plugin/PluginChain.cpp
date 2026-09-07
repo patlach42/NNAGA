@@ -581,6 +581,7 @@ PluginRealtimeCounters PluginChain::getRealtimeCounters() const noexcept {
         total.inputStarvations += counters.inputStarvations;
         total.outputUnderrunFrames += counters.outputUnderrunFrames;
         total.guestDeadlineMisses += counters.guestDeadlineMisses;
+        total.guestFramesProduced += counters.guestFramesProduced;
     }
     return total;
 }

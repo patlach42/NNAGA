@@ -5,10 +5,13 @@
 #include "VstFactory.h"
 #include "../ipc/SharedRing.h"
 #include "../ipc/PickerChannel.h"
+#include "../ipc/VstInstancePaths.h"
+#include "WineAudioBlockAdapter.h"
 #include "../launcher/WineHostProcess.h"
 #include <array>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <algorithm>
@@ -56,6 +59,7 @@ public:
         if (ring_) {
             counters.inputStarvations = ring_->starvationCount();
             counters.guestDeadlineMisses = ring_->deadlineMissCount();
+            counters.guestFramesProduced = ring_->guestFramesProduced();
         }
         counters.outputUnderrunFrames = underrunFrames_.load(std::memory_order_relaxed);
         return counters;
@@ -104,7 +108,10 @@ private:
     // guest completed its startup handshake.
     std::atomic<bool> guestReadyForActivation_{false};
     std::atomic<bool> realtimeReady_{false};
+    std::optional<VstInstancePaths> instancePaths_;
+    std::string instanceLogPath_;
     std::unique_ptr<SharedRing>      ring_;
+    WineAudioBlockAdapter audioAdapter_;
     std::unique_ptr<PickerChannel>   picker_;
     std::unique_ptr<WineHostProcess> guest_;
     // Permanent silent plane for nullable host inputs. Keeps transport,
@@ -134,6 +141,7 @@ private:
     float lastOutputLeft_ = 0.0f;
     float lastOutputRight_ = 0.0f;
     bool haveLastOutput_ = false;
+    bool outputPrimed_ = false;
 };
 
 } // namespace vsthost

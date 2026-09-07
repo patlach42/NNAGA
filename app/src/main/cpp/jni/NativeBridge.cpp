@@ -930,7 +930,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbFlightRecorderSnapshot(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
         JNIEnv* env, jobject thiz) {
-    constexpr jsize kStatCount = 98;
+    constexpr jsize kStatCount = 104;
     jlong values[kStatCount] = {};
     if (g_ctx && g_ctx->directUsbOutput) {
         const auto capture = g_ctx->directUsbOutput->captureStats();
@@ -1036,6 +1036,11 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
                 g_ctx->directUsbOutput->worstServiceOffCpuNs());
             values[95] = static_cast<jlong>(
                 g_ctx->directUsbOutput->maxCallbacksPerPoll());
+            // Capture pre-roll dropped at the handover to live capture. A
+            // classification, not a fault: it used to be counted as an overrun
+            // and failed every session that was otherwise clean.
+            values[98] = static_cast<jlong>(
+                g_ctx->directUsbOutput->startupCaptureDiscardFrames());
             // The pair that says what the servicing thread was doing through
             // the worst multi-collect: how long the iteration took, and how
             // much of that it spent runnable without a CPU.
@@ -1043,6 +1048,15 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
                 g_ctx->directUsbOutput->worstMultiCollectSpanNs());
             values[97] = static_cast<jlong>(
                 g_ctx->directUsbOutput->worstMultiCollectRunqueueNs());
+            // Capture pacing, the five numbers a capture-target sweep is read
+            // from: how often the render thread actually blocked for input,
+            // what that cost, and whether a timeout still left a whole quantum
+            // - a spent reserve - or did not.
+            values[99] = static_cast<jlong>(stats.captureWaitBlocked);
+            values[100] = static_cast<jlong>(stats.captureWaitTotalNanoseconds);
+            values[101] = static_cast<jlong>(stats.worstCaptureWaitNanoseconds);
+            values[102] = static_cast<jlong>(stats.captureSoftTimeouts);
+            values[103] = static_cast<jlong>(stats.leastCaptureAtTimeout);
             values[51] = static_cast<jlong>(
                 stats.maxSchedulerLatenessNanoseconds);
             values[52] = static_cast<jlong>(stats.captureTargetFrames);
@@ -1165,13 +1179,13 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetRealtimeStats(
         JNIEnv* env, jobject) {
-    // Schema v1; order mirrors AudioRealtimeStats.fromRaw.
-    constexpr jsize kCount = 26;
+    // Schema v2; order mirrors AudioRealtimeStats.fromRaw.
+    constexpr jsize kCount = 27;
     const auto stats = g_ctx && g_ctx->audioEngine
         ? g_ctx->audioEngine->getRealtimeStatsSnapshot()
         : AudioEngine::RealtimeStatsSnapshot{};
     const jlong values[kCount] = {
-        1, static_cast<jlong>(stats.callbackCount),
+        2, static_cast<jlong>(stats.callbackCount),
         static_cast<jlong>(stats.callbackFrames),
         static_cast<jlong>(stats.frameCapacityViolations),
         static_cast<jlong>(stats.inputUnderflowFrames),
@@ -1196,6 +1210,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRealtimeStats(
         static_cast<jlong>(stats.peakCallbackNanoseconds),
         static_cast<jlong>(stats.callbackDeadlineBudgetNanoseconds),
         static_cast<jlong>(stats.callbackDeadlineMisses),
+        static_cast<jlong>(stats.vstGuestFramesProduced),
     };
     jlongArray out = env->NewLongArray(kCount);
     if (out) env->SetLongArrayRegion(out, 0, kCount, values);

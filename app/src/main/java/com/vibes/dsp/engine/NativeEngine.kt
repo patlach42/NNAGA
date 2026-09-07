@@ -256,8 +256,17 @@ data class DirectUsbStats(
     val worstServiceOffCpuNs: Long = 0,
     val serviceRunqueueWaitNs: Long = 0,
     val maxCallbacksPerPoll: Long = 0,
+    val startupCaptureDiscardFrames: Long = 0,
     val worstMultiCollectSpanNs: Long = 0,
     val worstMultiCollectRunqueueNs: Long = 0,
+    /** Render blocks that actually waited for capture, and what the wait cost. */
+    val captureWaitBlocked: Long = 0,
+    val captureWaitTotalNs: Long = 0,
+    val worstCaptureWaitNs: Long = 0,
+    /** Timeouts that still left a whole quantum: the capture target spent, not lost. */
+    val captureSoftTimeouts: Long = 0,
+    /** Fewest frames ever present at a timeout, or -1 if none timed out. */
+    val leastCaptureAtTimeout: Long = -1,
     val firstLossRing: Long = 0,
     val firstLossQueued: Long = 0,
     val firstLossHadRoom: Long = 0,
@@ -356,8 +365,14 @@ data class DirectUsbStats(
         private const val WORST_SERVICE_OFF_CPU = 93
         private const val SERVICE_RUNQUEUE_WAIT = 94
         private const val MAX_CALLBACKS_PER_POLL = 95
+        private const val STARTUP_CAPTURE_DISCARD = 98
         private const val MULTI_COLLECT_SPAN = 96
         private const val MULTI_COLLECT_RUNQUEUE = 97
+        private const val CAPTURE_WAIT_BLOCKED = 99
+        private const val CAPTURE_WAIT_TOTAL_NS = 100
+        private const val WORST_CAPTURE_WAIT_NS = 101
+        private const val CAPTURE_SOFT_TIMEOUTS = 102
+        private const val LEAST_CAPTURE_AT_TIMEOUT = 103
         private const val FIRST_LOSS_RING = 81
         private const val FIRST_LOSS_QUEUED = 82
         private const val FIRST_LOSS_HAD_ROOM = 83
@@ -452,8 +467,14 @@ data class DirectUsbStats(
                 worstServiceOffCpuNs = at(WORST_SERVICE_OFF_CPU),
                 serviceRunqueueWaitNs = at(SERVICE_RUNQUEUE_WAIT),
                 maxCallbacksPerPoll = at(MAX_CALLBACKS_PER_POLL),
+                startupCaptureDiscardFrames = at(STARTUP_CAPTURE_DISCARD),
                 worstMultiCollectSpanNs = at(MULTI_COLLECT_SPAN),
                 worstMultiCollectRunqueueNs = at(MULTI_COLLECT_RUNQUEUE),
+                captureWaitBlocked = at(CAPTURE_WAIT_BLOCKED),
+                captureWaitTotalNs = at(CAPTURE_WAIT_TOTAL_NS),
+                worstCaptureWaitNs = at(WORST_CAPTURE_WAIT_NS),
+                captureSoftTimeouts = at(CAPTURE_SOFT_TIMEOUTS),
+                leastCaptureAtTimeout = at(LEAST_CAPTURE_AT_TIMEOUT),
                 firstLossRing = at(FIRST_LOSS_RING),
                 firstLossQueued = at(FIRST_LOSS_QUEUED),
                 firstLossHadRoom = at(FIRST_LOSS_HAD_ROOM),
@@ -496,18 +517,33 @@ data class AudioRealtimeStats(
     val peakCallbackNs: Long,
     val callbackDeadlineBudgetNs: Long,
     val callbackDeadlineMisses: Long,
+    val vstGuestFramesProduced: Long,
 ) {
     companion object {
-        private const val VERSION = 1L
-        private const val SIZE = 26
+        private const val V1 = 1L
+        private const val V2 = 2L
+        private const val V1_SIZE = 26
+        private const val V2_SIZE = 27
         fun fromRaw(raw: LongArray): AudioRealtimeStats {
-            require(raw.size >= SIZE) { "Realtime stats payload is truncated" }
-            require(raw[0] == VERSION) { "Unsupported realtime stats schema: ${raw[0]}" }
+            require(raw.isNotEmpty()) { "Realtime stats payload is truncated" }
+            val guestFramesProduced = when (raw[0]) {
+                V1 -> {
+                    require(raw.size >= V1_SIZE) { "Realtime stats payload is truncated" }
+                    0L
+                }
+                V2 -> {
+                    require(raw.size >= V2_SIZE) { "Realtime stats payload is truncated" }
+                    raw[26]
+                }
+                else -> throw IllegalArgumentException(
+                    "Unsupported realtime stats schema: ${raw[0]}"
+                )
+            }
             return AudioRealtimeStats(
                 raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
                 raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14],
                 raw[15], raw[16], raw[17], raw[18], raw[19], raw[20], raw[21],
-                raw[22], raw[23], raw[24], raw[25]
+                raw[22], raw[23], raw[24], raw[25], guestFramesProduced
             )
         }
     }

@@ -308,6 +308,12 @@ private fun DirectUsbSessionSettings(
     var savedProfiles by remember { mutableStateOf<List<DirectUsbCalibrationProfile>>(emptyList()) }
     var selectedPacketsPerTransfer by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbPacketsPerTransfer(context)) }
     var selectedRingCapacityKiB by remember { mutableIntStateOf(AudioSettingsManager.getDirectUsbRingCapacityKiB(context)) }
+    var selectedServicePlacement by remember {
+        mutableIntStateOf(AudioSettingsManager.getServiceCpuPlacement(context))
+    }
+    var selectedAdpfMode by remember {
+        mutableIntStateOf(AudioSettingsManager.getAdpfMode(context))
+    }
     var thermalSafetyEnabled by remember {
         mutableStateOf(AudioSettingsManager.getDirectUsbThermalSafetyEnabled(context))
     }
@@ -785,27 +791,35 @@ private fun DirectUsbSessionSettings(
             selectedCaptureLimit = it
             AudioSettingsManager.setDirectUsbCaptureLimit(context, it)
         }
-        IntSelector("Capture target", selectedCaptureTarget, watermarkOptions, controlsEnabled) {
+        // Auto, off, or exact. Off is reachable only through the sentinel: the
+        // driver reads a plain zero as a request to derive the value.
+        val captureOptions = remember(watermarkOptions) {
+            listOf(AudioSettingsManager.EXPLICIT_ZERO_FRAMES) + watermarkOptions
+        }
+        IntSelector("Capture target", selectedCaptureTarget, captureOptions, controlsEnabled) {
             selectedCaptureTarget = it
             AudioSettingsManager.setDirectUsbCaptureTarget(context, it)
         }
-        IntSelector("Capture headroom", selectedCaptureHeadroom, watermarkOptions, controlsEnabled) {
+        IntSelector("Capture headroom", selectedCaptureHeadroom, captureOptions, controlsEnabled) {
             selectedCaptureHeadroom = it
             AudioSettingsManager.setDirectUsbCaptureHeadroom(context, it)
         }
         IntSelector(
             "Capture deadline slack",
             selectedCaptureDeadlineSlack,
-            watermarkOptions,
+            captureOptions,
             controlsEnabled
         ) {
             selectedCaptureDeadlineSlack = it
             AudioSettingsManager.setDirectUsbCaptureDeadlineSlack(context, it)
         }
         Text(
-            "Capture target is the post-read input runway. Headroom reserves one completion " +
-                "wave in the capture ring. Deadline slack adds bounded wait time. Auto uses " +
-                "negotiated endpoint geometry."
+            "Capture target is the post-read input runway, and the render thread will not " +
+                "read a block until it holds a quantum plus this many frames - so it is " +
+                "input latency carried on every block, spent only when a wait times out. " +
+                "Headroom is a start-time budget check, not a runtime limit. Deadline slack " +
+                "adds bounded wait time. Auto uses negotiated endpoint geometry; Off asks " +
+                "for none, which Auto cannot express."
         )
         IntSelector("Transfer count", selectedTransferCount, (0..8).toList(), controlsEnabled) {
             selectedTransferCount = it
@@ -827,6 +841,50 @@ private fun DirectUsbSessionSettings(
         Text(
             "Ring capacity is a physical storage ceiling in KiB (0 = Auto) and applies on the next USB engine start. " +
                 "Transfer and packet values of Auto use the device-derived geometry.",
+        )
+        // Where USB servicing runs, and what the platform is told about the
+        // render period. Both were measurement axes reachable only from the
+        // stress harness; an ordinary launch took the built-in value and no
+        // user could try the other one.
+        IntSelector(
+            "USB servicing cores",
+            selectedServicePlacement,
+            listOf(0, 1, 2),
+            controlsEnabled,
+        ) {
+            selectedServicePlacement = it
+            AudioSettingsManager.setServiceCpuPlacement(context, it)
+        }
+        Text(
+            when (selectedServicePlacement) {
+                0 -> "One core of the fast pool. Lowest wake-up jitter while that core is " +
+                    "awake, and worst when the kernel parks it."
+                2 -> "That core exclusively, with the render thread moved off it. Separates " +
+                    "the two threads at the cost of the pool's spare capacity for render."
+                else -> "The whole fast pool. Servicing follows whichever core is awake, " +
+                    "which is why it is the default."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        IntSelector(
+            "Performance hint",
+            selectedAdpfMode,
+            listOf(0, 1, 2),
+            controlsEnabled,
+        ) {
+            selectedAdpfMode = it
+            AudioSettingsManager.setAdpfMode(context, it)
+        }
+        Text(
+            when (selectedAdpfMode) {
+                0 -> "Off. The scheduler is told nothing about the render period."
+                2 -> "Wall time and CPU time reported separately, so time spent off-CPU " +
+                    "is visible to the governor rather than hidden in the block's duration."
+                else -> "CPU time only. Applies on the next USB engine start."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -1633,11 +1691,29 @@ private fun IntSelector(
         "Input" -> "Input $value"
         "Output" -> "Outputs ${value * 2 - 1}–${value * 2}"
         "Period multiplier" -> "$value×"
-        "Playback target", "Startup prime", "Write headroom", "Capture queue limit",
-        "Capture target", "Capture headroom", "Capture deadline slack" ->
+        "Playback target", "Startup prime", "Write headroom", "Capture queue limit" ->
             if (value == 0) "Auto" else "$value frames"
+        // These three carry the explicit-zero sentinel, so they have three
+        // states and not two: derive one, ask for none, or name the number.
+        "Capture target", "Capture headroom", "Capture deadline slack" -> when {
+            value == AudioSettingsManager.EXPLICIT_ZERO_FRAMES -> "Off (0 frames)"
+            value == 0 -> "Auto"
+            else -> "$value frames"
+        }
         "Transfer count", "Packets per transfer" -> if (value == 0) "Auto" else "$value"
         "Ring capacity" -> "$value KiB (restart)"
+        "USB servicing cores" -> when (value) {
+            0 -> "One fast core"
+            2 -> "Exclusive, render moved off"
+            else -> "Whole fast pool"
+        }
+        "Performance hint" -> when (value) {
+            0 -> "Off"
+            2 -> "Wall and CPU"
+            else -> "CPU time"
+        }
+        "Producer lead (credit reserve)", "Meter refresh, ms",
+        "Transport readout, ms", "Statistics refresh, ms" -> "$value"
         else -> "$value-bit"
     }
     Column {

@@ -1,0 +1,7 @@
+start 1788733848 buffer=32 multiplier=2 transfers=5 headroom=416 admission=1 reserve=32 render_stall_us=0 service_stall_us=0 audio_affinity=1 ui_affinity=1 service_cpus=1 adpf=1 ui_meter_ms=17 ui_frame_clock=1 ui_clock_ms=33 ui_stats_ms=200 tweaks=rt_priority loopback=true out_pair=0 in_chan=0 packets=4 cycles=6 duration_ms=45000 capture_target=0 capture_headroom=0 capture_slack=0 playback_target=56
+usb_permission_accepted 1788733897
+instrument rc=0
+foreground_vibes=23 foreground_samples=24
+telemetry lines=33
+log lines=9155
+end 1788734083
