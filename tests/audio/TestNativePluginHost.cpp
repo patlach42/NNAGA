@@ -14,6 +14,7 @@ using guitarrackcraft::NativePlugin;
 using guitarrackcraft::NativePluginLibrary;
 using guitarrackcraft::PluginChain;
 using guitarrackcraft::RealtimeClass;
+using guitarrackcraft::MidiBuffer;
 
 bool activationSucceeds = true;
 uint32_t activationCalls = 0;
@@ -203,7 +204,9 @@ TEST_F(NativePluginHostTest, ChainPublishesAndProcessesArbitraryCertifiedNativeP
     AudioProcessContext context;
     context.sampleRate = 48000.0;
 
-    ASSERT_EQ(chain.process(inputs, outputs, frames, context, nullptr, 0, nullptr, 0), 0u);
+    MidiBuffer inputMidi;
+    MidiBuffer outputMidi;
+    chain.process(inputs, outputs, frames, context, inputMidi, outputMidi);
     EXPECT_EQ(processCalls, 1u);
     EXPECT_FLOAT_EQ(outputLeft[0], 0.75f);
     EXPECT_FLOAT_EQ(outputLeft[1], 0.375f);

@@ -105,21 +105,15 @@ void JsfxPlugin::deactivate() {
     latencyFrames_.store(0, std::memory_order_release);
 }
 
-uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, uint32_t frames,
-                             const AudioProcessContext& context, const MidiEvent* inputEvents,
-                             uint32_t inputCount, MidiEvent* outputEvents, uint32_t outputCapacity) {
+MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* const* outputs, uint32_t frames,
+                                          const AudioProcessContext& context, const MidiBuffer& inputMidi,
+                                          MidiBuffer& outputMidi) {
     auto passthrough = [&] {
         if (outputs) for (uint32_t ch = 0; ch < 2; ++ch) if (outputs[ch]) {
             if (inputs && inputs[ch]) std::copy_n(inputs[ch], frames, outputs[ch]);
             else std::fill_n(outputs[ch], frames, 0.0f);
         }
-        if (outputEvents && inputEvents) {
-            const uint32_t count =
-                std::min({inputCount, outputCapacity, kMaxMidiEvents});
-            std::copy_n(inputEvents, count, outputEvents);
-            return count;
-        }
-        return 0u;
+        return MidiOutputDisposition::Passthrough;
     };
     if (!fx_ || !active_.load(std::memory_order_acquire) ||
         callbackFaulted_.load(std::memory_order_acquire) || frames == 0 ||
@@ -138,10 +132,17 @@ uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, 
         ti.time_position = context.sampleRate > 0 ? context.samplePosition / context.sampleRate : 0;
         ti.playback_state = context.playing ? ysfx_playback_playing : ysfx_playback_stopped;
         ysfx_set_time_info(fx_, &ti);
-        const uint32_t count = std::min(inputCount, kMaxMidiEvents);
-        if (inputEvents) for (uint32_t i = 0; i < count; ++i) {
-            uint8_t bytes[3] = {inputEvents[i].status, inputEvents[i].data1, inputEvents[i].data2};
-            ysfx_midi_event_t ev{0, std::min(inputEvents[i].frameOffset, frames - 1), 3, bytes};
+        for (uint32_t i = 0; i < inputMidi.eventCount(); ++i) {
+            const MidiEvent& midi = inputMidi.eventAt(i);
+            if (midi.frameOffset >= frames || midi.payloadSize == 0 ||
+                midi.payloadSize > kMaxMidiPayloadBytes ||
+                midi.payloadOffset > inputMidi.payloadBytes() ||
+                midi.payloadSize > inputMidi.payloadBytes() - midi.payloadOffset) {
+                outputMidi.recordRejectedMessages();
+                continue;
+            }
+            ysfx_midi_event_t ev{0, midi.frameOffset, midi.payloadSize,
+                                 inputMidi.payloadFor(midi)};
             ysfx_send_midi(fx_, &ev);
         }
         ysfx_process_float(fx_, inputs, outputs, 2, 2, frames);
@@ -155,17 +156,23 @@ uint32_t JsfxPlugin::process(const float* const* inputs, float* const* outputs, 
             latencyFrames_.store(static_cast<uint32_t>(
                 std::min(static_cast<double>(pdc), 65535.0)), std::memory_order_relaxed);
         else latencyFrames_.store(0, std::memory_order_relaxed);
-        uint32_t countOut = 0;
+        bool emitted = false;
         ysfx_midi_event_t ev{};
-        while (outputEvents && countOut < outputCapacity && ysfx_receive_midi(fx_, &ev))
-            if (ev.size >= 3 && ev.data)
-                outputEvents[countOut++] = {ev.offset, ev.data[0], ev.data[1], ev.data[2]};
+        while (ysfx_receive_midi(fx_, &ev)) {
+            emitted = true;
+            if (!ev.data || ev.size == 0 || ev.size > kMaxMidiPayloadBytes ||
+                ev.offset >= frames) {
+                outputMidi.recordRejectedMessages();
+                continue;
+            }
+            outputMidi.append(ev.offset, ev.data, ev.size);
+        }
         if (uiHost_) uiHost_->releaseEffect();
-        return countOut;
+        return emitted ? MidiOutputDisposition::Replace : MidiOutputDisposition::Passthrough;
     } catch (...) {
         callbackFaulted_.store(true, std::memory_order_release);
         if (uiHost_) uiHost_->releaseEffect();
-        return passthrough();
+        return MidiOutputDisposition::Passthrough;
     }
 }
 

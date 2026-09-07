@@ -20,7 +20,9 @@
 #ifndef GUITARRACKCRAFT_IPLUGIN_H
 #define GUITARRACKCRAFT_IPLUGIN_H
 
+#include <array>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -142,12 +144,167 @@ struct AudioProcessContext {
     float beatsPerBar = 4.0f;
     int32_t beatUnit = 4;
 };
-/** A raw MIDI short message scheduled within the current audio block. */
+inline constexpr uint32_t kMaxMidiEvents = 128;
+inline constexpr uint32_t kMaxMidiPayloadBytes = 65'536;
+
+/** Descriptor for one complete MIDI message owned by a MidiBuffer. */
 struct MidiEvent {
-    uint32_t frameOffset;
-    uint8_t status;
-    uint8_t data1;
-    uint8_t data2;
+    uint32_t frameOffset = 0;
+    uint32_t payloadOffset = 0;
+    uint32_t payloadSize = 0;
+};
+
+/**
+ * Allocation-free, owning MIDI block buffer.
+ *
+ * append() preserves caller insertion order. stableMergeFrom() assumes each
+ * source is ordered by frameOffset and preserves higher-priority events before
+ * lower-priority events at equal offsets.
+ */
+class MidiBuffer final {
+public:
+    void clear() noexcept {
+        eventCount_ = 0;
+        payloadBytes_ = 0;
+        rejectedMessages_ = 0;
+    }
+
+    uint32_t eventCount() const noexcept { return eventCount_; }
+    uint32_t payloadBytes() const noexcept { return payloadBytes_; }
+    uint64_t rejectedMessages() const noexcept { return rejectedMessages_; }
+    void recordRejectedMessages(uint64_t count = 1) noexcept {
+        rejectedMessages_ += count;
+    }
+    const MidiEvent* events() const noexcept { return events_.data(); }
+    const uint8_t* payloadData() const noexcept { return payload_.data(); }
+    const MidiEvent& eventAt(uint32_t index) const noexcept { return events_[index]; }
+    const uint8_t* payloadFor(const MidiEvent& event) const noexcept {
+        return payload_.data() + event.payloadOffset;
+    }
+
+    bool append(uint32_t frameOffset, const uint8_t* payload, uint32_t payloadSize) noexcept {
+        if (!payload || payloadSize == 0 || payloadSize > kMaxMidiPayloadBytes ||
+            eventCount_ >= kMaxMidiEvents ||
+            payloadSize > kMaxMidiPayloadBytes - payloadBytes_) {
+            ++rejectedMessages_;
+            return false;
+        }
+        const uint32_t payloadOffset = payloadBytes_;
+        std::memcpy(payload_.data() + payloadOffset, payload, payloadSize);
+        payloadBytes_ += payloadSize;
+        events_[eventCount_++] = MidiEvent{frameOffset, payloadOffset, payloadSize};
+        return true;
+    }
+
+    bool append(const MidiBuffer& source, const MidiEvent& event) noexcept {
+        if (event.payloadSize == 0 || event.payloadOffset > source.payloadBytes_ ||
+            event.payloadSize > source.payloadBytes_ - event.payloadOffset) {
+            ++rejectedMessages_;
+            return false;
+        }
+        return append(event.frameOffset, source.payloadFor(event), event.payloadSize);
+    }
+
+    bool copyFrom(const MidiBuffer& source) noexcept {
+        if (this == &source) return true;
+        clear();
+        bool copiedAll = true;
+        for (uint32_t i = 0; i < source.eventCount_; ++i) {
+            copiedAll = append(source, source.events_[i]) && copiedAll;
+        }
+        return copiedAll;
+    }
+
+    /**
+     * Merge two ordered sources into this buffer. Capacity is reserved for all
+     * higher-priority events first; rejected lower-priority messages remain
+     * complete and later smaller messages may still fit.
+     *
+     * @return number of rejected lower-priority messages
+     */
+    uint32_t stableMergeFrom(const MidiBuffer& higherPriority,
+                             const MidiBuffer& lowerPriority) noexcept {
+        if (this == &higherPriority || this == &lowerPriority) {
+            return higherPriority.eventCount_ + lowerPriority.eventCount_;
+        }
+
+        clear();
+        std::array<bool, kMaxMidiEvents> acceptLower{};
+        uint32_t remainingEvents = kMaxMidiEvents - higherPriority.eventCount_;
+        uint32_t remainingBytes = kMaxMidiPayloadBytes - higherPriority.payloadBytes_;
+        uint32_t dropped = 0;
+        for (uint32_t i = 0; i < lowerPriority.eventCount_; ++i) {
+            const MidiEvent& event = lowerPriority.events_[i];
+            if (remainingEvents > 0 && event.payloadSize <= remainingBytes) {
+                acceptLower[i] = true;
+                --remainingEvents;
+                remainingBytes -= event.payloadSize;
+            } else {
+                ++dropped;
+            }
+        }
+
+        uint32_t highIndex = 0;
+        uint32_t lowIndex = 0;
+        while (highIndex < higherPriority.eventCount_ ||
+               lowIndex < lowerPriority.eventCount_) {
+            while (lowIndex < lowerPriority.eventCount_ && !acceptLower[lowIndex]) {
+                ++lowIndex;
+            }
+            const bool useHigher =
+                    highIndex < higherPriority.eventCount_ &&
+                    (lowIndex >= lowerPriority.eventCount_ ||
+                     higherPriority.events_[highIndex].frameOffset <=
+                             lowerPriority.events_[lowIndex].frameOffset);
+            if (useHigher) {
+                append(higherPriority, higherPriority.events_[highIndex++]);
+            } else if (lowIndex < lowerPriority.eventCount_) {
+                append(lowerPriority, lowerPriority.events_[lowIndex++]);
+            }
+        }
+        rejectedMessages_ = dropped;
+        return dropped;
+    }
+
+    /** Remove invalid events and compact their payload bytes in place. */
+    uint32_t discardInvalid(uint32_t numFrames) noexcept {
+        uint32_t writeEvent = 0;
+        uint32_t writePayload = 0;
+        uint32_t dropped = 0;
+        for (uint32_t readEvent = 0; readEvent < eventCount_; ++readEvent) {
+            const MidiEvent event = events_[readEvent];
+            const bool valid = event.frameOffset < numFrames &&
+                               event.payloadSize > 0 &&
+                               event.payloadOffset <= payloadBytes_ &&
+                               event.payloadSize <= payloadBytes_ - event.payloadOffset;
+            if (!valid) {
+                ++dropped;
+                continue;
+            }
+            std::memmove(payload_.data() + writePayload,
+                         payload_.data() + event.payloadOffset,
+                         event.payloadSize);
+            events_[writeEvent++] =
+                    MidiEvent{event.frameOffset, writePayload, event.payloadSize};
+            writePayload += event.payloadSize;
+        }
+        eventCount_ = writeEvent;
+        payloadBytes_ = writePayload;
+        rejectedMessages_ += dropped;
+        return dropped;
+    }
+
+private:
+    std::array<MidiEvent, kMaxMidiEvents> events_{};
+    std::array<uint8_t, kMaxMidiPayloadBytes> payload_{};
+    uint32_t eventCount_ = 0;
+    uint32_t payloadBytes_ = 0;
+    uint64_t rejectedMessages_ = 0;
+};
+
+enum class MidiOutputDisposition : uint8_t {
+    Passthrough,
+    Replace,
 };
 struct PluginRealtimeCounters {
     uint64_t inputStarvations = 0;
@@ -189,20 +346,15 @@ public:
     virtual void deactivate() = 0;
     /**
      * Process audio and transform MIDI through the plugin.
-     * @param inputs Array of input audio buffers (one per input port)
-     * @param outputs Array of output audio buffers (one per output port)
-     * @param numFrames Number of audio frames to process
-     * @param context Immutable block timing and transport state
-     * @param inputEvents MIDI events scheduled in this block (may be null)
-     * @param inputCount Number of entries in inputEvents
-     * @param outputEvents Destination MIDI buffer (may be null)
-     * @param outputCapacity Capacity of outputEvents
-     * @return Number of MIDI events written to outputEvents
+     * Passthrough retains inputMidi without copying. Replace makes outputMidi
+     * authoritative, including when it is empty.
      */
-    virtual uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                             const AudioProcessContext& context,
-                             const MidiEvent* inputEvents, uint32_t inputCount,
-                             MidiEvent* outputEvents, uint32_t outputCapacity) = 0;
+    virtual MidiOutputDisposition process(const float* const* inputs,
+                                          float* const* outputs,
+                                          uint32_t numFrames,
+                                          const AudioProcessContext& context,
+                                          const MidiBuffer& inputMidi,
+                                          MidiBuffer& outputMidi) = 0;
 
     /**
      * Get plugin metadata.

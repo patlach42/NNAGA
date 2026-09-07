@@ -88,6 +88,17 @@ class PluginRuntimeInstrumentationTest {
                     sessionStartCallbacks + WARMUP_CALLBACKS
             }
             val baseline = engine.getRealtimeStats()
+            val baselineRaw = engine.nativeGetRealtimeStats()
+            assertEquals("Realtime stats v3 payload size changed", 33, baselineRaw.size)
+            assertEquals("Realtime stats schema changed", 3L, baselineRaw[0])
+            assertEquals("Realtime MIDI aggregate moved from index 6", baselineRaw[6], baseline.midiEventDrops)
+            assertEquals("VST guest frames moved from index 26", baselineRaw[26], baseline.vstGuestFramesProduced)
+            assertEquals(baselineRaw[27], baseline.midiIngressDrops)
+            assertEquals(baselineRaw[28], baseline.midiOversizeMessages)
+            assertEquals(baselineRaw[29], baseline.midiMalformedMessages)
+            assertEquals(baselineRaw[30], baseline.midiLateEvents)
+            assertEquals(baselineRaw[31], baseline.midiMergeDrops)
+            assertEquals(baselineRaw[32], baseline.midiPluginOutputDrops)
 
             val beforeUnknown = engine.getRackPlugins(pathId).toList()
             val unknownId = "NATIVE:__nnaga_missing_plugin__"
@@ -149,6 +160,12 @@ class PluginRuntimeInstrumentationTest {
                 before.midiEventDrops,
                 after.midiEventDrops,
             )
+            assertEquals("MIDI ingress drops changed", before.midiIngressDrops, after.midiIngressDrops)
+            assertEquals("MIDI oversize counter changed", before.midiOversizeMessages, after.midiOversizeMessages)
+            assertEquals("MIDI malformed counter changed", before.midiMalformedMessages, after.midiMalformedMessages)
+            assertEquals("MIDI late-event counter changed", before.midiLateEvents, after.midiLateEvents)
+            assertEquals("MIDI merge-drop counter changed", before.midiMergeDrops, after.midiMergeDrops)
+            assertEquals("MIDI plugin-output-drop counter changed", before.midiPluginOutputDrops, after.midiPluginOutputDrops)
             assertEquals(
                 "Plan-publication deferrals increased",
                 before.planPublishDeferrals,

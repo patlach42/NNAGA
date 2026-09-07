@@ -95,6 +95,12 @@ public:
         uint64_t inputUnderflowFrames = 0;
         uint64_t inputOverflowFrames = 0;
         uint64_t midiEventDrops = 0;
+        uint64_t midiIngressDrops = 0;
+        uint64_t midiOversizeMessages = 0;
+        uint64_t midiMalformedMessages = 0;
+        uint64_t midiLateEvents = 0;
+        uint64_t midiMergeDrops = 0;
+        uint64_t midiPluginOutputDrops = 0;
         uint64_t planPublishDeferrals = 0;
         uint64_t vstInputStarvations = 0;
         uint64_t vstOutputUnderrunFrames = 0;

@@ -301,18 +301,14 @@ bool PluginChain::reorderPlugins(int fromIndex, int toIndex) {
     return true;
 }
 
-uint32_t PluginChain::process(const float* const* inputs,
-                              float* const* outputs,
-                              uint32_t numFrames,
-                              const AudioProcessContext& context,
-                              const MidiEvent* inputEvents,
-                              uint32_t inputCount,
-                              MidiEvent* outputEvents,
-                              uint32_t outputCapacity) {
-    if (inputCount > kMaxMidiEvents) {
-        midiEventDrops_.fetch_add(inputCount - kMaxMidiEvents, std::memory_order_relaxed);
-    }
-    if (numFrames == 0) return 0;
+void PluginChain::process(const float* const* inputs,
+                          float* const* outputs,
+                          uint32_t numFrames,
+                          const AudioProcessContext& context,
+                          const MidiBuffer& inputMidi,
+                          MidiBuffer& outputMidi) {
+    outputMidi.clear();
+    if (numFrames == 0) return;
 
     audioEpoch_.fetch_add(1, std::memory_order_acq_rel);
     ProcessPlan* plan = activePlan_.load(std::memory_order_acquire);
@@ -327,7 +323,7 @@ uint32_t PluginChain::process(const float* const* inputs,
             oversizedBlocks_.fetch_add(1, std::memory_order_relaxed);
         }
         clearOutputs(outputs, numFrames);
-        return 0;
+        return;
     }
 
     if (plan->entries.empty()) {
@@ -341,22 +337,21 @@ uint32_t PluginChain::process(const float* const* inputs,
         } else {
             clearOutputs(outputs, numFrames);
         }
+        outputMidi.copyFrom(inputMidi);
         latencyFrames_.store(plan->manualLatencyFrames, std::memory_order_relaxed);
         latencyOverflow_.store(plan->manualLatencyFrames > kMaxSupportedPdcFrames,
                                std::memory_order_relaxed);
-        return 0;
+        return;
     }
 
     if (!inputs || !inputs[0] || !inputs[1] || intermediateBuffers_.size() < 4) {
         clearOutputs(outputs, numFrames);
-        return 0;
+        return;
     }
 
-    const MidiEvent* currentMidi = inputEvents;
-    uint32_t currentMidiCount = std::min(inputCount, kMaxMidiEvents);
-    MidiEvent* midiScratch = midiScratchA_.data();
+    const MidiBuffer* currentMidi = &inputMidi;
+    MidiBuffer* stageMidi = &midiScratchA_;
     const float* currentInput[2] = {inputs[0], inputs[1]};
-    uint32_t produced = 0;
 
     for (size_t index = 0; index < plan->entries.size(); ++index) {
         const bool last = index + 1 == plan->entries.size();
@@ -365,32 +360,30 @@ uint32_t PluginChain::process(const float* const* inputs,
             last ? outputs[0] : intermediateBuffers_[pair * 2].data(),
             last ? outputs[1] : intermediateBuffers_[pair * 2 + 1].data()
         };
-        MidiEvent* stageMidi = last ? outputEvents : midiScratch;
-        const uint32_t stageCapacity = last ? outputCapacity : kMaxMidiEvents;
-        produced = std::min(plan->entries[index]->process(
-                                    currentInput, stageOutput, numFrames, context,
-                                    currentMidi, currentMidiCount, stageMidi, stageCapacity),
-                            stageCapacity);
-        if (produced == 0 && stageMidi && currentMidi && currentMidiCount > 0) {
-            uint32_t forwarded = 0;
-            const uint32_t limit = std::min(currentMidiCount, stageCapacity);
-            for (uint32_t event = 0; event < limit; ++event) {
-                if (currentMidi[event].frameOffset < numFrames) {
-                    stageMidi[forwarded++] = currentMidi[event];
-                }
-            }
-            produced = forwarded;
+        stageMidi->clear();
+        const MidiOutputDisposition disposition =
+                plan->entries[index]->process(currentInput,
+                                              stageOutput,
+                                              numFrames,
+                                              context,
+                                              *currentMidi,
+                                              *stageMidi);
+        if (disposition == MidiOutputDisposition::Replace) {
+            stageMidi->discardInvalid(numFrames);
+        }
+        midiPluginOutputDrops_.fetch_add(stageMidi->rejectedMessages(),
+                                         std::memory_order_relaxed);
+        if (disposition == MidiOutputDisposition::Replace) {
+            currentMidi = stageMidi;
+            stageMidi = stageMidi == &midiScratchA_ ? &midiScratchB_ : &midiScratchA_;
         }
         if (!last) {
             currentInput[0] = stageOutput[0];
             currentInput[1] = stageOutput[1];
-            currentMidi = stageMidi;
-            currentMidiCount = produced;
-            midiScratch = midiScratch == midiScratchA_.data()
-                    ? midiScratchB_.data()
-                    : midiScratchA_.data();
         }
     }
+    outputMidi.copyFrom(*currentMidi);
+
     uint64_t dynamicLatency = plan->manualLatencyFrames;
     for (const auto* plugin : plan->entries) dynamicLatency += plugin->getLatencyFrames();
     latencyOverflow_.store(dynamicLatency > kMaxSupportedPdcFrames,
@@ -398,7 +391,6 @@ uint32_t PluginChain::process(const float* const* inputs,
     latencyFrames_.store(
             static_cast<uint32_t>(std::min<uint64_t>(dynamicLatency, UINT32_MAX)),
             std::memory_order_relaxed);
-    return produced;
 }
 
 void PluginChain::setSampleRate(float sampleRate, uint32_t bufferSize) {

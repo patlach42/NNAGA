@@ -8,7 +8,6 @@
 #include "../ipc/VstInstancePaths.h"
 #include "WineAudioBlockAdapter.h"
 #include "../launcher/WineHostProcess.h"
-#include <array>
 #include <atomic>
 #include <memory>
 #include <optional>
@@ -42,12 +41,11 @@ public:
     void prepare() override;
     void activate(float sampleRate, uint32_t bufferSize) override;
     void deactivate() override;
-    uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext& context,
-                     const guitarrackcraft::MidiEvent* midiEvents,
-                     uint32_t midiEventCount,
-                     guitarrackcraft::MidiEvent* outputEvents,
-                     uint32_t outputCapacity) override;
+    guitarrackcraft::MidiOutputDisposition process(const float* const* inputs, float* const* outputs,
+                                                   uint32_t numFrames,
+                                                   const guitarrackcraft::AudioProcessContext& context,
+                                                   const guitarrackcraft::MidiBuffer& inputMidi,
+                                                   guitarrackcraft::MidiBuffer& outputMidi) override;
 
     guitarrackcraft::PluginInfo getInfo() const override;
     bool isReadyForRealtime() const noexcept override {
@@ -114,11 +112,6 @@ private:
     WineAudioBlockAdapter audioAdapter_;
     std::unique_ptr<PickerChannel>   picker_;
     std::unique_ptr<WineHostProcess> guest_;
-    // Permanent silent plane for nullable host inputs. Keeps transport,
-    // input, and output FIFOs advancing together without RT allocation.
-    std::array<float, VSTPOC_MAX_BLOCK_FRAMES> silentInput_{};
-
-
 
     // Host-side mirror of param values pushed via setParameter or refreshed
     // from the guest snapshot. Used as a fallback for legacy guest builds.
@@ -135,13 +128,10 @@ private:
     mutable std::atomic<uint32_t> lastStableLatencyFrames_{0};
     std::atomic<int32_t> underruns_{0};
     std::atomic<uint64_t> underrunFrames_{0};
-    uint32_t dryRampSamples_ = 0;
-    uint32_t wetRampSamples_ = 0;
-    bool dryFallback_ = true;
-    float lastOutputLeft_ = 0.0f;
-    float lastOutputRight_ = 0.0f;
-    bool haveLastOutput_ = false;
+    WineFailClosedAudioState failClosedAudio_;
     bool outputPrimed_ = false;
+    uint64_t observedSharedMidiDrops_ = 0;
+    uint64_t observedAdapterMidiDrops_ = 0;
 };
 
 } // namespace vsthost

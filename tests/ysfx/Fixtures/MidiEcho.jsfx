@@ -1,0 +1,8 @@
+desc:MIDI Echo Contract
+out_pin:output
+@init
+msg = 1000;
+@block
+while (len = midirecv_buf(offset, msg, 65536)) (
+  midisend_buf(offset, msg, len);
+);

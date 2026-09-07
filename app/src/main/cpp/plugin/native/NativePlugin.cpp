@@ -166,9 +166,8 @@ void NativePlugin::deactivate() {
     maxFrames_ = 0;
 }
 
-uint32_t NativePlugin::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                               const AudioProcessContext& context, const MidiEvent*, uint32_t,
-                               MidiEvent*, uint32_t) {
+MidiOutputDisposition NativePlugin::process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                               const AudioProcessContext& context, const MidiBuffer&, MidiBuffer&) {
     if (!handle_ || maxFrames_ == 0 || numFrames == 0 || numFrames > maxFrames_ ||
         !inputs || !outputs || !inputs[0] || !inputs[1] || !outputs[0] || !outputs[1]) {
         if (numFrames > maxFrames_) {
@@ -185,7 +184,7 @@ uint32_t NativePlugin::process(const float* const* inputs, float* const* outputs
                 }
             }
         }
-        return 0;
+        return MidiOutputDisposition::Passthrough;
     }
     for (uint32_t word = 0; word < dirty_.size(); ++word) {
         uint64_t changed = dirty_[word].exchange(0, std::memory_order_acquire);
@@ -202,7 +201,7 @@ uint32_t NativePlugin::process(const float* const* inputs, float* const* outputs
         context.sampleRate, context.beatsPerMinute, static_cast<uint8_t>(context.playing), static_cast<uint8_t>(context.looping), 0,
         context.beatPosition, context.bar, context.barBeat, context.musicalQuarterNotes, context.beatsPerBar, context.beatUnit};
     descriptor_->process(handle_, inputs[0], inputs[1], outputs[0], outputs[1], numFrames, &nativeContext);
-    return 0;
+    return MidiOutputDisposition::Passthrough;
 }
 
 uint32_t NativePlugin::ordinalForPort(uint32_t portIndex) const noexcept {

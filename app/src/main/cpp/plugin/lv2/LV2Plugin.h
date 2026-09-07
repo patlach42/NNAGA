@@ -83,10 +83,9 @@ public:
     // IPlugin interface
     void activate(float sampleRate, uint32_t bufferSize = 0) override;
     void deactivate() override;
-    uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                     const AudioProcessContext& context,
-                     const MidiEvent* inputEvents, uint32_t inputCount,
-                     MidiEvent* outputEvents, uint32_t outputCapacity) override;
+    MidiOutputDisposition process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                                  const AudioProcessContext& context,
+                                  const MidiBuffer& inputMidi, MidiBuffer& outputMidi) override;
     PluginInfo getInfo() const override;
     bool isReadyForRealtime() const noexcept override {
         return structuralValid_.load(std::memory_order_acquire) &&

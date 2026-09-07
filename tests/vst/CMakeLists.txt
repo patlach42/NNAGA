@@ -13,6 +13,16 @@ add_executable(wine_audio_block_adapter_tests
     TestWineAudioBlockAdapter.cpp
 )
 
+add_executable(vst_host_midi_contract_tests
+    TestVstHostMidi.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../vsthost_lib/external/vst_host/vst_host_midi.c
+)
+target_include_directories(vst_host_midi_contract_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../vsthost_lib/external
+)
+target_link_libraries(vst_host_midi_contract_tests PRIVATE GTest::gtest_main pthread)
+
 target_include_directories(wine_audio_block_adapter_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${VSTHOST_CPP_DIR}
@@ -56,3 +66,4 @@ gtest_discover_tests(vst_transport_tests)
 gtest_discover_tests(vst_parameter_tests)
 gtest_discover_tests(wine_audio_block_adapter_tests)
 gtest_discover_tests(wine_plugin_path_tests)
+gtest_discover_tests(vst_host_midi_contract_tests)

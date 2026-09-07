@@ -4,6 +4,8 @@
 #include "PluginChain.h"
 #include "ClipTempoAdapter.h"
 
+#include "LiveMidiSource.h"
+
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -11,6 +13,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -71,6 +74,15 @@ struct TrackInputSource {
     RackPathId trackId = 0;
     TrackInputTap tap = TrackInputTap::PreFader;
 };
+struct TrackMidiInputSource {
+    enum class Kind : uint8_t { None = 0, UsbPort = 1, TrackOutput = 2 };
+    Kind kind = Kind::None;
+    UsbMidiPortIdentity usb{};
+    std::string displayName;
+    RackPathId trackId = 0;
+    uint64_t runtimeSourceHandle = 0;
+};
+
 enum class LaunchQuantization : uint8_t { Bar, Quarter, Eighth, Sixteenth, None };
 struct WavClip {
     std::vector<float> left;
@@ -81,7 +93,7 @@ struct WavClip {
 };
 struct MidiTimedEvent {
     uint64_t microseconds = 0;
-    MidiEvent event{};
+    std::vector<uint8_t> payload;
 };
 struct MidiClip {
     std::vector<MidiTimedEvent> events;
@@ -145,6 +157,14 @@ struct TrackSnapshot {
     int32_t recordingSlot{-1};
     std::string name;
     uint32_t colorArgb{0};
+    uint8_t midiInputKind{0};
+    uint16_t midiVendorId{0};
+    uint16_t midiProductId{0};
+    std::string midiSerialNumber;
+    uint16_t midiPortNumber{0};
+    std::string midiDisplayName;
+    RackPathId midiInputSourceTrackId{0};
+    bool midiInputConnected{false};
 };
 enum class RecordingPhase : uint8_t { Idle, Armed, Pending, Recording, Cancelling, Completing, Complete };
 struct TransportSnapshot { bool playing; double positionSec; double beatsPerMinute; uint64_t samplePosition; uint64_t transportFrame; double musicalQuarterNotes{0.0}; double sampleRate{0.0}; uint64_t capturedAtMonotonicNanos{0}; };
@@ -175,6 +195,7 @@ public:
             bool inputArmed = false;
             bool inputArmLocked = false;
             TrackInputSource inputSource{};
+            TrackMidiInputSource midiInputSource{};
             PluginChain::ChainState chain;
             uint32_t selectedSlot = 0;
             double defaultLoopLengthBars = 1.0;
@@ -190,6 +211,19 @@ public:
         uint64_t samplePosition = 0;
         double musicalQuarterNotes = 0.0;
     };
+    uint64_t registerUsbMidiSource(const UsbMidiPortIdentity&);
+    bool hasUsbMidiSource(uint64_t) const;
+    void unregisterUsbMidiSource(uint64_t);
+    void flushUsbMidiSource(uint64_t);
+    uint32_t enqueueUsbMidiBatch(uint64_t, const uint64_t*, const uint32_t*,
+                                 const uint32_t*, const uint8_t*, uint32_t,
+                                 uint32_t = 0, uint32_t = 0);
+    bool setTrackMidiInputNone(RackPathId);
+    bool setTrackMidiInputUsb(RackPathId, const UsbMidiPortIdentity&, const std::string&, uint64_t);
+    bool setTrackMidiInputTrack(RackPathId, RackPathId);
+    bool bindTrackUsbMidiSource(RackPathId, uint64_t);
+    TrackMidiInputSource getTrackMidiInputSource(RackPathId) const;
+
     bool setTrackClipAssetId(RackPathId, uint32_t, bool, const std::string&);
     bool materializeProjectMedia(const std::string& directory, std::string& diagnostic);
     std::vector<std::tuple<RackPathId, uint32_t, std::string, bool>> getProjectClipMediaRefs() const;
@@ -235,7 +269,16 @@ public:
     bool hasPluginLatencyOverflow(RackPathId pathId) const;
     PluginRealtimeCounters getRealtimeCounters() const noexcept;
     uint64_t getPlanPublishDeferrals() const noexcept;
-    uint64_t getMidiEventDrops() const noexcept { return midiEventDrops_.load(std::memory_order_relaxed); }
+    uint64_t getMidiIngressDrops() const noexcept { return midiIngressDrops_.load(std::memory_order_relaxed); }
+    uint64_t getMidiOversizeMessages() const noexcept { return midiOversizeMessages_.load(std::memory_order_relaxed); }
+    uint64_t getMidiMalformedMessages() const noexcept { return midiMalformedMessages_.load(std::memory_order_relaxed); }
+    uint64_t getMidiLateEvents() const noexcept { return midiLateEvents_.load(std::memory_order_relaxed); }
+    uint64_t getMidiMergeDrops() const noexcept { return midiMergeDrops_.load(std::memory_order_relaxed); }
+    uint64_t getMidiPluginOutputDrops() const noexcept { return midiPluginOutputDrops_.load(std::memory_order_relaxed); }
+    uint64_t getMidiEventDrops() const noexcept {
+        return getMidiIngressDrops() + getMidiOversizeMessages() + getMidiMalformedMessages() +
+            getMidiLateEvents() + getMidiMergeDrops() + getMidiPluginOutputDrops();
+    }
     struct SlotConfig {
         std::atomic<double> defaultLoopLengthBars{1.0};
         std::atomic<bool> enterOnPunch{false};
@@ -264,6 +307,8 @@ public:
         std::atomic<bool> inputArmed{false};
         std::atomic<bool> inputArmLocked{false};
         std::string name;
+        TrackMidiInputSource midiInputSource{};
+        std::atomic<uint32_t> midiPanicGeneration{0};
         uint32_t colorArgb{0};
         std::vector<std::shared_ptr<SlotConfig>> slotConfig;
         std::vector<std::shared_ptr<ClipRuntime>> clipRuntime;
@@ -276,6 +321,12 @@ public:
         TrackInputSource inputSource{};
         std::vector<float> sourceLeft, sourceRight, outputLeft, outputRight;
         std::vector<float> latencyHistoryLeft, latencyHistoryRight;
+        MidiBuffer midiInput;
+        MidiBuffer panicMidi;
+        MidiBuffer clipMidi;
+        MidiBuffer mergeMidi;
+        MidiBuffer outputMidi;
+        std::atomic<uint32_t> midiPanicAppliedGeneration{0};
         uint32_t latencyHistoryWrite = 0;
         uint32_t latencyHistoryValid = 0;
         uint32_t audioPathLatency = 0;
@@ -283,8 +334,6 @@ public:
         bool audioLatencyInitialized = false;
         bool audioInputSourceInitialized = false;
         bool audioPathLatencyOverflow = false;
-        std::array<MidiEvent, 4096> midiScratch{};
-        uint32_t midiScratchCount = 0;
         std::atomic<uint32_t> punchCalibrationRemaining{0}, punchCalibrationFrames{0};
         std::atomic<float> punchNoiseSum{0.0f}, punchThreshold{0.02f};
         std::atomic<RecordingPhase> recordingPhase{RecordingPhase::Idle};
@@ -298,7 +347,24 @@ public:
         std::atomic<uint8_t> recordQuantization{0};
         TrackNode() = default;
     };
-    struct GraphSnapshot { struct TrackView { std::shared_ptr<TrackNode> node; std::shared_ptr<const WavClip> clip; std::shared_ptr<WavClip> recordingClip; std::shared_ptr<const MidiClip> midi; std::vector<std::shared_ptr<const WavClip>> wavSlots; std::vector<std::shared_ptr<const MidiClip>> midiSlots; std::vector<std::shared_ptr<ClipRuntime>> clipRuntime; std::vector<std::shared_ptr<SlotConfig>> slotConfig; uint32_t selectedSlot{0}; uint32_t recordingSlot{std::numeric_limits<uint32_t>::max()}; uint32_t recordLength{0}; uint64_t recordingGeneration{0}; TrackInputSource inputSource{}; int32_t routeIndex{-1}; }; std::vector<TrackView> tracks; std::vector<uint32_t> topoOrder; uint32_t capacity{}; std::shared_ptr<PluginChain> master; };
+    struct GraphSnapshot {
+        struct TrackView {
+            std::shared_ptr<TrackNode> node; std::shared_ptr<const WavClip> clip;
+            std::shared_ptr<WavClip> recordingClip; std::shared_ptr<const MidiClip> midi;
+            std::vector<std::shared_ptr<const WavClip>> wavSlots;
+            std::vector<std::shared_ptr<const MidiClip>> midiSlots;
+            std::vector<std::shared_ptr<ClipRuntime>> clipRuntime;
+            std::vector<std::shared_ptr<SlotConfig>> slotConfig;
+            uint32_t selectedSlot{0}; uint32_t recordingSlot{std::numeric_limits<uint32_t>::max()};
+            uint32_t recordLength{0}; uint64_t recordingGeneration{0};
+            TrackInputSource inputSource{}; TrackMidiInputSource midiInputSource{};
+            int32_t audioRouteIndex{-1}; int32_t midiRouteIndex{-1}; int32_t midiSourceIndex{-1};
+        };
+        std::vector<TrackView> tracks; std::vector<uint32_t> topoOrder;
+        std::vector<std::shared_ptr<LiveMidiSource>> midiSources;
+        std::vector<MidiBuffer> midiSourceBuffers;
+        uint32_t capacity{}; std::shared_ptr<PluginChain> master;
+    };
     struct RetiredSnapshot { std::unique_ptr<GraphSnapshot> owner; RetiredSnapshot* next=nullptr; };
     struct Mailbox { std::atomic<uint64_t> sequence{0}, playSerial{0}, resetSerial{0}, bpmSerial{0}; std::atomic<bool> desiredPlaying{false}; std::atomic<double> desiredBpm{120.0}; };
     std::unique_ptr<GraphSnapshot> activeOwner_; alignas(64) std::atomic<GraphSnapshot*> activeSnapshot_{nullptr}; alignas(64) std::atomic<GraphSnapshot*> hazardSnapshot_{nullptr}; RetiredSnapshot* retired_=nullptr;
@@ -306,11 +372,21 @@ public:
     uint64_t controlGeneration_=0;
     uint64_t audioSamplePosition_=0, audioTransportFrame_=0, appliedPlaySerial_=0, appliedResetSerial_=0, appliedBpmSerial_=0; bool audioPlaying_=false; double audioElapsedSeconds_=0.0, audioBpm_=120; double audioMusicalQuarterNotes_=0.0;
     std::vector<std::shared_ptr<TrackNode>> tracks_; std::vector<std::shared_ptr<const WavClip>> clips_; std::vector<std::shared_ptr<WavClip>> recordingClips_; std::vector<std::shared_ptr<const MidiClip>> midiClips_; std::vector<std::vector<std::shared_ptr<const WavClip>>> wavSlots_; std::vector<std::vector<std::shared_ptr<const MidiClip>>> midiSlots_; std::vector<std::vector<std::string>> clipLabelOverrides_; std::shared_ptr<PluginChain> master_; RackPathId nextTrackId_=1; std::atomic<float> sampleRate_{0}; uint32_t bufferSize_=0; std::vector<float> mixLeft_, mixRight_;
+    MidiBuffer masterMidiInput_;
+    MidiBuffer masterMidiOutput_;
     Mailbox mailbox_; std::atomic<bool> statusPlaying_{false}; std::atomic<double> statusPositionSec_{0}, statusBpm_{120}, statusMusicalQuarterNotes_{0}; std::atomic<uint64_t> statusSamplePosition_{0}, statusTransportFrame_{0}, statusSampleRate_{0}, statusCapturedAtNanos_{0}, statusSequence_{0};
     void applyGlobalMailbox() noexcept; void publishGlobalStatus(double) noexcept; static uint64_t nextBoundary(uint64_t, double, double, double, LaunchQuantization) noexcept;
     void writeMailboxLocked(bool, bool, bool, bool=false, double=120); std::unique_ptr<GraphSnapshot> buildSnapshotLocked(const std::vector<std::shared_ptr<TrackNode>>&, const std::vector<std::shared_ptr<const WavClip>>&, const std::vector<std::shared_ptr<WavClip>>& = {}) const; std::unique_ptr<GraphSnapshot> buildSnapshotLocked(const std::vector<std::shared_ptr<TrackNode>>&, const std::vector<std::shared_ptr<const WavClip>>&, const std::vector<std::shared_ptr<WavClip>>&, const std::vector<std::vector<std::shared_ptr<const WavClip>>>&, const std::vector<std::vector<std::shared_ptr<const MidiClip>>>&) const; bool publishSnapshotLocked(std::unique_ptr<GraphSnapshot>); bool startTrackRecordingLocked(RackPathId, uint32_t, double, LaunchQuantization, bool); static double clipDuration(const WavClip&); void reclaimerLoop(); void reclaimRetired();
     bool audioLatencyOverflow_ = false;
     static constexpr uint32_t kLatencyHistoryFrames = 65536;
+    std::atomic<uint64_t> midiIngressDrops_{0};
+    std::atomic<uint64_t> midiOversizeMessages_{0};
+    mutable std::unordered_map<uint64_t, std::shared_ptr<LiveMidiSource>> midiSourceRegistry_;
+    uint64_t nextMidiSourceHandle_ = 1;
+    std::atomic<uint64_t> midiMalformedMessages_{0};
+    std::atomic<uint64_t> midiLateEvents_{0};
+    std::atomic<uint64_t> midiMergeDrops_{0};
+    std::atomic<uint64_t> midiPluginOutputDrops_{0};
     std::vector<std::vector<std::string>> wavAssetIds_, midiAssetIds_;
     uint32_t audioGlobalLatency_ = 0;
     bool clearIncompleteRecordingLocked(size_t) noexcept;
@@ -319,7 +395,6 @@ public:
     std::atomic<int32_t> availableInputChannelCount_{0};
     bool ensureClipRuntimeLocked(TrackNode&, uint32_t);
     bool ensureSlotConfigLocked(TrackNode&, uint32_t);
-    std::atomic<uint64_t> midiEventDrops_{0};
 };
 } // namespace guitarrackcraft
 #endif

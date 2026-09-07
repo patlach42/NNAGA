@@ -166,17 +166,13 @@ void WineVstPlugin::activate(float sampleRate, uint32_t bufferSize) {
     realtimeReady_.store(false, std::memory_order_release);
     sampleRate_ = sampleRate;
     bufferSize_ = bufferSize;
-    dryRampSamples_ = 0;
-    wetRampSamples_ = 0;
-    dryFallback_ = true;
-    lastOutputLeft_ = 0.0f;
-    lastOutputRight_ = 0.0f;
-    haveLastOutput_ = false;
+    failClosedAudio_.reset();
     outputPrimed_ = false;
     audioAdapter_.reset();
+    observedSharedMidiDrops_ = 0;
+    observedAdapterMidiDrops_ = 0;
     if (!std::isfinite(sampleRate) || sampleRate <= 0.0f ||
-        bufferSize == 0 || bufferSize > VSTPOC_MAX_BLOCK_FRAMES ||
-        !audioAdapter_.configure(bufferSize)) {
+        bufferSize == 0 || bufferSize > VSTPOC_MAX_BLOCK_FRAMES) {
         return;
     }
     prepare();
@@ -387,63 +383,40 @@ void WineVstPlugin::deactivate() {
          entry_.displayName.c_str(), underruns_.load(std::memory_order_relaxed));
 }
 
-uint32_t WineVstPlugin::process(const float* const* inputs,
-                                float* const* outputs,
-                                uint32_t numFrames,
-                                const guitarrackcraft::AudioProcessContext& context,
-                                const guitarrackcraft::MidiEvent* midiEvents,
-                                uint32_t midiEventCount,
-                                guitarrackcraft::MidiEvent* outputEvents,
-                                uint32_t outputCapacity) {
-    const auto renderDryFallback = [&](uint64_t missingFrames) -> uint32_t {
-        if (!dryFallback_ || wetRampSamples_ > 0) dryRampSamples_ = 0;
-        const float* inL = inputs && inputs[0] ? inputs[0] : nullptr;
-        const float* inR = inputs && inputs[1] ? inputs[1] : inL;
-        const float fromLeft = haveLastOutput_ ? lastOutputLeft_ : 0.0f;
-        const float fromRight = haveLastOutput_ ? lastOutputRight_ : 0.0f;
-        if (outputs) {
-            for (uint32_t i = 0; i < numFrames; ++i) {
-                if (dryRampSamples_ < 64) ++dryRampSamples_;
-                const float dryGain = static_cast<float>(dryRampSamples_) / 64.0f;
-                const float wetGain = 1.0f - dryGain;
-                if (outputs[0]) outputs[0][i] = fromLeft * wetGain + (inL ? inL[i] : 0.0f) * dryGain;
-                if (outputs[1]) outputs[1][i] = fromRight * wetGain + (inR ? inR[i] : 0.0f) * dryGain;
-            }
-            if (numFrames > 0 && outputs[0] && outputs[1]) {
-                lastOutputLeft_ = outputs[0][numFrames - 1];
-                lastOutputRight_ = outputs[1][numFrames - 1];
-                haveLastOutput_ = true;
-            }
-        }
-        dryFallback_ = true;
-        wetRampSamples_ = 0;
+guitarrackcraft::MidiOutputDisposition WineVstPlugin::process(
+    const float* const* inputs, float* const* outputs, uint32_t numFrames,
+    const guitarrackcraft::AudioProcessContext& context,
+    const guitarrackcraft::MidiBuffer& inputMidi,
+    guitarrackcraft::MidiBuffer& outputMidi) {
+    outputMidi.clear();
+    const auto accountMidiDrops = [&]() {
+        const uint64_t shared = ring_ ? ring_->midiDropCount() : observedSharedMidiDrops_;
+        const uint64_t adapter = audioAdapter_.midiDropCount();
+        if (shared > observedSharedMidiDrops_)
+            outputMidi.recordRejectedMessages(shared - observedSharedMidiDrops_);
+        if (adapter > observedAdapterMidiDrops_)
+            outputMidi.recordRejectedMessages(adapter - observedAdapterMidiDrops_);
+        observedSharedMidiDrops_ = shared;
+        observedAdapterMidiDrops_ = adapter;
+    };
+    const auto renderDryFallback = [&](uint64_t missingFrames)
+        -> guitarrackcraft::MidiOutputDisposition {
+        failClosedAudio_.renderFailure(outputs, numFrames);
         underruns_.fetch_add(1, std::memory_order_relaxed);
         underrunFrames_.fetch_add(missingFrames, std::memory_order_relaxed);
-        const uint32_t count = std::min(midiEventCount, outputCapacity);
-        if (outputEvents && midiEvents) std::memcpy(outputEvents, midiEvents, count * sizeof(*outputEvents));
-        return count;
+        accountMidiDrops();
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     };
-    if (!ring_ || !outputs || !audioAdapter_.valid()) {
+    if (!WineAudioBlockAdapter::acceptsCallbackFrames(bufferSize_, numFrames)) {
         return renderDryFallback(numFrames);
     }
-    if (bufferSize_ == 0 || numFrames != bufferSize_ ||
-        numFrames > VSTPOC_MAX_BLOCK_FRAMES) {
-        return renderDryFallback(numFrames);
-    }
-    if (audioAdapter_.inputReady()) {
-        if (!ring_->inputWritable(audioAdapter_.guestFrames()) ||
-            !ring_->publishTransport(audioAdapter_.inputContext().samplePosition,
-                audioAdapter_.inputContext().transportFrame, audioAdapter_.inputContext().loopEndFrame,
-                audioAdapter_.inputContext().sampleRate, audioAdapter_.inputContext().beatsPerMinute,
-                audioAdapter_.inputContext().playing, audioAdapter_.inputContext().looping,
-                audioAdapter_.guestFrames(), audioAdapter_.inputMidi(), audioAdapter_.inputMidiCount()) ||
-            ring_->pushInput(audioAdapter_.inputLeft(), audioAdapter_.inputRight(),
-                             static_cast<int32_t>(audioAdapter_.guestFrames())) !=
-                static_cast<int32_t>(audioAdapter_.guestFrames()))
+    if (!audioAdapter_.valid()) {
+        if (!audioAdapter_.configure(numFrames))
             return renderDryFallback(numFrames);
-        audioAdapter_.consumeInput();
+    } else if (audioAdapter_.graphFrames() != numFrames) {
+        return renderDryFallback(numFrames);
     }
-    if (!audioAdapter_.appendInput(inputs, context, midiEvents, midiEventCount))
+    if (!ring_ || !outputs || !outputs[0] || !outputs[1])
         return renderDryFallback(numFrames);
     if (audioAdapter_.inputReady()) {
         if (!ring_->inputWritable(audioAdapter_.guestFrames()) ||
@@ -451,24 +424,36 @@ uint32_t WineVstPlugin::process(const float* const* inputs,
                 audioAdapter_.inputContext().transportFrame, audioAdapter_.inputContext().loopEndFrame,
                 audioAdapter_.inputContext().sampleRate, audioAdapter_.inputContext().beatsPerMinute,
                 audioAdapter_.inputContext().playing, audioAdapter_.inputContext().looping,
-                audioAdapter_.guestFrames(), audioAdapter_.inputMidi(), audioAdapter_.inputMidiCount()) ||
+                audioAdapter_.guestFrames(), audioAdapter_.inputMidi()) ||
             ring_->pushInput(audioAdapter_.inputLeft(), audioAdapter_.inputRight(),
                              static_cast<int32_t>(audioAdapter_.guestFrames())) !=
                 static_cast<int32_t>(audioAdapter_.guestFrames()))
             return renderDryFallback(numFrames);
         audioAdapter_.consumeInput();
     }
-    // Keep the adapter's two complete output slots filled opportunistically.
-    // Pull FIFO blocks with their descriptor-paired MIDI snapshots.
+    if (!audioAdapter_.appendInput(inputs, context, inputMidi))
+        return renderDryFallback(numFrames);
+    if (audioAdapter_.inputReady()) {
+        if (!ring_->inputWritable(audioAdapter_.guestFrames()) ||
+            !ring_->publishTransport(audioAdapter_.inputContext().samplePosition,
+                audioAdapter_.inputContext().transportFrame, audioAdapter_.inputContext().loopEndFrame,
+                audioAdapter_.inputContext().sampleRate, audioAdapter_.inputContext().beatsPerMinute,
+                audioAdapter_.inputContext().playing, audioAdapter_.inputContext().looping,
+                audioAdapter_.guestFrames(), audioAdapter_.inputMidi()) ||
+            ring_->pushInput(audioAdapter_.inputLeft(), audioAdapter_.inputRight(),
+                             static_cast<int32_t>(audioAdapter_.guestFrames())) !=
+                static_cast<int32_t>(audioAdapter_.guestFrames()))
+            return renderDryFallback(numFrames);
+        audioAdapter_.consumeInput();
+    }
     if (audioAdapter_.outputWriteAvailable()) {
-        uint32_t count = 0;
-        const int32_t pulled = ring_->pullAudioBlock(
+        bool authoritative = false;
+        const int32_t pulled = ring_->pullOutput(
             audioAdapter_.outputLeft(), audioAdapter_.outputRight(),
             static_cast<int32_t>(audioAdapter_.guestFrames()),
-            audioAdapter_.outputMidi(), VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK,
-            &count, true);
+            audioAdapter_.outputMidi(), true, authoritative);
         if (pulled == static_cast<int32_t>(audioAdapter_.guestFrames()))
-            (void)audioAdapter_.commitOutput(audioAdapter_.outputMidi(), count);
+            (void)audioAdapter_.commitOutput(audioAdapter_.outputMidi(), authoritative);
     }
     if (!outputPrimed_) {
         if (audioAdapter_.outputBlockCount() <
@@ -479,34 +464,17 @@ uint32_t WineVstPlugin::process(const float* const* inputs,
         outputPrimed_ = false;
         return renderDryFallback(numFrames);
     }
-    const uint32_t outCount = audioAdapter_.copyOutput(outputs[0], outputs[1], outputEvents, outputCapacity);
+    const bool outputAuthoritative = audioAdapter_.outputAuthoritative();
+    audioAdapter_.copyOutput(outputs[0], outputs[1], outputMidi);
     if (audioAdapter_.outputBlockCount() == 0) outputPrimed_ = false;
-    if (dryFallback_) {
-        uint32_t frame = 0;
-        const float* inL = inputs && inputs[0] ? inputs[0] : silentInput_.data();
-        const float* inR = inputs && inputs[1] ? inputs[1] : inL;
-        while (frame < numFrames && wetRampSamples_ < 64) {
-            ++wetRampSamples_;
-            const float wetGain = static_cast<float>(wetRampSamples_) / 64.0f;
-            const float dryGain = 1.0f - wetGain;
-            if (outputs[0]) outputs[0][frame] = outputs[0][frame] * wetGain + inL[frame] * dryGain;
-            if (outputs[1]) outputs[1][frame] = outputs[1][frame] * wetGain + inR[frame] * dryGain;
-            ++frame;
-        }
-        if (wetRampSamples_ >= 64) { dryFallback_ = false; dryRampSamples_ = 0; wetRampSamples_ = 0; }
-    }
-    uint32_t returned = outCount;
-    if (outCount == 0 && outputEvents && midiEvents) {
-        returned = std::min(midiEventCount, outputCapacity);
-        if (returned) std::memcpy(outputEvents, midiEvents, returned * sizeof(*outputEvents));
-    }
-    if (numFrames > 0 && outputs[0] && outputs[1]) {
-        lastOutputLeft_ = outputs[0][numFrames - 1];
-        lastOutputRight_ = outputs[1][numFrames - 1];
-        haveLastOutput_ = true;
-    }
-    return returned;
+    failClosedAudio_.applyRecovery(outputs, numFrames);
+    if (numFrames > 0 && outputs[0] && outputs[1])
+        failClosedAudio_.rememberProcessed(outputs[0], outputs[1], numFrames);
+    accountMidiDrops();
+    return outputAuthoritative ? guitarrackcraft::MidiOutputDisposition::Replace
+                               : guitarrackcraft::MidiOutputDisposition::Passthrough;
 }
+
 int32_t WineVstPlugin::getEditorWidth() const {
     return (ring_ && ring_->raw()) ? ring_->raw()->editor_width : 0;
 }

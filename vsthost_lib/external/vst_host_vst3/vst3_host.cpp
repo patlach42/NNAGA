@@ -12,9 +12,9 @@
  * the same VstpocShared protocol so audio + status + parameter ring are
  * format-agnostic.
  *
- * This is a MINIMAL VST3 host — single plugin, stereo in/out, no MIDI, no
- * GUI yet (GUI lands in next iteration). Editor view comes from
- * IEditController::createView("editor") + IPlugView::attached(hwnd,"HWND")
+ * This is a MINIMAL VST3 host — single plugin, stereo in/out, fixed-size
+ * channel-voice and SysEx MIDI, no GUI yet (GUI lands in next iteration).
+ * Editor view comes from IEditController::createView("editor") + IPlugView::attached(hwnd,"HWND")
  * which we wire to the same DesktopWindow path vst_host.c uses.
  */
 
@@ -64,6 +64,7 @@ extern "C" {
 #include "public.sdk/source/vst/hosting/parameterchanges.h"
 #include "public.sdk/source/vst/hosting/eventlist.h"
 #include "public.sdk/source/common/memorystream.h"
+#include "vst3_midi_conversion.h"
 
 using namespace Steinberg;
 using namespace Steinberg::Vst;
@@ -126,6 +127,7 @@ struct HostTransport {
     uint32 blockFrames = 0;
     uint32 midiEventCount = 0;
     VstpocMidiEvent midiEvents[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK] = {};
+    uint8_t midiPayload[vstpoc::vst3::kMaxPayload] = {};
     bool valid = false;
 };
 static bool g_transport_pending = false;
@@ -133,22 +135,60 @@ static HostTransport g_transport{};
 static bool read_transport(const VstpocShared* shm) {
     if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V9_SIZE) { g_transport.valid = false; return false; }
-    uint64 tail = __atomic_load_n(&shm->transport_queue_tail, __ATOMIC_RELAXED);
-    uint64 head = __atomic_load_n(&shm->transport_queue_head, __ATOMIC_ACQUIRE);
-    if (tail == head) return false;
-    VstpocTransportBlock b = shm->transport_queue[tail & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
-    __atomic_store_n((uint64*)&shm->transport_queue_tail, tail + 1u, __ATOMIC_RELEASE);
+        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V10_SIZE ||
+        (shm->shared_feature_bits & VSTPOC_FEATURE_MIDI_PAYLOAD_RING) == 0) {
+        g_transport.valid = false;
+        return false;
+    }
+    VstpocTransportBlock b{};
+    if (!vstpoc_transport_queue_pop(shm, &b)) return false;
+    g_transport.midiEventCount = 0;
+    const uint64 inputTail = __atomic_load_n(&shm->midi_input_payload_tail, __ATOMIC_RELAXED);
+    const uint64 inputHead = __atomic_load_n(&shm->midi_input_payload_head, __ATOMIC_ACQUIRE);
+    const bool payloadRangeValid = b.midi_payload_begin == inputTail &&
+        b.midi_payload_end >= b.midi_payload_begin &&
+        b.midi_payload_end <= inputHead &&
+        b.midi_payload_end - b.midi_payload_begin <= VSTPOC_MIDI_PAYLOAD_RING_BYTES;
+    const uint32 count = payloadRangeValid
+        ? std::min<uint32>(
+              b.midi_event_count, VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK)
+        : 0;
+    uint64 midiDrops =
+        b.midi_event_count > count ? b.midi_event_count - count : 0;
+    if (!payloadRangeValid && midiDrops == 0) midiDrops = 1;
+    uint32 payloadUsed = 0;
+    for (uint32 i = 0; i < count; ++i) {
+        const VstpocMidiEvent& src = b.midi_events[i];
+        if (src.payload_size == 0 ||
+            src.payload_size > vstpoc::vst3::kMaxPayload ||
+            src.payload_offset < b.midi_payload_begin ||
+            src.payload_offset > b.midi_payload_end ||
+            src.payload_size > b.midi_payload_end - src.payload_offset ||
+            payloadUsed > vstpoc::vst3::kMaxPayload - src.payload_size) {
+            ++midiDrops;
+            continue;
+        }
+        for (uint32 j = 0; j < src.payload_size; ++j)
+            g_transport.midiPayload[payloadUsed + j] =
+                shm->midi_input_payload[(src.payload_offset + j) & (VSTPOC_MIDI_PAYLOAD_RING_BYTES - 1u)];
+        g_transport.midiEvents[g_transport.midiEventCount++] =
+            VstpocMidiEvent{src.frame_offset, src.payload_size, payloadUsed};
+        payloadUsed += src.payload_size;
+    }
+    if (midiDrops != 0) {
+        __atomic_add_fetch(
+            (uint64*)&shm->midi_input_drop_count, midiDrops, __ATOMIC_RELAXED);
+    }
+    __atomic_store_n(
+        (uint64*)&shm->midi_input_payload_tail,
+        payloadRangeValid ? b.midi_payload_end : inputHead,
+        __ATOMIC_RELEASE);
     g_transport.samplePosition = b.sample_position;
     g_transport.sampleRate = b.sample_rate;
     g_transport.loopEndFrame = b.loop_end_frame;
     g_transport.transportFrame = b.transport_frame;
     g_transport.tempo = b.beats_per_minute;
     g_transport.flags = b.flags;
-    g_transport.midiEventCount = std::min<uint32>(b.midi_event_count,
-                                                   VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK);
-    for (uint32 i = 0; i < g_transport.midiEventCount; ++i)
-        g_transport.midiEvents[i] = b.midi_events[i];
     g_transport.blockFrames = b.block_frames;
     g_transport.valid = b.block_frames != 0 && b.block_frames <= VSTPOC_MAX_BLOCK_FRAMES;
     return g_transport.valid;
@@ -1120,13 +1160,14 @@ static VstpocShared* map_shared(const char* path)
     if (!shm) return NULL;
     if (shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V9_SIZE ||
-        (shm->shared_feature_bits & VSTPOC_FEATURE_PLANAR_AUDIO) == 0) {
+        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V10_SIZE ||
+        (shm->shared_feature_bits & (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_MIDI_PAYLOAD_RING)) !=
+            (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_MIDI_PAYLOAD_RING)) {
         LOG("incompatible shared layout/features: magic=%llx version=%u size=%u features=%llx expected=%u\n",
             (unsigned long long)shm->shared_layout_magic,
             (unsigned)shm->shared_layout_version,
             (unsigned)shm->shared_layout_size,
-            (unsigned long long)shm->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V9_SIZE);
+            (unsigned long long)shm->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V10_SIZE);
         UnmapViewOfFile(shm);
         return NULL;
     }
@@ -2104,6 +2145,11 @@ static void activate_main_buses(IComponent* comp)
  * otherwise the output is garbage / appears unprocessed. */
 static int g_pluginInChannels  = 2;
 static int g_pluginOutChannels = 2;
+static vstpoc::vst3::MessageBuffer g_vst3_output_midi;
+static vstpoc::vst3::MessageBuffer g_vst3_unsupported_input;
+static bool g_vst3_output_authoritative = false;
+static vstpoc::vst3::MessageBuffer g_vst3_merge_midi;
+static const vstpoc::vst3::MessageBuffer* g_vst3_final_midi = &g_vst3_output_midi;
 static IComponent* g_component = nullptr;  /* for getBusInfo channel counts */
 
 /* Re-read the plugin's current per-bus channel count and update what process()
@@ -2205,47 +2251,79 @@ static void process_block(IAudioProcessor* processor,
         g_pendingParamFlags[index] = 0;
     }
     EventList events;
+    g_vst3_unsupported_input.clear();
     for (uint32 i = 0; i < g_transport.midiEventCount; ++i) {
-        const VstpocMidiEvent& m = g_transport.midiEvents[i];
-        const uint8 status = m.status & 0xF0u;
-        Event e{};
-        e.sampleOffset = (int32)std::min<uint32>(m.frame_offset, (uint32)nFrames - 1u);
-        const int16 channel = (int16)(m.status & 0x0Fu);
-        if (status == 0x90u && m.data2 != 0) {
-            e.type = Event::kNoteOnEvent;
-            e.noteOn.channel = channel;
-            e.noteOn.pitch = m.data1;
-            e.noteOn.velocity = m.data2 / 127.0f;
-            events.addEvent(e);
-        } else if (status == 0x80u || (status == 0x90u && m.data2 == 0)) {
-            e.type = Event::kNoteOffEvent;
-            e.noteOff.channel = channel;
-            e.noteOff.pitch = m.data1;
-            e.noteOff.velocity = m.data2 / 127.0f;
-            events.addEvent(e);
-        } else if (status == 0xB0u || status == 0xA0u ||
-                   status == 0xC0u || status == 0xD0u || status == 0xE0u) {
-            e.type = Event::kLegacyMIDICCOutEvent;
-            e.midiCCOut.channel = channel;
-            if (status == 0xB0u) {
-                e.midiCCOut.controlNumber = m.data1;
-                e.midiCCOut.value = m.data2;
-            } else if (status == 0xA0u) {
-                e.midiCCOut.controlNumber = kCtrlPolyPressure;
-                e.midiCCOut.value = m.data1;
-                e.midiCCOut.value2 = m.data2;
-            } else if (status == 0xC0u) {
-                e.midiCCOut.controlNumber = kCtrlProgramChange;
-                e.midiCCOut.value = m.data1;
-            } else if (status == 0xD0u) {
-                e.midiCCOut.controlNumber = kAfterTouch;
-                e.midiCCOut.value = m.data1;
-            } else {
-                e.midiCCOut.controlNumber = kPitchBend;
-                e.midiCCOut.value = m.data1;
-                e.midiCCOut.value2 = m.data2;
+        const VstpocMidiEvent& message = g_transport.midiEvents[i];
+        if (message.frame_offset >= static_cast<uint32>(nFrames)) {
+            if (g_shm) {
+                __atomic_add_fetch(
+                    (uint64_t*)&g_shm->midi_input_drop_count, 1u, __ATOMIC_RELAXED);
             }
-            events.addEvent(e);
+            continue;
+        }
+
+        const uint8_t* payload =
+            g_transport.midiPayload + message.payload_offset;
+        const uint32 size = message.payload_size;
+        const uint8_t status = size ? payload[0] : 0;
+        Event event{};
+        event.sampleOffset = static_cast<int32>(message.frame_offset);
+        bool supported = true;
+        if (vstpoc::vst3::isSysEx(payload, size)) {
+            event.type = Event::kDataEvent;
+            event.data.type = DataEvent::kMidiSysEx;
+            event.data.size = size;
+            event.data.bytes = payload;
+        } else if (vstpoc::vst3::isChannelVoice(payload, size)) {
+            const uint8_t kind = status & 0xF0u;
+            const int16 channel = static_cast<int16>(status & 0x0Fu);
+            if (kind == 0x90u && payload[2] != 0) {
+                event.type = Event::kNoteOnEvent;
+                event.noteOn.channel = channel;
+                event.noteOn.pitch = payload[1];
+                event.noteOn.velocity = payload[2] / 127.0f;
+            } else if (kind == 0x80u ||
+                       (kind == 0x90u && payload[2] == 0)) {
+                event.type = Event::kNoteOffEvent;
+                event.noteOff.channel = channel;
+                event.noteOff.pitch = payload[1];
+                event.noteOff.velocity = payload[2] / 127.0f;
+            } else {
+                event.type = Event::kLegacyMIDICCOutEvent;
+                event.midiCCOut.channel = channel;
+                if (kind == 0xB0u) {
+                    event.midiCCOut.controlNumber = payload[1];
+                    event.midiCCOut.value = payload[2];
+                } else if (kind == 0xA0u) {
+                    event.midiCCOut.controlNumber = kCtrlPolyPressure;
+                    event.midiCCOut.value = payload[1];
+                    event.midiCCOut.value2 = payload[2];
+                } else if (kind == 0xC0u) {
+                    event.midiCCOut.controlNumber = kCtrlProgramChange;
+                    event.midiCCOut.value = payload[1];
+                } else if (kind == 0xD0u) {
+                    event.midiCCOut.controlNumber = kAfterTouch;
+                    event.midiCCOut.value = payload[1];
+                } else {
+                    event.midiCCOut.controlNumber = kPitchBend;
+                    event.midiCCOut.value = payload[1];
+                    event.midiCCOut.value2 = payload[2];
+                }
+            }
+        } else {
+            supported = false;
+        }
+
+        if (supported) {
+            if (events.addEvent(event) != kResultOk && g_shm) {
+                __atomic_add_fetch(
+                    (uint64_t*)&g_shm->midi_input_drop_count, 1u, __ATOMIC_RELAXED);
+            }
+        } else if (!g_vst3_unsupported_input.append(
+                       message.frame_offset, payload, size) &&
+                   g_shm) {
+            __atomic_add_fetch(
+                (uint64_t*)&g_shm->midi_input_drop_count, 1u, __ATOMIC_RELAXED);
         }
     }
 
@@ -2292,7 +2370,10 @@ static void process_block(IAudioProcessor* processor,
     data.outputEvents         = &outputEvents;
     data.processContext       = &processContext;
 
+    g_vst3_output_midi.clear();
+    g_vst3_final_midi = &g_vst3_output_midi;
     if (!enter_process_call()) {
+        g_vst3_output_authoritative = false;
         for (int32 i = 0; i < nFrames; ++i) {
             out_l[i] = 0.0f;
             out_r[i] = 0.0f;
@@ -2300,47 +2381,90 @@ static void process_block(IAudioProcessor* processor,
         return;
     }
     processor->process(data);
+    g_vst3_output_authoritative = g_component &&
+        g_component->getBusCount(kEvent, kOutput) > 0;
     if (g_shm) {
-        __atomic_add_fetch((uint64_t*)&g_shm->midi_output_seq, 1u, __ATOMIC_RELEASE);
-        uint32_t written = 0;
-        const uint32_t count = std::min<uint32_t>(
-            static_cast<uint32_t>(outputEvents.getEventCount()),
-            VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK);
+        const int32 outputEventCount = outputEvents.getEventCount();
+        const uint32_t outputEventTotal =
+            outputEventCount > 0 ? static_cast<uint32_t>(outputEventCount) : 0u;
+        const uint32_t count =
+            std::min<uint32_t>(outputEventTotal, VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK);
+        if (outputEventCount < 0) {
+            __atomic_add_fetch(
+                (uint64_t*)&g_shm->midi_output_drop_count, 1u, __ATOMIC_RELAXED);
+        } else if (outputEventTotal > count) {
+            __atomic_add_fetch(
+                (uint64_t*)&g_shm->midi_output_drop_count,
+                outputEventTotal - count,
+                __ATOMIC_RELAXED);
+        }
+
+        uint8_t shortBytes[3]{};
         for (uint32_t i = 0; i < count; ++i) {
             Event event{};
-            if (outputEvents.getEvent(static_cast<int32>(i), event) != kResultOk) continue;
-            VstpocMidiEvent midi{};
-            midi.frame_offset = event.sampleOffset < nFrames
-                ? static_cast<uint32_t>(event.sampleOffset)
-                : static_cast<uint32_t>(nFrames - 1);
-            if (event.type == Event::kNoteOnEvent) {
-                midi.status = static_cast<uint8_t>(0x90u | (event.noteOn.channel & 0x0Fu));
-                midi.data1 = static_cast<uint8_t>(event.noteOn.pitch);
-                midi.data2 = static_cast<uint8_t>(std::min<int>(127, static_cast<int>(event.noteOn.velocity * 127.0f)));
-            } else if (event.type == Event::kNoteOffEvent) {
-                midi.status = static_cast<uint8_t>(0x80u | (event.noteOff.channel & 0x0Fu));
-                midi.data1 = static_cast<uint8_t>(event.noteOff.pitch);
-                midi.data2 = static_cast<uint8_t>(std::min<int>(127, static_cast<int>(event.noteOff.velocity * 127.0f)));
-            } else if (event.type == Event::kLegacyMIDICCOutEvent) {
-                const uint16 control = event.midiCCOut.controlNumber;
-                if (control == kCtrlProgramChange) midi.status = static_cast<uint8_t>(0xC0u | (event.midiCCOut.channel & 0x0Fu));
-                else if (control == kAfterTouch) midi.status = static_cast<uint8_t>(0xD0u | (event.midiCCOut.channel & 0x0Fu));
-                else if (control == kPitchBend) midi.status = static_cast<uint8_t>(0xE0u | (event.midiCCOut.channel & 0x0Fu));
-                else midi.status = static_cast<uint8_t>(0xB0u | (event.midiCCOut.channel & 0x0Fu));
-                midi.data1 = static_cast<uint8_t>(event.midiCCOut.value);
-                midi.data2 = static_cast<uint8_t>(event.midiCCOut.value2);
-            } else {
+            if (outputEvents.getEvent(static_cast<int32>(i), event) != kResultOk ||
+                event.sampleOffset < 0 || event.sampleOffset >= nFrames) {
+                __atomic_add_fetch(
+                    (uint64_t*)&g_shm->midi_output_drop_count, 1u, __ATOMIC_RELAXED);
                 continue;
             }
-            volatile VstpocMidiEvent* destination =
-                &g_shm->midi_output_events[written++];
-            destination->frame_offset = midi.frame_offset;
-            destination->status = midi.status;
-            destination->data1 = midi.data1;
-            destination->data2 = midi.data2;
+
+            const uint32_t frame = static_cast<uint32_t>(event.sampleOffset);
+            const uint8_t* bytes = shortBytes;
+            std::size_t size = 0;
+            if (event.type == Event::kDataEvent &&
+                event.data.type == DataEvent::kMidiSysEx && event.data.bytes &&
+                vstpoc::vst3::isSysEx(event.data.bytes, event.data.size) &&
+                event.data.size <= vstpoc::vst3::kMaxPayload) {
+                bytes = event.data.bytes;
+                size = event.data.size;
+            } else if (event.type == Event::kNoteOnEvent) {
+                shortBytes[0] =
+                    static_cast<uint8_t>(0x90u | (event.noteOn.channel & 0x0Fu));
+                shortBytes[1] = static_cast<uint8_t>(event.noteOn.pitch);
+                shortBytes[2] = static_cast<uint8_t>(std::clamp(
+                    static_cast<int>(event.noteOn.velocity * 127.0f), 0, 127));
+                size = 3;
+            } else if (event.type == Event::kNoteOffEvent) {
+                shortBytes[0] =
+                    static_cast<uint8_t>(0x80u | (event.noteOff.channel & 0x0Fu));
+                shortBytes[1] = static_cast<uint8_t>(event.noteOff.pitch);
+                shortBytes[2] = static_cast<uint8_t>(std::clamp(
+                    static_cast<int>(event.noteOff.velocity * 127.0f), 0, 127));
+                size = 3;
+            } else if (event.type == Event::kLegacyMIDICCOutEvent) {
+                const uint16 control = event.midiCCOut.controlNumber;
+                shortBytes[0] = static_cast<uint8_t>(
+                    (control == kCtrlProgramChange ? 0xC0u :
+                     control == kAfterTouch ? 0xD0u :
+                     control == kPitchBend ? 0xE0u : 0xB0u) |
+                    (event.midiCCOut.channel & 0x0Fu));
+                shortBytes[1] = static_cast<uint8_t>(event.midiCCOut.value);
+                shortBytes[2] = static_cast<uint8_t>(event.midiCCOut.value2);
+                size = (shortBytes[0] & 0xE0u) == 0xC0u ? 2u : 3u;
+            }
+
+            if (size == 0) {
+                __atomic_add_fetch(
+                    (uint64_t*)&g_shm->midi_output_drop_count, 1u, __ATOMIC_RELAXED);
+            } else {
+                (void)g_vst3_output_midi.append(frame, bytes, size);
+            }
         }
-        g_shm->midi_output_count = written;
-        __atomic_add_fetch((uint64_t*)&g_shm->midi_output_seq, 1u, __ATOMIC_RELEASE);
+
+        const uint64_t existingRejections =
+            g_vst3_unsupported_input.rejected() + g_vst3_output_midi.rejected();
+        g_vst3_unsupported_input.mergeInto(
+            g_vst3_merge_midi, g_vst3_output_midi);
+        const uint64_t mergeRejections =
+            g_vst3_merge_midi.rejected() > existingRejections
+                ? g_vst3_merge_midi.rejected() - existingRejections
+                : 0;
+        __atomic_add_fetch(
+            &g_shm->midi_output_drop_count,
+            g_vst3_output_midi.rejected() + mergeRejections,
+            __ATOMIC_RELAXED);
+        g_vst3_final_midi = &g_vst3_merge_midi;
     }
     leave_process_call();
 
@@ -2529,27 +2653,57 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
                 bh & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
             d->frame_count = (uint32_t)blockFrames;
             d->ring_offset = (uint32_t)slot;
-            volatile VstpocOutputMidiBlock* mb = &g_shm->output_midi_blocks[
-                bh & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
-            uint32_t midiCount = g_shm->midi_output_count;
-            if (midiCount > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK)
-                midiCount = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
-            mb->event_count = midiCount;
-            for (uint32_t i = 0; i < midiCount; ++i) {
-                mb->events[i].frame_offset =
-                    g_shm->midi_output_events[i].frame_offset;
-                mb->events[i].status = g_shm->midi_output_events[i].status;
-                mb->events[i].data1 = g_shm->midi_output_events[i].data1;
-                mb->events[i].data2 = g_shm->midi_output_events[i].data2;
-                mb->events[i].reserved = 0;
+            const uint64_t payloadHead = __atomic_load_n(&g_shm->midi_output_payload_head, __ATOMIC_RELAXED);
+            const uint64_t payloadTail = __atomic_load_n(&g_shm->midi_output_payload_tail, __ATOMIC_ACQUIRE);
+            const auto& finalMidi = *g_vst3_final_midi;
+            uint64_t payloadBytes = 0;
+            uint32_t midiCount = 0;
+            for (; midiCount < finalMidi.size() &&
+                   midiCount < VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK; ++midiCount) {
+                const auto& message = finalMidi.at(midiCount);
+                if (message.size > vstpoc::vst3::kMaxPayload ||
+                    payloadBytes > VSTPOC_MIDI_PAYLOAD_RING_BYTES - message.size ||
+                    payloadHead + payloadBytes - payloadTail + message.size >
+                        VSTPOC_MIDI_PAYLOAD_RING_BYTES) {
+                    break;
+                }
+                payloadBytes += message.size;
             }
-            __atomic_store_n(&mb->sequence, bh + 1u, __ATOMIC_RELEASE);
+            d->midi_event_count = midiCount;
+            d->midi_flags = g_vst3_output_authoritative
+                ? VSTPOC_MIDI_FLAG_AUTHORITATIVE
+                : 0u;
+            d->midi_payload_begin = payloadHead;
+            d->midi_payload_end = payloadHead + payloadBytes;
+            uint64_t cursor = payloadHead;
+            for (uint32_t i = 0; i < midiCount; ++i) {
+                const auto& message = finalMidi.at(i);
+                d->midi_events[i].frame_offset = message.frame;
+                d->midi_events[i].payload_size = message.size;
+                d->midi_events[i].payload_offset = cursor;
+                for (uint32_t byte = 0; byte < message.size; ++byte) {
+                    g_shm->midi_output_payload[
+                        (cursor + byte) &
+                        (VSTPOC_MIDI_PAYLOAD_RING_BYTES - 1u)] =
+                            message.bytes[byte];
+                }
+                cursor += message.size;
+            }
+            if (midiCount < finalMidi.size()) {
+                __atomic_add_fetch(
+                    &g_shm->midi_output_drop_count,
+                    static_cast<uint64_t>(finalMidi.size() - midiCount),
+                    __ATOMIC_RELAXED);
+            }
+            __atomic_store_n(&g_shm->midi_output_payload_head, payloadHead + payloadBytes, __ATOMIC_RELEASE);
             __atomic_store_n(&d->sequence, bh + 1u, __ATOMIC_RELEASE);
             __atomic_store_n(&g_shm->audio_head, oh + (uint64_t)blockFrames, __ATOMIC_RELEASE);
             __atomic_store_n(&g_shm->output_block_head, bh + 1u, __ATOMIC_RELEASE);
             __atomic_add_fetch(&g_shm->guest_frames_produced, (uint64_t)blockFrames, __ATOMIC_RELAXED);
         } else {
             __atomic_add_fetch(&g_shm->output_drop_count, 1u, __ATOMIC_RELAXED);
+            __atomic_add_fetch(&g_shm->midi_output_drop_count,
+                static_cast<uint64_t>(g_vst3_final_midi->size()), __ATOMIC_RELAXED);
         }
     }
     LOG("audio thread: stop_flag set, exiting\n");

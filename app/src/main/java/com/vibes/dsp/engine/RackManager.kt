@@ -92,6 +92,43 @@ object RackManager {
         native.setTrackInputHardwareMono(trackId, channel)
     fun setTrackInputTrack(trackId: RackPathId, sourceTrackId: RackPathId, tap: Int): Boolean =
         native.setTrackInputTrack(trackId, sourceTrackId, tap)
+    fun setTrackMidiInputNone(trackId: RackPathId): Boolean =
+        native.setTrackMidiInputNone(trackId)
+    fun setTrackMidiInputUsb(
+        trackId: RackPathId,
+        vendorId: Int,
+        productId: Int,
+        serialNumber: String,
+        portNumber: Int,
+        displayName: String,
+        sourceHandle: Long,
+    ): Boolean = native.setTrackMidiInputUsb(
+        trackId, vendorId, productId, serialNumber, portNumber, displayName, sourceHandle
+    )
+    fun setTrackMidiInputTrack(trackId: RackPathId, sourceTrackId: RackPathId): Boolean =
+        native.setTrackMidiInputTrack(trackId, sourceTrackId)
+    fun bindTrackUsbMidiSource(trackId: RackPathId, sourceHandle: Long): Boolean =
+        native.bindTrackUsbMidiSource(trackId, sourceHandle)
+    fun registerUsbMidiSource(
+        vendorId: Int,
+        productId: Int,
+        serialNumber: String,
+        portNumber: Int,
+    ): Long = native.registerUsbMidiSource(vendorId, productId, serialNumber, portNumber)
+    fun unregisterUsbMidiSource(sourceHandle: Long) = native.unregisterUsbMidiSource(sourceHandle)
+    fun flushUsbMidiSource(sourceHandle: Long) = native.flushUsbMidiSource(sourceHandle)
+    fun enqueueUsbMidiBatch(
+        sourceHandle: Long,
+        timestampsNanos: LongArray,
+        offsets: IntArray,
+        lengths: IntArray,
+        payload: ByteArray,
+        count: Int,
+        oversizeDelta: Int,
+        malformedDelta: Int,
+    ): Int = native.enqueueUsbMidiBatch(
+        sourceHandle, timestampsNanos, offsets, lengths, payload, count, oversizeDelta, malformedDelta
+    )
     fun loadTrackWav(trackId: RackPathId, path: String, displayName: String): Boolean = native.loadTrackWav(trackId, path, displayName)
     fun loadTrackMidi(trackId: RackPathId, path: String, displayName: String): Boolean =
         native.loadTrackMidi(trackId, path, displayName)

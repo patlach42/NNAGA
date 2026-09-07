@@ -137,16 +137,15 @@ public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&, guitarrackcraft::MidiBuffer&) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame] * 2.0f;
             outputs[1][frame] = inputs[1][frame] * 2.0f;
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override {
@@ -164,15 +163,15 @@ class ParameterPlugin final : public IPlugin {
 public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&, guitarrackcraft::MidiBuffer&) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame];
             outputs[1][frame] = inputs[1][frame];
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
     guitarrackcraft::PluginInfo getInfo() const override {
         guitarrackcraft::PluginInfo info;
@@ -207,10 +206,10 @@ public:
     }
     void activate(float, uint32_t) override {}
     void deactivate() override {}
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&, guitarrackcraft::MidiBuffer&) override {
         state_->entered.store(true, std::memory_order_release);
         while (!state_->release.load(std::memory_order_acquire))
             std::this_thread::yield();
@@ -218,7 +217,7 @@ public:
             outputs[0][frame] = inputs[0][frame];
             outputs[1][frame] = inputs[1][frame];
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
     guitarrackcraft::PluginInfo getInfo() const override {
         guitarrackcraft::PluginInfo info;
@@ -240,16 +239,16 @@ public:
         : calls_(std::move(calls)) {}
     void activate(float, uint32_t) override {}
     void deactivate() override {}
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames, const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&, guitarrackcraft::MidiBuffer&) override {
         calls_->fetch_add(1, std::memory_order_relaxed);
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = 42.0f;
             outputs[1][frame] = -42.0f;
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
     guitarrackcraft::PluginInfo getInfo() const override {
         guitarrackcraft::PluginInfo info;
@@ -284,6 +283,8 @@ protected:
     std::array<float, 2048> inputRight_{};
     std::array<float, 2048> outputLeft_{};
     std::array<float, 2048> outputRight_{};
+    guitarrackcraft::MidiBuffer midiInput_;
+    guitarrackcraft::MidiBuffer midiOutput_;
 };
 
 TEST_F(PluginChainRealtimeTest, SupportedFrameQuantaProcessWithoutAllocations) {
@@ -301,7 +302,7 @@ TEST_F(PluginChainRealtimeTest, SupportedFrameQuantaProcessWithoutAllocations) {
             allocation_probe::NoAllocScope noAlloc;
             chain_.process(inputs, outputs, frames,
                            guitarrackcraft::AudioProcessContext{},
-                           nullptr, 0, nullptr, 0);
+                           midiInput_, midiOutput_);
             allocations = noAlloc.count();
         }
 
@@ -325,7 +326,7 @@ TEST_F(PluginChainRealtimeTest, OversizedCallbackClearsWithoutAllocating) {
         allocation_probe::NoAllocScope noAlloc;
         chain_.process(inputs, outputs, frames,
                        guitarrackcraft::AudioProcessContext{},
-                       nullptr, 0, nullptr, 0);
+                       midiInput_, midiOutput_);
         allocations = noAlloc.count();
     }
 
@@ -352,13 +353,15 @@ TEST(PluginChainEmptyTest, InPlacePassesThroughWithoutAllocating) {
     const auto expectedRight = right;
     const float* inputs[] = {left.data(), right.data()};
     float* outputs[] = {left.data(), right.data()};
+    guitarrackcraft::MidiBuffer midiInput;
+    guitarrackcraft::MidiBuffer midiOutput;
 
     std::size_t allocations = 0;
     {
         allocation_probe::NoAllocScope noAlloc;
         chain.process(inputs, outputs, frames,
                       guitarrackcraft::AudioProcessContext{},
-                      nullptr, 0, nullptr, 0);
+                      midiInput, midiOutput);
         allocations = noAlloc.count();
     }
 
@@ -414,7 +417,7 @@ TEST_F(PluginChainRealtimeTest,
         for (uint32_t iteration = 0; iteration < 2000; ++iteration) {
             chain_.process(inputs, outputs, frames,
                            guitarrackcraft::AudioProcessContext{},
-                           nullptr, 0, nullptr, 0);
+                           midiInput_, midiOutput_);
             for (uint32_t frame = 0; frame < frames; ++frame) {
                 const float leftRatio = outLeft[frame] / left[frame];
                 const float rightRatio = outRight[frame] / right[frame];
@@ -490,10 +493,12 @@ TEST_F(PluginChainRealtimeTest, RetiredPluginDestructionWaitsForAudioHazard) {
     std::array<float, 64> outputRight{};
     const float* inputs[] = {inputLeft.data(), inputRight.data()};
     float* outputs[] = {outputLeft.data(), outputRight.data()};
+    guitarrackcraft::MidiBuffer midiInput;
+    guitarrackcraft::MidiBuffer midiOutput;
     std::thread audio([&] {
         chain.process(inputs, outputs, 64,
                       guitarrackcraft::AudioProcessContext{},
-                      nullptr, 0, nullptr, 0);
+                      midiInput, midiOutput);
     });
     for (uint32_t spin = 0;
          spin < 100'000 && !state->entered.load(std::memory_order_acquire);
@@ -549,10 +554,12 @@ TEST_F(PluginChainRealtimeTest, OversizedQuantumIsRejectedWithoutPartialProcess)
     outputRight.fill(9.0f);
     const float* inputs[] = {inputLeft.data(), inputRight.data()};
     float* outputs[] = {outputLeft.data(), outputRight.data()};
+    guitarrackcraft::MidiBuffer midiInput;
+    guitarrackcraft::MidiBuffer midiOutput;
 
     chain.process(inputs, outputs, 65,
                   guitarrackcraft::AudioProcessContext{},
-                  nullptr, 0, nullptr, 0);
+                  midiInput, midiOutput);
     EXPECT_EQ(calls->load(std::memory_order_acquire), 0u);
     for (uint32_t frame = 0; frame < 65; ++frame) {
         EXPECT_FLOAT_EQ(outputLeft[frame], 0.0f);
@@ -561,7 +568,7 @@ TEST_F(PluginChainRealtimeTest, OversizedQuantumIsRejectedWithoutPartialProcess)
 
     chain.process(inputs, outputs, 64,
                   guitarrackcraft::AudioProcessContext{},
-                  nullptr, 0, nullptr, 0);
+                  midiInput, midiOutput);
     EXPECT_EQ(calls->load(std::memory_order_acquire), 1u);
     EXPECT_FLOAT_EQ(outputLeft[0], 42.0f);
     EXPECT_FLOAT_EQ(outputRight[0], -42.0f);

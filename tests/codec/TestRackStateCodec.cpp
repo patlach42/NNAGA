@@ -37,7 +37,7 @@ RackGraph::State fixtureState() {
     first.inputSource.kind = TrackInputSource::Kind::TrackOutput;
     first.inputSource.tap = TrackInputTap::PostFader;
     first.inputSource.firstChannel = -3;
-    first.inputSource.trackId = 0x8877665544332211ULL;
+    first.inputSource.trackId = 42;
     first.name = "Барабаны";
     first.colorArgb = 0xff123456u;
 
@@ -58,6 +58,17 @@ RackGraph::State fixtureState() {
     second.inputSource.kind = TrackInputSource::Kind::HardwareMono;
     second.inputSource.tap = TrackInputTap::PreFader;
     second.inputSource.firstChannel = 11;
+    first.midiInputSource.kind = TrackMidiInputSource::Kind::TrackOutput;
+    first.midiInputSource.trackId = 42;
+    first.midiInputSource.runtimeSourceHandle = 0xfeedbeefULL;
+
+    second.midiInputSource.kind = TrackMidiInputSource::Kind::UsbPort;
+    second.midiInputSource.usb.vendorId = 0x1234;
+    second.midiInputSource.usb.productId = 0xabcd;
+    second.midiInputSource.usb.portNumber = 7;
+    second.midiInputSource.usb.serialNumber = "SERIAL-42";
+    second.midiInputSource.displayName = "Keyboard output";
+    second.midiInputSource.runtimeSourceHandle = 0x12345678ULL;
     second.chain.plugins.push_back(plugin("VST3", "vst3:gamma", {{4, 0.33333334f}}, {}, 19));
     second.name = "Guitar";
     second.colorArgb = 0xffc0ffeeu;
@@ -70,6 +81,19 @@ RackGraph::State fixtureState() {
     state.transportFrame = 0x1020304050607080ULL;
     state.samplePosition = 0xfedcba9876543210ULL;
     state.musicalQuarterNotes = 1234.5;
+    return state;
+}
+RackGraph::State usbState() {
+    RackGraph::State state;
+    RackGraph::State::Track track;
+    track.id = 1;
+    track.midiInputSource.kind = TrackMidiInputSource::Kind::UsbPort;
+    track.midiInputSource.usb.vendorId = 0x1111;
+    track.midiInputSource.usb.productId = 0x2222;
+    track.midiInputSource.usb.portNumber = 3;
+    track.midiInputSource.usb.serialNumber = "usb-serial";
+    track.midiInputSource.displayName = "USB output";
+    state.tracks.push_back(std::move(track));
     return state;
 }
 
@@ -125,6 +149,13 @@ void expectState(const RackGraph::State& actual, const RackGraph::State& expecte
         EXPECT_EQ(a.inputSource.tap, e.inputSource.tap);
         EXPECT_EQ(a.inputSource.firstChannel, e.inputSource.firstChannel);
         EXPECT_EQ(a.inputSource.trackId, e.inputSource.trackId);
+        EXPECT_EQ(a.midiInputSource.kind, e.midiInputSource.kind);
+        EXPECT_EQ(a.midiInputSource.trackId, e.midiInputSource.trackId);
+        EXPECT_EQ(a.midiInputSource.usb.vendorId, e.midiInputSource.usb.vendorId);
+        EXPECT_EQ(a.midiInputSource.usb.productId, e.midiInputSource.usb.productId);
+        EXPECT_EQ(a.midiInputSource.usb.portNumber, e.midiInputSource.usb.portNumber);
+        EXPECT_EQ(a.midiInputSource.usb.serialNumber, e.midiInputSource.usb.serialNumber);
+        EXPECT_EQ(a.midiInputSource.displayName, e.midiInputSource.displayName);
 
         EXPECT_EQ(a.name, e.name);
         EXPECT_EQ(a.colorArgb, e.colorArgb);
@@ -178,8 +209,8 @@ void refreshCrc(std::vector<uint8_t>& data) {
     const size_t offset = data.size() - 4;
     putU32(data, offset, crc32(data.data(), offset));
 }
-constexpr size_t kV4TrackNameLengthOffset = 52;
-constexpr size_t kV4TrackNameDataOffset = 56;
+constexpr size_t kV5TrackNameLengthOffset = 81;
+constexpr size_t kV5TrackNameDataOffset = 85;
 
 std::string supplementaryName(size_t count) {
     std::string result;
@@ -206,9 +237,9 @@ std::vector<uint8_t> encodeSingleTrackName(const std::string& name) {
 void setTrackNameBytes(std::vector<uint8_t>& encoded, size_t offset,
                        std::initializer_list<uint8_t> bytes) {
     const size_t nameLength =
-        getU32(encoded, kV4TrackNameLengthOffset);
+        getU32(encoded, kV5TrackNameLengthOffset);
     ASSERT_LE(offset + bytes.size(), nameLength);
-    size_t index = kV4TrackNameDataOffset + offset;
+    size_t index = kV5TrackNameDataOffset + offset;
     for (uint8_t byte : bytes)
         encoded[index++] = byte;
     refreshCrc(encoded);
@@ -217,10 +248,10 @@ void setTrackNameBytes(std::vector<uint8_t>& encoded, size_t offset,
 void appendTrackNameBytes(std::vector<uint8_t>& encoded,
                           std::initializer_list<uint8_t> bytes) {
     const size_t nameLength =
-        getU32(encoded, kV4TrackNameLengthOffset);
-    const size_t insertOffset = kV4TrackNameDataOffset + nameLength;
+        getU32(encoded, kV5TrackNameLengthOffset);
+    const size_t insertOffset = kV5TrackNameDataOffset + nameLength;
     encoded.insert(encoded.begin() + insertOffset, bytes.begin(), bytes.end());
-    putU32(encoded, kV4TrackNameLengthOffset,
+    putU32(encoded, kV5TrackNameLengthOffset,
            static_cast<uint32_t>(nameLength + bytes.size()));
     refreshCrc(encoded);
 }
@@ -233,6 +264,17 @@ void expectInvalidTrackNamePayload(const std::vector<uint8_t>& encoded) {
     EXPECT_FALSE(RackStateCodec::decode(
         encoded.data(), encoded.size(), existing, error));
     EXPECT_EQ(error, "invalid-track-name");
+    expectState(existing, before);
+}
+void expectInvalidMidiPayload(const std::vector<uint8_t>& encoded,
+                              const char* expectedError = "invalid-midi-input") {
+    RackGraph::State existing = fixtureState();
+    existing.tracks[0].id = 123;
+    const RackGraph::State before = existing;
+    std::string error;
+    EXPECT_FALSE(RackStateCodec::decode(
+        encoded.data(), encoded.size(), existing, error));
+    EXPECT_EQ(error, expectedError);
     expectState(existing, before);
 }
 
@@ -346,60 +388,65 @@ std::optional<size_t> firstPropertyLengthOffset(
         return std::nullopt;
     return propertyOffset;
 }
-// Strip the v4 per-track metadata while retaining the v3 track configuration,
-// clip records, and version-3 chain/global wire format. This keeps compatibility
-// tests based on payloads emitted by the current encoder rather than hand-built
-// bytes.
-std::vector<uint8_t> makeV3Payload(const std::vector<uint8_t>& v4) {
-    if (v4.size() < 12 || getU32(v4, 4) != 4u)
+// Strip the v5 MIDI metadata and v4 track metadata while retaining the
+// version-3 track configuration, clip records, and chain/global wire format.
+std::vector<uint8_t> makeV3Payload(const std::vector<uint8_t>& v5) {
+    if (v5.size() < 12 || getU32(v5, 4) != 5u)
         return {};
-    const size_t limit = v4.size() - 4;
+    const size_t limit = v5.size() - 4;
     size_t offset = 8;
     uint32_t trackCount = 0;
-    if (!readU32(v4, limit, offset, trackCount))
+    if (!readU32(v5, limit, offset, trackCount))
         return {};
 
-    std::vector<uint8_t> v3(v4.begin(), v4.begin() + 12);
+    std::vector<uint8_t> v3(v5.begin(), v5.begin() + 12);
     putU32(v3, 4, 3);
-    const auto copyRange = [&v3, &v4](size_t begin, size_t end) {
-        v3.insert(v3.end(), v4.begin() + begin, v4.begin() + end);
+    const auto copyRange = [&v3, &v5](size_t begin, size_t end) {
+        v3.insert(v3.end(), v5.begin() + begin, v5.begin() + end);
     };
     for (uint32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
         const size_t trackStart = offset;
-        if (!skipBytes(v4, limit, offset, 28u) ||
-            !skipBytes(v4, limit, offset, 12u))
+        if (!skipBytes(v5, limit, offset, 28u))
             return {};
         copyRange(trackStart, offset);
-        if (!skipWireString(v4, limit, offset) ||
-            !skipBytes(v4, limit, offset, 4u))
+        if (!skipBytes(v5, limit, offset, 1u + 8u + 4u + 4u + 4u) ||
+            !skipWireString(v5, limit, offset) ||
+            !skipWireString(v5, limit, offset))
+            return {};
+        const size_t configStart = offset;
+        if (!skipBytes(v5, limit, offset, 12u))
+            return {};
+        copyRange(configStart, offset);
+        if (!skipWireString(v5, limit, offset) ||
+            !skipBytes(v5, limit, offset, 4u))
             return {};
         const size_t clipStart = offset;
         uint32_t clipCount = 0;
-        if (!readU32(v4, limit, offset, clipCount))
+        if (!readU32(v5, limit, offset, clipCount))
             return {};
         for (uint32_t clipIndex = 0; clipIndex < clipCount; ++clipIndex) {
-            if (!skipBytes(v4, limit, offset, 6u) ||
-                !skipWireString(v4, limit, offset) ||
-                !skipWireString(v4, limit, offset) ||
-                !skipWireString(v4, limit, offset) ||
-                !skipBytes(v4, limit, offset, 47u))
+            if (!skipBytes(v5, limit, offset, 6u) ||
+                !skipWireString(v5, limit, offset) ||
+                !skipWireString(v5, limit, offset) ||
+                !skipWireString(v5, limit, offset) ||
+                !skipBytes(v5, limit, offset, 47u))
                 return {};
         }
         copyRange(clipStart, offset);
         const size_t chainStart = offset;
         std::optional<size_t> unusedPropertyOffset;
-        if (!skipChain(v4, limit, offset, 4u, unusedPropertyOffset))
+        if (!skipChain(v5, limit, offset, 4u, unusedPropertyOffset))
             return {};
         copyRange(chainStart, offset);
     }
 
     const size_t masterStart = offset;
     std::optional<size_t> unusedPropertyOffset;
-    if (!skipChain(v4, limit, offset, 4u, unusedPropertyOffset))
+    if (!skipChain(v5, limit, offset, 4u, unusedPropertyOffset))
         return {};
     copyRange(masterStart, offset);
     const size_t globalStart = offset;
-    if (!skipBytes(v4, limit, offset, 33u) || offset != limit)
+    if (!skipBytes(v5, limit, offset, 33u) || offset != limit)
         return {};
     copyRange(globalStart, limit);
     v3.resize(v3.size() + 4u);
@@ -412,6 +459,65 @@ std::vector<uint8_t> makeV3Payload(const std::vector<uint8_t>& v4) {
 // Strip the v3 track configuration and clip records while retaining the
 // version-2 chain/global wire format. This keeps compatibility tests based on
 // payloads emitted by the current encoder rather than hand-built bytes.
+// Remove only the v5 MIDI block, retaining the v4 track metadata and the
+// remainder of the current encoder's wire format.
+std::vector<uint8_t> makeV4Payload(const std::vector<uint8_t>& v5) {
+    if (v5.size() < 12 || getU32(v5, 4) != 5u)
+        return {};
+    const size_t limit = v5.size() - 4;
+    size_t offset = 8;
+    uint32_t trackCount = 0;
+    if (!readU32(v5, limit, offset, trackCount))
+        return {};
+    std::vector<uint8_t> v4(v5.begin(), v5.begin() + 12);
+    putU32(v4, 4, 4);
+    const auto copyRange = [&v4, &v5](size_t begin, size_t end) {
+        v4.insert(v4.end(), v5.begin() + begin, v5.begin() + end);
+    };
+    for (uint32_t trackIndex = 0; trackIndex < trackCount; ++trackIndex) {
+        const size_t trackStart = offset;
+        if (!skipBytes(v5, limit, offset, 28u))
+            return {};
+        copyRange(trackStart, offset);
+        if (!skipBytes(v5, limit, offset, 1u + 8u + 4u + 4u + 4u) ||
+            !skipWireString(v5, limit, offset) ||
+            !skipWireString(v5, limit, offset))
+            return {};
+        const size_t remainderStart = offset;
+        if (!skipBytes(v5, limit, offset, 12u) ||
+            !skipWireString(v5, limit, offset) ||
+            !skipBytes(v5, limit, offset, 4u))
+            return {};
+        uint32_t clipCount = 0;
+        if (!readU32(v5, limit, offset, clipCount))
+            return {};
+        for (uint32_t clipIndex = 0; clipIndex < clipCount; ++clipIndex) {
+            if (!skipBytes(v5, limit, offset, 6u) ||
+                !skipWireString(v5, limit, offset) ||
+                !skipWireString(v5, limit, offset) ||
+                !skipWireString(v5, limit, offset) ||
+                !skipBytes(v5, limit, offset, 47u))
+                return {};
+        }
+        std::optional<size_t> unusedPropertyOffset;
+        if (!skipChain(v5, limit, offset, 4u, unusedPropertyOffset))
+            return {};
+        copyRange(remainderStart, offset);
+    }
+    const size_t masterStart = offset;
+    std::optional<size_t> unusedPropertyOffset;
+    if (!skipChain(v5, limit, offset, 4u, unusedPropertyOffset))
+        return {};
+    copyRange(masterStart, offset);
+    const size_t globalStart = offset;
+    if (!skipBytes(v5, limit, offset, 33u) || offset != limit)
+        return {};
+    copyRange(globalStart, limit);
+    v4.resize(v4.size() + 4u);
+    refreshCrc(v4);
+    return v4;
+}
+
 std::vector<uint8_t> makeV2Payload(const std::vector<uint8_t>& v3) {
     if (v3.size() < 12 || getU32(v3, 4) != 3u)
         return {};
@@ -466,11 +572,11 @@ std::vector<uint8_t> makeV2Payload(const std::vector<uint8_t>& v3) {
     return v2;
 }
 TEST(RackStateCodecTest,
-     V4DecodeAcceptsMaximumNameOf48SupplementaryUnicodeScalars) {
+     V5DecodeAcceptsMaximumNameOf48SupplementaryUnicodeScalars) {
     const std::string expectedName = supplementaryName(48);
     const std::vector<uint8_t> encoded = encodeSingleTrackName(expectedName);
     ASSERT_FALSE(encoded.empty());
-    ASSERT_EQ(getU32(encoded, kV4TrackNameLengthOffset), 288u);
+    ASSERT_EQ(getU32(encoded, kV5TrackNameLengthOffset), 288u);
 
     RackGraph::State decoded;
     std::string error;
@@ -481,28 +587,28 @@ TEST(RackStateCodecTest,
 }
 
 TEST(RackStateCodecTest,
-     V4DecodeRejects49UnicodeScalarsAtomically) {
+     V5DecodeRejects49UnicodeScalarsAtomically) {
     std::vector<uint8_t> encoded =
         encodeSingleTrackName(std::string(48, 'a'));
     ASSERT_FALSE(encoded.empty());
     appendTrackNameBytes(encoded, {'b'});
-    ASSERT_EQ(getU32(encoded, kV4TrackNameLengthOffset), 49u);
+    ASSERT_EQ(getU32(encoded, kV5TrackNameLengthOffset), 49u);
 
     expectInvalidTrackNamePayload(encoded);
 }
 
-TEST(RackStateCodecTest, V4DecodeRejectsNamesOver288EncodedBytesAtomically) {
+TEST(RackStateCodecTest, V5DecodeRejectsNamesOver288EncodedBytesAtomically) {
     std::vector<uint8_t> encoded =
         encodeSingleTrackName(supplementaryName(48));
     ASSERT_FALSE(encoded.empty());
     appendTrackNameBytes(encoded, {'b'});
-    ASSERT_EQ(getU32(encoded, kV4TrackNameLengthOffset), 289u);
+    ASSERT_EQ(getU32(encoded, kV5TrackNameLengthOffset), 289u);
 
     expectInvalidTrackNamePayload(encoded);
 }
 
 TEST(RackStateCodecTest,
-     V4DecodeRejectsMalformedModifiedUtf8TrackNamesAtomically) {
+     V5DecodeRejectsMalformedModifiedUtf8TrackNamesAtomically) {
     struct Corruption {
         const char* name;
         std::function<void(std::vector<uint8_t>&)> mutate;
@@ -537,7 +643,7 @@ TEST(RackStateCodecTest,
 
     const std::vector<uint8_t> encoded = encodeSingleTrackName("valid!");
     ASSERT_FALSE(encoded.empty());
-    ASSERT_EQ(getU32(encoded, kV4TrackNameLengthOffset), 6u);
+    ASSERT_EQ(getU32(encoded, kV5TrackNameLengthOffset), 6u);
 
     for (const Corruption& corruption : corruptions) {
         SCOPED_TRACE(corruption.name);
@@ -547,13 +653,126 @@ TEST(RackStateCodecTest,
     }
 }
 
+TEST(RackStateCodecTest,
+     V5RoundTripPreservesUsbIdentityAndTrackOutputWithoutRuntimeHandles) {
+    RackGraph::State expected = fixtureState();
+    std::string error;
+    const std::vector<uint8_t> encoded = RackStateCodec::encode(expected, &error);
+    ASSERT_FALSE(encoded.empty()) << error;
+    ASSERT_EQ(getU32(encoded, 4), 5u);
+
+    RackGraph::State decoded;
+    ASSERT_TRUE(RackStateCodec::decode(
+        encoded.data(), encoded.size(), decoded, error)) << error;
+    expectState(decoded, expected);
+    EXPECT_EQ(decoded.tracks[0].midiInputSource.runtimeSourceHandle, 0u);
+    EXPECT_EQ(decoded.tracks[1].midiInputSource.runtimeSourceHandle, 0u);
+    EXPECT_EQ(decoded.tracks[0].midiInputSource.kind,
+              TrackMidiInputSource::Kind::TrackOutput);
+    EXPECT_EQ(decoded.tracks[0].midiInputSource.trackId, 42u);
+    EXPECT_EQ(decoded.tracks[1].midiInputSource.kind,
+              TrackMidiInputSource::Kind::UsbPort);
+    EXPECT_EQ(decoded.tracks[1].midiInputSource.usb.vendorId, 0x1234u);
+    EXPECT_EQ(decoded.tracks[1].midiInputSource.usb.productId, 0xabcdu);
+    EXPECT_EQ(decoded.tracks[1].midiInputSource.usb.portNumber, 7u);
+}
+
+TEST(RackStateCodecTest, V5RejectsMalformedMidiKindAndIdentityRangesAtomically) {
+    struct Corruption {
+        const char* name;
+        std::function<void(std::vector<uint8_t>&)> mutate;
+    };
+    const std::vector<Corruption> corruptions = {
+        {"kind", [](auto& data) { data[40] = 3; }},
+        {"vendor", [](auto& data) { putU32(data, 49, 65536); }},
+        {"product", [](auto& data) { putU32(data, 53, 65536); }},
+        {"port", [](auto& data) { putU32(data, 57, 65536); }},
+        {"serial-utf", [](auto& data) {
+             putU32(data, 61, 2);
+             data[65] = 0xc0;
+             data[66] = 0x80;
+         }},
+        {"display-utf", [](auto& data) {
+             putU32(data, 75, 2);
+             data[79] = 0xc0;
+             data[80] = 0x80;
+         }},
+    };
+    for (const Corruption& corruption : corruptions) {
+        SCOPED_TRACE(corruption.name);
+        std::string error;
+        const std::vector<uint8_t> source = RackStateCodec::encode(usbState(), &error);
+        ASSERT_FALSE(source.empty()) << error;
+        std::vector<uint8_t> damaged = source;
+        corruption.mutate(damaged);
+        refreshCrc(damaged);
+        expectInvalidMidiPayload(damaged);
+    }
+}
+
+TEST(RackStateCodecTest, V5RejectsTruncatedMidiBlockWithoutReplacingState) {
+    std::string error;
+    std::vector<uint8_t> damaged = RackStateCodec::encode(usbState(), &error);
+    ASSERT_FALSE(damaged.empty()) << error;
+    damaged.resize(damaged.size() - 5);
+    damaged.insert(damaged.end(), 4, 0);
+    refreshCrc(damaged);
+
+    RackGraph::State existing = fixtureState();
+    const RackGraph::State before = existing;
+    EXPECT_FALSE(RackStateCodec::decode(
+        damaged.data(), damaged.size(), existing, error));
+    EXPECT_FALSE(error.empty());
+    expectState(existing, before);
+}
+
+TEST(RackStateCodecTest, V5RejectsMissingMidiRouteWithoutReplacingState) {
+    RackGraph::State source = usbState();
+    source.tracks.front().midiInputSource.kind =
+        TrackMidiInputSource::Kind::TrackOutput;
+    source.tracks.front().midiInputSource.trackId = 999;
+    std::string error;
+    const std::vector<uint8_t> encoded = RackStateCodec::encode(source, &error);
+    ASSERT_FALSE(encoded.empty()) << error;
+
+    RackGraph::State existing = fixtureState();
+    const RackGraph::State before = existing;
+    EXPECT_FALSE(RackStateCodec::decode(
+        encoded.data(), encoded.size(), existing, error));
+    EXPECT_EQ(error, "invalid-midi-route");
+    expectState(existing, before);
+}
+
+TEST(RackStateCodecTest, V5RejectsMixedAudioMidiCycleWithoutReplacingState) {
+    RackGraph::State source;
+    RackGraph::State::Track first;
+    RackGraph::State::Track second;
+    first.id = 1;
+    second.id = 2;
+    first.inputSource.kind = TrackInputSource::Kind::TrackOutput;
+    first.inputSource.trackId = 2;
+    second.midiInputSource.kind = TrackMidiInputSource::Kind::TrackOutput;
+    second.midiInputSource.trackId = 1;
+    source.tracks = {first, second};
+    std::string error;
+    const std::vector<uint8_t> encoded = RackStateCodec::encode(source, &error);
+    ASSERT_FALSE(encoded.empty()) << error;
+
+    RackGraph::State existing = fixtureState();
+    const RackGraph::State before = existing;
+    EXPECT_FALSE(RackStateCodec::decode(
+        encoded.data(), encoded.size(), existing, error));
+    EXPECT_EQ(error, "invalid-midi-route");
+    expectState(existing, before);
+}
+
 
 TEST(RackStateCodecTest, RoundTripPreservesRoutingPluginsParametersBinaryPropertiesAndTrackMetadata) {
     const RackGraph::State expected = fixtureState();
     std::string error;
     const std::vector<uint8_t> encoded = RackStateCodec::encode(expected, &error);
     ASSERT_FALSE(encoded.empty()) << error;
-    EXPECT_EQ(getU32(encoded, 4), 4u);
+    EXPECT_EQ(getU32(encoded, 4), 5u);
 
 
     RackGraph::State decoded;
@@ -603,7 +822,7 @@ TEST(RackStateCodecTest,
     std::string error;
     const std::vector<uint8_t> encoded = RackStateCodec::encode(expected, &error);
     ASSERT_FALSE(encoded.empty()) << error;
-    EXPECT_EQ(getU32(encoded, 4), 4u);
+    EXPECT_EQ(getU32(encoded, 4), 5u);
 
 
     RackGraph::State decoded;
@@ -633,6 +852,15 @@ TEST(RackStateCodecTest, V3PayloadDefaultsTrackMetadataAndV1DefaultsManualLatenc
     const std::vector<uint8_t> v3 = makeV3Payload(v4);
     ASSERT_FALSE(v3.empty());
     EXPECT_EQ(getU32(v3, 4), 3u);
+    const std::vector<uint8_t> legacyV4 = makeV4Payload(v4);
+    ASSERT_FALSE(legacyV4.empty());
+    EXPECT_EQ(getU32(legacyV4, 4), 4u);
+    RackGraph::State decodedV4;
+    ASSERT_TRUE(RackStateCodec::decode(
+        legacyV4.data(), legacyV4.size(), decodedV4, error)) << error;
+    expectState(decodedV4, expected);
+    EXPECT_EQ(decodedV4.tracks.front().midiInputSource.kind,
+              TrackMidiInputSource::Kind::None);
 
     RackGraph::State decodedV3;
     ASSERT_TRUE(RackStateCodec::decode(
@@ -856,10 +1084,10 @@ TEST(RackStateCodecTest,
     std::vector<uint8_t> damaged = RackStateCodec::encodeDeviceChain(42, source);
     ASSERT_FALSE(damaged.empty());
 
-    // The v4 track envelope is 64 bytes before the scoped chain's plugin
+    // The v5 track envelope is 93 bytes before the scoped chain's plugin
     // count. Keep the CRC valid so this exercises bounded decoding, not only
     // checksum rejection.
-    putU32(damaged, 64, std::numeric_limits<uint32_t>::max());
+    putU32(damaged, 93, std::numeric_limits<uint32_t>::max());
     refreshCrc(damaged);
 
     PluginChain::ChainState existing;

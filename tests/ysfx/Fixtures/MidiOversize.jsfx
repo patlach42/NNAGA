@@ -1,0 +1,25 @@
+desc:MIDI Payload Overflow Contract
+out_pin:output
+@init
+first = 4000;
+i = 0;
+while (i < 65530) (
+  first[i] = i % 127;
+  i += 1;
+);
+first[0] = 0xf0;
+first[65529] = 0xf7;
+second = 70000;
+second[0] = 0xf0;
+second[1] = 0x7d;
+second[2] = 0x01;
+second[3] = 0x02;
+second[4] = 0x03;
+second[5] = 0x04;
+second[6] = 0x05;
+second[7] = 0x06;
+second[8] = 0x07;
+second[9] = 0xf7;
+@block
+midisyx(0, first, 65530);
+midisyx(1, second, 10);

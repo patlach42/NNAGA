@@ -76,10 +76,13 @@ import com.vibes.dsp.engine.ClipSlotInfo
 import com.vibes.dsp.engine.ClipTempoMode
 import com.vibes.dsp.engine.DirectUsbAudioManager
 import com.vibes.dsp.engine.MidiNoteInfo
+import com.vibes.dsp.engine.MidiAssignmentStatus
 import com.vibes.dsp.engine.MASTER_PATH_ID
 import com.vibes.dsp.engine.RackPathId
 import com.vibes.dsp.engine.RackTrackInfo
 import com.vibes.dsp.engine.TrackLaunchQuantization
+import com.vibes.dsp.engine.UsbMidiEndpoint
+import com.vibes.dsp.engine.UsbMidiState
 import com.vibes.dsp.ui.components.CompactHorizontalFader
 import com.vibes.dsp.ui.components.FontaudioGlyph
 import com.vibes.dsp.ui.components.FontaudioIcon
@@ -217,6 +220,57 @@ private fun inputSourceLabel(track: RackTrackInfo, tracks: List<RackTrackInfo>):
 
         else -> "Unknown source"
     }
+private fun midiStatusLabel(status: MidiAssignmentStatus): String = when (status) {
+    MidiAssignmentStatus.Disconnected -> "Disconnected"
+    MidiAssignmentStatus.Ambiguous -> "Ambiguous"
+    MidiAssignmentStatus.Opening -> "Opening"
+    MidiAssignmentStatus.Connected -> "Connected"
+    MidiAssignmentStatus.Failed -> "Failed"
+}
+
+private fun midiAssignmentStatus(track: RackTrackInfo, usbMidiState: UsbMidiState): MidiAssignmentStatus =
+    usbMidiState.assignments[track.id]?.status
+        ?: if (track.midiInputConnected) MidiAssignmentStatus.Connected else MidiAssignmentStatus.Disconnected
+
+private fun midiInputLabel(
+    track: RackTrackInfo,
+    tracks: List<RackTrackInfo>,
+    usbMidiState: UsbMidiState,
+): String = when (track.midiInputKind) {
+    0 -> "None"
+    1 -> {
+        val displayName = track.midiDisplayName.ifBlank {
+            "USB MIDI port ${track.midiPortNumber + 1}"
+        }
+        "$displayName · ${midiStatusLabel(midiAssignmentStatus(track, usbMidiState))}"
+    }
+    2 -> {
+        val sourceIndex = tracks.indexOfFirst { it.id == track.midiInputSourceTrackId }
+        val sourceLabel = if (sourceIndex >= 0) {
+            trackDisplayName(tracks[sourceIndex], sourceIndex)
+        } else {
+            "Track ${track.midiInputSourceTrackId}"
+        }
+        "$sourceLabel output"
+    }
+    else -> "Unknown source"
+}
+
+private fun midiEndpointMatches(track: RackTrackInfo, endpoint: UsbMidiEndpoint): Boolean =
+    track.midiVendorId == endpoint.identity.vendorId &&
+        track.midiProductId == endpoint.identity.productId &&
+        track.midiSerialNumber == endpoint.identity.serialNumber &&
+        track.midiPortNumber == endpoint.identity.portNumber
+
+private fun midiEndpointLabel(endpoint: UsbMidiEndpoint, endpoints: List<UsbMidiEndpoint>): String {
+    val duplicates = endpoints.filter {
+        it.identity == endpoint.identity && it.displayName == endpoint.displayName
+    }
+    if (duplicates.size <= 1) return endpoint.displayName
+    val ordinal = duplicates.indexOfFirst { it.deviceToken == endpoint.deviceToken } + 1
+    return "${endpoint.displayName} · Device $ordinal"
+}
+
 
 private fun trackDisplayName(track: RackTrackInfo, index: Int): String =
     track.name.ifEmpty { defaultTrackName(index) }
@@ -294,6 +348,7 @@ fun LiveScreen(
     val slotsByTrack by viewModel.clipSlots.collectAsState()
     val peaksByTrack by viewModel.waveformPeaks.collectAsState()
     val notesByClip by viewModel.midiNotes.collectAsState()
+    val usbMidiState by viewModel.usbMidiState.collectAsState()
     val inputChannelCount = DirectUsbAudioManager.getInputChannelCount()
 
     var launchQuantizationOrdinal by rememberSaveable { mutableIntStateOf(0) }
@@ -308,6 +363,7 @@ fun LiveScreen(
     var selectedSlot by rememberSaveable { mutableIntStateOf(0) }
     var deviceChainPathId by remember { mutableStateOf<RackPathId?>(null) }
     var inputMenuTrack by remember { mutableStateOf<RackTrackInfo?>(null) }
+    var midiInputMenuTrack by remember { mutableStateOf<RackTrackInfo?>(null) }
     var trackMenuTargetId by rememberSaveable { mutableStateOf<Long?>(null) }
     var trackDialog by remember { mutableStateOf<TrackDialog?>(null) }
     var trackNameInput by rememberSaveable { mutableStateOf("") }
@@ -586,6 +642,16 @@ fun LiveScreen(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     NnagaSelectorMenuItem(
+                        text = "MIDI input · ${midiInputLabel(trackMenuTarget, tracks, usbMidiState)}",
+                        selected = false,
+                        onClick = {
+                            val target = trackMenuTarget
+                            dismissTrackDialog()
+                            midiInputMenuTrack = target
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    NnagaSelectorMenuItem(
                         text = if (trackMenuTarget.inputArmed) "Disarm track" else "Arm track",
                         selected = trackMenuTarget.inputArmed,
                         onClick = {
@@ -768,6 +834,87 @@ fun LiveScreen(
                 }
             },
             confirmButton = { NnagaTextButton(onClick = { inputMenuTrack = null }) { Text("Cancel") } },
+        )
+    }
+    midiInputMenuTrack?.let { menuTrack ->
+        val track = tracks.firstOrNull { it.id == menuTrack.id } ?: menuTrack
+        val assignmentStatus = midiAssignmentStatus(track, usbMidiState)
+        val assignment = usbMidiState.assignments[track.id]
+        val matchingEndpoints = usbMidiState.endpoints.filter {
+            midiEndpointMatches(track, it)
+        }
+        AlertDialog(
+            onDismissRequest = { midiInputMenuTrack = null },
+            title = { Text("MIDI input") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState())) {
+                    NnagaSelectorMenuItem(
+                        text = "None",
+                        selected = track.midiInputKind == 0,
+                        onClick = {
+                            viewModel.setTrackMidiInputNone(track.id)
+                            midiInputMenuTrack = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    val showSavedAssignment =
+                        track.midiInputKind == 1 &&
+                            assignmentStatus != MidiAssignmentStatus.Connected &&
+                            matchingEndpoints.size != 1
+                    if (showSavedAssignment) {
+                        NnagaSelectorMenuItem(
+                            text = midiInputLabel(track, tracks, usbMidiState),
+                            selected = true,
+                            enabled = false,
+                            onClick = {},
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    usbMidiState.endpoints.forEach { endpoint ->
+                        val matchesAssignment =
+                            track.midiInputKind == 1 && midiEndpointMatches(track, endpoint)
+                        val endpointSelected = matchesAssignment && (
+                            matchingEndpoints.size == 1 ||
+                                assignmentStatus == MidiAssignmentStatus.Connected &&
+                                assignment?.deviceToken == endpoint.deviceToken
+                            )
+                        val endpointText = midiEndpointLabel(endpoint, usbMidiState.endpoints) +
+                            if (matchesAssignment &&
+                                assignmentStatus != MidiAssignmentStatus.Connected &&
+                                matchingEndpoints.size == 1
+                            ) {
+                                " · ${midiStatusLabel(assignmentStatus)}"
+                            } else {
+                                ""
+                            }
+                        NnagaSelectorMenuItem(
+                            text = endpointText,
+                            selected = endpointSelected,
+                            onClick = {
+                                viewModel.setTrackMidiInputUsb(track.id, endpoint)
+                                midiInputMenuTrack = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    tracks.filter { it.id != track.id }.forEach { source ->
+                        val sourceIndex = tracks.indexOf(source)
+                        NnagaSelectorMenuItem(
+                            text = "${trackDisplayName(source, sourceIndex)} output",
+                            selected = track.midiInputKind == 2 &&
+                                track.midiInputSourceTrackId == source.id,
+                            onClick = {
+                                viewModel.setTrackMidiInputTrack(track.id, source.id)
+                                midiInputMenuTrack = null
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                NnagaTextButton(onClick = { midiInputMenuTrack = null }) { Text("Cancel") }
+            },
         )
     }
     clipSettingsTarget?.let { (trackId, slotIndex) ->

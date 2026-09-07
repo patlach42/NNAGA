@@ -22,7 +22,6 @@ class PluginChain {
 public:
     static constexpr uint32_t kMaxSupportedPdcFrames = 65535;
     static constexpr uint32_t kMaxRetiredPlans = 8;
-    static constexpr uint32_t kMaxMidiEvents = 128;
 
     PluginChain() = default;
     ~PluginChain();
@@ -31,14 +30,12 @@ public:
     bool removePlugin(int index);
     bool reorderPlugins(int fromIndex, int toIndex);
 
-    uint32_t process(const float* const* inputs,
-                     float* const* outputs,
-                     uint32_t numFrames,
-                     const AudioProcessContext& context,
-                     const MidiEvent* inputEvents,
-                     uint32_t inputCount,
-                     MidiEvent* outputEvents,
-                     uint32_t outputCapacity);
+    void process(const float* const* inputs,
+                 float* const* outputs,
+                 uint32_t numFrames,
+                 const AudioProcessContext& context,
+                 const MidiBuffer& inputMidi,
+                 MidiBuffer& outputMidi);
 
     bool isEmptyForAudio() const noexcept {
         return pluginCount_.load(std::memory_order_acquire) == 0;
@@ -69,8 +66,8 @@ public:
     std::string getParameterDisplay(uint64_t instanceId, uint32_t portIndex) const;
 
     PluginRealtimeCounters getRealtimeCounters() const noexcept;
-    uint64_t getMidiEventDrops() const noexcept {
-        return midiEventDrops_.load(std::memory_order_relaxed);
+    uint64_t getMidiPluginOutputDrops() const noexcept {
+        return midiPluginOutputDrops_.load(std::memory_order_relaxed);
     }
     uint64_t getPlanPublishDeferrals() const noexcept {
         return planPublishDeferrals_.load(std::memory_order_relaxed);
@@ -191,7 +188,7 @@ private:
     std::atomic<uint32_t> renderBufferSize_{0};
     std::atomic<bool> latencyOverflow_{false};
     std::atomic<uint64_t> oversizedBlocks_{0};
-    std::atomic<uint64_t> midiEventDrops_{0};
+    std::atomic<uint64_t> midiPluginOutputDrops_{0};
     std::atomic<uint64_t> planPublishDeferrals_{0};
 
     bool running_ = false;
@@ -200,8 +197,8 @@ private:
     bool planPublished_ = false;
     float sampleRate_ = 0.0f;
 
-    std::array<MidiEvent, kMaxMidiEvents> midiScratchA_{};
-    std::array<MidiEvent, kMaxMidiEvents> midiScratchB_{};
+    MidiBuffer midiScratchA_;
+    MidiBuffer midiScratchB_;
     std::vector<std::vector<float>> intermediateBuffers_;
 
     std::mutex reclaimerMutex_;

@@ -43,6 +43,7 @@
 #include "../plugin/PluginRegistry.h"
 #include "../plugin/IPlugin.h"
 #include "../plugin/IPluginFactory.h"
+#include "../plugin/RackGraph.h"
 #include "../plugin/lv2/LV2PluginFactory.h"
 #include "../plugin/native/NativePluginFactory.h"
 
@@ -256,7 +257,7 @@ static bool parseMidiFile(const std::string& path, const std::string& name, std:
     auto u32=[&](size_t p)->uint32_t{return (static_cast<uint32_t>(bytes[p])<<24)|(static_cast<uint32_t>(bytes[p+1])<<16)|(static_cast<uint32_t>(bytes[p+2])<<8)|bytes[p+3];};
     const uint16_t format=u16(8), tracks=u16(10), division=u16(12);
     if ((format!=0&&format!=1)||tracks==0||(division&0x8000)||division==0) return false;
-    struct Raw { uint64_t tick; MidiEvent ev; }; struct Tempo { uint64_t tick; uint32_t us; };
+    struct Raw { uint64_t tick; std::vector<uint8_t> payload; }; struct Tempo { uint64_t tick; uint32_t us; };
     std::vector<Raw> raw; std::vector<Tempo> tempos{{0,500000}}; size_t pos=14;
     for (uint16_t tr=0;tr<tracks;++tr) {
         if (pos+8>bytes.size()||std::memcmp(bytes.data()+pos,"MTrk",4)!=0) return false;
@@ -270,7 +271,9 @@ static bool parseMidiFile(const std::string& path, const std::string& name, std:
             if(status==0xf0||status==0xf7){uint32_t sl=0;n=0;do{if(pos>=end||n++>=4)return false;b=bytes[pos++];sl=(sl<<7)|(b&0x7f);}while(b&0x80);if(sl>end-pos)return false;pos+=sl;continue;}
             const uint8_t type=status&0xf0; if(type!=0x80&&type!=0x90&&type!=0xa0&&type!=0xb0&&type!=0xc0&&type!=0xd0&&type!=0xe0)return false;
             if(pos>=end)return false; uint8_t d1=bytes[pos++]; uint8_t d2=0; if(type!=0xc0&&type!=0xd0){if(pos>=end)return false;d2=bytes[pos++];}
-            raw.push_back({tick,{0,status,d1,d2}});
+            std::vector<uint8_t> payload{status,d1};
+            if (type != 0xc0 && type != 0xd0) payload.push_back(d2);
+            raw.push_back({tick,std::move(payload)});
         }
         pos=end;
     }
@@ -281,7 +284,7 @@ static bool parseMidiFile(const std::string& path, const std::string& name, std:
     if (tempo == 0) return false;
     clip->sourceBpm=60'000'000.0/static_cast<double>(tempo);
     ti=0;
-    for(const auto& r:raw){while(ti+1<tempos.size()&&tempos[ti+1].tick<=r.tick){micros+=(tempos[ti+1].tick-lastTick)*tempo/division;lastTick=tempos[++ti].tick;tempo=tempos[ti].us;if(tempo==0)return false;} micros+=(r.tick-lastTick)*tempo/division;lastTick=r.tick; MidiTimedEvent e; e.microseconds=micros; e.event=r.ev; clip->events.push_back(e); clip->durationMicroseconds=std::max(clip->durationMicroseconds,e.microseconds+1);}
+    for(const auto& r:raw){while(ti+1<tempos.size()&&tempos[ti+1].tick<=r.tick){micros+=(tempos[ti+1].tick-lastTick)*tempo/division;lastTick=tempos[++ti].tick;tempo=tempos[ti].us;if(tempo==0)return false;} micros+=(r.tick-lastTick)*tempo/division;lastTick=r.tick; MidiTimedEvent e; e.microseconds=micros; e.payload=r.payload; clip->events.push_back(std::move(e)); clip->durationMicroseconds=std::max(clip->durationMicroseconds,e.microseconds+1);}
     out=std::move(clip); return true;
 }
 
@@ -1179,13 +1182,13 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetDirectUsbStats(
 JNIEXPORT jlongArray JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeGetRealtimeStats(
         JNIEnv* env, jobject) {
-    // Schema v2; order mirrors AudioRealtimeStats.fromRaw.
-    constexpr jsize kCount = 27;
+    // Schema v3; preserve every v2 index and append MIDI counters.
+    constexpr jsize kCount = 33;
     const auto stats = g_ctx && g_ctx->audioEngine
         ? g_ctx->audioEngine->getRealtimeStatsSnapshot()
         : AudioEngine::RealtimeStatsSnapshot{};
     const jlong values[kCount] = {
-        2, static_cast<jlong>(stats.callbackCount),
+        3, static_cast<jlong>(stats.callbackCount),
         static_cast<jlong>(stats.callbackFrames),
         static_cast<jlong>(stats.frameCapacityViolations),
         static_cast<jlong>(stats.inputUnderflowFrames),
@@ -1211,6 +1214,12 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetRealtimeStats(
         static_cast<jlong>(stats.callbackDeadlineBudgetNanoseconds),
         static_cast<jlong>(stats.callbackDeadlineMisses),
         static_cast<jlong>(stats.vstGuestFramesProduced),
+        static_cast<jlong>(stats.midiIngressDrops),
+        static_cast<jlong>(stats.midiOversizeMessages),
+        static_cast<jlong>(stats.midiMalformedMessages),
+        static_cast<jlong>(stats.midiLateEvents),
+        static_cast<jlong>(stats.midiMergeDrops),
+        static_cast<jlong>(stats.midiPluginOutputDrops),
     };
     jlongArray out = env->NewLongArray(kCount);
     if (out) env->SetLongArrayRegion(out, 0, kCount, values);
@@ -1780,6 +1789,177 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackInputTrack(
 }
 
 JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackMidiInputNone(
+    JNIEnv*, jobject, jlong trackId) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().setTrackMidiInputNone(
+        static_cast<RackPathId>(trackId)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackMidiInputUsb(
+    JNIEnv* env, jobject, jlong trackId, jint vendorId, jint productId,
+    jstring serialNumber, jint portNumber, jstring displayName, jlong sourceHandle) {
+    if (!g_ctx || !g_ctx->audioEngine || !serialNumber || !displayName ||
+        vendorId < 0 || vendorId > 65535 || productId < 0 || productId > 65535 ||
+        portNumber < 0 || portNumber > 65535 || sourceHandle < 0) {
+        return JNI_FALSE;
+    }
+    const char* serial = env->GetStringUTFChars(serialNumber, nullptr);
+    if (!serial || env->ExceptionCheck()) {
+        if (serial) env->ReleaseStringUTFChars(serialNumber, serial);
+        return JNI_FALSE;
+    }
+    const char* display = env->GetStringUTFChars(displayName, nullptr);
+    if (!display || env->ExceptionCheck()) {
+        if (display) env->ReleaseStringUTFChars(displayName, display);
+        env->ReleaseStringUTFChars(serialNumber, serial);
+        return JNI_FALSE;
+    }
+    const UsbMidiPortIdentity identity{
+        static_cast<uint16_t>(vendorId), static_cast<uint16_t>(productId),
+        std::string(serial), static_cast<uint16_t>(portNumber)};
+    const std::string displayText(display);
+    env->ReleaseStringUTFChars(displayName, display);
+    env->ReleaseStringUTFChars(serialNumber, serial);
+    if (env->ExceptionCheck()) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().setTrackMidiInputUsb(
+        static_cast<RackPathId>(trackId), identity, displayText,
+        static_cast<uint64_t>(sourceHandle)) ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeSetTrackMidiInputTrack(
+    JNIEnv*, jobject, jlong trackId, jlong sourceTrackId) {
+    if (!g_ctx || !g_ctx->audioEngine) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().setTrackMidiInputTrack(
+        static_cast<RackPathId>(trackId), static_cast<RackPathId>(sourceTrackId))
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeBindTrackUsbMidiSource(
+    JNIEnv*, jobject, jlong trackId, jlong sourceHandle) {
+    if (!g_ctx || !g_ctx->audioEngine || sourceHandle <= 0) return JNI_FALSE;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return g_ctx->audioEngine->getRackGraph().bindTrackUsbMidiSource(
+        static_cast<RackPathId>(trackId), static_cast<uint64_t>(sourceHandle))
+        ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jlong JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeRegisterUsbMidiSource(
+        JNIEnv* env, jobject, jint vendorId, jint productId, jstring serialNumber, jint portNumber) {
+    if (!g_ctx || !g_ctx->audioEngine || !serialNumber ||
+        vendorId < 0 || vendorId > 65535 || productId < 0 || productId > 65535 ||
+        portNumber < 0 || portNumber > 65535) {
+        return 0;
+    }
+    const char* chars = env->GetStringUTFChars(serialNumber, nullptr);
+    if (!chars || env->ExceptionCheck()) {
+        if (chars) env->ReleaseStringUTFChars(serialNumber, chars);
+        return 0;
+    }
+    const UsbMidiPortIdentity identity{
+        static_cast<uint16_t>(vendorId), static_cast<uint16_t>(productId),
+        std::string(chars), static_cast<uint16_t>(portNumber)};
+    env->ReleaseStringUTFChars(serialNumber, chars);
+    if (env->ExceptionCheck()) return 0;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    return static_cast<jlong>(g_ctx->audioEngine->getRackGraph().registerUsbMidiSource(identity));
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeUnregisterUsbMidiSource(
+        JNIEnv*, jobject, jlong sourceHandle) {
+    if (!g_ctx || !g_ctx->audioEngine || sourceHandle == 0) return;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    g_ctx->audioEngine->getRackGraph().unregisterUsbMidiSource(static_cast<uint64_t>(sourceHandle));
+}
+
+JNIEXPORT void JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeFlushUsbMidiSource(
+        JNIEnv*, jobject, jlong sourceHandle) {
+    if (!g_ctx || !g_ctx->audioEngine || sourceHandle == 0) return;
+    std::lock_guard lock(g_ctx->rackControlMutex);
+    g_ctx->audioEngine->getRackGraph().flushUsbMidiSource(static_cast<uint64_t>(sourceHandle));
+}
+
+JNIEXPORT jint JNICALL
+Java_com_vibes_dsp_engine_NativeEngine_nativeEnqueueUsbMidiBatch(
+        JNIEnv* env, jobject, jlong sourceHandle, jlongArray timestampsNanos,
+        jintArray offsets, jintArray lengths, jbyteArray payload, jint count,
+        jint oversizeDelta, jint malformedDelta) {
+    if (!g_ctx || !g_ctx->audioEngine || sourceHandle == 0 || count < 0 || count > 128 ||
+        oversizeDelta < 0 || malformedDelta < 0 || !timestampsNanos || !offsets ||
+        !lengths || !payload) {
+        return 0;
+    }
+    if (env->GetArrayLength(timestampsNanos) < count ||
+        env->GetArrayLength(offsets) < count ||
+        env->GetArrayLength(lengths) < count) {
+        return 0;
+    }
+    auto& graph = g_ctx->audioEngine->getRackGraph();
+    {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        if (!graph.hasUsbMidiSource(static_cast<uint64_t>(sourceHandle))) return 0;
+    }
+
+    jlong rawTimestamps[128] = {};
+    jint rawOffsets[128] = {};
+    jint rawLengths[128] = {};
+    env->GetLongArrayRegion(timestampsNanos, 0, count, rawTimestamps);
+    env->GetIntArrayRegion(offsets, 0, count, rawOffsets);
+    env->GetIntArrayRegion(lengths, 0, count, rawLengths);
+    if (env->ExceptionCheck()) return 0;
+
+    const jsize payloadLength = env->GetArrayLength(payload);
+    uint64_t timestamps[128] = {};
+    uint32_t messageOffsets[128] = {};
+    uint32_t messageLengths[128] = {};
+    for (jint i = 0; i < count; ++i) {
+        if (rawTimestamps[i] < 0 || rawOffsets[i] < 0 ||
+            rawLengths[i] < 1 || rawLengths[i] > 65536 ||
+            rawOffsets[i] > payloadLength ||
+            static_cast<int64_t>(rawOffsets[i]) + rawLengths[i] > payloadLength) {
+            return 0;
+        }
+        timestamps[i] = static_cast<uint64_t>(rawTimestamps[i]);
+        messageOffsets[i] = static_cast<uint32_t>(rawOffsets[i]);
+        messageLengths[i] = static_cast<uint32_t>(rawLengths[i]);
+    }
+
+    static constexpr uint8_t kEmptyPayload = 0;
+    if (count == 0) {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        return static_cast<jint>(graph.enqueueUsbMidiBatch(
+            static_cast<uint64_t>(sourceHandle), timestamps, messageOffsets, messageLengths,
+            &kEmptyPayload, 0, static_cast<uint32_t>(oversizeDelta),
+            static_cast<uint32_t>(malformedDelta)));
+    }
+
+    jbyte* payloadBytes = env->GetByteArrayElements(payload, nullptr);
+    if (!payloadBytes || env->ExceptionCheck()) {
+        if (payloadBytes) env->ReleaseByteArrayElements(payload, payloadBytes, JNI_ABORT);
+        return 0;
+    }
+    uint32_t accepted = 0;
+    {
+        std::lock_guard lock(g_ctx->rackControlMutex);
+        accepted = graph.enqueueUsbMidiBatch(
+            static_cast<uint64_t>(sourceHandle), timestamps, messageOffsets, messageLengths,
+            reinterpret_cast<const uint8_t*>(payloadBytes), static_cast<uint32_t>(count),
+            static_cast<uint32_t>(oversizeDelta), static_cast<uint32_t>(malformedDelta));
+    }
+    env->ReleaseByteArrayElements(payload, payloadBytes, JNI_ABORT);
+    return static_cast<jint>(accepted);
+}
+
+JNIEXPORT jboolean JNICALL
 Java_com_vibes_dsp_engine_NativeEngine_nativeLoadTrackWav(
     JNIEnv* env, jobject, jlong trackId, jstring path, jstring displayName) {
     if (!g_ctx || !g_ctx->audioEngine || !path || !displayName) return JNI_FALSE;
@@ -2113,7 +2293,7 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
     jclass clazz = env->FindClass("com/vibes/dsp/engine/RackTrackInfo");
     if (!clazz) return nullptr;
     jmethodID ctor = env->GetMethodID(
-        clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIIJIZZIDIDDJILjava/lang/String;I)V");
+        clazz, "<init>", "(JFZZZLjava/lang/String;DZZDJZZZIIJIZZIDIDDJILjava/lang/String;IIIILjava/lang/String;ILjava/lang/String;JZ)V");
     if (!ctor) {
         env->DeleteLocalRef(clazz);
         return nullptr;
@@ -2123,6 +2303,8 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
         const auto& track = tracks[index];
         jstring name = env->NewStringUTF(track.wavDisplayName.c_str());
         jstring trackName = env->NewStringUTF(track.name.c_str());
+        jstring midiSerial = env->NewStringUTF(track.midiSerialNumber.c_str());
+        jstring midiDisplay = env->NewStringUTF(track.midiDisplayName.c_str());
         jobject item = env->NewObject(
             clazz, ctor, static_cast<jlong>(track.id), track.volume,
             track.inputArmed ? JNI_TRUE : JNI_FALSE,
@@ -2145,10 +2327,18 @@ Java_com_vibes_dsp_engine_NativeEngine_nativeGetTracks(JNIEnv* env, jobject) {
             track.musicalQuarterNotes, track.sampleRate,
             static_cast<jlong>(track.capturedAtMonotonicNanos),
             static_cast<jint>(track.recordingSlot), trackName,
-            static_cast<jint>(track.colorArgb));
+            static_cast<jint>(track.colorArgb),
+            static_cast<jint>(track.midiInputKind),
+            static_cast<jint>(track.midiVendorId),
+            static_cast<jint>(track.midiProductId), midiSerial,
+            static_cast<jint>(track.midiPortNumber), midiDisplay,
+            static_cast<jlong>(track.midiInputSourceTrackId),
+            track.midiInputConnected ? JNI_TRUE : JNI_FALSE);
         if (item) env->SetObjectArrayElement(result, static_cast<jsize>(index), item);
         if (name) env->DeleteLocalRef(name);
         if (trackName) env->DeleteLocalRef(trackName);
+        if (midiSerial) env->DeleteLocalRef(midiSerial);
+        if (midiDisplay) env->DeleteLocalRef(midiDisplay);
         if (item) env->DeleteLocalRef(item);
     }
     env->DeleteLocalRef(clazz);

@@ -518,22 +518,39 @@ data class AudioRealtimeStats(
     val callbackDeadlineBudgetNs: Long,
     val callbackDeadlineMisses: Long,
     val vstGuestFramesProduced: Long,
+    val midiIngressDrops: Long = 0L,
+    val midiOversizeMessages: Long = 0L,
+    val midiMalformedMessages: Long = 0L,
+    val midiLateEvents: Long = 0L,
+    val midiMergeDrops: Long = 0L,
+    val midiPluginOutputDrops: Long = 0L,
 ) {
     companion object {
         private const val V1 = 1L
         private const val V2 = 2L
+        private const val V3 = 3L
         private const val V1_SIZE = 26
         private const val V2_SIZE = 27
+        private const val V3_SIZE = 33
         fun fromRaw(raw: LongArray): AudioRealtimeStats {
             require(raw.isNotEmpty()) { "Realtime stats payload is truncated" }
-            val guestFramesProduced = when (raw[0]) {
+            val guestFramesProduced: Long
+            val midiCounters: LongArray
+            when (raw[0]) {
                 V1 -> {
                     require(raw.size >= V1_SIZE) { "Realtime stats payload is truncated" }
-                    0L
+                    guestFramesProduced = 0L
+                    midiCounters = LongArray(6)
                 }
                 V2 -> {
                     require(raw.size >= V2_SIZE) { "Realtime stats payload is truncated" }
-                    raw[26]
+                    guestFramesProduced = raw[26]
+                    midiCounters = LongArray(6)
+                }
+                V3 -> {
+                    require(raw.size >= V3_SIZE) { "Realtime stats payload is truncated" }
+                    guestFramesProduced = raw[26]
+                    midiCounters = raw.copyOfRange(27, 33)
                 }
                 else -> throw IllegalArgumentException(
                     "Unsupported realtime stats schema: ${raw[0]}"
@@ -543,7 +560,9 @@ data class AudioRealtimeStats(
                 raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
                 raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14],
                 raw[15], raw[16], raw[17], raw[18], raw[19], raw[20], raw[21],
-                raw[22], raw[23], raw[24], raw[25], guestFramesProduced
+                raw[22], raw[23], raw[24], raw[25], guestFramesProduced,
+                midiCounters[0], midiCounters[1], midiCounters[2],
+                midiCounters[3], midiCounters[4], midiCounters[5]
             )
         }
     }
@@ -603,13 +622,13 @@ data class ClipSlotInfo(
     val loopStartQuarterNotes: Double = 0.0,
     val loopLengthQuarterNotes: Double = 4.0,
 )
- 
 data class ProjectClipMediaRef(
     val trackId: RackPathId,
     val slot: Int,
     val assetId: String,
     val isMidi: Boolean,
 )
+
 data class ProjectStateSnapshot(
     val rackState: ByteArray,
     val mediaRefs: Array<ProjectClipMediaRef>,
@@ -619,7 +638,7 @@ data class MidiNoteInfo(
     val startMicroseconds: Long,
     val durationMicroseconds: Long,
     val pitch: Int,
-    val velocity: Int
+    val velocity: Int,
 )
 
 data class RackTrackInfo(
@@ -652,6 +671,14 @@ data class RackTrackInfo(
     val recordingSlot: Int = -1,
     val name: String = "",
     val colorArgb: Int = 0,
+    val midiInputKind: Int = 0,
+    val midiVendorId: Int = 0,
+    val midiProductId: Int = 0,
+    val midiSerialNumber: String = "",
+    val midiPortNumber: Int = 0,
+    val midiDisplayName: String = "",
+    val midiInputSourceTrackId: Long = 0L,
+    val midiInputConnected: Boolean = false,
 )
 
 data class TransportInfo(
@@ -1146,6 +1173,36 @@ class NativeEngine private constructor() {
     external fun nativeSetTrackInputHardwarePair(trackId: Long, firstChannel: Int): Boolean
     external fun nativeSetTrackInputHardwareMono(trackId: Long, channel: Int): Boolean
     external fun nativeSetTrackInputTrack(trackId: Long, sourceTrackId: Long, tap: Int): Boolean
+    external fun nativeSetTrackMidiInputNone(trackId: Long): Boolean
+    external fun nativeSetTrackMidiInputUsb(
+        trackId: Long,
+        vendorId: Int,
+        productId: Int,
+        serialNumber: String,
+        portNumber: Int,
+        displayName: String,
+        sourceHandle: Long,
+    ): Boolean
+    external fun nativeSetTrackMidiInputTrack(trackId: Long, sourceTrackId: Long): Boolean
+    external fun nativeBindTrackUsbMidiSource(trackId: Long, sourceHandle: Long): Boolean
+    external fun nativeRegisterUsbMidiSource(
+        vendorId: Int,
+        productId: Int,
+        serialNumber: String,
+        portNumber: Int,
+    ): Long
+    external fun nativeUnregisterUsbMidiSource(sourceHandle: Long)
+    external fun nativeFlushUsbMidiSource(sourceHandle: Long)
+    external fun nativeEnqueueUsbMidiBatch(
+        sourceHandle: Long,
+        timestampsNanos: LongArray,
+        offsets: IntArray,
+        lengths: IntArray,
+        payload: ByteArray,
+        count: Int,
+        oversizeDelta: Int,
+        malformedDelta: Int,
+    ): Int
     external fun nativeLoadTrackWav(trackId: Long, path: String, displayName: String): Boolean
     external fun nativeLoadTrackMidi(trackId: Long, path: String, displayName: String): Boolean
     external fun nativeUnloadTrackMidi(trackId: Long): Boolean
@@ -1265,12 +1322,49 @@ class NativeEngine private constructor() {
     fun setTrackClipAssetId(trackId: Long, slot: Int, isMidi: Boolean, assetId: String): Boolean =
         nativeSetTrackClipAssetId(trackId, slot, isMidi, assetId)
     fun exportDeviceChain(pathId: Long): ByteArray? = nativeExportDeviceChain(pathId)
+    fun registerUsbMidiSource(
+        vendorId: Int,
+        productId: Int,
+        serialNumber: String,
+        portNumber: Int,
+    ): Long = nativeRegisterUsbMidiSource(vendorId, productId, serialNumber, portNumber)
+    fun unregisterUsbMidiSource(sourceHandle: Long) = nativeUnregisterUsbMidiSource(sourceHandle)
+    fun flushUsbMidiSource(sourceHandle: Long) = nativeFlushUsbMidiSource(sourceHandle)
+    fun enqueueUsbMidiBatch(
+        sourceHandle: Long,
+        timestampsNanos: LongArray,
+        offsets: IntArray,
+        lengths: IntArray,
+        payload: ByteArray,
+        count: Int,
+        oversizeDelta: Int,
+        malformedDelta: Int,
+    ): Int = nativeEnqueueUsbMidiBatch(
+        sourceHandle, timestampsNanos, offsets, lengths, payload, count, oversizeDelta, malformedDelta
+    )
     fun importDeviceChain(pathId: Long, bytes: ByteArray): String? = nativeImportDeviceChain(pathId, bytes)
 
     fun addTrack(): Long = nativeAddTrack()
     fun removeTrack(trackId: Long): Boolean = nativeRemoveTrack(trackId)
     fun getTracks(): Array<RackTrackInfo> = nativeGetTracks()
     fun setTrackName(trackId: Long, name: String): Boolean = nativeSetTrackName(trackId, name)
+    fun setTrackMidiInputNone(trackId: Long): Boolean =
+        nativeSetTrackMidiInputNone(trackId)
+    fun setTrackMidiInputUsb(
+        trackId: Long,
+        vendorId: Int,
+        productId: Int,
+        serialNumber: String,
+        portNumber: Int,
+        displayName: String,
+        sourceHandle: Long,
+    ): Boolean = nativeSetTrackMidiInputUsb(
+        trackId, vendorId, productId, serialNumber, portNumber, displayName, sourceHandle
+    )
+    fun setTrackMidiInputTrack(trackId: Long, sourceTrackId: Long): Boolean =
+        nativeSetTrackMidiInputTrack(trackId, sourceTrackId)
+    fun bindTrackUsbMidiSource(trackId: Long, sourceHandle: Long): Boolean =
+        nativeBindTrackUsbMidiSource(trackId, sourceHandle)
     fun setTrackColor(trackId: Long, argb: Int): Boolean = nativeSetTrackColor(trackId, argb)
     fun setTrackVolume(trackId: Long, volume: Float): Boolean = nativeSetTrackVolume(trackId, volume.coerceIn(0f, 1f))
     fun setTrackInputArmed(trackId: Long, armed: Boolean): Boolean = nativeSetTrackInputArmed(trackId, armed)

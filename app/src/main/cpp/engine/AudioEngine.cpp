@@ -975,7 +975,12 @@ AudioEngine::RealtimeStatsSnapshot AudioEngine::getRealtimeStatsSnapshot() const
     out.vstGuestDeadlineMisses = pluginStats.guestDeadlineMisses;
     out.vstGuestFramesProduced = pluginStats.guestFramesProduced;
     out.midiEventDrops = rackGraph_.getMidiEventDrops();
-    out.planPublishDeferrals = rackGraph_.getPlanPublishDeferrals();
+    out.midiIngressDrops = rackGraph_.getMidiIngressDrops();
+    out.midiOversizeMessages = rackGraph_.getMidiOversizeMessages();
+    out.midiMalformedMessages = rackGraph_.getMidiMalformedMessages();
+    out.midiLateEvents = rackGraph_.getMidiLateEvents();
+    out.midiMergeDrops = rackGraph_.getMidiMergeDrops();
+    out.midiPluginOutputDrops = rackGraph_.getMidiPluginOutputDrops();
     out.xRunCount = static_cast<uint64_t>(std::max(0, getXRunCount()));
     return out;
 }

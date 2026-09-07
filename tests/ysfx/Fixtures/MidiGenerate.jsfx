@@ -1,0 +1,11 @@
+desc:MIDI Generator Contract
+out_pin:output
+@init
+msg = 2000;
+msg[0] = 0xf0;
+msg[1] = 0x01;
+msg[2] = 0x7d;
+msg[3] = 0x55;
+msg[4] = 0xf7;
+@block
+midisyx(9, msg, 5);

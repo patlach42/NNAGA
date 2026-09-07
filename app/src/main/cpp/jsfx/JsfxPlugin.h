@@ -25,9 +25,9 @@ public:
     void activate(float sampleRate, uint32_t bufferSize = 0) override;
     bool isReadyForRealtime() const noexcept override { return ready_.load(std::memory_order_acquire); }
     void deactivate() override;
-    uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                     const AudioProcessContext& context, const MidiEvent* inputEvents,
-                     uint32_t inputCount, MidiEvent* outputEvents, uint32_t outputCapacity) override;
+    MidiOutputDisposition process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                                   const AudioProcessContext& context, const MidiBuffer& inputMidi,
+                                   MidiBuffer& outputMidi) override;
     PluginInfo getInfo() const override;
     uint32_t getLatencyFrames() const noexcept override { return latencyFrames_.load(std::memory_order_relaxed); }
     void setParameter(uint32_t portIndex, float value) override;
@@ -42,8 +42,7 @@ public:
 private:
     static constexpr uint32_t kMaxSliders = ysfx_max_sliders;
     static constexpr uint32_t kMaxQuantum = 8192;
-    static constexpr uint32_t kMaxMidiEvents = 128;
-    static constexpr uint32_t kMidiCapacityBytes = 4096;
+    static constexpr uint32_t kMidiCapacityBytes = 67'584;
     std::shared_ptr<ysfx_config_t> config_;
     ysfx_t* fx_ = nullptr;
     std::unique_ptr<JsfxUiHost> uiHost_;

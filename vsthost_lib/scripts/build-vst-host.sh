@@ -31,6 +31,7 @@ build_one() {
         -I"$REPO/external" \
         -o "$out" \
         "$REPO/external/vst_host/vst_host.c" \
+        "$REPO/external/vst_host/vst_host_midi.c" \
         -Wl,--stack,16777216 \
         -lkernel32 -lws2_32 -static
     "${cc%-gcc}-strip" "$out" 2>/dev/null || true

@@ -534,6 +534,7 @@ object DirectUsbAudioManager {
                 )
                 if (ok) {
                     availableInputChannels = 2
+                    UsbMidiInputManager.startSessionAndAwait()
                     return@withLock Result.success(Unit)
                 }
                 availableInputChannels = 0
@@ -578,7 +579,7 @@ object DirectUsbAudioManager {
             )
         }
 
-    private fun startExact(
+    private suspend fun startExact(
         context: Context,
         exact: DirectUsbFormat,
         outputPair: Int,
@@ -638,6 +639,7 @@ object DirectUsbAudioManager {
             disableInternal(context)
             return Result.failure(IllegalStateException(message))
         }
+        UsbMidiInputManager.startSessionAndAwait()
         return Result.success(Unit)
     }
 
@@ -1152,6 +1154,11 @@ object DirectUsbAudioManager {
     }
 
     private fun disableInternal(context: Context) {
+        // Close MIDI first: native source handles must not outlive the audio
+        // session they feed, including native/OBOE failure paths.
+        kotlinx.coroutines.runBlocking {
+            UsbMidiInputManager.stopSessionAndAwait()
+        }
         releaseAudioWakeLock()
         AudioSessionService.stop(context)
         val engine = NativeEngine.getInstance()

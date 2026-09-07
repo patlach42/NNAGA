@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include "vst2.h"
 #include "shared_layout.h"
+#include "vst_host_midi.h"
 
 typedef struct {
     int32_t type, byteSize, deltaFrames, flags;
@@ -40,10 +41,16 @@ typedef struct {
     uint8_t reserved[16];
 } VstMidiEvent;
 typedef struct {
+    int32_t type, byteSize, deltaFrames, flags;
+    uint8_t* sysexDump;
+    int32_t dumpBytes;
+    uint8_t reserved[8];
+} VstMidiSysexEvent;
+typedef struct {
     int32_t numEvents, reserved;
     VstMidiEvent* events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
 } VstEventsMidi;
-static void dispatch_midi(AEffect* effect);
+static void dispatch_midi(AEffect* effect, const VstHostMidiBuffer* input);
 
 /* Vectored exception handler + setjmp/longjmp form a more robust crash
  * recovery path than __try/__except across the FEX-Emu ARM64EC ↔ x86_64
@@ -236,9 +243,10 @@ typedef AEffect* (VST_CALL *VstPluginMainFn)(AudioMasterCallback);
 #define VSTHOST_MAX_PLUGINS 8
 
 typedef struct {
-    HMODULE  module;
+    HMODULE module;
     AEffect* eff;
     const char* path;   /* points into argv */
+    int midi_authoritative;
 } PluginEntry;
 
 static PluginEntry g_plugins[VSTHOST_MAX_PLUGINS];
@@ -247,6 +255,11 @@ static PluginEntry g_plugins[VSTHOST_MAX_PLUGINS];
 static float g_vst2_defaults[VSTHOST_MAX_PLUGINS][VSTPOC_MAX_PARAMS];
 static int g_vst2_default_count[VSTHOST_MAX_PLUGINS];
 static int g_pluginCount = 0;
+static int plugin_midi_authoritative(AEffect* effect, int slot) {
+    return effect && slot >= 0 && slot < g_pluginCount &&
+           g_plugins[slot].eff == effect &&
+           g_plugins[slot].midi_authoritative;
+}
 
 /* Globals shared between audio loop and editor thread. The "g_eff" is
  * the FIRST plugin — that's the one whose editor we open first and
@@ -311,76 +324,146 @@ typedef struct {
     int valid;
 } HostTransport;
 static HostTransport g_transport = {0};
-static VstpocMidiEvent g_chain_midi[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
-static uint32_t g_chain_midi_count = 0;
-static uint32_t g_chain_midi_capacity = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+static VstHostMidiBuffer g_chain_midi;
+static VstHostMidiBuffer g_plugin_next_midi;
+static int g_chain_midi_authoritative = 0;
+static uint32_t g_plugin_midi_drops = 0;
+static VstHostMidiBuffer* g_midi_capture = &g_plugin_next_midi;
+static VstHostMidiBuffer* g_final_midi = &g_chain_midi;
+static uint8_t g_input_copy[VST_HOST_MIDI_MAX_PAYLOAD];
 
-static void publish_midi_output(void) {
-    if (!g_shm) return;
-    uint64_t seq = __atomic_load_n(&g_shm->midi_output_seq, __ATOMIC_RELAXED);
-    uint32_t count = g_chain_midi_count;
-    if (count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) count = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
-    for (uint32_t i = 0; i < count; ++i) g_shm->midi_output_events[i] = g_chain_midi[i];
-    g_shm->midi_output_count = count;
-    __atomic_store_n((uint64_t*)&g_shm->midi_output_seq, seq + 1u, __ATOMIC_RELEASE);
+static uint32_t clamp_frame(int32_t frame) {
+    if (frame < 0) return 0;
+    if (g_transport.block_frames && (uint32_t)frame >= g_transport.block_frames)
+        return g_transport.block_frames - 1u;
+    return (uint32_t)frame;
 }
 
-static void publish_output_midi_block(uint64_t sequence) {
-    volatile VstpocOutputMidiBlock* block = &g_shm->output_midi_blocks[
-        (sequence - 1u) & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
-    uint32_t count = g_chain_midi_count;
-    if (count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) count = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
-    block->event_count = count;
-    for (uint32_t i = 0; i < count; ++i) block->events[i] = g_chain_midi[i];
-    __atomic_store_n(&block->sequence, sequence, __ATOMIC_RELEASE);
-}
-
-
-static void dispatch_midi(AEffect* effect) {
-    if (!effect || !effect->dispatcher || g_transport.midi_event_count == 0) return;
+static void dispatch_midi(AEffect* effect, const VstHostMidiBuffer* input) {
+    if (!effect || !effect->dispatcher || !input || input->count == 0) return;
     VstMidiEvent midi[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
+    VstMidiSysexEvent sysex[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
     VstEventsMidi events;
     memset(&events, 0, sizeof(events));
-    events.numEvents = (int32_t)g_transport.midi_event_count;
-    for (uint32_t i = 0; i < g_transport.midi_event_count; ++i) {
-        const VstpocMidiEvent* in = &g_transport.midi_events[i];
-        VstMidiEvent* out = &midi[i];
-        memset(out, 0, sizeof(*out));
-        out->type = 1;
-        out->byteSize = sizeof(*out);
-        out->deltaFrames = (int32_t)in->frame_offset;
-        out->midiData[0] = in->status;
-        out->midiData[1] = in->data1;
-        out->midiData[2] = in->data2;
-        events.events[i] = out;
-    }
-    effect->dispatcher(effect, effProcessEvents, 0, 0, &events, 0.0f);
+    for (uint32_t i = 0; i < input->count; ++i) {
+        const VstHostMidiDesc* d = &input->events[i];
+        if (d->payload_offset > input->payload_size ||
+            d->payload_size > input->payload_size - d->payload_offset ||
+            (g_transport.block_frames && d->frame_offset >= g_transport.block_frames)) {
+            continue;
+        }
+        const uint8_t* bytes = input->payload + d->payload_offset;
+        events.events[events.numEvents++] = &midi[i];
+        if (bytes[0] == 0xF0 && d->payload_size >= 2 &&
+            bytes[d->payload_size - 1] == 0xF7) {
+            memset(&sysex[i], 0, sizeof(sysex[i]));
+            sysex[i].type = 6;
+            sysex[i].byteSize = sizeof(sysex[i]);
+            sysex[i].deltaFrames = (int32_t)clamp_frame((int32_t)d->frame_offset);
+            sysex[i].dumpBytes = (int32_t)d->payload_size;
+            sysex[i].sysexDump = (uint8_t*)bytes;
+            events.events[events.numEvents - 1] = (VstMidiEvent*)&sysex[i];
+        } else if (d->payload_size <= 3) {
+            memset(&midi[i], 0, sizeof(midi[i]));
+            midi[i].type = 1;
+            midi[i].byteSize = sizeof(midi[i]);
+            midi[i].deltaFrames = (int32_t)clamp_frame((int32_t)d->frame_offset);
+            memcpy(midi[i].midiData, bytes, d->payload_size);
+        } else {
+            events.numEvents--;
+        }
+        }
+    if (events.numEvents) effect->dispatcher(effect, effProcessEvents, 0, 0, &events, 0.0f);
 }
 static double g_configured_rate = 0.0;
 static int g_configured_block = 0;
 static int g_transport_pending = 0;
-
 static int read_transport(const VstpocShared* shm) {
     if (!shm || shm->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         shm->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V9_SIZE) { g_transport.valid = 0; return 0; }
-    uint64_t tail = __atomic_load_n(&shm->transport_queue_tail, __ATOMIC_RELAXED);
-    uint64_t head = __atomic_load_n(&shm->transport_queue_head, __ATOMIC_ACQUIRE);
-    if (tail == head) return 0;
-    VstpocTransportBlock b = shm->transport_queue[tail & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
-    __atomic_store_n((uint64_t*)&shm->transport_queue_tail, tail + 1u, __ATOMIC_RELEASE);
-    g_transport.sample_position = b.sample_position;
-    g_transport.transport_frame = b.transport_frame;
-    g_transport.loop_end_frame = b.loop_end_frame;
-    g_transport.sample_rate = b.sample_rate;
-    g_transport.tempo = b.beats_per_minute;
-    g_transport.midi_event_count = b.midi_event_count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK
-                                  ? VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK : b.midi_event_count;
-    for (uint32_t i = 0; i < g_transport.midi_event_count; ++i)
-        g_transport.midi_events[i] = b.midi_events[i];
-    g_transport.flags = b.flags;
-    g_transport.block_frames = b.block_frames;
-    g_transport.valid = b.block_frames != 0 && b.block_frames <= VSTPOC_MAX_BLOCK_FRAMES;
+        shm->shared_layout_size < VSTPOC_SHARED_LAYOUT_V10_SIZE ||
+        (shm->shared_feature_bits & VSTPOC_FEATURE_MIDI_PAYLOAD_RING) == 0) {
+        g_transport.valid = 0;
+        return 0;
+    }
+    VstpocTransportBlock block;
+    if (!vstpoc_transport_queue_pop(shm, &block)) return 0;
+
+    g_transport.sample_position = block.sample_position;
+    g_transport.transport_frame = block.transport_frame;
+    g_transport.loop_end_frame = block.loop_end_frame;
+    g_transport.sample_rate = block.sample_rate;
+    g_transport.tempo = block.beats_per_minute;
+    g_transport.flags = block.flags;
+    g_transport.block_frames = block.block_frames;
+    g_transport.valid =
+        block.block_frames != 0 && block.block_frames <= VSTPOC_MAX_BLOCK_FRAMES;
+
+    vst_host_midi_clear(&g_chain_midi);
+    const uint64_t inputTail =
+        __atomic_load_n(&shm->midi_input_payload_tail, __ATOMIC_RELAXED);
+    const uint64_t inputHead =
+        __atomic_load_n(&shm->midi_input_payload_head, __ATOMIC_ACQUIRE);
+    const int payloadRangeValid =
+        block.midi_payload_begin == inputTail &&
+        block.midi_payload_end >= block.midi_payload_begin &&
+        block.midi_payload_end <= inputHead &&
+        block.midi_payload_end - block.midi_payload_begin <=
+            VSTPOC_MIDI_PAYLOAD_RING_BYTES;
+    const uint32_t count =
+        block.midi_event_count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK
+            ? VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK
+            : block.midi_event_count;
+    uint64_t dropped =
+        block.midi_event_count > count ? block.midi_event_count - count : 0;
+    if (payloadRangeValid) {
+        for (uint32_t i = 0; i < count; ++i) {
+            const VstpocMidiEvent* input = &block.midi_events[i];
+            if (input->payload_size == 0 ||
+                input->payload_size > VST_HOST_MIDI_MAX_PAYLOAD ||
+                input->payload_offset < block.midi_payload_begin ||
+                input->payload_offset > block.midi_payload_end ||
+                input->payload_size >
+                    block.midi_payload_end - input->payload_offset ||
+                (g_transport.valid &&
+                 input->frame_offset >= block.block_frames)) {
+                ++dropped;
+                continue;
+            }
+            const uint64_t ringOffset =
+                input->payload_offset & (VSTPOC_MIDI_PAYLOAD_RING_BYTES - 1u);
+            const uint8_t* source =
+                (const uint8_t*)shm->midi_input_payload + ringOffset;
+            if (ringOffset + input->payload_size >
+                VSTPOC_MIDI_PAYLOAD_RING_BYTES) {
+                const uint32_t first =
+                    (uint32_t)(VSTPOC_MIDI_PAYLOAD_RING_BYTES - ringOffset);
+                memcpy(g_input_copy, source, first);
+                memcpy(
+                    g_input_copy + first,
+                    (const uint8_t*)shm->midi_input_payload,
+                    input->payload_size - first);
+                source = g_input_copy;
+            }
+            (void)vst_host_midi_append(
+                &g_chain_midi,
+                input->frame_offset,
+                source,
+                input->payload_size);
+        }
+    } else {
+        dropped += count ? count : 1u;
+    }
+    dropped += g_chain_midi.dropped;
+    g_chain_midi.dropped = 0;
+    if (dropped) {
+        __atomic_add_fetch(
+            (uint64_t*)&shm->midi_input_drop_count, dropped, __ATOMIC_RELAXED);
+    }
+    __atomic_store_n(
+        (uint64_t*)&shm->midi_input_payload_tail,
+        payloadRangeValid ? block.midi_payload_end : inputHead,
+        __ATOMIC_RELEASE);
     return g_transport.valid;
 }
 static AEffect* g_eff = NULL;
@@ -813,15 +896,29 @@ static VST_CALL intptr_t host_callback(AEffect* eff, int32_t opcode,
             const VstEventsMidi* ev = (const VstEventsMidi*)ptr;
             if (!ev || ev->numEvents <= 0) return 1;
             uint32_t n = (uint32_t)ev->numEvents;
-            if (n > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) n = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+            if (n > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) {
+                g_midi_capture->dropped += n - VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+                n = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+            }
             for (uint32_t i = 0; i < n; ++i) {
                 const VstMidiEvent* m = ev->events[i];
-                if (!m || g_chain_midi_count >= g_chain_midi_capacity) break;
-                VstpocMidiEvent* out = &g_chain_midi[g_chain_midi_count++];
-                out->frame_offset = (m->deltaFrames < 0) ? 0u :
-                    ((uint32_t)m->deltaFrames < g_transport.block_frames
-                        ? (uint32_t)m->deltaFrames : g_transport.block_frames - 1u);
-                out->status = m->midiData[0]; out->data1 = m->midiData[1]; out->data2 = m->midiData[2]; out->reserved = 0;
+                if (!m) { g_midi_capture->dropped++; continue; }
+                int32_t frame = m->deltaFrames;
+                if (m->type == 6) {
+                    const VstMidiSysexEvent* sx = (const VstMidiSysexEvent*)m;
+                    frame = sx->deltaFrames;
+                    if (frame < 0 || (g_transport.block_frames && (uint32_t)frame >= g_transport.block_frames)) {
+                        g_midi_capture->dropped++; continue;
+                    }
+                    vst_host_midi_append_vst_sysex(g_midi_capture, frame, sx->type, sx->byteSize,
+                                                   sx->dumpBytes, sx->sysexDump);
+                } else {
+                    if (frame < 0 || (g_transport.block_frames && (uint32_t)frame >= g_transport.block_frames)) {
+                        g_midi_capture->dropped++; continue;
+                    }
+                    vst_host_midi_append_vst_event(g_midi_capture, frame, m->type, m->byteSize,
+                                                   m->midiData);
+                }
             }
             return 1;
         }
@@ -881,12 +978,13 @@ static VstpocShared* map_shared(const char* path) {
     }
     if (s->shared_layout_magic != VSTPOC_SHARED_LAYOUT_MAGIC ||
         s->shared_layout_version != VSTPOC_SHARED_LAYOUT_VERSION ||
-        s->shared_layout_size < VSTPOC_SHARED_LAYOUT_V9_SIZE ||
-        (s->shared_feature_bits & VSTPOC_FEATURE_PLANAR_AUDIO) == 0) {
+        s->shared_layout_size < VSTPOC_SHARED_LAYOUT_V10_SIZE ||
+        (s->shared_feature_bits & (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_MIDI_PAYLOAD_RING)) !=
+            (VSTPOC_FEATURE_PLANAR_AUDIO | VSTPOC_FEATURE_MIDI_PAYLOAD_RING)) {
         LOG("incompatible shared layout/features: magic=%llx version=%u size=%u features=%llx expected=%u\n",
             (unsigned long long)s->shared_layout_magic,
             (unsigned)s->shared_layout_version, (unsigned)s->shared_layout_size,
-            (unsigned long long)s->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V9_SIZE);
+            (unsigned long long)s->shared_feature_bits, (unsigned)VSTPOC_SHARED_LAYOUT_V10_SIZE);
         UnmapViewOfFile(s);
         return NULL;
     }
@@ -1460,6 +1558,9 @@ static int load_one_plugin(int slot, const char* dll_path) {
     g_plugins[slot].module = plugin;
     g_plugins[slot].eff    = eff;
     g_plugins[slot].path   = dll_path;
+    g_plugins[slot].midi_authoritative =
+        eff->dispatcher(eff, effCanDo, 0, 0, (void*)"sendVstEvents", 0.0f) > 0 ||
+        eff->dispatcher(eff, effCanDo, 0, 0, (void*)"sendVstMidiEvent", 0.0f) > 0;
     return 1;
 }
 
@@ -1807,6 +1908,7 @@ int main(int argc, char** argv) {
 
         LARGE_INTEGER dsp_started;
         QueryPerformanceCounter(&dsp_started);
+        g_plugin_midi_drops = 0;
         /* Chained DSP: feed input through each plugin in sequence,
          * ping-ponging between (in_l/r) and (out_l/r) as scratch
          * buffers. With N plugins, the chain looks like:
@@ -1821,22 +1923,31 @@ int main(int argc, char** argv) {
          * but should NOT modify the input buffers — so ping-ponging
          * between two distinct pairs is safe. */
         {
-            g_chain_midi_count = 0;
             float* cur_in[2]  = { in_l,  in_r  };
             float* cur_out[2] = { out_l, out_r };
+            g_chain_midi_authoritative = 0;
+            VstHostMidiBuffer* midi_current = &g_chain_midi;
+            VstHostMidiBuffer* midi_next = &g_plugin_next_midi;
             for (int p = 0; p < g_pluginCount; p++) {
                 AEffect* pe = g_plugins[p].eff;
                 if (!pe) continue;
-                dispatch_midi(pe);
+                vst_host_midi_clear(midi_next);
+                g_midi_capture = midi_next;
+                dispatch_midi(pe, midi_current);
                 pe->processReplacing(pe, cur_in, cur_out, blockFrames);
-                /* Swap: this plugin's output becomes next plugin's input. */
+                g_plugin_midi_drops += midi_next->dropped;
+                midi_next->dropped = 0;
+                if (plugin_midi_authoritative(pe, p)) {
+                    VstHostMidiBuffer* swap = midi_current;
+                    g_chain_midi_authoritative = 1;
+                    midi_current = vst_host_midi_select(midi_current, midi_next, 1);
+                    midi_next = swap;
+                }
                 float* tmp;
                 tmp = cur_in[0]; cur_in[0] = cur_out[0]; cur_out[0] = tmp;
                 tmp = cur_in[1]; cur_in[1] = cur_out[1]; cur_out[1] = tmp;
             }
-            /* After the loop, cur_in[] points at the FINAL output (we
-             * swapped after the last processReplacing). If that's not
-             * out_l/out_r already, copy. */
+            g_final_midi = midi_current;
             if (cur_in[0] != out_l) {
                 for (int i = 0; i < blockFrames; i++) {
                     out_l[i] = cur_in[0][i];
@@ -1857,7 +1968,6 @@ int main(int argc, char** argv) {
                     &shm->deadline_miss_count, 1u, __ATOMIC_RELAXED);
             }
         }
-        publish_midi_output();
         g_transport_pending = 0;
         /* Commit one complete output block. Newest whole blocks are dropped
          * when either ring is full; producer never touches consumer cursors. */
@@ -1878,13 +1988,52 @@ int main(int argc, char** argv) {
                 (VstpocOutputBlock*)&shm->output_blocks[bh & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
             d->frame_count = (uint32_t)blockFrames;
             d->ring_offset = (uint32_t)slot;
-            publish_output_midi_block(bh + 1u);
+            VstHostMidiBuffer* fm = g_final_midi;
+            uint32_t out_count = fm ? fm->count : 0;
+            uint32_t out_bytes = fm ? fm->payload_size : 0;
+            if (fm && fm->dropped) __atomic_add_fetch(&shm->midi_output_drop_count,
+                                                       fm->dropped, __ATOMIC_RELAXED);
+            if (g_plugin_midi_drops)
+                __atomic_add_fetch(&shm->midi_output_drop_count, g_plugin_midi_drops, __ATOMIC_RELAXED);
+            uint64_t mph = __atomic_load_n(&shm->midi_output_payload_head, __ATOMIC_RELAXED);
+            uint64_t mpt = __atomic_load_n(&shm->midi_output_payload_tail, __ATOMIC_ACQUIRE);
+            uint64_t used_bytes = mph - mpt;
+            uint64_t free_bytes = used_bytes >= VSTPOC_MIDI_PAYLOAD_RING_BYTES ? 0 :
+                                  VSTPOC_MIDI_PAYLOAD_RING_BYTES - used_bytes;
+            while (out_count && out_bytes > free_bytes) {
+                out_count--;
+                out_bytes -= fm->events[out_count].payload_size;
+            }
+            if (fm && out_count < fm->count) __atomic_add_fetch(&shm->midi_output_drop_count,
+                                                                  fm->count - out_count, __ATOMIC_RELAXED);
+            d->midi_event_count = out_count;
+            d->midi_flags = g_chain_midi_authoritative ? VSTPOC_MIDI_FLAG_AUTHORITATIVE : 0;
+            d->midi_payload_begin = mph;
+            uint64_t cursor = mph;
+            for (uint32_t i = 0; i < out_count; ++i) {
+                const VstHostMidiDesc* md = &fm->events[i];
+                const uint8_t* src = fm->payload + md->payload_offset;
+                uint64_t pos = cursor & (VSTPOC_MIDI_PAYLOAD_RING_BYTES - 1u);
+                uint32_t first = (uint32_t)(VSTPOC_MIDI_PAYLOAD_RING_BYTES - pos);
+                if (first > md->payload_size) first = md->payload_size;
+                memcpy((void*)(shm->midi_output_payload + pos), src, first);
+                if (first < md->payload_size)
+                    memcpy((void*)shm->midi_output_payload, src + first, md->payload_size - first);
+                d->midi_events[i].frame_offset = md->frame_offset;
+                d->midi_events[i].payload_size = md->payload_size;
+                d->midi_events[i].payload_offset = cursor;
+                cursor += md->payload_size;
+            }
+            d->midi_payload_end = cursor;
+            __atomic_store_n(&shm->midi_output_payload_head, cursor, __ATOMIC_RELEASE);
             __atomic_store_n(&d->sequence, bh + 1u, __ATOMIC_RELEASE);
             __atomic_store_n(&shm->audio_head, ah + (uint64_t)blockFrames, __ATOMIC_RELEASE);
             __atomic_store_n(&shm->output_block_head, bh + 1u, __ATOMIC_RELEASE);
             __atomic_add_fetch(&shm->guest_frames_produced, (uint64_t)blockFrames, __ATOMIC_RELAXED);
         } else {
             __atomic_add_fetch(&shm->output_drop_count, 1u, __ATOMIC_RELAXED);
+            if (g_final_midi && g_final_midi->count)
+                __atomic_add_fetch(&shm->midi_output_drop_count, g_final_midi->count, __ATOMIC_RELAXED);
         }
     }
 

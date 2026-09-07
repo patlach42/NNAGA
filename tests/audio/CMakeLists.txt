@@ -5,6 +5,7 @@ set(AUDIO_APP_CPP_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp)
 
 add_executable(audio_realtime_tests
     TestRackGraph.cpp
+    TestLiveMidiSource.cpp
     TestAudioRealtime.cpp
     TestAudioCpuAffinity.cpp
     TestWavIO.cpp
@@ -13,6 +14,7 @@ add_executable(audio_realtime_tests
     ${AUDIO_APP_CPP_DIR}/plugin/PluginChain.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/RackGraph.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginRegistry.cpp
+    ${AUDIO_APP_CPP_DIR}/plugin/LiveMidiSource.cpp
     ${AUDIO_APP_CPP_DIR}/utils/WavIO.cpp
 )
 

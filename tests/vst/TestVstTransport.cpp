@@ -1,1149 +1,591 @@
 #include <gtest/gtest.h>
 
 #include "ipc/SharedRing.h"
-
-#include <atomic>
-#include <cerrno>
-#include <cstddef>
+#include "vst/WineAudioBlockAdapter.h"
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
-#include <poll.h>
 #include <string>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/un.h>
-#include <sys/wait.h>
-#include <thread>
-#include <unistd.h>
 #include <vector>
+#include <unistd.h>
+
+using guitarrackcraft::MidiBuffer;
 
 namespace {
 
-static_assert(VSTPOC_SHARED_LAYOUT_VERSION == 9u);
-static_assert(VSTPOC_SHARED_LAYOUT_MAGIC == UINT64_C(0x565354504f435339));
-static_assert(sizeof(VstpocOutputBlock) == 16u);
-static_assert(sizeof(VstpocOutputMidiBlock) == 1088u);
-static_assert(sizeof(VstpocTransportBlock) == 1080u);
-static_assert(VSTPOC_TRANSPORT_QUEUE_CAPACITY == 1024u);
-static_assert(VSTPOC_OUTPUT_BLOCK_CAPACITY == 128u);
-static_assert(offsetof(VstpocShared, shared_layout_magic) == 335000u);
-static_assert(offsetof(VstpocShared, shared_layout_version) == 335008u);
-static_assert(offsetof(VstpocShared, shared_layout_size) == 335012u);
-static_assert(offsetof(VstpocShared, shared_feature_bits) == 335016u);
-static_assert(offsetof(VstpocShared, transport_seq) == 335040u);
-static_assert(offsetof(VstpocShared, transport_queue_head) == 335424u);
-static_assert(offsetof(VstpocShared, transport_queue_tail) == 335488u);
-static_assert(offsetof(VstpocShared, transport_queue) == 335552u);
-static_assert(offsetof(VstpocShared, transport_queue_dropped) == 1442560u);
-static_assert(offsetof(VstpocShared, latency_seq) == 1557376u);
-static_assert(offsetof(VstpocShared, guest_state) == 1557440u);
-static_assert(offsetof(VstpocShared, block_deadline_ns) == 1557696u);
-static_assert(offsetof(VstpocShared, deadline_miss_count) == 1557760u);
-static_assert(offsetof(VstpocShared, starvation_count) == 1557824u);
-static_assert(offsetof(VstpocShared, output_drop_count) == 1557888u);
-static_assert(offsetof(VstpocShared, wake_requested) == 1558080u);
-static_assert(offsetof(VstpocShared, output_block_head) == 1558144u);
-static_assert(offsetof(VstpocShared, output_block_tail) == 1558208u);
-static_assert(offsetof(VstpocShared, output_blocks) == 1558272u);
-static_assert(offsetof(VstpocShared, output_block_sequence) == 1560320u);
-static_assert(offsetof(VstpocShared, output_block_frames) == 1560384u);
-static_assert(offsetof(VstpocShared, output_midi_blocks) == 1560704u);
-static_assert(offsetof(VstpocShared, output_midi_blocks) ==
-              VSTPOC_SHARED_LAYOUT_V8_SIZE);
-static_assert(VSTPOC_SHARED_LAYOUT_V8_SIZE == 1560704u);
-static_assert(VSTPOC_SHARED_LAYOUT_V9_SIZE == 1700032u);
-static_assert(sizeof(VstpocShared) == 1700032u);
+static_assert(VSTPOC_SHARED_LAYOUT_VERSION == 10u);
+static_assert(VSTPOC_SHARED_LAYOUT_MAGIC == UINT64_C(0x565354504f433130));
+static_assert(sizeof(VstpocMidiEvent) == 16u);
+static_assert(offsetof(VstpocOutputBlock, midi_events) > offsetof(VstpocOutputBlock, midi_payload_end));
+static_assert(offsetof(VstpocTransportBlock, midi_events) > offsetof(VstpocTransportBlock, midi_payload_end));
+static_assert(VSTPOC_MIDI_PAYLOAD_RING_BYTES == 1024u * 1024u);
+static_assert(VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK == 128u);
 
 class TempBackingFile {
 public:
     TempBackingFile() {
-        char pattern[] = "/tmp/vst_transport_tests_XXXXXX";
+        char pattern[] = "/tmp/vst_transport_v10_XXXXXX";
         const int fd = ::mkstemp(pattern);
         EXPECT_NE(fd, -1);
-        if (fd < 0) return;
-        ::close(fd);
-        path_ = pattern;
+        if (fd >= 0) { ::close(fd); path_ = pattern; }
     }
-
-    ~TempBackingFile() {
-        if (!path_.empty()) ::unlink(path_.c_str());
-    }
-
+    ~TempBackingFile() { if (!path_.empty()) ::unlink(path_.c_str()); }
     const std::string& path() const { return path_; }
-
 private:
     std::string path_;
 };
 
 class SharedRingFixture : public ::testing::Test {
 protected:
-    void SetUp() override { ring.setExpectedWakePeer(getpid()); }
-
     TempBackingFile backing;
     SharedRing ring{backing.path()};
 };
 
-constexpr int kWakePollTimeoutMs = 500;
-constexpr int kNoWakePollTimeoutMs = 100;
-
-int ConnectWake(const std::string& path) {
-    if (path.empty()) return -1;
-
-    sockaddr_un address{};
-    if (path.size() + 1u > sizeof(address.sun_path)) return -1;
-
-    const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
-    if (fd < 0) return -1;
-
-    address.sun_family = AF_UNIX;
-    std::memcpy(address.sun_path, path.c_str(), path.size() + 1u);
-    const socklen_t addressLength = static_cast<socklen_t>(
-        offsetof(sockaddr_un, sun_path) + path.size() + 1u);
-    if (::connect(fd, reinterpret_cast<const sockaddr*>(&address),
-                  addressLength) < 0) {
-        ::close(fd);
-        return -1;
-    }
-    return fd;
+void store(uint64_t* p, uint64_t value, int order = __ATOMIC_RELEASE) {
+    __atomic_store_n(p, value, order);
+}
+uint64_t load(const uint64_t* p, int order = __ATOMIC_ACQUIRE) {
+    return __atomic_load_n(p, order);
 }
 
-bool ReceiveWake(int fd, int timeoutMs = kWakePollTimeoutMs) {
-    pollfd descriptor{fd, POLLIN | POLLHUP | POLLERR, 0};
-    int result;
-    do {
-        result = ::poll(&descriptor, 1, timeoutMs);
-    } while (result < 0 && errno == EINTR);
-    if (result <= 0 || (descriptor.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
-        return false;
-    }
-
-    char message[64];
-    ssize_t received;
-    do {
-        received = ::recv(fd, message, sizeof(message),
-                          MSG_DONTWAIT | MSG_NOSIGNAL);
-    } while (received < 0 && errno == EINTR);
-    return received > 0;
+MidiBuffer shortMidi(uint32_t frame, uint8_t note) {
+    MidiBuffer midi;
+    const uint8_t payload[] = {0x90, note, 100};
+    EXPECT_TRUE(midi.append(frame, payload, sizeof(payload)));
+    return midi;
 }
 
-ssize_t ReceiveWakeBytes(int fd, int timeoutMs = kWakePollTimeoutMs) {
-    pollfd descriptor{fd, POLLIN | POLLHUP | POLLERR, 0};
-    int result;
-    do {
-        result = ::poll(&descriptor, 1, timeoutMs);
-    } while (result < 0 && errno == EINTR);
-    if (result <= 0 ||
-        (descriptor.revents & (POLLIN | POLLHUP | POLLERR)) == 0) {
-        return 0;
-    }
-
-    char message[64];
-    ssize_t received;
-    do {
-        received = ::recv(fd, message, sizeof(message),
-                          MSG_DONTWAIT | MSG_NOSIGNAL);
-    } while (received < 0 && errno == EINTR);
-    return received > 0 ? received : 0;
+MidiBuffer exactSysex(uint32_t frame, uint8_t seed = 1) {
+    MidiBuffer midi;
+    std::vector<uint8_t> bytes(guitarrackcraft::kMaxMidiPayloadBytes);
+    bytes.front() = 0xf0;
+    for (uint32_t i = 1; i + 1 < bytes.size(); ++i)
+        bytes[i] = static_cast<uint8_t>((seed + i * 29u) % 127u);
+    bytes.back() = 0xf7;
+    EXPECT_TRUE(midi.append(frame, bytes.data(), bytes.size()));
+    return midi;
 }
 
-// A connect succeeds once the listener has queued the connection, but the
-// host accept loop may not have installed it in its broadcast set yet.
-bool PrimeWakeClient(SharedRing& ring, int fd) {
-    for (int attempt = 0; attempt < 8; ++attempt) {
-        ring.notifyGuest();
-        if (ReceiveWake(fd)) return true;
-        __atomic_store_n(&ring.raw()->wake_requested, 0u, __ATOMIC_RELEASE);
-    }
-    return false;
+void writePayload(VstpocShared* shared, uint64_t absolute,
+                  const uint8_t* bytes, uint32_t size) {
+    const uint32_t slot = static_cast<uint32_t>(absolute & (VSTPOC_MIDI_PAYLOAD_RING_BYTES - 1u));
+    const uint32_t first = std::min<uint32_t>(size, VSTPOC_MIDI_PAYLOAD_RING_BYTES - slot);
+    std::memcpy(shared->midi_output_payload + slot, bytes, first);
+    if (size > first) std::memcpy(shared->midi_output_payload, bytes + first, size - first);
 }
 
-void StoreRelaxed(uint64_t* value, uint64_t next) {
-    __atomic_store_n(value, next, __ATOMIC_RELAXED);
-}
-
-void StoreRelease(uint64_t* value, uint64_t next) {
-    __atomic_store_n(value, next, __ATOMIC_RELEASE);
-}
-
-uint64_t LoadAcquire(const uint64_t* value) {
-    return __atomic_load_n(value, __ATOMIC_ACQUIRE);
-}
-
-constexpr uint64_t AudioSlot(uint64_t frame) {
-    return frame & (VSTPOC_AUDIO_RING_FRAMES - 1u);
-}
-
-uint64_t ConsumeWakeRequest(VstpocShared* shared) {
-    return __atomic_exchange_n(&shared->wake_requested, 0u, __ATOMIC_ACQ_REL);
-}
-
-void StageOutputBlock(VstpocShared* shared, uint64_t blockIndex,
-                      uint32_t frameCount, uint32_t ringOffset,
-                      float leftBase, float rightBase) {
-    for (uint32_t i = 0; i < frameCount; ++i) {
-        const uint32_t slot =
-            (ringOffset + i) & (VSTPOC_AUDIO_RING_FRAMES - 1u);
-        shared->audio[0][slot] = leftBase + static_cast<float>(i);
-        shared->audio[1][slot] = rightBase - static_cast<float>(i);
-    }
-    VstpocOutputBlock& block =
-        shared->output_blocks[blockIndex & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
-    block.frame_count = frameCount;
-    block.ring_offset = ringOffset;
-    StoreRelease(&block.sequence, blockIndex + 1u);
-}
-void StageOutputBlockWithMidi(
-    VstpocShared* shared, uint64_t blockIndex, uint32_t frameCount,
-    uint32_t ringOffset, float leftBase, float rightBase,
-    const guitarrackcraft::MidiEvent* midiEvents, uint32_t midiEventCount) {
-    for (uint32_t i = 0; i < frameCount; ++i) {
-        const uint32_t slot =
-            (ringOffset + i) & (VSTPOC_AUDIO_RING_FRAMES - 1u);
-        shared->audio[0][slot] = leftBase + static_cast<float>(i);
-        shared->audio[1][slot] = rightBase - static_cast<float>(i);
-    }
-
-    VstpocOutputMidiBlock& midiBlock =
-        shared->output_midi_blocks[
-            blockIndex & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
-    const uint32_t count =
-        midiEvents ? (midiEventCount < VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK
-                          ? midiEventCount
-                          : VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK)
-                   : 0u;
-    midiBlock.event_count = count;
-    midiBlock.reserved = 0;
-    for (uint32_t i = 0; i < count; ++i) {
-        midiBlock.events[i].frame_offset = midiEvents[i].frameOffset;
-        midiBlock.events[i].status = midiEvents[i].status;
-        midiBlock.events[i].data1 = midiEvents[i].data1;
-        midiBlock.events[i].data2 = midiEvents[i].data2;
-        midiBlock.events[i].reserved = 0;
-    }
-    StoreRelease(&midiBlock.sequence, blockIndex + 1u);
-
-    VstpocOutputBlock& block =
-        shared->output_blocks[blockIndex & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
-    block.frame_count = frameCount;
-    block.ring_offset = ringOffset;
-    StoreRelease(&block.sequence, blockIndex + 1u);
-}
-
-bool TryStageOutputBlockWithMidi(
-    VstpocShared* shared, uint32_t frameCount, float marker,
-    const guitarrackcraft::MidiEvent* midiEvents, uint32_t midiEventCount) {
-    const uint64_t audioHead = LoadAcquire(&shared->audio_head);
-    const uint64_t audioTail = LoadAcquire(&shared->audio_tail);
-    const uint64_t blockHead = LoadAcquire(&shared->output_block_head);
-    const uint64_t blockTail = LoadAcquire(&shared->output_block_tail);
-    if (blockHead - blockTail >= VSTPOC_OUTPUT_BLOCK_CAPACITY ||
-        audioHead - audioTail + frameCount > VSTPOC_AUDIO_RING_FRAMES) {
+bool stageOutput(VstpocShared* shared, uint32_t frames, float marker,
+                 const MidiBuffer& midi, uint32_t flags = 0) {
+    const uint64_t blockHead = load(&shared->output_block_head, __ATOMIC_RELAXED);
+    const uint64_t blockTail = load(&shared->output_block_tail, __ATOMIC_ACQUIRE);
+    if (blockHead - blockTail >= VSTPOC_OUTPUT_BLOCK_CAPACITY) {
         __atomic_add_fetch(&shared->output_drop_count, 1u, __ATOMIC_RELAXED);
         return false;
     }
-    const uint32_t offset = static_cast<uint32_t>(
-        audioHead & (VSTPOC_AUDIO_RING_FRAMES - 1u));
-    StageOutputBlockWithMidi(shared, blockHead, frameCount, offset, marker,
-                             -marker, midiEvents, midiEventCount);
-    StoreRelease(&shared->audio_head, audioHead + frameCount);
-    StoreRelease(&shared->output_block_head, blockHead + 1u);
-    return true;
-}
-
-
-// This is the guest-side shared-memory protocol seam. It deliberately only
-// models descriptor publication so the host-side consumer can be tested
-// without starting a Wine process.
-bool TryStageOutputBlock(VstpocShared* shared, uint32_t frameCount,
-                         float marker) {
-    const uint64_t audioHead = LoadAcquire(&shared->audio_head);
-    const uint64_t audioTail = LoadAcquire(&shared->audio_tail);
-    const uint64_t blockHead = LoadAcquire(&shared->output_block_head);
-    const uint64_t blockTail = LoadAcquire(&shared->output_block_tail);
-    if (blockHead - blockTail >= VSTPOC_OUTPUT_BLOCK_CAPACITY ||
-        audioHead - audioTail + frameCount > VSTPOC_AUDIO_RING_FRAMES) {
-        __atomic_add_fetch(&shared->output_drop_count, 1u, __ATOMIC_RELAXED);
-        return false;
+    const uint64_t audioHead = load(&shared->audio_head, __ATOMIC_RELAXED);
+    const uint64_t audioTail = load(&shared->audio_tail, __ATOMIC_ACQUIRE);
+    if (audioHead - audioTail + frames > VSTPOC_AUDIO_RING_FRAMES) return false;
+    const uint64_t payloadBegin = load(&shared->midi_output_payload_head, __ATOMIC_RELAXED);
+    const uint64_t payloadTail = load(&shared->midi_output_payload_tail, __ATOMIC_ACQUIRE);
+    if (payloadBegin - payloadTail + midi.payloadBytes() > VSTPOC_MIDI_PAYLOAD_RING_BYTES) return false;
+    const uint64_t blockIndex = blockHead & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u);
+    VstpocOutputBlock& block = shared->output_blocks[blockIndex];
+    const uint32_t offset = static_cast<uint32_t>(audioHead & (VSTPOC_AUDIO_RING_FRAMES - 1u));
+    for (uint32_t i = 0; i < frames; ++i) {
+        const uint32_t slot = (offset + i) & (VSTPOC_AUDIO_RING_FRAMES - 1u);
+        shared->audio[0][slot] = marker + static_cast<float>(i);
+        shared->audio[1][slot] = -marker - static_cast<float>(i);
     }
-    const uint32_t offset = static_cast<uint32_t>(
-        audioHead & (VSTPOC_AUDIO_RING_FRAMES - 1u));
-    StageOutputBlock(shared, blockHead, frameCount, offset, marker, -marker);
-    StoreRelease(&shared->audio_head, audioHead + frameCount);
-    StoreRelease(&shared->output_block_head, blockHead + 1u);
+    block.frame_count = frames;
+    block.ring_offset = offset;
+    block.midi_event_count = 0;
+    block.midi_flags = flags;
+    block.midi_payload_begin = payloadBegin;
+    uint64_t payloadEnd = payloadBegin;
+    for (uint32_t i = 0; i < midi.eventCount() && i < VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK; ++i) {
+        const auto& event = midi.eventAt(i);
+        writePayload(shared, payloadEnd, midi.payloadFor(event), event.payloadSize);
+        auto& desc = block.midi_events[block.midi_event_count++];
+        desc.frame_offset = event.frameOffset;
+        desc.payload_size = event.payloadSize;
+        desc.payload_offset = payloadEnd;
+        payloadEnd += event.payloadSize;
+    }
+    block.midi_payload_end = payloadEnd;
+    store(&shared->midi_output_payload_head, payloadEnd);
+    store(&block.sequence, blockHead + 1u);
+    store(&shared->audio_head, audioHead + frames);
+    store(&shared->output_block_head, blockHead + 1u);
     return true;
 }
 
-TEST(VstSharedLayoutTest, MetadataAndV9FeatureEnvelopeAreStable) {
-    TempBackingFile backing;
-    SharedRing ring(backing.path());
+std::vector<uint8_t> readRing(const uint8_t* bytes, uint64_t absolute,
+                              uint32_t size) {
+    std::vector<uint8_t> result(size);
+    const uint32_t slot = static_cast<uint32_t>(
+        absolute & (VSTPOC_MIDI_PAYLOAD_RING_BYTES - 1u));
+    const uint32_t first = std::min<uint32_t>(
+        size, VSTPOC_MIDI_PAYLOAD_RING_BYTES - slot);
+    std::memcpy(result.data(), bytes + slot, first);
+    if (size > first) std::memcpy(result.data() + first, bytes, size - first);
+    return result;
+}
 
+std::vector<uint8_t> readPayload(const VstpocShared* shared, uint64_t absolute,
+                                 uint32_t size) {
+    return readRing(shared->midi_output_payload, absolute, size);
+}
+
+std::vector<uint8_t> readInputPayload(const VstpocShared* shared,
+                                      uint64_t absolute, uint32_t size) {
+    return readRing(shared->midi_input_payload, absolute, size);
+}
+TEST_F(SharedRingFixture, PublishesV10MagicFeaturesAndPayloadRings) {
     ASSERT_TRUE(ring.valid());
-    ASSERT_TRUE(ring.wakeReady());
     const VstpocShared* shared = ring.raw();
-    EXPECT_EQ(shared->shared_layout_magic, VSTPOC_SHARED_LAYOUT_MAGIC);
-    EXPECT_EQ(shared->shared_layout_version, VSTPOC_SHARED_LAYOUT_VERSION);
-    EXPECT_EQ(shared->shared_layout_size, sizeof(VstpocShared));
-    EXPECT_EQ(shared->shared_feature_bits,
-              static_cast<uint64_t>(VSTPOC_FEATURE_PLANAR_AUDIO |
-                                    VSTPOC_FEATURE_WAKE_SOCKET |
-                                    VSTPOC_FEATURE_MIDI_EVENTS |
-                                    VSTPOC_FEATURE_MIDI_OUTPUT |
-                                    VSTPOC_FEATURE_OUTPUT_BLOCK_MIDI));
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_head), 0u);
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_tail), 0u);
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_dropped), 0u);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_head), 0u);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 0u);
+    EXPECT_EQ(load(&shared->shared_layout_magic), VSTPOC_SHARED_LAYOUT_MAGIC);
+    EXPECT_EQ(shared->shared_layout_version, 10u);
+    EXPECT_NE(shared->shared_feature_bits & VSTPOC_FEATURE_MIDI_PAYLOAD_RING, 0u);
+    EXPECT_EQ(shared->shared_layout_size, VSTPOC_SHARED_LAYOUT_V10_SIZE);
+    EXPECT_EQ(VSTPOC_SHARED_LAYOUT_V10_SIZE, sizeof(VstpocShared));
 }
 
-TEST_F(SharedRingFixture, TransportRecordPreservesFieldsAndFIFOOrder) {
-    constexpr uint32_t kRecords = 6;
-    for (uint32_t i = 0; i < kRecords; ++i) {
+TEST_F(SharedRingFixture, TransportPayloadRingWrapsAndPublishesBeforeQueueHead) {
+    VstpocShared* shared = ring.raw();
+    const uint64_t start = VSTPOC_MIDI_PAYLOAD_RING_BYTES - 4u;
+    store(&shared->midi_input_payload_head, start, __ATOMIC_RELAXED);
+    store(&shared->midi_input_payload_tail, start, __ATOMIC_RELEASE);
+    MidiBuffer midi = shortMidi(7, 60);
+    const uint8_t sysex[] = {0xf0, 1, 2, 3, 4, 0xf7};
+    ASSERT_TRUE(midi.append(19, sysex, sizeof(sysex)));
+    ASSERT_TRUE(ring.publishTransport(1, 2, 0, 48000.0, 120.0, true, false, 64, midi));
+    const auto& block = shared->transport_queue[0];
+    EXPECT_EQ(block.midi_payload_begin, start);
+    EXPECT_EQ(block.midi_payload_end, start + midi.payloadBytes());
+    EXPECT_EQ(block.midi_event_count, 2u);
+    EXPECT_EQ(readInputPayload(shared, start, 3), (std::vector<uint8_t>{0x90, 60, 100}));
+    EXPECT_EQ(readInputPayload(shared, start + 3, 6), (std::vector<uint8_t>{0xf0, 1, 2, 3, 4, 0xf7}));
+}
+
+TEST_F(SharedRingFixture,
+       Vst3TransportQueuePopReleasesEverySlotAcrossTwoWraps) {
+    VstpocShared* shared = ring.raw();
+    constexpr uint64_t blocks =
+        2u * VSTPOC_TRANSPORT_QUEUE_CAPACITY + 17u;
+    MidiBuffer empty;
+
+    for (uint64_t i = 0; i < blocks; ++i) {
         ASSERT_TRUE(ring.publishTransport(
-            1000 + i, 2000 + i, 3000 + i, 48000.0 + i, 120.0 + i,
-            (i & 1u) != 0, (i & 2u) != 0, 64 + i, nullptr, 0));
+            i * 64u, i * 64u + 11u, 0, 48000.0, 120.0, true, false,
+            64, empty)) << "producer rejected block " << i;
+
+        VstpocTransportBlock consumed{};
+        ASSERT_TRUE(vstpoc_transport_queue_pop(shared, &consumed))
+            << "consumer missed block " << i;
+        EXPECT_EQ(consumed.sample_position, i * 64u);
+        EXPECT_EQ(consumed.transport_frame, i * 64u + 11u);
+        EXPECT_EQ(consumed.block_frames, 64u);
+        EXPECT_EQ(load(&shared->transport_queue_tail), i + 1u);
+        EXPECT_EQ(load(&shared->transport_queue_head), i + 1u);
+        EXPECT_FALSE(vstpoc_transport_queue_pop(shared, &consumed));
     }
+    EXPECT_EQ(load(&shared->transport_queue_dropped), 0u);
+}
 
+TEST_F(SharedRingFixture, OutputPublicationOrdersPayloadAndDescriptorBeforeHead) {
     VstpocShared* shared = ring.raw();
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_head), kRecords);
-    EXPECT_EQ(LoadAcquire(&shared->transport_seq), kRecords + 1u);
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_tail), 0u);
+    MidiBuffer midi = exactSysex(11, 9);
+    ASSERT_TRUE(stageOutput(shared, 32, 4.0f, midi, VSTPOC_MIDI_FLAG_AUTHORITATIVE));
+    const auto& block = shared->output_blocks[0];
+    EXPECT_EQ(block.midi_event_count, 1u);
+    EXPECT_EQ(block.midi_events[0].payload_size, guitarrackcraft::kMaxMidiPayloadBytes);
+    EXPECT_EQ(load(&shared->midi_output_payload_head), guitarrackcraft::kMaxMidiPayloadBytes);
+    EXPECT_EQ(load(&shared->output_block_head), 1u);
+    EXPECT_EQ(block.sequence, 1u);
+    EXPECT_EQ(readPayload(shared, block.midi_events[0].payload_offset,
+                          block.midi_events[0].payload_size).front(), 0xf0);
+}
 
-    for (uint32_t i = 0; i < kRecords; ++i) {
-        const VstpocTransportBlock& record = shared->transport_queue[i];
-        EXPECT_EQ(record.sample_position, 1000u + i);
-        EXPECT_EQ(record.transport_frame, 2000u + i);
-        EXPECT_EQ(record.loop_end_frame, 3000u + i);
-        EXPECT_DOUBLE_EQ(record.sample_rate, 48000.0 + i);
-        EXPECT_DOUBLE_EQ(record.beats_per_minute, 120.0 + i);
-        EXPECT_EQ(record.flags, (i & 1u ? 1u : 0u) | (i & 2u ? 2u : 0u));
-        EXPECT_EQ(record.block_frames, 64u + i);
+TEST_F(SharedRingFixture, OutputPayloadRingWrapsAcrossAdjacentDescriptorBytes) {
+    VstpocShared* shared = ring.raw();
+    const uint64_t start = VSTPOC_MIDI_PAYLOAD_RING_BYTES - 2u;
+    store(&shared->midi_output_payload_head, start, __ATOMIC_RELAXED);
+    store(&shared->midi_output_payload_tail, start, __ATOMIC_RELEASE);
+    MidiBuffer midi = shortMidi(3, 66);
+    ASSERT_TRUE(stageOutput(shared, 4, 14.0f, midi));
+    const auto& block = shared->output_blocks[0];
+    EXPECT_EQ(block.midi_payload_begin, start);
+    EXPECT_EQ(block.midi_events[0].payload_offset, start);
+    std::array<float, 4> left{};
+    std::array<float, 4> right{};
+    MidiBuffer output;
+    bool authoritative = false;
+    ASSERT_EQ(ring.pullOutput(left.data(), right.data(), 4, output, true,
+                               authoritative), 4);
+    ASSERT_EQ(output.eventCount(), 1u);
+    const auto& event = output.eventAt(0);
+    EXPECT_EQ(event.frameOffset, 3u);
+    EXPECT_EQ(output.payloadFor(event)[0], 0x90u);
+    EXPECT_EQ(output.payloadFor(event)[1], 66u);
+}
+
+TEST_F(SharedRingFixture, PullOutputReturnsAdjacentBlocksAndEachMidiExactlyOnce) {
+    VstpocShared* shared = ring.raw();
+    ASSERT_TRUE(stageOutput(shared, 4, 10.0f, shortMidi(1, 60)));
+    ASSERT_TRUE(stageOutput(shared, 4, 20.0f, shortMidi(2, 61)));
+    std::array<float, 4> left{};
+    std::array<float, 4> right{};
+    MidiBuffer midi;
+    bool authoritative = false;
+    ASSERT_EQ(ring.pullOutput(left.data(), right.data(), 4, midi, true, authoritative), 4);
+    ASSERT_EQ(midi.eventCount(), 1u);
+    EXPECT_EQ(midi.payloadFor(midi.eventAt(0))[1], 60u);
+    EXPECT_FALSE(authoritative);
+    midi.clear();
+    ASSERT_EQ(ring.pullOutput(left.data(), right.data(), 4, midi, true, authoritative), 4);
+    ASSERT_EQ(midi.eventCount(), 1u);
+    EXPECT_EQ(midi.payloadFor(midi.eventAt(0))[1], 61u);
+    EXPECT_EQ(load(&shared->output_block_tail), 2u);
+    midi.clear();
+    EXPECT_EQ(ring.pullOutput(left.data(), right.data(), 4, midi, true, authoritative), 0);
+    EXPECT_EQ(midi.eventCount(), 0u);
+}
+TEST_F(SharedRingFixture, PullOutputAdvancesSeededAbsoluteAudioCursor) {
+    VstpocShared* shared = ring.raw();
+    constexpr uint64_t start = 32;
+    constexpr uint32_t frames = 12;
+    store(&shared->audio_head, start, __ATOMIC_RELAXED);
+    store(&shared->audio_tail, start, __ATOMIC_RELEASE);
+    MidiBuffer empty;
+    ASSERT_TRUE(stageOutput(shared, frames, 100.0f, empty));
+    ASSERT_TRUE(stageOutput(shared, frames, 200.0f, empty));
+    ASSERT_TRUE(stageOutput(shared, frames, 300.0f, empty));
+
+    std::array<float, frames> left{};
+    std::array<float, frames> right{};
+    MidiBuffer midi;
+    bool authoritative = false;
+    for (const float marker : {100.0f, 200.0f, 300.0f}) {
+        ASSERT_EQ(ring.pullOutput(left.data(), right.data(), frames, midi, true,
+                                  authoritative), frames);
+        EXPECT_FLOAT_EQ(left.front(), marker);
+        EXPECT_FLOAT_EQ(left.back(), marker + 11.0f);
+        EXPECT_FLOAT_EQ(right.front(), -marker);
+        EXPECT_EQ(load(&shared->audio_tail),
+                  start + static_cast<uint64_t>(
+                              (marker - 100.0f) / 100.0f + 1.0f) * frames);
     }
+    EXPECT_EQ(load(&shared->output_block_tail), 3u);
+    EXPECT_EQ(load(&shared->audio_tail), start + 3u * frames);
 }
 
-TEST_F(SharedRingFixture, TransportRecordPreservesMidiPayloadAndClampsFrameOffsets) {
-    const guitarrackcraft::MidiEvent midiEvents[] = {
-        {7u, 0x90u, 60u, 100u},
-        {99u, 0x80u, 60u, 0u},
-    };
 
-    ASSERT_TRUE(ring.publishTransport(
-        1000, 2000, 3000, 48000.0, 120.0, true, false, 64,
-        midiEvents, 2));
-
-    const VstpocTransportBlock& record = ring.raw()->transport_queue[0];
-    EXPECT_EQ(record.midi_event_count, 2u);
-    EXPECT_EQ(record.midi_events[0].frame_offset, 7u);
-    EXPECT_EQ(record.midi_events[0].status, 0x90u);
-    EXPECT_EQ(record.midi_events[0].data1, 60u);
-    EXPECT_EQ(record.midi_events[0].data2, 100u);
-    EXPECT_EQ(record.midi_events[0].reserved, 0u);
-    EXPECT_EQ(record.midi_events[1].frame_offset, 63u);
-    EXPECT_EQ(record.midi_events[1].status, 0x80u);
-    EXPECT_EQ(record.midi_events[1].data1, 60u);
-    EXPECT_EQ(record.midi_events[1].data2, 0u);
-    EXPECT_EQ(record.midi_events[1].reserved, 0u);
-}
-
-TEST_F(SharedRingFixture, TransportQueueWrapsWithoutReordering) {
+TEST_F(SharedRingFixture, PullOutputReportsAuthoritativeFlagWithExactSysEx) {
     VstpocShared* shared = ring.raw();
-    const uint64_t start = VSTPOC_TRANSPORT_QUEUE_CAPACITY - 2u;
-    StoreRelaxed(&shared->transport_queue_tail, start);
-    StoreRelaxed(&shared->transport_queue_head, start);
-
-    ASSERT_TRUE(ring.publishTransport(11, 21, 31, 44100.0, 90.0, true, false, 3,
-                                      nullptr, 0));
-    ASSERT_TRUE(ring.publishTransport(12, 22, 32, 44100.0, 91.0, false, true, 4,
-                                      nullptr, 0));
-    ASSERT_TRUE(ring.publishTransport(13, 23, 33, 44100.0, 92.0, true, true, 5,
-                                      nullptr, 0));
-    ASSERT_TRUE(ring.publishTransport(14, 24, 34, 44100.0, 93.0, false, false, 6,
-                                      nullptr, 0));
-
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_head), start + 4u);
-    const VstpocTransportBlock& wrapped0 = shared->transport_queue[(start + 0u) & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
-    const VstpocTransportBlock& wrapped1 = shared->transport_queue[(start + 1u) & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
-    const VstpocTransportBlock& wrapped2 = shared->transport_queue[(start + 2u) & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
-    const VstpocTransportBlock& wrapped3 = shared->transport_queue[(start + 3u) & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
-    EXPECT_EQ(wrapped0.sample_position, 11u);
-    EXPECT_EQ(wrapped1.sample_position, 12u);
-    EXPECT_EQ(wrapped2.sample_position, 13u);
-    EXPECT_EQ(wrapped3.sample_position, 14u);
-    EXPECT_EQ(wrapped0.loop_end_frame, 31u);
-    EXPECT_EQ(wrapped1.loop_end_frame, 32u);
-    EXPECT_EQ(wrapped2.loop_end_frame, 33u);
-    EXPECT_EQ(wrapped3.loop_end_frame, 34u);
-    EXPECT_EQ(wrapped0.flags, 1u);
-    EXPECT_EQ(wrapped1.flags, 2u);
-    EXPECT_EQ(wrapped2.flags, 3u);
-    EXPECT_EQ(wrapped3.flags, 0u);
+    MidiBuffer midiIn = exactSysex(7, 17);
+    ASSERT_TRUE(stageOutput(shared, 8, 30.0f, midiIn, VSTPOC_MIDI_FLAG_AUTHORITATIVE));
+    std::array<float, 8> left{};
+    std::array<float, 8> right{};
+    MidiBuffer midiOut;
+    bool authoritative = false;
+    ASSERT_EQ(ring.pullOutput(left.data(), right.data(), 8, midiOut, true, authoritative), 8);
+    ASSERT_TRUE(authoritative);
+    ASSERT_EQ(midiOut.eventCount(), 1u);
+    const auto& event = midiOut.eventAt(0);
+    ASSERT_EQ(event.payloadSize, guitarrackcraft::kMaxMidiPayloadBytes);
+    EXPECT_EQ(midiOut.payloadFor(event)[0], 0xf0);
+    EXPECT_EQ(midiOut.payloadFor(event)[event.payloadSize - 1], 0xf7);
 }
 
-TEST_F(SharedRingFixture, FullTransportQueueRejectsWithoutOverwritingOrAdvancing) {
+TEST_F(SharedRingFixture, PullOutputDropsMismatchedAudioAndMidiTogether) {
     VstpocShared* shared = ring.raw();
-    const uint64_t tail = 37;
-    const uint64_t head = tail + VSTPOC_TRANSPORT_QUEUE_CAPACITY;
-    StoreRelaxed(&shared->transport_queue_tail, tail);
-    StoreRelaxed(&shared->transport_queue_head, head);
-    StoreRelaxed(&shared->transport_queue_dropped, 0);
-    VstpocTransportBlock& occupied = shared->transport_queue[head & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
-    occupied.sample_position = 777;
-    occupied.loop_end_frame = 999;
-    occupied.transport_frame = 888;
-    occupied.sample_rate = 96000.0;
-
-    EXPECT_FALSE(ring.publishTransport(1, 2, 3, 4.0, 5.0, true, true, 6,
-                                       nullptr, 0));
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_head), head);
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_tail), tail);
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_dropped), 1u);
-    EXPECT_EQ(occupied.sample_position, 777u);
-    EXPECT_EQ(occupied.transport_frame, 888u);
-    EXPECT_EQ(occupied.loop_end_frame, 999u);
-    EXPECT_DOUBLE_EQ(occupied.sample_rate, 96000.0);
+    ASSERT_TRUE(stageOutput(shared, 7, 40.0f, shortMidi(2, 70)));
+    ASSERT_TRUE(stageOutput(shared, 4, 50.0f, shortMidi(3, 71)));
+    std::array<float, 4> left{};
+    std::array<float, 4> right{};
+    MidiBuffer midi;
+    bool authoritative = false;
+    EXPECT_EQ(ring.pullOutput(left.data(), right.data(), 4, midi, true, authoritative), 4);
+    EXPECT_FALSE(authoritative);
+    ASSERT_EQ(midi.eventCount(), 1u);
+    EXPECT_EQ(midi.payloadFor(midi.eventAt(0))[1], 71u);
+    EXPECT_EQ(load(&shared->output_block_tail), 2u);
+    EXPECT_EQ(load(&shared->audio_tail), 11u);
+    EXPECT_EQ(load(&shared->midi_output_payload_tail), load(&shared->midi_output_payload_head));
 }
 
-TEST_F(SharedRingFixture, CompleteOutputDescriptorBecomesVisibleOnlyAfterSequenceCommit) {
+TEST_F(SharedRingFixture, PullOutputRejectsUnpublishedDescriptorWithoutExposure) {
     VstpocShared* shared = ring.raw();
-    constexpr uint32_t kFrames = 4;
-    constexpr uint32_t kOffset = 100;
-    StoreRelease(&shared->audio_tail, kOffset);
-    StageOutputBlock(shared, 0, kFrames, kOffset, 10.0f, -10.0f);
-    StoreRelaxed(&shared->output_blocks[0].sequence, 0u);
-    StoreRelease(&shared->audio_head, kOffset + kFrames);
-    StoreRelease(&shared->output_block_head, 1u);
+    const uint8_t note[] = {0x90, 60, 100};
+    store(&shared->midi_output_payload_head, sizeof(note), __ATOMIC_RELAXED);
+    writePayload(shared, 0, note, sizeof(note));
+    auto& block = shared->output_blocks[0];
+    block.frame_count = 4;
+    block.ring_offset = 0;
+    block.midi_event_count = 1;
+    block.midi_payload_begin = 0;
+    block.midi_payload_end = sizeof(note);
+    block.midi_events[0] = {0, sizeof(note), 0};
+    store(&shared->output_block_head, 1u);
+    store(&block.sequence, 0u, __ATOMIC_RELAXED);
+    std::array<float, 4> left{};
+    std::array<float, 4> right{};
+    MidiBuffer midi;
+    bool authoritative = true;
+    EXPECT_EQ(ring.pullOutput(left.data(), right.data(), 4, midi, true, authoritative), 0);
+    EXPECT_EQ(midi.eventCount(), 0u);
+    EXPECT_EQ(load(&shared->output_block_tail), 0u);
+    EXPECT_EQ(load(&shared->audio_tail), 0u);
+    EXPECT_FALSE(authoritative);
+}
+TEST_F(SharedRingFixture, RejectedDescriptorDoesNotDiscardFollowingValidAudio) {
+    VstpocShared* shared = ring.raw();
+    MidiBuffer empty;
+    ASSERT_TRUE(stageOutput(shared, 4, 10.0f, empty));
+    auto& rejected = shared->output_blocks[0];
+    store(&rejected.sequence, 0u, __ATOMIC_RELAXED);
+    ASSERT_TRUE(stageOutput(shared, 4, 20.0f, empty));
 
-    float left[kFrames] = {91.0f, 92.0f, 93.0f, 94.0f};
-    float right[kFrames] = {-91.0f, -92.0f, -93.0f, -94.0f};
-    EXPECT_EQ(ring.pullAudio(left, right, kFrames), 0);
-    EXPECT_FLOAT_EQ(left[0], 91.0f);
-    EXPECT_FLOAT_EQ(right[0], -91.0f);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 0u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_tail), kOffset);
+    std::array<float, 4> left{};
+    std::array<float, 4> right{};
+    MidiBuffer midi;
+    bool authoritative = true;
+    EXPECT_EQ(ring.pullOutput(left.data(), right.data(), 4, midi, true,
+                              authoritative), 0);
+    EXPECT_EQ(load(&shared->output_block_tail), 0u);
+    EXPECT_EQ(load(&shared->audio_tail), 0u);
 
-    StoreRelease(&shared->output_blocks[0].sequence, 1u);
-    ASSERT_EQ(ring.pullAudio(left, right, kFrames), kFrames);
-    for (uint32_t i = 0; i < kFrames; ++i) {
-        EXPECT_FLOAT_EQ(left[i], 10.0f + static_cast<float>(i));
-        EXPECT_FLOAT_EQ(right[i], -10.0f - static_cast<float>(i));
+    store(&rejected.sequence, 1u, __ATOMIC_RELEASE);
+    ASSERT_EQ(ring.pullOutput(left.data(), right.data(), 4, midi, true,
+                              authoritative), 4);
+    EXPECT_EQ(left[0], 10.0f);
+    ASSERT_EQ(ring.pullOutput(left.data(), right.data(), 4, midi, true,
+                              authoritative), 4);
+    EXPECT_EQ(left[0], 20.0f);
+    EXPECT_EQ(load(&shared->output_block_tail), 2u);
+    EXPECT_EQ(load(&shared->audio_tail), 8u);
+    EXPECT_EQ(midi.eventCount(), 0u);
+    EXPECT_FALSE(authoritative);
+}
+
+
+TEST_F(SharedRingFixture, OutputBlockRingRejectsFullState) {
+    VstpocShared* shared = ring.raw();
+    MidiBuffer empty;
+    for (uint32_t i = 0; i < VSTPOC_OUTPUT_BLOCK_CAPACITY; ++i)
+        ASSERT_TRUE(stageOutput(shared, 1, static_cast<float>(i), empty));
+    EXPECT_FALSE(stageOutput(shared, 1, 99.0f, empty));
+    EXPECT_EQ(load(&shared->output_drop_count), 1u);
+}
+
+TEST_F(SharedRingFixture, InputPayloadRingAcceptsExactMaximumAndRejectsOversizeAtBufferBoundary) {
+    VstpocShared* shared = ring.raw();
+    MidiBuffer exact = exactSysex(0);
+    ASSERT_TRUE(ring.publishTransport(0, 0, 0, 48000.0, 120.0, true, false, 64, exact));
+    EXPECT_EQ(shared->transport_queue[0].midi_events[0].payload_size,
+              guitarrackcraft::kMaxMidiPayloadBytes);
+    EXPECT_EQ(load(&shared->midi_input_drop_count), 0u);
+    MidiBuffer invalid;
+    std::vector<uint8_t> tooLarge(guitarrackcraft::kMaxMidiPayloadBytes + 1u);
+    EXPECT_FALSE(invalid.append(0, tooLarge.data(), tooLarge.size()));
+    EXPECT_TRUE(ring.publishTransport(0, 0, 0, 48000.0, 120.0, true,
+                                      false, 64, invalid));
+}
+
+TEST_F(SharedRingFixture, PublishAndPullFailuresRenderSilenceThroughFailClosedSeam) {
+    VstpocShared* shared = ring.raw();
+    MidiBuffer empty;
+    for (uint32_t i = 0; i < VSTPOC_TRANSPORT_QUEUE_CAPACITY; ++i) {
+        ASSERT_TRUE(ring.publishTransport(i, i, 0, 48000.0, 120.0, true,
+                                          false, 64, empty));
     }
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 1u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_tail), kOffset + kFrames);
-}
+    ASSERT_FALSE(ring.publishTransport(0, 0, 0, 48000.0, 120.0, true,
+                                       false, 64, empty));
 
-TEST_F(SharedRingFixture, StaleOutputDescriptorSequenceIsNotConsumedOrExposed) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->audio_tail, 12u);
-    StageOutputBlock(shared, 0, 2, 12, 3.0f, -3.0f);
-    StoreRelaxed(&shared->output_blocks[0].sequence, 99u);
-    StoreRelease(&shared->audio_head, 14u);
-    StoreRelease(&shared->output_block_head, 1u);
-
-    float left[2] = {7.0f, 8.0f};
-    float right[2] = {-7.0f, -8.0f};
-    EXPECT_EQ(ring.pullAudio(left, right, 2), 0);
-    EXPECT_FLOAT_EQ(left[0], 7.0f);
-    EXPECT_FLOAT_EQ(right[0], -7.0f);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 0u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_tail), 12u);
-}
-
-TEST_F(SharedRingFixture, PartialOutputRequestDropsWholeBlockWithoutTouchingProducerHeads) {
-    VstpocShared* shared = ring.raw();
-    constexpr uint32_t kFrames = 8;
-    constexpr uint32_t kOffset = 32;
-    StoreRelease(&shared->audio_tail, kOffset);
-    StageOutputBlock(shared, 0, kFrames, kOffset, 20.0f, -20.0f);
-    StoreRelease(&shared->audio_head, kOffset + kFrames);
-    StoreRelease(&shared->output_block_head, 1u);
-
-    float left[4] = {81.0f, 82.0f, 83.0f, 84.0f};
-    float right[4] = {-81.0f, -82.0f, -83.0f, -84.0f};
-    EXPECT_EQ(ring.pullAudio(left, right, 4), 0);
+    vsthost::WineFailClosedAudioState failClosed;
+    failClosed.reset();
+    std::array<float, 4> left{};
+    std::array<float, 4> right{};
+    left.fill(-10.0f);
+    right.fill(-20.0f);
+    float* outputs[] = {left.data(), right.data()};
+    failClosed.renderFailure(outputs, 4);
     for (uint32_t i = 0; i < 4; ++i) {
-        EXPECT_FLOAT_EQ(left[i], 81.0f + static_cast<float>(i));
-        EXPECT_FLOAT_EQ(right[i], -81.0f - static_cast<float>(i));
+        EXPECT_FLOAT_EQ(left[i], 0.0f);
+        EXPECT_FLOAT_EQ(right[i], 0.0f);
     }
-    EXPECT_EQ(LoadAcquire(&shared->output_block_head), 1u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_head), kOffset + kFrames);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 1u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_tail), kOffset + kFrames);
-}
 
-TEST_F(SharedRingFixture, FullOutputQueueDropsNewestAndPreservesCommittedDescriptors) {
-    VstpocShared* shared = ring.raw();
-    StoreRelaxed(&shared->output_drop_count, 0u);
-    for (uint32_t i = 0; i < VSTPOC_OUTPUT_BLOCK_CAPACITY; ++i) {
-        ASSERT_TRUE(TryStageOutputBlock(shared, 1, static_cast<float>(i)));
-    }
-    ASSERT_EQ(LoadAcquire(&shared->output_block_head),
-              static_cast<uint64_t>(VSTPOC_OUTPUT_BLOCK_CAPACITY));
-    const VstpocOutputBlock first = shared->output_blocks[0];
-    const float firstSample = shared->audio[0][0];
-
-    EXPECT_FALSE(TryStageOutputBlock(shared, 1, 999.0f));
-    EXPECT_EQ(LoadAcquire(&shared->output_drop_count), 1u);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_head),
-              static_cast<uint64_t>(VSTPOC_OUTPUT_BLOCK_CAPACITY));
-    EXPECT_EQ(shared->output_blocks[0].sequence, first.sequence);
-    EXPECT_EQ(shared->output_blocks[0].frame_count, first.frame_count);
-    EXPECT_EQ(shared->output_blocks[0].ring_offset, first.ring_offset);
-    EXPECT_FLOAT_EQ(shared->audio[0][0], firstSample);
-}
-
-TEST_F(SharedRingFixture, PullAudioAdvancesConsumerTailsButNeverProducerHeads) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->audio_tail, 20u);
-    StageOutputBlock(shared, 0, 3, 20, 31.0f, -31.0f);
-    StoreRelease(&shared->audio_head, 23u);
-    StoreRelease(&shared->output_block_head, 1u);
-
-    float left[3] = {};
-    float right[3] = {};
-    ASSERT_EQ(ring.pullAudio(left, right, 3), 3);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 1u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_tail), 23u);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_head), 1u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_head), 23u);
-}
-
-TEST_F(SharedRingFixture,
-       PullAudioTrimsMismatchedBlocksAndConsumesWrappedNonDivisorQuantum) {
-    VstpocShared* shared = ring.raw();
-    constexpr uint32_t kQuantum = 257;  // Deliberately does not divide the ring.
-    constexpr uint32_t kStaleFrames = 256;
-    const uint64_t audioStart =
-        VSTPOC_AUDIO_RING_FRAMES - (kStaleFrames + 2u);
-    const uint64_t blockStart = VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u;
-    const uint64_t secondStart = audioStart + kStaleFrames;
-    const uint64_t thirdStart = secondStart + kQuantum;
-
-    // The first descriptor is complete but mismatched for this host quantum.
-    // The following descriptors are exact blocks; both descriptor and audio
-    // indices cross their physical ring boundaries.
-    StoreRelease(&shared->audio_tail, audioStart);
-    StoreRelease(&shared->audio_head, audioStart);
-    StoreRelease(&shared->output_block_tail, blockStart);
-    StoreRelease(&shared->output_block_head, blockStart);
-    StoreRelease(&shared->output_drop_count, 0u);
-    ASSERT_TRUE(TryStageOutputBlock(shared, kStaleFrames, 10.0f));
-    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 100.0f));
-    ASSERT_TRUE(TryStageOutputBlock(shared, kQuantum, 200.0f));
-    EXPECT_EQ(LoadAcquire(&shared->output_drop_count), 0u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_head), thirdStart + kQuantum);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_head), blockStart + 3u);
-
-    std::vector<float> left(kQuantum, -1.0f);
-    std::vector<float> right(kQuantum, 1.0f);
-    ASSERT_EQ(ring.pullAudio(left.data(), right.data(), kQuantum), kQuantum);
-    for (uint32_t i = 0; i < kQuantum; ++i) {
-        EXPECT_FLOAT_EQ(left[i], 200.0f + static_cast<float>(i));
-        EXPECT_FLOAT_EQ(right[i], -200.0f - static_cast<float>(i));
-    }
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), blockStart + 3u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_tail), thirdStart + kQuantum);
-    EXPECT_EQ(LoadAcquire(&shared->audio_head), thirdStart + kQuantum);
-
-    EXPECT_EQ(ring.pullAudio(left.data(), right.data(), kQuantum), 0);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), blockStart + 3u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_tail), thirdStart + kQuantum);
-    EXPECT_EQ(LoadAcquire(&shared->audio_head), thirdStart + kQuantum);
-}
-
-
-TEST_F(SharedRingFixture,
-       DefaultPullReturnsLatestMatchingBlockAndTrimsEarlierCommittedBlocks) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->audio_tail, 32u);
-    StoreRelease(&shared->audio_head, 32u);
-    StoreRelease(&shared->output_block_tail, 0u);
-    StoreRelease(&shared->output_block_head, 0u);
-    ASSERT_TRUE(TryStageOutputBlock(shared, 4, 10.0f));
-    ASSERT_TRUE(TryStageOutputBlock(shared, 4, 20.0f));
-    ASSERT_TRUE(TryStageOutputBlock(shared, 4, 30.0f));
-
-    float left[4] = {};
-    float right[4] = {};
-    ASSERT_EQ(ring.pullAudio(left, right, 4), 4);
+    ASSERT_TRUE(stageOutput(shared, 4, 100.0f, empty));
+    store(&shared->output_blocks[0].sequence, 0u, __ATOMIC_RELAXED);
+    left.fill(-10.0f);
+    right.fill(-20.0f);
+    bool authoritative = true;
+    EXPECT_EQ(ring.pullOutput(left.data(), right.data(), 4, empty, true,
+                              authoritative), 0);
+    failClosed.reset();
+    failClosed.renderFailure(outputs, 4);
     for (uint32_t i = 0; i < 4; ++i) {
-        EXPECT_FLOAT_EQ(left[i], 30.0f + static_cast<float>(i));
-        EXPECT_FLOAT_EQ(right[i], -30.0f - static_cast<float>(i));
+        EXPECT_FLOAT_EQ(left[i], 0.0f);
+        EXPECT_FLOAT_EQ(right[i], 0.0f);
     }
-    EXPECT_EQ(LoadAcquire(&shared->output_block_tail), 3u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_tail), 44u);
-    EXPECT_EQ(LoadAcquire(&shared->output_block_head), 3u);
-    EXPECT_EQ(LoadAcquire(&shared->audio_head), 44u);
-}
-
-
-TEST_F(SharedRingFixture, PullAudioBlockFifoPairsEachDescriptorWithItsMidi) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->audio_tail, 32u);
-    StoreRelease(&shared->audio_head, 32u);
-    StoreRelease(&shared->output_block_tail, 0u);
-    StoreRelease(&shared->output_block_head, 0u);
-
-    const guitarrackcraft::MidiEvent firstMidi[] = {
-        {1u, 0x90u, 60u, 101u},
-    };
-    const guitarrackcraft::MidiEvent secondMidi[] = {
-        {3u, 0x80u, 60u, 0u},
-        {7u, 0x90u, 64u, 117u},
-    };
-    ASSERT_TRUE(TryStageOutputBlockWithMidi(shared, 4, 10.0f, firstMidi, 1));
-    ASSERT_TRUE(
-        TryStageOutputBlockWithMidi(shared, 4, 20.0f, secondMidi, 2));
-
-    float left[4] = {};
-    float right[4] = {};
-    guitarrackcraft::MidiEvent midi[2] = {};
-    uint32_t midiCount = 0;
-    ASSERT_EQ(ring.pullAudioBlock(left, right, 4, midi, 2, &midiCount, true),
-              4);
-    EXPECT_FLOAT_EQ(left[0], 10.0f);
-    EXPECT_FLOAT_EQ(right[0], -10.0f);
-    ASSERT_EQ(midiCount, 1u);
-    EXPECT_EQ(midi[0].frameOffset, 1u);
-    EXPECT_EQ(midi[0].status, 0x90u);
-    EXPECT_EQ(midi[0].data1, 60u);
-    EXPECT_EQ(midi[0].data2, 101u);
-
-    midiCount = 0;
-    ASSERT_EQ(ring.pullAudioBlock(left, right, 4, midi, 2, &midiCount, true),
-              4);
-    EXPECT_FLOAT_EQ(left[0], 20.0f);
-    EXPECT_FLOAT_EQ(right[0], -20.0f);
-    ASSERT_EQ(midiCount, 2u);
-    EXPECT_EQ(midi[0].frameOffset, 3u);
-    EXPECT_EQ(midi[0].status, 0x80u);
-    EXPECT_EQ(midi[0].data1, 60u);
-    EXPECT_EQ(midi[0].data2, 0u);
-    EXPECT_EQ(midi[1].frameOffset, 7u);
-    EXPECT_EQ(midi[1].status, 0x90u);
-    EXPECT_EQ(midi[1].data1, 64u);
-    EXPECT_EQ(midi[1].data2, 117u);
-}
-
-TEST_F(SharedRingFixture, PullAudioBlockLatestOnlyPairsNewestDescriptorWithMidi) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->audio_tail, 32u);
-    StoreRelease(&shared->audio_head, 32u);
-    StoreRelease(&shared->output_block_tail, 0u);
-    StoreRelease(&shared->output_block_head, 0u);
-
-    const guitarrackcraft::MidiEvent oldMidi[] = {
-        {2u, 0x90u, 36u, 90u},
-    };
-    const guitarrackcraft::MidiEvent newestMidi[] = {
-        {5u, 0x90u, 72u, 110u},
-    };
-    ASSERT_TRUE(TryStageOutputBlockWithMidi(shared, 4, 40.0f, oldMidi, 1));
-    ASSERT_TRUE(
-        TryStageOutputBlockWithMidi(shared, 4, 50.0f, newestMidi, 1));
-
-    float left[4] = {};
-    float right[4] = {};
-    guitarrackcraft::MidiEvent midi[1] = {};
-    uint32_t midiCount = 0;
-    ASSERT_EQ(ring.pullAudioBlock(left, right, 4, midi, 1, &midiCount, false),
-              4);
-    EXPECT_FLOAT_EQ(left[0], 50.0f);
-    EXPECT_FLOAT_EQ(right[0], -50.0f);
-    ASSERT_EQ(midiCount, 1u);
-    EXPECT_EQ(midi[0].frameOffset, 5u);
-    EXPECT_EQ(midi[0].status, 0x90u);
-    EXPECT_EQ(midi[0].data1, 72u);
-    EXPECT_EQ(midi[0].data2, 110u);
-}
-
-TEST_F(SharedRingFixture, PullAudioBlockFifoPairsMidiAcrossDescriptorAndAudioWrap) {
-    VstpocShared* shared = ring.raw();
-    const uint64_t blockStart = VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u;
-    const uint64_t audioStart = VSTPOC_AUDIO_RING_FRAMES - 2u;
-    StoreRelease(&shared->audio_tail, audioStart);
-    StoreRelease(&shared->audio_head, audioStart);
-    StoreRelease(&shared->output_block_tail, blockStart);
-    StoreRelease(&shared->output_block_head, blockStart);
-
-    const guitarrackcraft::MidiEvent firstMidi[] = {
-        {0u, 0x90u, 48u, 80u},
-    };
-    const guitarrackcraft::MidiEvent secondMidi[] = {
-        {3u, 0x90u, 49u, 81u},
-    };
-    ASSERT_TRUE(TryStageOutputBlockWithMidi(shared, 4, 60.0f, firstMidi, 1));
-    ASSERT_TRUE(
-        TryStageOutputBlockWithMidi(shared, 4, 70.0f, secondMidi, 1));
-
-    float left[4] = {};
-    float right[4] = {};
-    guitarrackcraft::MidiEvent midi[1] = {};
-    uint32_t midiCount = 0;
-    ASSERT_EQ(ring.pullAudioBlock(left, right, 4, midi, 1, &midiCount, true),
-              4);
-    EXPECT_FLOAT_EQ(left[0], 60.0f);
-    EXPECT_EQ(midiCount, 1u);
-    EXPECT_EQ(midi[0].data1, 48u);
-
-    midiCount = 0;
-    ASSERT_EQ(ring.pullAudioBlock(left, right, 4, midi, 1, &midiCount, true),
-              4);
-    EXPECT_FLOAT_EQ(left[0], 70.0f);
-    EXPECT_EQ(midiCount, 1u);
-    EXPECT_EQ(midi[0].data1, 49u);
-}
-
-TEST_F(SharedRingFixture, PullAudioBlockRejectsUncommittedOrWrongMidiSequence) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->audio_tail, 64u);
-    StoreRelease(&shared->audio_head, 64u);
-    StoreRelease(&shared->output_block_tail, 0u);
-    StoreRelease(&shared->output_block_head, 0u);
-
-    const guitarrackcraft::MidiEvent firstMidi[] = {
-        {1u, 0x90u, 55u, 100u},
-    };
-    const guitarrackcraft::MidiEvent secondMidi[] = {
-        {2u, 0x90u, 56u, 101u},
-    };
-    ASSERT_TRUE(TryStageOutputBlockWithMidi(shared, 4, 80.0f, firstMidi, 1));
-    ASSERT_TRUE(
-        TryStageOutputBlockWithMidi(shared, 4, 90.0f, secondMidi, 1));
-    StoreRelaxed(&shared->output_midi_blocks[0].sequence, 0u);
-    StoreRelaxed(&shared->output_midi_blocks[1].sequence, 999u);
-
-    float left[4] = {};
-    float right[4] = {};
-    guitarrackcraft::MidiEvent midi[1] = {{77u, 0xf0u, 1u, 2u}};
-    uint32_t midiCount = 99u;
-    ASSERT_EQ(ring.pullAudioBlock(left, right, 4, midi, 1, &midiCount, true),
-              4);
-    EXPECT_FLOAT_EQ(left[0], 80.0f);
-    EXPECT_EQ(midiCount, 0u);
-    EXPECT_EQ(midi[0].status, 0xf0u);
-
-    midiCount = 99u;
-    ASSERT_EQ(ring.pullAudioBlock(left, right, 4, midi, 1, &midiCount, true),
-              4);
-    EXPECT_FLOAT_EQ(left[0], 90.0f);
-    EXPECT_EQ(midiCount, 0u);
-    EXPECT_EQ(midi[0].status, 0xf0u);
-}
-
-TEST_F(SharedRingFixture, TransportPublicationDerivesDeadlineFromFramesAndRate) {
-    constexpr uint32_t kFrames = 257;
-    constexpr double kRate = 44100.0;
-    ASSERT_TRUE(ring.publishTransport(0, 0, 0, kRate, 120.0, true, false,
-                                      kFrames, nullptr, 0));
-    const uint64_t expected = static_cast<uint64_t>(
-        static_cast<double>(kFrames) * 1'000'000'000.0 / kRate);
-    EXPECT_EQ(ring.guestDeadlineNs(), expected);
-
-    ASSERT_TRUE(ring.publishTransport(0, kFrames, 0, 48000.0, 120.0, true,
-                                      false, 128, nullptr, 0));
-    EXPECT_EQ(ring.guestDeadlineNs(), static_cast<uint64_t>(
-        128.0 * 1'000'000'000.0 / 48000.0));
-}
-
-TEST_F(SharedRingFixture, HealthGettersKeepDeadlineStarvationAndDropDistinct) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->block_deadline_ns, 1234567u);
-    StoreRelease(&shared->deadline_miss_count, 11u);
-    StoreRelease(&shared->starvation_count, 23u);
-    StoreRelease(&shared->output_drop_count, 37u);
-
-    EXPECT_EQ(ring.guestDeadlineNs(), 1234567u);
-    EXPECT_EQ(ring.deadlineMissCount(), 11u);
-    EXPECT_EQ(ring.starvationCount(), 23u);
-    EXPECT_EQ(ring.outputDropCount(), 37u);
-}
-
-TEST_F(SharedRingFixture,
-       TransportWakeRequestIsOnePerEnqueueAfterGuestClearsIt) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->transport_queue_head, 0u);
-    StoreRelease(&shared->transport_queue_tail, 0u);
-    StoreRelease(&shared->wake_requested, 0u);
-
-    ASSERT_TRUE(ring.publishTransport(0, 0, 0, 48000.0, 120.0, true, false,
-                                      257, nullptr, 0));
-    EXPECT_EQ(ConsumeWakeRequest(shared), 1u);
-    ASSERT_TRUE(ring.publishTransport(257, 257, 0, 48000.0, 120.0, true,
-                                      false, 257, nullptr, 0));
-    EXPECT_EQ(ConsumeWakeRequest(shared), 1u);
-
-    // The consumer advances its tail between producer commits. The next
-    // enqueue must still publish a wake even though an old empty/non-empty
-    // observation could be stale.
-    StoreRelease(&shared->transport_queue_tail, 2u);
-    ASSERT_TRUE(ring.publishTransport(514, 514, 0, 48000.0, 120.0, true,
-                                      false, 257, nullptr, 0));
-    EXPECT_EQ(ConsumeWakeRequest(shared), 1u);
-    EXPECT_EQ(LoadAcquire(&shared->transport_queue_head), 3u);
-}
-
-TEST_F(SharedRingFixture, WakeListenerAdvertisesBoundedPath) {
-    ASSERT_TRUE(ring.valid());
-    ASSERT_TRUE(ring.wakeReady());
-
-    const std::string wakePath = ring.wakePath();
-    ASSERT_FALSE(wakePath.empty());
-    sockaddr_un address{};
-    EXPECT_LE(wakePath.size() + 1u, sizeof(address.sun_path));
-    EXPECT_EQ(::access(wakePath.c_str(), F_OK), 0);
-    EXPECT_NE(ring.raw()->shared_feature_bits & VSTPOC_FEATURE_WAKE_SOCKET, 0u);
-}
-
-TEST_F(SharedRingFixture,
-       TransportWakeArrivesOnEmptyToNonemptyAndCoalescesUntilConsumed) {
-    ASSERT_TRUE(ring.wakeReady());
-    const int client = ConnectWake(ring.wakePath());
-    ASSERT_NE(client, -1);
-    ASSERT_TRUE(PrimeWakeClient(ring, client));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
-
-    ASSERT_TRUE(ring.publishTransport(0, 0, 0, 48000.0, 120.0, true,
-                                      false, 64, nullptr, 0));
-    EXPECT_TRUE(ReceiveWake(client));
-
-    ASSERT_TRUE(ring.publishTransport(64, 64, 0, 48000.0, 120.0, true,
-                                      false, 64, nullptr, 0));
-    EXPECT_FALSE(ReceiveWake(client, kNoWakePollTimeoutMs));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
-
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->transport_queue_tail,
-                 LoadAcquire(&shared->transport_queue_head));
-
-    ASSERT_TRUE(ring.publishTransport(128, 128, 0, 48000.0, 120.0, true,
-                                      false, 64, nullptr, 0));
-    EXPECT_TRUE(ReceiveWake(client));
-    ::close(client);
-}
-TEST(SharedRingWakeTest, UnsetExpectedPeerRejectsWakeClient) {
-    TempBackingFile backing;
-    SharedRing ring(backing.path());
-    ASSERT_TRUE(ring.valid());
-    ASSERT_TRUE(ring.wakeReady());
-
-    const int client = ConnectWake(ring.wakePath());
-    ASSERT_NE(client, -1);
-    ring.notifyGuest();
-    EXPECT_FALSE(ReceiveWake(client, kNoWakePollTimeoutMs));
-    ::close(client);
-}
-TEST(SharedRingWakeTest, WakeClientFromDifferentProcessIsRejected) {
-    TempBackingFile backing;
-    SharedRing ring(backing.path());
-    ASSERT_TRUE(ring.valid());
-    ASSERT_TRUE(ring.wakeReady());
-    ring.setExpectedWakePeer(getpid());
-
-    int connected[2] = {-1, -1};
-    ASSERT_EQ(::pipe(connected), 0);
-    const pid_t child = ::fork();
-    ASSERT_NE(child, -1);
-    if (child == 0) {
-        ::close(connected[0]);
-        const int client = ConnectWake(ring.wakePath());
-        const char status = client >= 0 ? 'C' : 'F';
-        (void)::write(connected[1], &status, 1);
-        if (client < 0) _exit(2);
-        const bool received = ReceiveWake(client, kWakePollTimeoutMs);
-        ::close(client);
-        _exit(received ? 1 : 0);
-    }
-
-    ::close(connected[1]);
-    char status = '\0';
-    ASSERT_EQ(::read(connected[0], &status, 1), 1);
-    ASSERT_EQ(status, 'C');
-    ::close(connected[0]);
-
-    ring.notifyGuest();
-    int childStatus = 0;
-    ASSERT_EQ(::waitpid(child, &childStatus, 0), child);
-    ASSERT_TRUE(WIFEXITED(childStatus));
-    EXPECT_EQ(WEXITSTATUS(childStatus), 0);
-}
-
-TEST_F(SharedRingFixture,
-       InputWakeArrivesOnEmptyToNonemptyAndCoalescesUntilConsumed) {
-    ASSERT_TRUE(ring.wakeReady());
-    const int client = ConnectWake(ring.wakePath());
-    ASSERT_NE(client, -1);
-    ASSERT_TRUE(PrimeWakeClient(ring, client));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
-
-    const float left[] = {1.0f};
-    const float right[] = {-1.0f};
-    ASSERT_EQ(ring.pushInput(left, right, 1), 1);
-    EXPECT_TRUE(ReceiveWake(client));
-
-    ASSERT_EQ(ring.pushInput(left, right, 1), 1);
-    EXPECT_FALSE(ReceiveWake(client, kNoWakePollTimeoutMs));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
-
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->audio_in_tail,
-                 LoadAcquire(&shared->audio_in_head));
-    ASSERT_EQ(ring.pushInput(left, right, 1), 1);
-    EXPECT_TRUE(ReceiveWake(client));
-    ::close(client);
 }
 
 
 TEST_F(SharedRingFixture,
-       TransportAndInputWakeCoalesceUntilGuestClearsWakeRequest) {
-    ASSERT_TRUE(ring.wakeReady());
-    const int client = ConnectWake(ring.wakePath());
-    ASSERT_NE(client, -1);
-    ASSERT_TRUE(PrimeWakeClient(ring, client));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
+       WineAudioProcessFailsClosedBeforePrimingAndRecoversProcessedOutput) {
+    constexpr uint32_t graphFrames = 64;
+    constexpr uint32_t activationFrames = graphFrames * 8;
+    constexpr uint32_t guestFrames = 128;
+    using Adapter = vsthost::WineAudioBlockAdapter;
+    using FailClosed = vsthost::WineFailClosedAudioState;
+    using Disposition = guitarrackcraft::MidiOutputDisposition;
 
-    const float left[] = {2.0f};
-    const float right[] = {-2.0f};
-    ASSERT_TRUE(ring.publishTransport(0, 0, 0, 48000.0, 120.0, true,
-                                      false, 1, nullptr, 0));
-    EXPECT_EQ(ReceiveWakeBytes(client), 1);
-
-    ASSERT_EQ(ring.pushInput(left, right, 1), 1);
-    EXPECT_FALSE(ReceiveWake(client, kNoWakePollTimeoutMs));
+    Adapter adapter(activationFrames);
+    ASSERT_TRUE(adapter.valid());
+    ASSERT_EQ(adapter.guestFrames(), activationFrames);
+    ASSERT_EQ(adapter.outputSlotCapacity(), 3u);
 
     VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->transport_queue_tail,
-                 LoadAcquire(&shared->transport_queue_head));
-    StoreRelease(&shared->audio_in_tail,
-                 LoadAcquire(&shared->audio_in_head));
-    StoreRelease(&shared->wake_requested, 0u);
+    MidiBuffer emptyMidi;
+    ASSERT_TRUE(stageOutput(shared, guestFrames, 100.0f, emptyMidi));
+    ASSERT_TRUE(stageOutput(shared, guestFrames, 200.0f, emptyMidi));
+    ASSERT_TRUE(stageOutput(shared, guestFrames, 300.0f, emptyMidi));
 
-    ASSERT_EQ(ring.pushInput(left, right, 1), 1);
-    EXPECT_EQ(ReceiveWakeBytes(client), 1);
-    StoreRelease(&shared->wake_requested, 0u);
+    struct CallbackResult {
+        std::array<float, graphFrames> left{};
+        std::array<float, graphFrames> right{};
+        Disposition disposition = Disposition::Passthrough;
+    };
 
-    StoreRelease(&shared->audio_in_tail,
-                 LoadAcquire(&shared->audio_in_head));
-    StoreRelease(&shared->transport_queue_tail,
-                 LoadAcquire(&shared->transport_queue_head));
-    ASSERT_TRUE(ring.publishTransport(1, 1, 0, 48000.0, 120.0, true,
-                                      false, 1, nullptr, 0));
-    EXPECT_EQ(ReceiveWakeBytes(client), 1);
-    ::close(client);
-}
-TEST_F(SharedRingFixture, ParamNotifyAndStopAlwaysWakeConnectedClient) {
-    ASSERT_TRUE(ring.wakeReady());
-    const int client = ConnectWake(ring.wakePath());
-    ASSERT_NE(client, -1);
-    ASSERT_TRUE(PrimeWakeClient(ring, client));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
+    bool geometryEstablished = false;
+    bool outputPrimed = false;
+    FailClosed failClosed;
+    failClosed.reset();
 
-    ring.pushParam(4, 0.5f);
-    EXPECT_TRUE(ReceiveWake(client));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
+    const auto publishInput = [&]() {
+        if (!adapter.inputReady()) return true;
+        const auto& inputContext = adapter.inputContext();
+        const bool published =
+            ring.inputWritable(adapter.guestFrames()) &&
+            ring.publishTransport(
+                inputContext.samplePosition, inputContext.transportFrame,
+                inputContext.loopEndFrame, inputContext.sampleRate,
+                inputContext.beatsPerMinute, inputContext.playing,
+                inputContext.looping, adapter.guestFrames(), adapter.inputMidi()) &&
+            ring.pushInput(adapter.inputLeft(), adapter.inputRight(),
+                           static_cast<int32_t>(adapter.guestFrames())) ==
+                static_cast<int32_t>(adapter.guestFrames());
+        if (published) adapter.consumeInput();
+        return published;
+    };
 
-    ring.notifyGuest();
-    EXPECT_TRUE(ReceiveWake(client));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
-
-    ring.signalStop();
-    EXPECT_TRUE(ReceiveWake(client));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
-    EXPECT_EQ(LoadAcquire(&ring.raw()->stop_flag), 1u);
-    ::close(client);
-}
-
-TEST_F(SharedRingFixture,
-       DisconnectedClientDoesNotBlockWakeAndReconnectReceivesLaterWake) {
-    ASSERT_TRUE(ring.wakeReady());
-    const int disconnected = ConnectWake(ring.wakePath());
-    ASSERT_NE(disconnected, -1);
-    ASSERT_TRUE(PrimeWakeClient(ring, disconnected));
-    StoreRelease(&ring.raw()->wake_requested, 0u);
-    ::close(disconnected);
-
-    // Exercise sends against the closed peer. These calls must remain
-    // non-blocking and must not terminate the test process with SIGPIPE.
-    ring.notifyGuest();
-    ring.notifyGuest();
-
-    const int reconnected = ConnectWake(ring.wakePath());
-    ASSERT_NE(reconnected, -1);
-    EXPECT_TRUE(PrimeWakeClient(ring, reconnected));
-    ::close(reconnected);
-}
-
-TEST(SharedRingWakeTest, DestructorRemovesAdvertisedSocketPath) {
-    TempBackingFile backing;
-    std::string wakePath;
-    {
-        SharedRing ring(backing.path());
-        ASSERT_TRUE(ring.valid());
-        ASSERT_TRUE(ring.wakeReady());
-        wakePath = ring.wakePath();
-        ASSERT_FALSE(wakePath.empty());
-        ASSERT_EQ(::access(wakePath.c_str(), F_OK), 0);
-    }
-    EXPECT_EQ(::access(wakePath.c_str(), F_OK), -1);
-    EXPECT_EQ(errno, ENOENT);
-}
-
-TEST_F(SharedRingFixture, GuestHealthAndStarvationCountersRemainObservable) {
-    VstpocShared* shared = ring.raw();
-    StoreRelease(&shared->guest_ready, 1u);
-    StoreRelaxed(&shared->guest_state, VSTPOC_GUEST_STATE_RUNNING);
-    StoreRelaxed(&shared->guest_frames_produced, 256u);
-    StoreRelaxed(&shared->guest_heartbeat, 11u);
-    StoreRelaxed(&shared->block_deadline_ns, 123456789u);
-    StoreRelaxed(&shared->deadline_miss_count, 0u);
-    StoreRelaxed(&shared->starvation_count, 0u);
-    StoreRelaxed(&shared->output_drop_count, 0u);
-
-    ASSERT_TRUE(ring.guestReady());
-    EXPECT_EQ(ring.guestFramesProduced(), 256u);
-    EXPECT_EQ(LoadAcquire(&shared->guest_state), VSTPOC_GUEST_STATE_RUNNING);
-    EXPECT_EQ(LoadAcquire(&shared->guest_heartbeat), 11u);
-    EXPECT_EQ(LoadAcquire(&shared->block_deadline_ns), 123456789u);
-
-    __atomic_add_fetch(&shared->deadline_miss_count, 1u, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&shared->deadline_miss_count, 1u, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&shared->starvation_count, 1u, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&shared->starvation_count, 1u, __ATOMIC_RELAXED);
-    __atomic_add_fetch(&shared->output_drop_count, 1u, __ATOMIC_RELAXED);
-    StoreRelease(&shared->guest_state, VSTPOC_GUEST_STATE_STARVED);
-    EXPECT_EQ(LoadAcquire(&shared->guest_state), VSTPOC_GUEST_STATE_STARVED);
-    EXPECT_EQ(LoadAcquire(&shared->deadline_miss_count), 2u);
-    EXPECT_EQ(LoadAcquire(&shared->starvation_count), 2u);
-    EXPECT_EQ(LoadAcquire(&shared->output_drop_count), 1u);
-
-    ring.notifyGuest();
-    EXPECT_EQ(LoadAcquire(&shared->deadline_miss_count), 2u);
-    EXPECT_EQ(LoadAcquire(&shared->starvation_count), 2u);
-    EXPECT_EQ(LoadAcquire(&shared->output_drop_count), 1u);
-}
-
-TEST_F(SharedRingFixture, InputPreflightAndPushAreAllOrNothingNearWrap) {
-    VstpocShared* shared = ring.raw();
-    const uint64_t start = VSTPOC_AUDIO_RING_FRAMES - 2u;
-    StoreRelaxed(&shared->audio_in_tail, start);
-    StoreRelaxed(&shared->audio_in_head, start);
-    EXPECT_TRUE(ring.inputWritable(VSTPOC_AUDIO_RING_FRAMES));
-    EXPECT_FALSE(ring.inputWritable(VSTPOC_AUDIO_RING_FRAMES + 1u));
-
-    const float wrappedLeft[] = {1.0f, 2.0f, 3.0f, 4.0f};
-    const float wrappedRight[] = {-1.0f, -2.0f, -3.0f, -4.0f};
-    ASSERT_TRUE(ring.inputWritable(4));
-    ASSERT_EQ(ring.pushInput(wrappedLeft, wrappedRight, 4), 4);
-    EXPECT_EQ(LoadAcquire(&shared->audio_in_head), start + 4u);
-    for (uint32_t i = 0; i < 4; ++i) {
-        const uint64_t slot = AudioSlot(start + i);
-        EXPECT_FLOAT_EQ(shared->audio_in[0][slot], wrappedLeft[i]);
-        EXPECT_FLOAT_EQ(shared->audio_in[1][slot], wrappedRight[i]);
-    }
-
-    const uint64_t nearlyFullHead = start + 4u + VSTPOC_AUDIO_RING_FRAMES - 2u;
-    StoreRelaxed(&shared->audio_in_head, nearlyFullHead);
-    StoreRelease(&shared->audio_in_tail, start + 4u);
-    const uint64_t occupiedSlot = AudioSlot(nearlyFullHead);
-    for (uint32_t slot = 0; slot < VSTPOC_AUDIO_RING_FRAMES; ++slot) {
-        shared->audio_in[0][slot] = 77.0f;
-        shared->audio_in[1][slot] = -77.0f;
-    }
-    shared->audio_in[0][occupiedSlot] = 55.0f;
-    shared->audio_in[1][occupiedSlot] = -55.0f;
-    const float rejectedLeft[] = {9.0f, 10.0f, 11.0f};
-    const float rejectedRight[] = {-9.0f, -10.0f, -11.0f};
-    EXPECT_FALSE(ring.inputWritable(3));
-    EXPECT_EQ(ring.pushInput(rejectedLeft, rejectedRight, 3), 0);
-    EXPECT_EQ(LoadAcquire(&shared->audio_in_head), nearlyFullHead);
-    for (uint32_t slot = 0; slot < VSTPOC_AUDIO_RING_FRAMES; ++slot) {
-        const float expectedL = slot == occupiedSlot ? 55.0f : 77.0f;
-        const float expectedR = slot == occupiedSlot ? -55.0f : -77.0f;
-        EXPECT_FLOAT_EQ(shared->audio_in[0][slot], expectedL);
-        EXPECT_FLOAT_EQ(shared->audio_in[1][slot], expectedR);
-    }
-}
-
-TEST_F(SharedRingFixture, LegacyRawAudioHeadDoesNotExposeOutputWithoutDescriptor) {
-    VstpocShared* shared = ring.raw();
-    const uint64_t start = VSTPOC_AUDIO_RING_FRAMES - 3u;
-    StoreRelaxed(&shared->audio_tail, start);
-    StoreRelease(&shared->audio_head, start + 7u);
-    StoreRelease(&shared->output_block_tail, 0u);
-    StoreRelease(&shared->output_block_head, 0u);
-
-    for (uint32_t i = 0; i < 7; ++i) {
-        const uint64_t slot = AudioSlot(start + i);
-        shared->audio[0][slot] = 100.0f + static_cast<float>(i);
-        shared->audio[1][slot] = -200.0f - static_cast<float>(i);
-    }
-
-    float left[7] = {};
-    float right[7] = {};
-    EXPECT_EQ(ring.pullAudio(left, right, 7), 0);
-}
-
-TEST_F(SharedRingFixture, InputSpscStressPreservesEveryFrameAfterSuccessfulPreflight) {
-    constexpr uint32_t kFrames = 20000;
-    VstpocShared* shared = ring.raw();
-    StoreRelaxed(&shared->audio_in_head, 0);
-    StoreRelaxed(&shared->audio_in_tail, 0);
-
-    std::vector<uint32_t> consumed;
-    consumed.reserve(kFrames);
-    std::atomic<bool> producerFailed{false};
-    std::atomic<bool> producerDone{false};
-
-    std::thread consumer([&] {
-        uint64_t tail = 0;
-        uint32_t spins = 0;
-        while (consumed.size() < kFrames && spins++ < 5000000u) {
-            const uint64_t head = LoadAcquire(&shared->audio_in_head);
-            if (head == tail) {
-                std::this_thread::yield();
-                continue;
-            }
-            const uint64_t slot = tail & (VSTPOC_AUDIO_RING_FRAMES - 1u);
-            const float left = shared->audio_in[0][slot];
-            const float right = shared->audio_in[1][slot];
-            if (left != -right || left < 0.0f || left >= static_cast<float>(kFrames)) {
-                producerFailed.store(true, std::memory_order_relaxed);
-                break;
-            }
-            consumed.push_back(static_cast<uint32_t>(left));
-            ++tail;
-            StoreRelease(&shared->audio_in_tail, tail);
+    const auto callback = [&](uint32_t callbackFrames, uint64_t samplePosition) {
+        CallbackResult result;
+        std::array<float, graphFrames> inputLeft{};
+        std::array<float, graphFrames> inputRight{};
+        for (uint32_t i = 0; i < graphFrames; ++i) {
+            inputLeft[i] = -10.0f;
+            inputRight[i] = -20.0f;
+            result.left[i] = inputLeft[i];
+            result.right[i] = inputRight[i];
         }
-        if (consumed.size() != kFrames) producerFailed.store(true, std::memory_order_relaxed);
-    });
+        float* outputs[] = {result.left.data(), result.right.data()};
 
-    std::thread producer([&] {
-        uint32_t next = 0;
-        uint32_t spins = 0;
-        while (next < kFrames && spins++ < 5000000u) {
-            if (!ring.inputWritable(1)) {
-                std::this_thread::yield();
-                continue;
-            }
-            const float left = static_cast<float>(next);
-            const float right = -static_cast<float>(next);
-            if (ring.pushInput(&left, &right, 1) != 1) {
-                producerFailed.store(true, std::memory_order_relaxed);
-                break;
-            }
-            ++next;
+        const auto fail = [&]() {
+            failClosed.renderFailure(outputs, callbackFrames);
+            return result;
+        };
+        if (!geometryEstablished) {
+            if (!Adapter::acceptsCallbackFrames(activationFrames, callbackFrames))
+                return fail();
+            geometryEstablished = adapter.configure(callbackFrames);
+            if (!geometryEstablished) return fail();
         }
-        if (next != kFrames) producerFailed.store(true, std::memory_order_relaxed);
-        producerDone.store(true, std::memory_order_release);
-    });
+        if (callbackFrames != graphFrames) return fail();
 
-    producer.join();
-    consumer.join();
-    EXPECT_TRUE(producerDone.load(std::memory_order_acquire));
-    ASSERT_FALSE(producerFailed.load(std::memory_order_relaxed));
-    ASSERT_EQ(consumed.size(), kFrames);
-    for (uint32_t i = 0; i < kFrames; ++i) EXPECT_EQ(consumed[i], i);
-    EXPECT_EQ(LoadAcquire(&shared->audio_in_head), kFrames);
-    EXPECT_EQ(LoadAcquire(&shared->audio_in_tail), kFrames);
+        guitarrackcraft::AudioProcessContext context;
+        context.samplePosition = samplePosition;
+        context.transportFrame = samplePosition + 17;
+        context.sampleRate = 48000.0;
+        context.playing = true;
+        const std::array<const float*, 2> inputs{
+            inputLeft.data(), inputRight.data()};
+        if (adapter.inputReady()) EXPECT_TRUE(publishInput());
+        if (!adapter.appendInput(inputs.data(), context, emptyMidi))
+            return fail();
+        if (adapter.inputReady()) EXPECT_TRUE(publishInput());
+
+        bool authoritative = false;
+        if (adapter.outputWriteAvailable()) {
+            const int32_t pulled = ring.pullOutput(
+                adapter.outputLeft(), adapter.outputRight(),
+                static_cast<int32_t>(adapter.guestFrames()),
+                adapter.outputMidi(), true, authoritative);
+            if (pulled == static_cast<int32_t>(adapter.guestFrames()))
+                EXPECT_TRUE(adapter.commitOutput(adapter.outputMidi(), authoritative));
+        }
+
+        if (!outputPrimed) {
+            if (adapter.outputBlockCount() < adapter.outputSlotCapacity())
+                return fail();
+            outputPrimed = true;
+        } else if (!adapter.outputReady()) {
+            outputPrimed = false;
+            return fail();
+        }
+
+        result.disposition = authoritative ? Disposition::Replace
+                                           : Disposition::Passthrough;
+        adapter.copyOutput(result.left.data(), result.right.data(), emptyMidi);
+        if (adapter.outputBlockCount() == 0) outputPrimed = false;
+        failClosed.applyRecovery(outputs, callbackFrames);
+        failClosed.rememberProcessed(
+            result.left.data(), result.right.data(), callbackFrames);
+        return result;
+    };
+
+    const CallbackResult first = callback(graphFrames, 0);
+    const CallbackResult second = callback(graphFrames, graphFrames);
+    EXPECT_FLOAT_EQ(first.left[0], 0.0f);
+    EXPECT_FLOAT_EQ(second.left[0], 0.0f);
+    const CallbackResult primed = callback(graphFrames, 2 * graphFrames);
+    EXPECT_FLOAT_EQ(primed.left[0], 100.0f / 64.0f);
+    EXPECT_FLOAT_EQ(primed.left[63], 163.0f);
+    ASSERT_TRUE(geometryEstablished);
+    ASSERT_EQ(adapter.graphFrames(), graphFrames);
+    ASSERT_EQ(adapter.guestFrames(), guestFrames);
+    EXPECT_FALSE(adapter.outputWriteAvailable());
+    EXPECT_EQ(primed.disposition, Disposition::Passthrough);
+    const CallbackResult blockOneTail = callback(graphFrames, 3 * graphFrames);
+    const CallbackResult blockTwoHead = callback(graphFrames, 4 * graphFrames);
+    const CallbackResult blockTwoTail = callback(graphFrames, 5 * graphFrames);
+    const CallbackResult blockThreeHead = callback(graphFrames, 6 * graphFrames);
+    const CallbackResult blockThreeTail = callback(graphFrames, 7 * graphFrames);
+    EXPECT_FLOAT_EQ(blockOneTail.left[63], 227.0f);
+    EXPECT_FLOAT_EQ(blockTwoHead.left[0], 200.0f);
+    EXPECT_FLOAT_EQ(blockTwoTail.left[63], 327.0f);
+    EXPECT_FLOAT_EQ(blockThreeHead.left[0], 300.0f);
+    EXPECT_FLOAT_EQ(blockThreeTail.left[63], 427.0f);
+    EXPECT_FALSE(adapter.outputReady());
+
+    const CallbackResult miss = callback(graphFrames, 8 * graphFrames);
+    EXPECT_FLOAT_EQ(miss.left[0], 427.0f * 63.0f / 64.0f);
+    EXPECT_NE(miss.left[0], -10.0f);
+
+    ASSERT_TRUE(stageOutput(shared, guestFrames, 400.0f, emptyMidi));
+    ASSERT_TRUE(stageOutput(shared, guestFrames, 500.0f, emptyMidi));
+    ASSERT_TRUE(stageOutput(shared, guestFrames, 600.0f, emptyMidi));
+    const CallbackResult recoveryMissOne = callback(graphFrames, 9 * graphFrames);
+    const CallbackResult recoveryMissTwo = callback(graphFrames, 10 * graphFrames);
+    EXPECT_FLOAT_EQ(recoveryMissOne.left[0], 0.0f);
+    EXPECT_FLOAT_EQ(recoveryMissTwo.left[0], 0.0f);
+    const CallbackResult recovered = callback(graphFrames, 11 * graphFrames);
+    EXPECT_FLOAT_EQ(recovered.left[0], 400.0f / 64.0f);
+    EXPECT_FLOAT_EQ(recovered.left[63], 463.0f);
+    EXPECT_EQ(recovered.disposition, Disposition::Passthrough);
+
+    EXPECT_EQ(load(&shared->audio_in_head), 6u * guestFrames);
 }
 
 }  // namespace

@@ -15,6 +15,7 @@
 #define VSTPOC_SHARED_LAYOUT_H
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <stddef.h>
 #ifdef __cplusplus
 #define _Alignas(x) alignas(x)
@@ -28,14 +29,16 @@
 #define VSTPOC_PARAM_UNIT_LEN      24     /* display unit, e.g. dB/Hz/ms */
 #define VSTPOC_PARAM_DISPLAY_LEN   64     /* current plugin-formatted value */
 
-#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504f435339) /* "VSTPOCS9" */
-#define VSTPOC_SHARED_LAYOUT_VERSION 9u
+#define VSTPOC_SHARED_LAYOUT_MAGIC   UINT64_C(0x565354504F433130) /* "VSTPOC10" */
+#define VSTPOC_SHARED_LAYOUT_VERSION 10u
 #define VSTPOC_TRANSPORT_QUEUE_CAPACITY 1024u
 #define VSTPOC_FEATURE_PLANAR_AUDIO (UINT64_C(1) << 0)
 #define VSTPOC_FEATURE_WAKE_SOCKET  (UINT64_C(1) << 1)
 #define VSTPOC_FEATURE_MIDI_EVENTS (UINT64_C(1) << 2)
 #define VSTPOC_FEATURE_MIDI_OUTPUT (UINT64_C(1) << 3)
-#define VSTPOC_FEATURE_OUTPUT_BLOCK_MIDI (UINT64_C(1) << 4)
+#define VSTPOC_FEATURE_MIDI_PAYLOAD_RING (UINT64_C(1) << 4)
+#define VSTPOC_MIDI_FLAG_AUTHORITATIVE (UINT32_C(1) << 0)
+#define VSTPOC_MIDI_PAYLOAD_RING_BYTES (1024u * 1024u)
 #define VSTPOC_GUEST_STATE_STARTING 1u
 #define VSTPOC_GUEST_STATE_RUNNING  2u
 #define VSTPOC_GUEST_STATE_STARVED  3u
@@ -44,27 +47,24 @@
 #define VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK 128u
 #define VSTPOC_OUTPUT_BLOCK_CAPACITY 128u
 
-typedef struct {
-    uint64_t sequence;
-    uint32_t frame_count;
-    uint32_t ring_offset;
-} VstpocOutputBlock;
-
-typedef struct {
+typedef struct VstpocMidiEvent {
     uint32_t frame_offset;
-    uint8_t status;
-    uint8_t data1;
-    uint8_t data2;
-    uint8_t reserved;
+    uint32_t payload_size;
+    uint64_t payload_offset;
 } VstpocMidiEvent;
 
 typedef struct {
     uint64_t sequence;
-    uint32_t event_count;
-    uint32_t reserved;
-    VstpocMidiEvent events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
-    uint8_t reserved_padding[48];
-} VstpocOutputMidiBlock;
+    uint32_t frame_count;
+    uint32_t ring_offset;
+    uint32_t midi_event_count;
+    uint32_t midi_flags;
+    uint64_t midi_payload_begin;
+    uint64_t midi_payload_end;
+    VstpocMidiEvent midi_events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
+} VstpocOutputBlock;
+
+/* Deprecated v9 type intentionally removed: MIDI bytes live in payload rings. */
 
 /* Native file-picker channel sizes. Wine-side GetOpenFileNameA hook writes
  * the request, Android-side SAF listener writes the response. */
@@ -113,9 +113,11 @@ typedef struct {
     uint32_t flags;
     uint32_t block_frames;
     uint32_t midi_event_count;
+    uint32_t midi_reserved;
+    uint64_t midi_payload_begin;
+    uint64_t midi_payload_end;
     VstpocMidiEvent midi_events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
 } VstpocTransportBlock;
-
 /* Single mmap region. Atomics laid out one-per-cacheline so producer and
  * consumer never share a line (avoids false sharing during heavy churn). */
 typedef struct {
@@ -268,16 +270,16 @@ typedef struct {
     _Alignas(VSTPOC_CACHELINE) double   transport_beats_per_minute;
     _Alignas(VSTPOC_CACHELINE) uint32_t transport_flags; /* bit0 playing, bit1 looping */
     /* v3 bounded transport queue; appended after all v2 fields. */
+    /* v10 transport queue and host→guest MIDI payload ring. */
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_head;
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_tail;
     _Alignas(VSTPOC_CACHELINE) VstpocTransportBlock transport_queue[VSTPOC_TRANSPORT_QUEUE_CAPACITY];
-    /* Guest-produced MIDI for the most recently processed audio block. */
-    _Alignas(VSTPOC_CACHELINE) uint64_t midi_output_seq;
-    uint32_t midi_output_count;
-    VstpocMidiEvent midi_output_events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
+    _Alignas(VSTPOC_CACHELINE) uint64_t midi_input_payload_head;
+    _Alignas(VSTPOC_CACHELINE) uint64_t midi_input_payload_tail;
+    _Alignas(VSTPOC_CACHELINE) uint8_t midi_input_payload[VSTPOC_MIDI_PAYLOAD_RING_BYTES];
+    _Alignas(VSTPOC_CACHELINE) uint64_t midi_input_drop_count;
+    _Alignas(VSTPOC_CACHELINE) uint64_t midi_output_drop_count;
     _Alignas(VSTPOC_CACHELINE) uint64_t transport_queue_dropped;
-
-    /* Generic editor extension. */
     _Alignas(VSTPOC_CACHELINE) uint64_t param_metadata_seq;
     _Alignas(VSTPOC_CACHELINE) VstpocParamMetadata param_metadata[VSTPOC_MAX_PARAMS];
     _Alignas(VSTPOC_CACHELINE) char param_display_values[VSTPOC_MAX_PARAMS][VSTPOC_PARAM_DISPLAY_LEN];
@@ -312,12 +314,32 @@ typedef struct {
     _Alignas(VSTPOC_CACHELINE) uint64_t error_generation;
     uint8_t reserved_v8[64];
     /* V9 append-only MIDI snapshots paired with output descriptors. */
-    _Alignas(VSTPOC_CACHELINE) VstpocOutputMidiBlock output_midi_blocks[VSTPOC_OUTPUT_BLOCK_CAPACITY];
-    uint8_t reserved_v9[64];
+    /* v10 guest→host output MIDI payload ring. */
+    _Alignas(VSTPOC_CACHELINE) uint64_t midi_output_payload_head;
+    _Alignas(VSTPOC_CACHELINE) uint64_t midi_output_payload_tail;
+    _Alignas(VSTPOC_CACHELINE) uint8_t midi_output_payload[VSTPOC_MIDI_PAYLOAD_RING_BYTES];
+
 } VstpocShared;
 
-#define VSTPOC_SHARED_LAYOUT_V8_SIZE offsetof(VstpocShared, output_midi_blocks)
-#define VSTPOC_SHARED_LAYOUT_V9_SIZE sizeof(VstpocShared)
+#define VSTPOC_SHARED_LAYOUT_V8_SIZE offsetof(VstpocShared, output_blocks)
+#define VSTPOC_SHARED_LAYOUT_V10_SIZE sizeof(VstpocShared)
+static inline bool vstpoc_transport_queue_pop(
+    const VstpocShared* shared, VstpocTransportBlock* block) {
+    if (!shared || !block) return false;
+    const uint64_t tail =
+        __atomic_load_n(&shared->transport_queue_tail, __ATOMIC_RELAXED);
+    const uint64_t head =
+        __atomic_load_n(&shared->transport_queue_head, __ATOMIC_ACQUIRE);
+    if (tail == head) return false;
+    *block = shared->transport_queue[
+        tail & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
+    __atomic_store_n(
+        (uint64_t*)&shared->transport_queue_tail,
+        tail + 1u,
+        __ATOMIC_RELEASE);
+    return true;
+}
+
 
 /* Native file-picker channel — lives in its OWN mmap file
  * (vst_picker_pN.dat next to vst_shm_pN.dat) so wine's comdlg32 hook

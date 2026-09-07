@@ -1,7 +1,8 @@
 #include "RackStateCodec.h"
 #include <cstring>
 #include <cmath>
-#include <algorithm>
+#include <functional>
+#include <unordered_map>
 namespace guitarrackcraft { namespace {
 constexpr uint32_t M=4096,S=1u<<20,P=8u<<20;
 struct W{std::vector<uint8_t>b;void u8(uint8_t x){b.push_back(x);}void u32(uint32_t x){for(int i=0;i<4;i++)u8(x>>(i*8));}void u64(uint64_t x){for(int i=0;i<8;i++)u8(x>>(i*8));}void f(float x){uint32_t v;memcpy(&v,&x,4);u32(v);}void d(double x){uint64_t v;memcpy(&v,&x,8);u64(v);}void str(const std::string&x){u32(x.size());b.insert(b.end(),x.begin(),x.end());}void bytes(const std::vector<uint8_t>&x){u32(x.size());b.insert(b.end(),x.begin(),x.end());}};
@@ -9,10 +10,34 @@ struct R{const uint8_t*p;size_t n,o=0;bool ok=1;uint8_t u8(){if(o>=n){ok=0;retur
 uint32_t crc(const uint8_t*p,size_t n){uint32_t c=~0u;for(size_t i=0;i<n;i++){c^=p[i];for(int j=0;j<8;j++)c=(c>>1)^(0xedb88320u&-(c&1));}return ~c;}
 void cw(W&w,const PluginChain::ChainState&c){w.u32(c.plugins.size());for(auto&p:c.plugins){w.str(p.format);w.str(p.pluginUri);w.u32(p.controlPortValues.size());for(auto&q:p.controlPortValues){w.u32(q.first);w.f(q.second);}w.u32(p.properties.size());for(auto&q:p.properties){w.str(q.keyUri);w.str(q.typeUri);w.u32(q.flags);w.bytes(q.value);}w.u32(p.manualLatencyFrames);}}
 bool cr(R&r,PluginChain::ChainState&c,bool lat){auto n=r.u32();if(!r.ok||n>M)return 0;c.plugins.clear();for(uint32_t i=0;i<n;i++){PluginState p;if(!r.str(p.format)||!r.str(p.pluginUri))return 0;auto q=r.u32();if(!r.ok||q>M)return 0;for(uint32_t j=0;j<q;j++){auto k=r.u32();auto v=r.f();if(!r.ok||!std::isfinite(v))return 0;p.controlPortValues.emplace_back(k,v);}q=r.u32();if(!r.ok||q>M)return 0;for(uint32_t j=0;j<q;j++){StateProperty x;if(!r.str(x.keyUri)||!r.str(x.typeUri))return 0;x.flags=r.u32();if(!r.bytes(x.value))return 0;p.properties.push_back(std::move(x));}if(lat){p.manualLatencyFrames=r.u32();if(!r.ok||p.manualLatencyFrames>PluginChain::kMaxSupportedPdcFrames)return 0;}c.plugins.push_back(std::move(p));}return r.ok;}
+bool validRoutes(const RackGraph::State& s) {
+    std::unordered_map<RackPathId, uint32_t> ids;
+    for (uint32_t i = 0; i < s.tracks.size(); ++i)
+        if (!ids.emplace(s.tracks[i].id, i).second) return false;
+    std::vector<uint8_t> state(s.tracks.size());
+    std::function<bool(uint32_t)> visit = [&](uint32_t i) {
+        if (state[i] == 1) return false;
+        if (state[i] == 2) return true;
+        state[i] = 1;
+        const auto& t = s.tracks[i];
+        auto edge = [&](RackPathId id, bool enabled) {
+            if (!enabled) return true;
+            auto it = ids.find(id);
+            return it != ids.end() && it->second != i && visit(it->second);
+        };
+        if (!edge(t.inputSource.trackId, t.inputSource.kind == TrackInputSource::Kind::TrackOutput) ||
+            !edge(t.midiInputSource.trackId,
+                  t.midiInputSource.kind == TrackMidiInputSource::Kind::TrackOutput)) return false;
+        state[i] = 2;
+        return true;
+    };
+    for (uint32_t i = 0; i < s.tracks.size(); ++i) if (!visit(i)) return false;
+    return true;
 }
-std::vector<uint8_t> RackStateCodec::encode(const RackGraph::State&s,std::string*e){W w;w.b.insert(w.b.end(),{'N','N','G','S'});w.u32(4);w.u32(s.tracks.size());for(auto&t:s.tracks){w.u64(t.id);w.f(t.volume);w.u8(t.inputArmed);w.u8(t.inputArmLocked);w.u8((uint8_t)t.inputSource.kind);w.u8((uint8_t)t.inputSource.tap);w.u32(t.inputSource.firstChannel);w.u64(t.inputSource.trackId);w.u32(t.selectedSlot);w.d(t.defaultLoopLengthBars);w.str(t.name);w.u32(t.colorArgb);w.u32(t.clipSlots.size());for(auto&c:t.clipSlots){w.u32(c.slot);w.u8(c.wav);w.u8(c.midi);w.str(c.assetId);w.str(c.midiAssetId);w.str(c.displayName);w.d(c.sourceBpm);w.u32(c.tempoMode);w.u8(c.looping);w.d(c.loopLengthBars);w.d(c.defaultLoopLengthBars);w.d(c.loopStartQuarterNotes);w.d(c.loopLengthQuarterNotes);w.u8(c.enterOnPunch);w.u8((uint8_t)c.launchQuantization);}cw(w,t.chain);}cw(w,s.master);w.d(s.beatsPerMinute);w.u8(s.transportPlaying);w.u64(s.transportFrame);w.u64(s.samplePosition);w.d(s.musicalQuarterNotes);if(w.b.size()>kMaxBlobBytes-4){if(e)*e="state-too-large";return{};}w.u32(crc(w.b.data(),w.b.size()));return std::move(w.b);}
+} // namespace
+std::vector<uint8_t> RackStateCodec::encode(const RackGraph::State&s,std::string*e){W w;w.b.insert(w.b.end(),{'N','N','G','S'});w.u32(5);w.u32(s.tracks.size());for(auto&t:s.tracks){w.u64(t.id);w.f(t.volume);w.u8(t.inputArmed);w.u8(t.inputArmLocked);w.u8((uint8_t)t.inputSource.kind);w.u8((uint8_t)t.inputSource.tap);w.u32(t.inputSource.firstChannel);w.u64(t.inputSource.trackId);w.u8((uint8_t)t.midiInputSource.kind);w.u64(t.midiInputSource.trackId);w.u32(t.midiInputSource.usb.vendorId);w.u32(t.midiInputSource.usb.productId);w.u32(t.midiInputSource.usb.portNumber);w.str(t.midiInputSource.usb.serialNumber);w.str(t.midiInputSource.displayName);w.u32(t.selectedSlot);w.d(t.defaultLoopLengthBars);w.str(t.name);w.u32(t.colorArgb);w.u32(t.clipSlots.size());for(auto&c:t.clipSlots){w.u32(c.slot);w.u8(c.wav);w.u8(c.midi);w.str(c.assetId);w.str(c.midiAssetId);w.str(c.displayName);w.d(c.sourceBpm);w.u32(c.tempoMode);w.u8(c.looping);w.d(c.loopLengthBars);w.d(c.defaultLoopLengthBars);w.d(c.loopStartQuarterNotes);w.d(c.loopLengthQuarterNotes);w.u8(c.enterOnPunch);w.u8((uint8_t)c.launchQuantization);}cw(w,t.chain);}cw(w,s.master);w.d(s.beatsPerMinute);w.u8(s.transportPlaying);w.u64(s.transportFrame);w.u64(s.samplePosition);w.d(s.musicalQuarterNotes);if(w.b.size()>kMaxBlobBytes-4){if(e)*e="state-too-large";return{};}w.u32(crc(w.b.data(),w.b.size()));return std::move(w.b);}
 bool RackStateCodec::decode(const uint8_t*d,size_t z,RackGraph::State&s,std::string&e){
-    if(!d||z<12||z>kMaxBlobBytes||memcmp(d,"NNGS",4)||d[5]||d[6]||d[7]||(d[4]!=1&&d[4]!=2&&d[4]!=3&&d[4]!=4)){e="unsupported-header";return 0;}
+    if(!d||z<12||z>kMaxBlobBytes||memcmp(d,"NNGS",4)||d[5]||d[6]||d[7]||(d[4]<1||d[4]>5)){e="unsupported-header";return 0;}
     uint32_t got=d[z-4]|d[z-3]<<8|d[z-2]<<16|d[z-1]<<24;
     if(crc(d,z-4)!=got){e="crc-mismatch";return 0;}
     R r{d,z-4};r.o=8;auto n=r.u32();
@@ -23,6 +48,22 @@ bool RackStateCodec::decode(const uint8_t*d,size_t z,RackGraph::State&s,std::str
         t.id=r.u64();t.volume=r.f();t.inputArmed=r.u8();t.inputArmLocked=r.u8();
         t.inputSource.kind=TrackInputSource::Kind(r.u8());t.inputSource.tap=TrackInputTap(r.u8());
         t.inputSource.firstChannel=r.u32();t.inputSource.trackId=r.u64();
+        if(d[4]>=5){
+            const auto kind = r.u8();
+            t.midiInputSource.kind = TrackMidiInputSource::Kind(kind);
+            t.midiInputSource.trackId = r.u64();
+            const auto vendor = r.u32(), product = r.u32(), port = r.u32();
+            if(!r.ok || kind > 2 || vendor > 65535 || product > 65535 || port > 65535){e="invalid-midi-input";return 0;}
+            t.midiInputSource.usb.vendorId = static_cast<uint16_t>(vendor);
+            t.midiInputSource.usb.productId = static_cast<uint16_t>(product);
+            t.midiInputSource.usb.portNumber = static_cast<uint16_t>(port);
+            if(!r.str(t.midiInputSource.usb.serialNumber) || !r.str(t.midiInputSource.displayName) ||
+               t.midiInputSource.usb.serialNumber.size() > 288 || t.midiInputSource.displayName.size() > 288 ||
+               (!t.midiInputSource.usb.serialNumber.empty() && !isValidTrackName(t.midiInputSource.usb.serialNumber)) ||
+               (!t.midiInputSource.displayName.empty() && !isValidTrackName(t.midiInputSource.displayName))){
+                e="invalid-midi-input";return 0;
+            }
+        }
         if(d[4]>=3){t.selectedSlot=r.u32();t.defaultLoopLengthBars=r.d();}
         if(d[4]>=4){
             if(!r.str(t.name)){e="invalid-track";return 0;}
@@ -37,12 +78,13 @@ bool RackStateCodec::decode(const uint8_t*d,size_t z,RackGraph::State&s,std::str
                 c.sourceBpm=r.d();c.tempoMode=r.u32();c.looping=r.u8();c.loopLengthBars=r.d();
                 c.defaultLoopLengthBars=r.d();c.loopStartQuarterNotes=r.d();c.loopLengthQuarterNotes=r.d();
                 c.enterOnPunch=r.u8();c.launchQuantization=LaunchQuantization(r.u8());t.clipSlots.push_back(std::move(c));
-            }
+        }
         }
         if(uint8_t(t.inputSource.kind)>2||uint8_t(t.inputSource.tap)>1||!std::isfinite(t.volume)||!cr(r,t.chain,d[4]>=2)){e="invalid-track";return 0;}
         o.tracks.push_back(std::move(t));
     }
     if(!cr(r,o.master,d[4]>=2)){e="invalid-master";return 0;}
+    if(d[4]>=5 && !validRoutes(o)){e="invalid-midi-route";return 0;}
     o.beatsPerMinute=r.d();o.transportPlaying=r.u8();o.transportFrame=r.u64();o.samplePosition=r.u64();o.musicalQuarterNotes=r.d();
     if(!r.ok||r.o!=z-4||!std::isfinite(o.beatsPerMinute)||o.beatsPerMinute<=0||o.beatsPerMinute>1000||!std::isfinite(o.musicalQuarterNotes)){e="truncated-or-invalid";return 0;}
     s=std::move(o);return 1;

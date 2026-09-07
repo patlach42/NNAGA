@@ -45,7 +45,8 @@ using guitarrackcraft::IJsfxUiTarget;
 using guitarrackcraft::IPlugin;
 using guitarrackcraft::JsfxPlugin;
 using guitarrackcraft::JsfxPluginFactory;
-using guitarrackcraft::MidiEvent;
+using guitarrackcraft::MidiBuffer;
+using guitarrackcraft::MidiOutputDisposition;
 using guitarrackcraft::PluginChain;
 using guitarrackcraft::PluginInfo;
 using guitarrackcraft::RealtimeClass;
@@ -71,6 +72,31 @@ void expectStereoEquals(const std::array<float, kFrames>& left,
         EXPECT_NEAR(left[frame], expectedLeft[frame], 1e-6f);
         EXPECT_NEAR(right[frame], expectedRight[frame], 1e-6f);
     }
+}
+template <typename Processor>
+MidiOutputDisposition processNoMidi(
+        Processor& processor,
+        const float* const* inputs,
+        float* const* outputs,
+        uint32_t numFrames,
+        const AudioProcessContext& context) {
+    MidiBuffer inputMidi;
+    MidiBuffer outputMidi;
+    return processor.process(inputs, outputs, numFrames, context, inputMidi,
+                             outputMidi);
+}
+
+template <typename Processor>
+void processChainNoMidi(
+        Processor& processor,
+        const float* const* inputs,
+        float* const* outputs,
+        uint32_t numFrames,
+        const AudioProcessContext& context) {
+    MidiBuffer inputMidi;
+    MidiBuffer outputMidi;
+    processor.process(inputs, outputs, numFrames, context, inputMidi,
+                      outputMidi);
 }
 
 } // namespace
@@ -145,7 +171,7 @@ TEST(JsfxPluginContractTest, ActivationReadinessAndBoundedProcessArePubliclyObse
     AudioProcessContext context;
     context.sampleRate = 48000.0;
 
-    ASSERT_EQ(plugin->process(inputs, outputs, kFrames, context, nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
     expectStereoEquals(outputLeft, outputRight, inputLeft, inputRight);
     EXPECT_FLOAT_EQ(plugin->getParameter(0), 0.25f);
     EXPECT_FLOAT_EQ(plugin->getParameter(2), 0.75f);
@@ -164,9 +190,8 @@ TEST(JsfxPluginContractTest, ActivationReadinessAndBoundedProcessArePubliclyObse
     }
     const float* oversizedInputs[] = {oversizedInputLeft.data(), oversizedInputRight.data()};
     float* oversizedOutputs[] = {oversizedOutputLeft.data(), oversizedOutputRight.data()};
-    EXPECT_EQ(plugin->process(oversizedInputs, oversizedOutputs, kFrames + 1, context,
-                              nullptr, 0, nullptr, 0),
-              0u);
+    (void)processNoMidi(*plugin, oversizedInputs, oversizedOutputs,
+                        kFrames + 1, context);
     for (uint32_t frame = 0; frame <= kFrames; ++frame) {
         EXPECT_FLOAT_EQ(oversizedOutputLeft[frame], oversizedInputLeft[frame]);
         EXPECT_FLOAT_EQ(oversizedOutputRight[frame], oversizedInputRight[frame]);
@@ -174,29 +199,15 @@ TEST(JsfxPluginContractTest, ActivationReadinessAndBoundedProcessArePubliclyObse
 
     outputLeft.fill(123.0f);
     outputRight.fill(-123.0f);
-    EXPECT_EQ(plugin->process(nullptr, outputs, kFrames, context, nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(*plugin, nullptr, outputs, kFrames, context);
     for (uint32_t frame = 0; frame < kFrames; ++frame) {
         EXPECT_FLOAT_EQ(outputLeft[frame], 0.0f);
         EXPECT_FLOAT_EQ(outputRight[frame], 0.0f);
     }
 
-    EXPECT_EQ(plugin->process(inputs, nullptr, kFrames, context, nullptr, 0, nullptr, 0), 0u);
-    EXPECT_EQ(plugin->process(inputs, outputs, 0, context, nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(*plugin, inputs, nullptr, kFrames, context);
+    (void)processNoMidi(*plugin, inputs, outputs, 0, context);
 
-    std::array<MidiEvent, 256> midi{};
-    for (uint32_t event = 0; event < midi.size(); ++event) {
-        midi[event].frameOffset = std::numeric_limits<uint32_t>::max();
-        midi[event].status = 0x90;
-        midi[event].data1 = static_cast<uint8_t>(event);
-        midi[event].data2 = 100;
-    }
-    std::array<MidiEvent, 2> midiOut{};
-    EXPECT_EQ(plugin->process(inputs, outputs, kFrames, context, midi.data(),
-                              std::numeric_limits<uint32_t>::max(), midiOut.data(), midiOut.size()),
-              0u);
-    EXPECT_EQ(plugin->process(inputs, outputs, kFrames, context, nullptr,
-                              std::numeric_limits<uint32_t>::max(), midiOut.data(), midiOut.size()),
-              0u);
     plugin->deactivate();
     EXPECT_FALSE(plugin->isReadyForRealtime());
 }
@@ -233,7 +244,7 @@ TEST(JsfxPluginChainContractTest, ActivatesCertifiedWrapperAndHandlesDryBypassBo
     float* outputs[] = {outputLeft.data(), outputRight.data()};
     AudioProcessContext context;
     context.sampleRate = 48000.0;
-    ASSERT_EQ(chain.process(inputs, outputs, kFrames, context, nullptr, 0, nullptr, 0), 0u);
+    processChainNoMidi(chain, inputs, outputs, kFrames, context);
     expectStereoEquals(outputLeft, outputRight, inputLeft, inputRight);
 
     std::array<float, kFrames + 1> oversizedLeft;
@@ -242,9 +253,8 @@ TEST(JsfxPluginChainContractTest, ActivatesCertifiedWrapperAndHandlesDryBypassBo
     oversizedRight.fill(-7.0f);
     const float* oversizedInputs[] = {oversizedLeft.data(), oversizedRight.data()};
     float* oversizedOutputs[] = {oversizedLeft.data(), oversizedRight.data()};
-    EXPECT_EQ(chain.process(oversizedInputs, oversizedOutputs, kFrames + 1, context,
-                            nullptr, 0, nullptr, 0),
-              0u);
+    processChainNoMidi(chain, oversizedInputs, oversizedOutputs,
+                       kFrames + 1, context);
     for (uint32_t frame = 0; frame <= kFrames; ++frame) {
         EXPECT_FLOAT_EQ(oversizedLeft[frame], 0.0f);
         EXPECT_FLOAT_EQ(oversizedRight[frame], 0.0f);
@@ -252,26 +262,13 @@ TEST(JsfxPluginChainContractTest, ActivatesCertifiedWrapperAndHandlesDryBypassBo
 
     outputLeft.fill(3.0f);
     outputRight.fill(-3.0f);
-    EXPECT_EQ(chain.process(nullptr, outputs, kFrames, context, nullptr, 0, nullptr, 0), 0u);
+    processChainNoMidi(chain, nullptr, outputs, kFrames, context);
     for (uint32_t frame = 0; frame < kFrames; ++frame) {
         EXPECT_FLOAT_EQ(outputLeft[frame], 0.0f);
         EXPECT_FLOAT_EQ(outputRight[frame], 0.0f);
     }
-    EXPECT_EQ(chain.process(inputs, nullptr, kFrames, context, nullptr, 0, nullptr, 0), 0u);
+    processChainNoMidi(chain, inputs, nullptr, kFrames, context);
 
-    std::array<MidiEvent, 256> midi{};
-    for (uint32_t event = 0; event < midi.size(); ++event) {
-        midi[event] = {0, 0x90, static_cast<uint8_t>(event), 80};
-    }
-    std::array<MidiEvent, 2> midiOut{};
-    EXPECT_EQ(chain.process(inputs, outputs, kFrames, context, midi.data(), midi.size(),
-                            midiOut.data(), midiOut.size()),
-              midiOut.size());
-    EXPECT_EQ(midiOut[0].status, 0x90);
-    EXPECT_EQ(midiOut[1].status, 0x90);
-    EXPECT_EQ(chain.process(inputs, outputs, kFrames, context, nullptr,
-                            std::numeric_limits<uint32_t>::max(), midiOut.data(), midiOut.size()),
-              0u);
 }
 
 TEST(JsfxGfxGateContractTest, DSPPassesThroughWhilePublicUiGateIsHeld) {
@@ -307,8 +304,141 @@ TEST(JsfxGfxGateContractTest, DSPPassesThroughWhilePublicUiGateIsHeld) {
 
     target->jsfxUiHost()->pauseEffect();
     ASSERT_TRUE(target->jsfxUiHost()->tryAcquireEffect());
-    ASSERT_EQ(plugin->process(inputs, outputs, kFrames, context, nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
     target->jsfxUiHost()->releaseEffect();
     target->jsfxUiHost()->resumeEffect();
     expectStereoEquals(outputLeft, outputRight, inputLeft, inputRight);
+}
+
+TEST(JsfxMidiContractTest, EchoesShortAndMaximumCompleteSysExByteExactly) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("MidiEcho.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    plugin->activate(48000.0f, 64);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    MidiBuffer input;
+    const std::array<uint8_t, 3> note = {0x90, 60, 100};
+    const std::array<uint8_t, 5> smallSysex = {0xf0, 1, 2, 3, 0xf7};
+    ASSERT_TRUE(input.append(3, note.data(), note.size()));
+    ASSERT_TRUE(input.append(9, smallSysex.data(), smallSysex.size()));
+    MidiBuffer output;
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    ASSERT_EQ(plugin->process(inputs, outputs, kFrames, AudioProcessContext{},
+                              input, output),
+              MidiOutputDisposition::Replace);
+    ASSERT_EQ(output.eventCount(), 2u);
+    for (uint32_t i = 0; i < output.eventCount(); ++i) {
+        const auto& actual = output.eventAt(i);
+        const auto& expected = input.eventAt(i);
+        EXPECT_EQ(actual.frameOffset, expected.frameOffset);
+        EXPECT_EQ(actual.payloadSize, expected.payloadSize);
+        EXPECT_TRUE(std::equal(
+            input.payloadFor(expected),
+            input.payloadFor(expected) + expected.payloadSize,
+            output.payloadFor(actual)));
+    }
+
+    std::vector<uint8_t> sysex(guitarrackcraft::kMaxMidiPayloadBytes);
+    sysex.front() = 0xf0;
+    for (uint32_t i = 1; i + 1 < sysex.size(); ++i)
+        sysex[i] = static_cast<uint8_t>((i * 37u) % 127u);
+    sysex.back() = 0xf7;
+    input.clear();
+    output.clear();
+    ASSERT_TRUE(input.append(17, sysex.data(), sysex.size()));
+    ASSERT_EQ(plugin->process(inputs, outputs, kFrames, AudioProcessContext{},
+                              input, output),
+              MidiOutputDisposition::Replace);
+    ASSERT_EQ(output.eventCount(), 1u);
+    const auto& actual = output.eventAt(0);
+    EXPECT_EQ(actual.frameOffset, 17u);
+    ASSERT_EQ(actual.payloadSize, sysex.size());
+    EXPECT_TRUE(std::equal(sysex.begin(), sysex.end(),
+                           output.payloadFor(actual)));
+    plugin->deactivate();
+}
+
+TEST(JsfxMidiContractTest, GeneratedSysExIsAuthoritativeAtItsInQuantumFrame) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("MidiGenerate.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    plugin->activate(48000.0f, 64);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    MidiBuffer input;
+    MidiBuffer output;
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    const auto disposition = plugin->process(
+        inputs, outputs, kFrames, AudioProcessContext{}, input, output);
+    ASSERT_EQ(disposition, MidiOutputDisposition::Replace);
+    ASSERT_EQ(output.eventCount(), 1u);
+    const auto& event = output.eventAt(0);
+    const std::array<uint8_t, 5> expected = {0xf0, 0x01, 0x7d, 0x55, 0xf7};
+    EXPECT_EQ(event.frameOffset, 9u);
+    ASSERT_EQ(event.payloadSize, expected.size());
+    EXPECT_TRUE(std::equal(expected.begin(), expected.end(),
+                           output.payloadFor(event)));
+    plugin->deactivate();
+}
+
+TEST(JsfxMidiContractTest, EmptyEmissionUsesPassthroughAndPreservesNoOutput) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("MidiEcho.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    plugin->activate(48000.0f, kFrames);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+    MidiBuffer input;
+    MidiBuffer output;
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    EXPECT_EQ(plugin->process(inputs, outputs, kFrames, AudioProcessContext{},
+                              input, output),
+              MidiOutputDisposition::Passthrough);
+    EXPECT_EQ(output.eventCount(), 0u);
+    plugin->deactivate();
+}
+
+TEST(JsfxMidiContractTest, EmittedPayloadOverCapacityIsDroppedAsOneMessage) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("MidiOversize.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    plugin->activate(48000.0f, kFrames);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    MidiBuffer input;
+    MidiBuffer output;
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    EXPECT_EQ(plugin->process(inputs, outputs, kFrames,
+                              AudioProcessContext{}, input, output),
+              MidiOutputDisposition::Replace);
+    ASSERT_EQ(output.eventCount(), 1u);
+    const auto& event = output.eventAt(0);
+    ASSERT_EQ(event.payloadSize, 65530u);
+    EXPECT_EQ(output.payloadFor(event)[0], 0xf0u);
+    EXPECT_EQ(output.payloadFor(event)[event.payloadSize - 1], 0xf7u);
+    plugin->deactivate();
 }

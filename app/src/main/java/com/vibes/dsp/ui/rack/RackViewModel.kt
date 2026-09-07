@@ -74,16 +74,17 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val trackVolumeLatest = ConcurrentHashMap<RackPathId, Float>()
     private val trackVolumeWake = Channel<Unit>(Channel.CONFLATED)
     private val _xRunCount = MutableStateFlow(0); val xRunCount = _xRunCount.asStateFlow()
-    private val _tracks = MutableStateFlow<List<RackTrackInfo>>(emptyList()); val tracks: StateFlow<List<RackTrackInfo>> = _tracks.asStateFlow()
+    private val _tracks = MutableStateFlow<List<RackTrackInfo>>(emptyList()); val tracks: StateFlow<List<RackTrackInfo>> = _tracks
     private val _selectedPathId = MutableStateFlow<RackPathId>(1L); val selectedPathId = _selectedPathId.asStateFlow()
     private val _directUsbStats = MutableStateFlow(DirectUsbStats())
     private val _realtimeStats = MutableStateFlow(
-        AudioRealtimeStats.fromRaw(LongArray(26) { if (it == 0) 1L else 0L })
+        AudioRealtimeStats.fromRaw(LongArray(33) { if (it == 0) 3L else 0L })
     )
     val realtimeStats: StateFlow<AudioRealtimeStats> = _realtimeStats.asStateFlow()
     val directUsbStats: StateFlow<DirectUsbStats> = _directUsbStats.asStateFlow()
     private val _directUsbState = MutableStateFlow(DirectUsbSessionState.Stopped)
     val directUsbState: StateFlow<DirectUsbSessionState> = _directUsbState.asStateFlow()
+    val usbMidiState: StateFlow<UsbMidiState> = UsbMidiInputManager.state
     private val _selectedPathPlugins = MutableStateFlow<List<RackPlugin>>(emptyList()); val selectedPathPlugins = _selectedPathPlugins.asStateFlow()
     private val _transport = MutableStateFlow(TransportInfo(false, 0.0, 120.0, 0L, 0L)); val transport = _transport.asStateFlow()
     private val _waveformPeaks = MutableStateFlow<Map<RackPathId, List<Float>>>(emptyMap())
@@ -101,6 +102,7 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
     private val lifecycleMutex = Mutex()
     private val rackControlMutex = Mutex()
     // Only the latest asynchronous path refresh may publish its result.
+    private val pendingMidiTokens = ConcurrentHashMap<RackPathId, Int>()
     private val selectedPathRefreshGeneration = AtomicLong(0L)
     private val parameterGeneration = AtomicLong(0L)
     private var restartJob: Job? = null
@@ -254,9 +256,9 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-
     fun onNativeEngineReady() {
         nativeReady = true
+        UsbMidiInputManager.initialize(getApplication())
         refreshRack(forceNewInstanceIds = true)
         if (autoStartAttempted) return
         autoStartAttempted = true
@@ -292,6 +294,35 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
             val selectedPathDisappeared = previousSelectedPath != MASTER_PATH_ID &&
                 all.none { it.id == previousSelectedPath }
             _tracks.value = all
+            val midiAssignments = all.mapNotNull { track ->
+                if (track.midiInputKind != 1) return@mapNotNull null
+                track.id to UsbMidiAssignment(
+                    identity = UsbMidiPortIdentity(
+                        track.midiVendorId,
+                        track.midiProductId,
+                        track.midiSerialNumber,
+                        track.midiPortNumber,
+                    ),
+                    displayName = track.midiDisplayName,
+                )
+            }.toMap()
+            val midiTokens = midiAssignments.mapNotNull { (trackId, assignment) ->
+                val selected = pendingMidiTokens[trackId] ?: return@mapNotNull null
+                val endpoint = UsbMidiInputManager.state.value.endpoints.firstOrNull {
+                    it.identity == assignment.identity && it.deviceToken == selected
+                }
+                if (endpoint == null) {
+                    pendingMidiTokens.remove(trackId)
+                    null
+                } else {
+                    trackId to endpoint.deviceToken
+                }
+            }.toMap()
+            UsbMidiInputManager.updateDesiredAssignments(midiAssignments)
+            if (midiTokens.isNotEmpty()) {
+                UsbMidiInputManager.updateSessionTokens(midiTokens)
+                midiTokens.keys.forEach(pendingMidiTokens::remove)
+            }
             val freshTrackIds = all.mapTo(HashSet(all.size)) { it.id }
             _clipSlots.update { current -> current.filterKeys { it in freshTrackIds } }
             _waveformPeaks.update { current -> current.filterKeys { it in freshTrackIds } }
@@ -510,6 +541,86 @@ class RackViewModel(application: Application) : AndroidViewModel(application) {
                     _errorMessage.value = "Failed to set mono hardware input"
                 }
                 refreshRackNow()
+            }
+        }
+    }
+    fun setTrackMidiInputNone(trackId: RackPathId) {
+        pendingMidiTokens.remove(trackId)
+        _tracks.value = _tracks.value.map {
+            if (it.id == trackId) it.copy(
+                midiInputKind = 0,
+                midiVendorId = 0,
+                midiProductId = 0,
+                midiSerialNumber = "",
+                midiPortNumber = 0,
+                midiDisplayName = "",
+                midiInputSourceTrackId = 0L,
+                midiInputConnected = false,
+            ) else it
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val success = RackManager.setTrackMidiInputNone(trackId)
+                refreshRackNow()
+                if (!success) _errorMessage.value = "Failed to set MIDI input"
+            }
+        }
+    }
+
+    fun setTrackMidiInputUsb(trackId: RackPathId, endpoint: UsbMidiEndpoint) {
+        pendingMidiTokens[trackId] = endpoint.deviceToken
+        val handle = UsbMidiInputManager.findLiveHandle(endpoint)
+        _tracks.value = _tracks.value.map {
+            if (it.id == trackId) it.copy(
+                midiInputKind = 1,
+                midiVendorId = endpoint.identity.vendorId,
+                midiProductId = endpoint.identity.productId,
+                midiSerialNumber = endpoint.identity.serialNumber,
+                midiPortNumber = endpoint.identity.portNumber,
+                midiDisplayName = endpoint.displayName,
+                midiInputSourceTrackId = 0L,
+                midiInputConnected = handle != 0L,
+            ) else it
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val success = RackManager.setTrackMidiInputUsb(
+                    trackId,
+                    endpoint.identity.vendorId,
+                    endpoint.identity.productId,
+                    endpoint.identity.serialNumber,
+                    endpoint.identity.portNumber,
+                    endpoint.displayName,
+                    handle,
+                )
+                if (!success) pendingMidiTokens.remove(trackId)
+                refreshRackNow()
+                if (!success) _errorMessage.value = "Failed to set MIDI input"
+            }
+        }
+    }
+
+    fun setTrackMidiInputTrack(trackId: RackPathId, sourceTrackId: RackPathId) {
+        pendingMidiTokens.remove(trackId)
+        _tracks.value = _tracks.value.map {
+            if (it.id == trackId) it.copy(
+                midiInputKind = 2,
+                midiVendorId = 0,
+                midiProductId = 0,
+                midiSerialNumber = "",
+                midiPortNumber = 0,
+                midiDisplayName = "",
+                midiInputSourceTrackId = sourceTrackId,
+                midiInputConnected = false,
+            ) else it
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            rackControlMutex.withLock {
+                val success = RackManager.setTrackMidiInputTrack(trackId, sourceTrackId)
+                refreshRackNow()
+                if (!success) {
+                    _errorMessage.value = "Invalid MIDI route (cycle or missing track)"
+                }
             }
         }
     }

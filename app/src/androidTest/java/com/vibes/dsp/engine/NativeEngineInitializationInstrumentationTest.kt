@@ -21,13 +21,32 @@ class NativeEngineInitializationInstrumentationTest {
         assertTrue("Initial native engine initialization failed", EngineInitHelper.initEngine(context))
 
         var trackId: Long? = null
+        var midiSourceHandle = 0L
         try {
             val createdTrackId = engine.addTrack()
             trackId = createdTrackId
             assertTrue("Adding a rack track failed", createdTrackId > MASTER_PATH_ID)
             assertTrue("Setting track volume failed", engine.setTrackVolume(createdTrackId, 0.37f))
             assertTrue("Arming track input failed", engine.setTrackInputArmed(createdTrackId, true))
-
+            midiSourceHandle = engine.registerUsbMidiSource(
+                vendorId = 0x1234,
+                productId = 0xabcd,
+                serialNumber = "instrumentation-midi",
+                portNumber = 7,
+            )
+            assertTrue("Registering MIDI source failed", midiSourceHandle > 0L)
+            assertTrue(
+                "Setting MIDI input failed",
+                engine.setTrackMidiInputUsb(
+                    createdTrackId,
+                    0x1234,
+                    0xabcd,
+                    "instrumentation-midi",
+                    7,
+                    "Instrumentation MIDI",
+                    midiSourceHandle,
+                ),
+            )
             val before = engine.getTracks().firstOrNull { it.id == createdTrackId }
             assertTrue("Added rack track was not returned by getTracks", before != null)
             val beforeTrack = before!!
@@ -47,6 +66,14 @@ class NativeEngineInitializationInstrumentationTest {
             assertEquals("Repeated nativeInit changed rack track id", beforeTrack.id, afterTrack.id)
             assertEquals("Repeated nativeInit changed rack track volume", beforeTrack.volume, afterTrack.volume, 0.0f)
             assertEquals("Repeated nativeInit changed input arm state", beforeTrack.inputArmed, afterTrack.inputArmed)
+            assertEquals("Initial MIDI input kind was not returned", 1, beforeTrack.midiInputKind)
+            assertEquals("Initial MIDI vendor id was not returned", 0x1234, beforeTrack.midiVendorId)
+            assertEquals("Initial MIDI product id was not returned", 0xabcd, beforeTrack.midiProductId)
+            assertEquals("Initial MIDI serial was not returned", "instrumentation-midi", beforeTrack.midiSerialNumber)
+            assertEquals("Initial MIDI port was not returned", 7, beforeTrack.midiPortNumber)
+            assertEquals("Initial MIDI display name was not returned", "Instrumentation MIDI", beforeTrack.midiDisplayName)
+            assertEquals("Initial MIDI source track was not returned", 0L, beforeTrack.midiInputSourceTrackId)
+            assertTrue("Initial MIDI source connection was not returned", beforeTrack.midiInputConnected)
             assertEquals("Repeated nativeInit changed input arm lock state", beforeTrack.inputArmLocked, afterTrack.inputArmLocked)
             assertEquals("Repeated nativeInit changed wav loaded state", beforeTrack.wavLoaded, afterTrack.wavLoaded)
             assertEquals("Repeated nativeInit changed wav display name", beforeTrack.wavDisplayName, afterTrack.wavDisplayName)
@@ -66,6 +93,14 @@ class NativeEngineInitializationInstrumentationTest {
             )
             assertEquals("Repeated nativeInit changed input source track", beforeTrack.inputSourceTrackId, afterTrack.inputSourceTrackId)
             assertEquals("Repeated nativeInit changed input tap", beforeTrack.inputTap, afterTrack.inputTap)
+            assertEquals("Repeated nativeInit changed MIDI input kind", beforeTrack.midiInputKind, afterTrack.midiInputKind)
+            assertEquals("Repeated nativeInit changed MIDI vendor id", beforeTrack.midiVendorId, afterTrack.midiVendorId)
+            assertEquals("Repeated nativeInit changed MIDI product id", beforeTrack.midiProductId, afterTrack.midiProductId)
+            assertEquals("Repeated nativeInit changed MIDI serial", beforeTrack.midiSerialNumber, afterTrack.midiSerialNumber)
+            assertEquals("Repeated nativeInit changed MIDI port", beforeTrack.midiPortNumber, afterTrack.midiPortNumber)
+            assertEquals("Repeated nativeInit changed MIDI display name", beforeTrack.midiDisplayName, afterTrack.midiDisplayName)
+            assertEquals("Repeated nativeInit changed MIDI source track", beforeTrack.midiInputSourceTrackId, afterTrack.midiInputSourceTrackId)
+            assertEquals("Repeated nativeInit changed MIDI connection", beforeTrack.midiInputConnected, afterTrack.midiInputConnected)
             assertEquals("Repeated nativeInit changed midi loaded state", beforeTrack.midiLoaded, afterTrack.midiLoaded)
             assertEquals("Repeated nativeInit changed midi playing state", beforeTrack.midiPlaying, afterTrack.midiPlaying)
             assertEquals("Repeated nativeInit changed selected slot", beforeTrack.selectedSlot, afterTrack.selectedSlot)
@@ -96,6 +131,7 @@ class NativeEngineInitializationInstrumentationTest {
             )
             assertEquals("Repeated nativeInit changed rack track id", createdTrackId, afterTrack.id)
         } finally {
+            if (midiSourceHandle != 0L) engine.unregisterUsbMidiSource(midiSourceHandle)
             trackId?.takeIf { it > MASTER_PATH_ID }?.let { engine.removeTrack(it) }
         }
     }

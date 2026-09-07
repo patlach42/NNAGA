@@ -5,7 +5,9 @@
 
 #include <filesystem>
 #include <atomic>
-#include <limits>
+#include <algorithm>
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -39,16 +41,17 @@ public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames,
+            const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&,
+            guitarrackcraft::MidiBuffer&) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame] + 10.0f;
             outputs[1][frame] = inputs[1][frame] + 20.0f;
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override {
@@ -78,17 +81,18 @@ public:
     }
     void deactivate() override {}
 
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames,
+            const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&,
+            guitarrackcraft::MidiBuffer&) override {
         if (physicalLatencyFrames_ == 0) {
             for (uint32_t frame = 0; frame < numFrames; ++frame) {
                 outputs[0][frame] = inputs[0][frame];
                 outputs[1][frame] = inputs[1][frame];
             }
-            return 0;
+            return guitarrackcraft::MidiOutputDisposition::Passthrough;
         }
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = delayLeft_[cursor_];
@@ -97,7 +101,7 @@ public:
             delayRight_[cursor_] = inputs[1][frame];
             cursor_ = (cursor_ + 1) % physicalLatencyFrames_;
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override {
@@ -129,16 +133,17 @@ public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames,
+            const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&,
+            guitarrackcraft::MidiBuffer&) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame];
             outputs[1][frame] = inputs[1][frame];
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override {
@@ -169,11 +174,12 @@ public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames,
+            const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&,
+            guitarrackcraft::MidiBuffer&) override {
         if (blockNext_.exchange(false, std::memory_order_acq_rel)) {
             entered_.store(true, std::memory_order_release);
             while (!release_.load(std::memory_order_acquire)) {
@@ -184,7 +190,7 @@ public:
             outputs[0][frame] = inputs[0][frame];
             outputs[1][frame] = inputs[1][frame];
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override {
@@ -210,17 +216,18 @@ public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames,
+            const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&,
+            guitarrackcraft::MidiBuffer&) override {
         observedTrackCount_ = graph_.getTracks().size();
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame];
             outputs[1][frame] = inputs[1][frame];
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override {
@@ -237,25 +244,36 @@ private:
     size_t& observedTrackCount_;
 };
 
+struct CapturedMidiEvent {
+    uint32_t frameOffset = 0;
+    uint8_t data1 = 0;
+};
+
 class MidiCapturingPlugin final : public IPlugin {
 public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent* inputEvents,
-                     uint32_t inputCount,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
-        for (uint32_t i = 0; i < inputCount && capturedCount_ < captured_.size(); ++i) {
-            captured_[capturedCount_++] = inputEvents[i];
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames,
+            const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer& inputMidi,
+            guitarrackcraft::MidiBuffer&) override {
+        for (uint32_t i = 0;
+             i < inputMidi.eventCount() && capturedCount_ < captured_.size();
+             ++i) {
+            const auto& event = inputMidi.eventAt(i);
+            const auto* payload = inputMidi.payloadFor(event);
+            captured_[capturedCount_++] = {
+                event.frameOffset,
+                static_cast<uint8_t>(event.payloadSize > 1 ? payload[1] : 0)};
         }
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame];
             outputs[1][frame] = inputs[1][frame];
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override {
@@ -269,12 +287,12 @@ public:
     uint32_t getNumOutputPorts() const override { return 2; }
 
     uint32_t capturedCount() const { return capturedCount_; }
-    const guitarrackcraft::MidiEvent& captured(uint32_t index) const {
+    const CapturedMidiEvent& captured(uint32_t index) const {
         return captured_[index];
     }
 
 private:
-    std::array<guitarrackcraft::MidiEvent, 128> captured_{};
+    std::array<CapturedMidiEvent, 128> captured_{};
     uint32_t capturedCount_ = 0;
 };
 
@@ -287,7 +305,7 @@ std::shared_ptr<const MidiClip> makeScheduledMidiClip(
     for (const uint64_t microseconds : eventMicroseconds) {
         clip->events.push_back({
             microseconds,
-            {0u, 0x90u, note++, 100u}});
+            {0x90u, note++, 100u}});
     }
     return clip;
 }
@@ -296,7 +314,7 @@ std::shared_ptr<const MidiClip> makeMidiClip(uint64_t durationMicroseconds,
                                              std::string name = "test.mid") {
     auto clip = std::make_shared<MidiClip>();
     clip->durationMicroseconds = durationMicroseconds;
-    clip->events.push_back({0u, {0u, 0x90u, 60u, 100u}});
+    clip->events.push_back({0u, {0x90u, 60u, 100u}});
     clip->displayName = std::move(name);
     return clip;
 }
@@ -338,6 +356,40 @@ std::shared_ptr<const WavClip> makeTempoRampClip(
     clip->displayName = std::move(name);
     return clip;
 }
+
+std::shared_ptr<const WavClip> makeRampClipAtRate(
+    uint32_t frames, uint32_t sampleRate, float firstSample = 1.0f,
+    double sourceBpm = 120.0, std::string name = "rate-ramp.wav") {
+    auto clip = std::make_shared<WavClip>();
+    clip->left.resize(frames);
+    for (uint32_t frame = 0; frame < frames; ++frame)
+        clip->left[frame] = firstSample + static_cast<float>(frame);
+    clip->sampleRate = sampleRate;
+    clip->sourceBpm = sourceBpm;
+    clip->displayName = std::move(name);
+    return clip;
+}
+
+struct VariableStereoBuffers {
+    explicit VariableStereoBuffers(uint32_t capacity)
+        : left(capacity), right(capacity), outputLeft(capacity),
+          outputRight(capacity), inputs{left.data(), right.data()},
+          outputs{outputLeft.data(), outputRight.data()} {}
+
+    void clear() {
+        std::fill(left.begin(), left.end(), 0.0f);
+        std::fill(right.begin(), right.end(), 0.0f);
+        std::fill(outputLeft.begin(), outputLeft.end(), -99.0f);
+        std::fill(outputRight.begin(), outputRight.end(), -99.0f);
+    }
+
+    std::vector<float> left;
+    std::vector<float> right;
+    std::vector<float> outputLeft;
+    std::vector<float> outputRight;
+    const float* inputs[2];
+    float* outputs[2];
+};
 
 struct StereoBuffers {
     std::array<float, 512> left{};
@@ -2204,7 +2256,7 @@ TEST(RackGraphTransportTest, TempoModesExposeMetadataAndEffectiveEof) {
     };
     const std::array<TempoCase, 3> cases = {{
         {"original", guitarrackcraft::ClipTempoMode::Original, 0, 1.0f, 2.0f, 512.0f, 2048u},
-        {"stretch", guitarrackcraft::ClipTempoMode::Stretch, 1, 1.0f, 2.0f, 512.0f, 1024u},
+        {"stretch", guitarrackcraft::ClipTempoMode::Stretch, 1, 1.0f, 3.0f, 1023.0f, 1024u},
         {"repitch", guitarrackcraft::ClipTempoMode::Repitch, 2, 1.0f, 3.0f, 1023.0f, 1024u},
     }};
 
@@ -2280,8 +2332,7 @@ TEST(RackGraphTransportTest, TempoAdaptersDoNotAllocateInAudioCallback) {
         allocation_probe::enabled = false;
 
         EXPECT_EQ(allocation_probe::allocations, 0u);
-        const float expectedFrame513 = mode == guitarrackcraft::ClipTempoMode::Stretch
-            ? 515.0f : 1027.0f;
+        const float expectedFrame513 = 1027.0f;
         EXPECT_FLOAT_EQ(buffers.outputLeft[0], expectedFrame513);
     }
 }
@@ -2453,6 +2504,156 @@ TEST(RackGraphTransportTest, ClipSourceBpmUpdateKeepsAudioCallbackAllocationFree
 }
 
 
+TEST(RackGraphTransportTest, TempoModeDurationMatchesProjectSourceRatioAt44kTo48k) {
+    struct Case {
+        guitarrackcraft::ClipTempoMode mode;
+        double projectBpm;
+        uint32_t expectedFrames;
+    };
+    const std::array<Case, 6> cases = {{
+        {guitarrackcraft::ClipTempoMode::Original, 90.0, 4800u},
+        {guitarrackcraft::ClipTempoMode::Original, 150.0, 4800u},
+        {guitarrackcraft::ClipTempoMode::Stretch, 90.0, 6400u},
+        {guitarrackcraft::ClipTempoMode::Stretch, 150.0, 3840u},
+        {guitarrackcraft::ClipTempoMode::Repitch, 90.0, 6400u},
+        {guitarrackcraft::ClipTempoMode::Repitch, 150.0, 3840u},
+    }};
+    for (const auto& testCase : cases) {
+        SCOPED_TRACE(static_cast<int>(testCase.mode));
+        SCOPED_TRACE(testCase.projectBpm);
+        RackGraph graph;
+        configure(graph, 1024, 48'000.0f, testCase.projectBpm);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.attachTrackWavSlot(
+            track, 0, makeRampClipAtRate(4410, 44'100, 1.0f, 120.0)));
+        ASSERT_TRUE(graph.setClipTempoMode(track, 0, testCase.mode));
+        ASSERT_TRUE(graph.setTransportPlaying(true));
+        ASSERT_TRUE(graph.setClipTransportPlaying(
+            track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+        VariableStereoBuffers buffers(1024);
+        uint32_t remaining = testCase.expectedFrames + 1;
+        while (remaining != 0) {
+            const uint32_t count = std::min<uint32_t>(remaining, 1024);
+            buffers.clear();
+            graph.process(buffers.inputs, 2, buffers.outputs, count);
+            remaining -= count;
+        }
+        const auto slots = graph.getTrackClipSlots(track);
+        const auto* info = findClipSlot(slots, 0);
+        ASSERT_NE(info, nullptr);
+        EXPECT_EQ(info->transportFrame, testCase.expectedFrames);
+        EXPECT_FALSE(info->playing);
+        EXPECT_EQ(graph.getTransportSnapshot().transportFrame,
+                  static_cast<uint64_t>(testCase.expectedFrames + 1));
+    }
+}
+
+TEST(RackGraphTransportTest, RenderAndTransportAreInvariantToAwkwardCallbackBlocks) {
+    const std::array<uint32_t, 4> blocks = {{127u, 128u, 511u, 513u}};
+    constexpr uint32_t totalFrames = 1279;
+    std::vector<float> reference;
+    uint64_t referenceTransport = 0;
+    double referenceQuarterNotes = 0.0;
+
+    for (const uint32_t block : blocks) {
+        RackGraph graph;
+        configure(graph, 1024, 48'000.0f, 137.5);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.attachTrackWavSlot(
+            track, 0, makeRampClipAtRate(4096, 48'000, 1.0f, 137.5)));
+        ASSERT_TRUE(graph.setTransportPlaying(true));
+        ASSERT_TRUE(graph.setClipTransportPlaying(
+            track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+        VariableStereoBuffers buffers(block);
+        std::vector<float> rendered;
+        rendered.reserve(totalFrames);
+        uint32_t remaining = totalFrames;
+        while (remaining != 0) {
+            const uint32_t count = std::min(block, remaining);
+            buffers.clear();
+            graph.process(buffers.inputs, 2, buffers.outputs, count);
+            rendered.insert(rendered.end(), buffers.outputLeft.begin(),
+                            buffers.outputLeft.begin() + count);
+            remaining -= count;
+        }
+        const auto snapshot = graph.getTransportSnapshot();
+        ASSERT_EQ(rendered.size(), totalFrames);
+        if (reference.empty()) {
+            reference = std::move(rendered);
+            referenceTransport = snapshot.transportFrame;
+            referenceQuarterNotes = snapshot.musicalQuarterNotes;
+        } else {
+            ASSERT_EQ(rendered.size(), reference.size());
+            for (uint32_t frame = 0; frame < totalFrames; ++frame) {
+                EXPECT_FLOAT_EQ(rendered[frame], reference[frame])
+                    << "callback block " << block << ", frame " << frame;
+            }
+            EXPECT_EQ(snapshot.transportFrame, referenceTransport);
+            EXPECT_DOUBLE_EQ(snapshot.musicalQuarterNotes,
+                             referenceQuarterNotes);
+        }
+    }
+    EXPECT_EQ(referenceTransport, static_cast<uint64_t>(totalFrames));
+    EXPECT_DOUBLE_EQ(referenceQuarterNotes,
+                     static_cast<double>(totalFrames) * 137.5 /
+                         (48'000.0 * 60.0));
+}
+
+TEST(RackGraphTransportTest, LoopWrapMarkersRepeatWithoutCumulativePhaseDrift) {
+    RackGraph graph;
+    configure(graph, 1024, 60.0f, 90.0);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.attachTrackWavSlot(
+        track, 0, makeRampClipAtRate(120, 60, 1.0f, 60.0)));
+    ASSERT_TRUE(graph.setClipTempoMode(track, 0,
+                                       guitarrackcraft::ClipTempoMode::Stretch));
+    ASSERT_TRUE(graph.setClipLoopLengthQuarterNotes(track, 0, 2.0));
+    ASSERT_TRUE(graph.setClipLooping(track, 0, true));
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    constexpr uint32_t loopFrames = 80;
+    constexpr uint32_t wraps = 5;
+    VariableStereoBuffers buffers(513);
+    std::vector<float> rendered;
+    rendered.reserve(loopFrames * wraps);
+    for (uint32_t offset = 0; offset < loopFrames * wraps;) {
+        const uint32_t count = std::min<uint32_t>(
+            127u, loopFrames * wraps - offset);
+        buffers.clear();
+        graph.process(buffers.inputs, 2, buffers.outputs, count);
+        rendered.insert(rendered.end(), buffers.outputLeft.begin(),
+                        buffers.outputLeft.begin() + count);
+        offset += count;
+    }
+
+    ASSERT_EQ(rendered.size(), loopFrames * wraps);
+    for (uint32_t wrap = 0; wrap < wraps; ++wrap) {
+        for (uint32_t frame = 0; frame < loopFrames; ++frame) {
+            EXPECT_FLOAT_EQ(rendered[wrap * loopFrames + frame],
+                            rendered[frame])
+                << "wrap " << wrap << ", frame " << frame;
+        }
+        if (wrap != 0) {
+            EXPECT_FLOAT_EQ(rendered[wrap * loopFrames - 1],
+                            rendered[loopFrames - 1])
+                << "last frame before wrap " << wrap;
+        }
+    }
+    const auto slots = graph.getTrackClipSlots(track);
+    const auto* info = findClipSlot(slots, 0);
+    ASSERT_NE(info, nullptr);
+    const auto transport = graph.getTransportSnapshot();
+    EXPECT_EQ(transport.transportFrame,
+              static_cast<uint64_t>(loopFrames * wraps));
+    EXPECT_EQ(info->transportFrame, 0u);
+    EXPECT_TRUE(info->playing);
+    EXPECT_TRUE(info->looping);
+}
+
 TEST(RackGraphTransportTest, MidiLoopUsesConfiguredLengthShorterAndLongerThanFile) {
     struct LoopCase {
         const char* name;
@@ -2533,8 +2734,9 @@ TEST(RackGraphTransportTest, MidiOverflowDropsNewestEventsAfterFixedCapacity) {
     auto clip = std::make_shared<MidiClip>();
     clip->durationMicroseconds = 1'000'000;
     for (uint32_t index = 0; index < 140; ++index) {
-        clip->events.push_back({0u, {0u, 0x90u,
-                                     static_cast<uint8_t>(index), 100u}});
+        clip->events.push_back({
+            0u,
+            {0x90u, static_cast<uint8_t>(index), 100u}});
     }
     ASSERT_TRUE(graph.attachTrackMidiSlot(track, 0, clip));
     const auto chain = graph.getChain(track);
@@ -4185,16 +4387,17 @@ public:
     void activate(float, uint32_t) override {}
     void deactivate() override {}
 
-    uint32_t process(const float* const* inputs, float* const* outputs,
-                     uint32_t numFrames,
-                     const guitarrackcraft::AudioProcessContext&,
-                     const guitarrackcraft::MidiEvent*, uint32_t,
-                     guitarrackcraft::MidiEvent*, uint32_t) override {
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs,
+            uint32_t numFrames,
+            const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer&,
+            guitarrackcraft::MidiBuffer&) override {
         for (uint32_t frame = 0; frame < numFrames; ++frame) {
             outputs[0][frame] = inputs[0][frame];
             outputs[1][frame] = inputs[1][frame];
         }
-        return 0;
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
     }
 
     guitarrackcraft::PluginInfo getInfo() const override {
@@ -5042,5 +5245,471 @@ TEST(RackGraphProjectMediaTest, ExistingWavAssetIdIsNotRematerialized) {
     EXPECT_EQ(regularFileCount(directory.path()), 0u);
 }
 
+
+class RoutingMidiCapturePlugin final : public guitarrackcraft::IPlugin {
+public:
+    struct Event {
+        uint32_t frame = 0;
+        uint32_t size = 0;
+        std::array<uint8_t, 4> bytes{};
+    };
+
+    void activate(float, uint32_t) override {}
+    void deactivate() override {}
+
+    guitarrackcraft::MidiOutputDisposition process(
+            const float* const* inputs, float* const* outputs, uint32_t numFrames,
+            const guitarrackcraft::AudioProcessContext&,
+            const guitarrackcraft::MidiBuffer& input,
+            guitarrackcraft::MidiBuffer&) override {
+        for (uint32_t i = 0; i < input.eventCount() && count_ < events_.size(); ++i) {
+            const auto& in = input.eventAt(i);
+            auto& out = events_[count_++];
+            out.frame = in.frameOffset;
+            out.size = in.payloadSize;
+            const uint32_t copied = std::min<uint32_t>(out.bytes.size(), in.payloadSize);
+            std::copy_n(input.payloadFor(in), copied, out.bytes.begin());
+        }
+        for (uint32_t frame = 0; frame < numFrames; ++frame) {
+            outputs[0][frame] = inputs[0][frame];
+            outputs[1][frame] = inputs[1][frame];
+        }
+        return guitarrackcraft::MidiOutputDisposition::Passthrough;
+    }
+
+    guitarrackcraft::PluginInfo getInfo() const override {
+        guitarrackcraft::PluginInfo info;
+        info.realtimeClass = guitarrackcraft::RealtimeClass::CertifiedInProcess;
+        return info;
+    }
+    void setParameter(uint32_t, float) override {}
+    float getParameter(uint32_t) const override { return 0.0f; }
+    uint32_t getNumInputPorts() const override { return 2; }
+    uint32_t getNumOutputPorts() const override { return 2; }
+
+    void clear() { count_ = 0; }
+    uint32_t count() const { return count_; }
+    const Event& event(uint32_t index) const { return events_[index]; }
+
+private:
+    std::array<Event, guitarrackcraft::kMaxMidiEvents> events_{};
+    uint32_t count_ = 0;
+};
+
+uint64_t routingTimestamp() {
+    const uint64_t now = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+    return now - 1'000'000u;
+}
+
+guitarrackcraft::UsbMidiPortIdentity routingIdentity(const char* serial) {
+    guitarrackcraft::UsbMidiPortIdentity identity;
+    identity.vendorId = 0x1234;
+    identity.productId = 0x5678;
+    identity.serialNumber = serial;
+    identity.portNumber = 1;
+    return identity;
+}
+void enqueueRoutingMessage(
+        RackGraph& graph, uint64_t handle, const std::vector<uint8_t>& message,
+        uint64_t timestamp = routingTimestamp()) {
+    const uint32_t offset = 0;
+    const uint32_t length = static_cast<uint32_t>(message.size());
+    ASSERT_EQ(graph.enqueueUsbMidiBatch(
+        handle, &timestamp, &offset, &length, message.data(), 1, 0, 0), 1u);
+}
+
+std::shared_ptr<const guitarrackcraft::MidiClip> makePayloadMidiClip(
+        uint64_t durationMicroseconds, std::vector<uint8_t> payload,
+        uint64_t eventMicroseconds = 16'667) {
+    auto clip = std::make_shared<guitarrackcraft::MidiClip>();
+    clip->durationMicroseconds = durationMicroseconds;
+    clip->events.push_back({eventMicroseconds, std::move(payload)});
+    return clip;
+}
+
+void expectPanic(const RoutingMidiCapturePlugin& capture) {
+    ASSERT_EQ(capture.count(), 32u);
+    for (uint32_t channel = 0; channel < 16; ++channel) {
+        const auto& cc = capture.event(channel * 2);
+        const auto& all = capture.event(channel * 2 + 1);
+        EXPECT_EQ(cc.frame, 0u);
+        EXPECT_EQ(all.frame, 0u);
+        ASSERT_EQ(cc.size, 3u);
+        ASSERT_EQ(all.size, 3u);
+        EXPECT_EQ(cc.bytes[0], static_cast<uint8_t>(0xb0u + channel));
+        EXPECT_EQ(cc.bytes[1], 64u);
+        EXPECT_EQ(cc.bytes[2], 0u);
+        EXPECT_EQ(all.bytes[0], static_cast<uint8_t>(0xb0u + channel));
+        EXPECT_EQ(all.bytes[1], 123u);
+        EXPECT_EQ(all.bytes[2], 0u);
+    }
+}
+
+TEST(RackGraphMidiRoutingTest, TrackOutputReachesEveryDownstreamChainOnceAtSameFrame) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId upstream = graph.getTracks().front().id;
+    const RackPathId firstDownstream = graph.addTrack();
+    const RackPathId secondDownstream = graph.addTrack();
+    ASSERT_TRUE(graph.setTrackInputArmed(firstDownstream, true));
+    ASSERT_TRUE(graph.setTrackInputArmed(secondDownstream, true));
+    ASSERT_TRUE(graph.attachTrackMidiSlot(
+        upstream, 0, makeScheduledMidiClip(1'000'000, {0u, 16'667u})));
+    ASSERT_TRUE(graph.setTrackMidiInputTrack(firstDownstream, upstream));
+    ASSERT_TRUE(graph.setTrackMidiInputTrack(secondDownstream, upstream));
+
+    auto firstCapture = std::make_unique<RoutingMidiCapturePlugin>();
+    auto* firstCapturePtr = firstCapture.get();
+    ASSERT_EQ(graph.getChain(firstDownstream)->addPlugin(std::move(firstCapture)), 0);
+    auto secondCapture = std::make_unique<RoutingMidiCapturePlugin>();
+    auto* secondCapturePtr = secondCapture.get();
+    ASSERT_EQ(graph.getChain(secondDownstream)->addPlugin(std::move(secondCapture)), 0);
+
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    firstCapturePtr->clear();
+    secondCapturePtr->clear();
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        upstream, 0, true, guitarrackcraft::LaunchQuantization::None));
+    graph.process(buffers.inputs, 2, buffers.outputs, 2);
+
+    ASSERT_EQ(firstCapturePtr->count(), 2u);
+    ASSERT_EQ(secondCapturePtr->count(), 2u);
+    for (uint32_t index = 0; index < 2; ++index) {
+        EXPECT_EQ(firstCapturePtr->event(index).frame, index);
+        EXPECT_EQ(secondCapturePtr->event(index).frame, index);
+        EXPECT_EQ(firstCapturePtr->event(index).size, 3u);
+        EXPECT_EQ(secondCapturePtr->event(index).size, 3u);
+        EXPECT_EQ(firstCapturePtr->event(index).bytes[1], static_cast<uint8_t>(60 + index));
+        EXPECT_EQ(secondCapturePtr->event(index).bytes[1], static_cast<uint8_t>(60 + index));
+    }
+}
+
+TEST(RackGraphMidiRoutingTest, MidiAndMixedCyclesMissingSourcesAndSelfRoutesRollback) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId first = graph.getTracks().front().id;
+    const RackPathId second = graph.addTrack();
+
+    EXPECT_FALSE(graph.setTrackMidiInputTrack(first, first));
+    EXPECT_EQ(graph.getTrackMidiInputSource(first).kind,
+              guitarrackcraft::TrackMidiInputSource::Kind::None);
+    EXPECT_FALSE(graph.setTrackMidiInputTrack(first, 0xfeedu));
+    EXPECT_EQ(graph.getTrackMidiInputSource(first).kind,
+              guitarrackcraft::TrackMidiInputSource::Kind::None);
+
+    ASSERT_TRUE(graph.setTrackMidiInputTrack(first, second));
+    EXPECT_FALSE(graph.setTrackMidiInputTrack(second, first));
+    EXPECT_EQ(graph.getTrackMidiInputSource(second).kind,
+              guitarrackcraft::TrackMidiInputSource::Kind::None);
+    EXPECT_EQ(graph.getTrackMidiInputSource(first).kind,
+              guitarrackcraft::TrackMidiInputSource::Kind::TrackOutput);
+    EXPECT_EQ(graph.getTrackMidiInputSource(first).trackId, second);
+
+    ASSERT_TRUE(graph.setTrackMidiInputNone(first));
+    ASSERT_TRUE(graph.setTrackInputTrack(first, second, guitarrackcraft::TrackInputTap::PreFader));
+    EXPECT_FALSE(graph.setTrackMidiInputTrack(second, first));
+    EXPECT_EQ(graph.getTrackMidiInputSource(second).kind,
+              guitarrackcraft::TrackMidiInputSource::Kind::None);
+    EXPECT_EQ(graph.getTrackInputSource(first).trackId, second);
+
+    EXPECT_FALSE(graph.removeTrack(second));
+    EXPECT_EQ(graph.getTracks().size(), 2u);
+    EXPECT_EQ(graph.getTrackInputSource(first).trackId, second);
+}
+
+TEST(RackGraphMidiRoutingTest, RemovingMidiReferencedTrackIsRejected) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId source = graph.getTracks().front().id;
+    const RackPathId destination = graph.addTrack();
+    ASSERT_TRUE(graph.setTrackMidiInputTrack(destination, source));
+
+    EXPECT_FALSE(graph.removeTrack(source));
+    EXPECT_EQ(graph.getTracks().size(), 2u);
+    EXPECT_EQ(graph.getTrackMidiInputSource(destination).trackId, source);
+}
+
+TEST(RackGraphMidiRoutingTest, DisarmedTrackIgnoresLiveMidiButStillPlaysItsClip) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    const auto identity = routingIdentity("gating");
+    const uint64_t handle = graph.registerUsbMidiSource(identity);
+    ASSERT_NE(handle, 0u);
+    ASSERT_TRUE(graph.setTrackMidiInputUsb(track, identity, "USB", handle));
+    ASSERT_TRUE(graph.attachTrackMidiSlot(
+        track, 0, makePayloadMidiClip(1'000'000, {0x90, 60, 100}, 0)));
+    auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+    auto* capturePtr = capture.get();
+    ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(capture)), 0);
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    capturePtr->clear();
+    ASSERT_TRUE(graph.setTrackInputArmed(track, false));
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    capturePtr->clear();
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+    enqueueRoutingMessage(graph, handle, {0x90, 61, 100});
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    ASSERT_EQ(capturePtr->count(), 1u);
+    EXPECT_EQ(capturePtr->event(0).frame, 0u);
+    EXPECT_EQ(capturePtr->event(0).size, 3u);
+    EXPECT_EQ(capturePtr->event(0).bytes[0], 0x90u);
+    EXPECT_EQ(capturePtr->event(0).bytes[1], 60u);
+}
+
+TEST(RackGraphMidiRoutingTest, LiveMidiPrecedesClipAtEqualFrameOffset) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+    const auto identity = routingIdentity("priority");
+    const uint64_t handle = graph.registerUsbMidiSource(identity);
+    ASSERT_TRUE(graph.setTrackMidiInputUsb(track, identity, "USB", handle));
+    ASSERT_TRUE(graph.attachTrackMidiSlot(
+        track, 0, makePayloadMidiClip(1'000'000, {0x90, 60, 100})));
+    auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+    auto* capturePtr = capture.get();
+    ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(capture)), 0);
+    ASSERT_TRUE(graph.setTransportPlaying(true));
+    ASSERT_TRUE(graph.setClipTransportPlaying(
+        track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    capturePtr->clear();
+    enqueueRoutingMessage(graph, handle, {0x90, 61, 100});
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    ASSERT_EQ(capturePtr->count(), 2u);
+    EXPECT_EQ(capturePtr->event(0).frame, 0u);
+    EXPECT_EQ(capturePtr->event(1).frame, 0u);
+    EXPECT_EQ(capturePtr->event(0).bytes[1], 61u);
+    EXPECT_EQ(capturePtr->event(1).bytes[1], 60u);
+}
+
+TEST(RackGraphMidiRoutingTest, MergeDropsNewestLowerPriorityEventsAndCountsExactly) {
+    struct Case {
+        const char* name;
+        uint32_t liveCount;
+        uint32_t liveBytes;
+        uint32_t clipBytes;
+        uint32_t expectedCount;
+    };
+    const std::array<Case, 2> cases{{
+        {"event capacity", guitarrackcraft::kMaxMidiEvents, 3u, 3u,
+         guitarrackcraft::kMaxMidiEvents},
+        {"payload capacity", guitarrackcraft::kMaxMidiEvents - 1u, 512u, 1024u,
+         guitarrackcraft::kMaxMidiEvents - 1u},
+    }};
+    for (const auto& testCase : cases) {
+        SCOPED_TRACE(testCase.name);
+        RackGraph graph;
+        configure(graph);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        const auto identity = routingIdentity(testCase.name);
+        const uint64_t handle = graph.registerUsbMidiSource(identity);
+        ASSERT_TRUE(graph.setTrackMidiInputUsb(track, identity, "USB", handle));
+        std::vector<uint8_t> clipPayload(testCase.clipBytes, 0x7f);
+        ASSERT_TRUE(graph.attachTrackMidiSlot(
+            track, 0, makePayloadMidiClip(1'000'000, std::move(clipPayload))));
+        auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+        auto* capturePtr = capture.get();
+        ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(capture)), 0);
+        ASSERT_TRUE(graph.setTransportPlaying(true));
+        ASSERT_TRUE(graph.setClipTransportPlaying(
+            track, 0, true, guitarrackcraft::LaunchQuantization::None));
+
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        capturePtr->clear();
+
+        std::vector<uint64_t> timestamps(testCase.liveCount);
+        std::vector<uint32_t> offsets(testCase.liveCount);
+        std::vector<uint32_t> lengths(testCase.liveCount, testCase.liveBytes);
+        std::vector<uint8_t> payload(
+            static_cast<size_t>(testCase.liveCount) * testCase.liveBytes, 0x55);
+        for (uint32_t index = 0; index < testCase.liveCount; ++index) {
+            offsets[index] = index * testCase.liveBytes;
+            payload[offsets[index]] = 0x90;
+            if (testCase.liveBytes > 1) payload[offsets[index] + 1] = index;
+        }
+        std::fill(timestamps.begin(), timestamps.end(), routingTimestamp());
+        ASSERT_EQ(graph.enqueueUsbMidiBatch(
+            handle, timestamps.data(), offsets.data(), lengths.data(),
+            payload.data(), testCase.liveCount, 0, 0), testCase.liveCount);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+        EXPECT_EQ(capturePtr->count(), testCase.expectedCount);
+        EXPECT_EQ(capturePtr->event(testCase.expectedCount - 1).bytes[1],
+                  static_cast<uint8_t>(testCase.liveCount - 1));
+        EXPECT_EQ(graph.getMidiMergeDrops(), 1u);
+        EXPECT_EQ(graph.getMidiIngressDrops(), 0u);
+        EXPECT_EQ(graph.getMidiEventDrops(), 1u);
+    }
+}
+
+TEST(RackGraphMidiRoutingTest, ArmAndSourceLifecycleEachEmitOneOrderedPanicQuantum) {
+    {
+        RackGraph graph;
+        configure(graph);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+        auto* capturePtr = capture.get();
+        ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(capture)), 0);
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        capturePtr->clear();
+        ASSERT_TRUE(graph.setTrackInputArmed(track, false));
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        expectPanic(*capturePtr);
+        capturePtr->clear();
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        EXPECT_EQ(capturePtr->count(), 0u);
+    }
+    {
+        RackGraph graph;
+        configure(graph);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        const auto firstIdentity = routingIdentity("change-a");
+        const auto secondIdentity = routingIdentity("change-b");
+        const uint64_t firstHandle = graph.registerUsbMidiSource(firstIdentity);
+        const uint64_t secondHandle = graph.registerUsbMidiSource(secondIdentity);
+        ASSERT_TRUE(graph.setTrackMidiInputUsb(track, firstIdentity, "A", firstHandle));
+        auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+        auto* capturePtr = capture.get();
+        ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(capture)), 0);
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        capturePtr->clear();
+        ASSERT_TRUE(graph.setTrackMidiInputUsb(
+            track, secondIdentity, "B", secondHandle));
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        expectPanic(*capturePtr);
+        capturePtr->clear();
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        EXPECT_EQ(capturePtr->count(), 0u);
+    }
+    {
+        RackGraph graph;
+        configure(graph);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        const auto identity = routingIdentity("flush");
+        const uint64_t handle = graph.registerUsbMidiSource(identity);
+        ASSERT_TRUE(graph.setTrackMidiInputUsb(track, identity, "USB", handle));
+        auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+        auto* capturePtr = capture.get();
+        ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(capture)), 0);
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        capturePtr->clear();
+        graph.flushUsbMidiSource(handle);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        expectPanic(*capturePtr);
+        capturePtr->clear();
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        EXPECT_EQ(capturePtr->count(), 0u);
+    }
+    {
+        RackGraph graph;
+        configure(graph);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        const auto identity = routingIdentity("unregister");
+        const uint64_t handle = graph.registerUsbMidiSource(identity);
+        ASSERT_TRUE(graph.setTrackMidiInputUsb(track, identity, "USB", handle));
+        auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+        auto* capturePtr = capture.get();
+        ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(capture)), 0);
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        capturePtr->clear();
+        graph.unregisterUsbMidiSource(handle);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        expectPanic(*capturePtr);
+        capturePtr->clear();
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        EXPECT_EQ(capturePtr->count(), 0u);
+    }
+    {
+        RackGraph graph;
+        configure(graph);
+        const RackPathId first = graph.getTracks().front().id;
+        const RackPathId second = graph.addTrack();
+        ASSERT_TRUE(graph.setTrackInputArmed(first, true));
+        ASSERT_TRUE(graph.setTrackInputArmed(second, true));
+        auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+        auto* capturePtr = capture.get();
+        ASSERT_EQ(graph.getChain(first)->addPlugin(std::move(capture)), 0);
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        capturePtr->clear();
+        ASSERT_TRUE(graph.setTrackInputArmedExclusive(second));
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        expectPanic(*capturePtr);
+        capturePtr->clear();
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        EXPECT_EQ(capturePtr->count(), 0u);
+    }
+}
+
+TEST(RackGraphMidiRoutingTest, TerminalTrackMidiExpiresBeforeMasterChain) {
+    RackGraph graph;
+    configure(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+
+    const auto identity = routingIdentity("terminal");
+    const uint64_t handle = graph.registerUsbMidiSource(identity);
+    ASSERT_NE(handle, 0u);
+    ASSERT_TRUE(graph.setTrackMidiInputUsb(track, identity, "USB", handle));
+
+    auto trackCapture = std::make_unique<RoutingMidiCapturePlugin>();
+    auto* trackCapturePtr = trackCapture.get();
+    ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(trackCapture)), 0);
+    auto masterCapture = std::make_unique<RoutingMidiCapturePlugin>();
+    auto* masterCapturePtr = masterCapture.get();
+    ASSERT_EQ(graph.getChain(guitarrackcraft::kMasterPathId)->addPlugin(
+                  std::move(masterCapture)),
+              0);
+
+    StereoBuffers buffers;
+    clearBuffers(buffers);
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+    trackCapturePtr->clear();
+    masterCapturePtr->clear();
+
+    enqueueRoutingMessage(graph, handle, {0x90, 60, 100});
+    graph.process(buffers.inputs, 2, buffers.outputs, 1);
+
+    ASSERT_EQ(trackCapturePtr->count(), 1u);
+    EXPECT_EQ(trackCapturePtr->event(0).frame, 0u);
+    EXPECT_EQ(trackCapturePtr->event(0).size, 3u);
+    EXPECT_EQ(trackCapturePtr->event(0).bytes[0], 0x90u);
+    EXPECT_EQ(trackCapturePtr->event(0).bytes[1], 60u);
+    EXPECT_EQ(trackCapturePtr->event(0).bytes[2], 100u);
+    EXPECT_EQ(masterCapturePtr->count(), 0u);
+}
 
 } // namespace

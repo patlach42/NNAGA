@@ -136,6 +136,10 @@ import com.vibes.dsp.engine.PluginInfo
 import com.vibes.dsp.engine.PluginUiPreferenceManager
 import com.vibes.dsp.engine.RackManager
 import com.vibes.dsp.engine.TrackLaunchQuantization
+import com.vibes.dsp.engine.MidiAssignmentStatus
+import com.vibes.dsp.engine.RackTrackInfo
+import com.vibes.dsp.engine.UsbMidiEndpoint
+import com.vibes.dsp.engine.UsbMidiState
 import com.vibes.dsp.engine.UiType
 import com.vibes.dsp.engine.X11Bridge
 import com.vibes.dsp.ui.components.CompactHorizontalFader
@@ -173,6 +177,59 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 private const val FALLBACK_JSFX_WIDTH = 640
 private const val FALLBACK_JSFX_HEIGHT = 360
+private fun midiStatusLabel(status: MidiAssignmentStatus): String = when (status) {
+    MidiAssignmentStatus.Disconnected -> "Disconnected"
+    MidiAssignmentStatus.Ambiguous -> "Ambiguous"
+    MidiAssignmentStatus.Opening -> "Opening"
+    MidiAssignmentStatus.Connected -> "Connected"
+    MidiAssignmentStatus.Failed -> "Failed"
+}
+
+private fun midiAssignmentStatus(track: RackTrackInfo, usbMidiState: UsbMidiState): MidiAssignmentStatus =
+    usbMidiState.assignments[track.id]?.status
+        ?: if (track.midiInputConnected) MidiAssignmentStatus.Connected else MidiAssignmentStatus.Disconnected
+
+private fun rackTrackDisplayName(track: RackTrackInfo, tracks: List<RackTrackInfo>): String {
+    val index = tracks.indexOfFirst { it.id == track.id }
+    return track.name.ifBlank {
+        if (index >= 0) "Track ${index + 1}" else "Track ${track.id}"
+    }
+}
+
+private fun midiInputLabel(
+    track: RackTrackInfo,
+    tracks: List<RackTrackInfo>,
+    usbMidiState: UsbMidiState,
+): String = when (track.midiInputKind) {
+    0 -> "None"
+    1 -> {
+        val displayName = track.midiDisplayName.ifBlank {
+            "USB MIDI port ${track.midiPortNumber + 1}"
+        }
+        "$displayName · ${midiStatusLabel(midiAssignmentStatus(track, usbMidiState))}"
+    }
+    2 -> {
+        val source = tracks.firstOrNull { it.id == track.midiInputSourceTrackId }
+        "${source?.let { rackTrackDisplayName(it, tracks) } ?: "Track ${track.midiInputSourceTrackId}"} output"
+    }
+    else -> "Unknown source"
+}
+
+private fun midiEndpointMatches(track: RackTrackInfo, endpoint: UsbMidiEndpoint): Boolean =
+    track.midiVendorId == endpoint.identity.vendorId &&
+        track.midiProductId == endpoint.identity.productId &&
+        track.midiSerialNumber == endpoint.identity.serialNumber &&
+        track.midiPortNumber == endpoint.identity.portNumber
+
+private fun midiEndpointLabel(endpoint: UsbMidiEndpoint, endpoints: List<UsbMidiEndpoint>): String {
+    val duplicates = endpoints.filter {
+        it.identity == endpoint.identity && it.displayName == endpoint.displayName
+    }
+    if (duplicates.size <= 1) return endpoint.displayName
+    val ordinal = duplicates.indexOfFirst { it.deviceToken == endpoint.deviceToken } + 1
+    return "${endpoint.displayName} · Device $ordinal"
+}
+
 
 
 private val PunchArmedColor = Color(0xFFFFC107)
@@ -296,6 +353,7 @@ fun RackScreen(
     val rackPlugins by viewModel.selectedPathPlugins.collectAsState()
     val transport by viewModel.transport.collectAsState()
     val clipSlots by viewModel.clipSlots.collectAsState()
+    val usbMidiState by viewModel.usbMidiState.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val blockingOperation by viewModel.blockingOperation.collectAsState()
     val selectedTrack = tracks.firstOrNull { it.id == selectedPathId }
@@ -665,6 +723,7 @@ fun RackScreen(
             var editTrackDefaultLoopLength by remember(track.id) { mutableStateOf(false) }
             var inputMenuExpanded by remember(track.id) { mutableStateOf(false) }
             var inputChannelMenuExpanded by remember(track.id) { mutableStateOf(false) }
+            var midiInputMenuExpanded by remember(track.id) { mutableStateOf(false) }
             val selectedSlot = track.selectedSlot
             val selectedClip = clipSlots[track.id]?.firstOrNull { it.slot == selectedSlot }
             val selectedSlotWavLoaded = selectedClip?.wavLoaded ?: track.wavLoaded
@@ -786,6 +845,7 @@ fun RackScreen(
                                 onLongClick = {
                                     inputMenuExpanded = true
                                     inputChannelMenuExpanded = false
+                                    midiInputMenuExpanded = false
                                 }
                             )
                             .semantics {
@@ -804,12 +864,27 @@ fun RackScreen(
                     }
                     DropdownMenu(
                         expanded = inputMenuExpanded,
-                        onDismissRequest = { inputMenuExpanded = false }
+                        onDismissRequest = {
+                            inputMenuExpanded = false
+                            inputChannelMenuExpanded = false
+                            midiInputMenuExpanded = false
+                        }
                     ) {
                         DropdownMenuItem(
                             text = { Text("Input source") },
                             enabled = inputChannelCount > 0 || tracks.any { it.id != track.id },
-                            onClick = { inputChannelMenuExpanded = true }
+                            onClick = {
+                                inputChannelMenuExpanded = true
+                                midiInputMenuExpanded = false
+                            }
+                        )
+                        NnagaSelectorMenuItem(
+                            text = "MIDI input · ${midiInputLabel(track, tracks, usbMidiState)}",
+                            selected = false,
+                            onClick = {
+                                midiInputMenuExpanded = true
+                                inputChannelMenuExpanded = false
+                            },
                         )
                     }
                     DropdownMenu(
@@ -853,6 +928,79 @@ fun RackScreen(
                                     },
                                 )
                             }
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = midiInputMenuExpanded,
+                        onDismissRequest = {
+                            midiInputMenuExpanded = false
+                            inputMenuExpanded = false
+                        }
+                    ) {
+                        NnagaSelectorMenuItem(
+                            text = "None",
+                            selected = track.midiInputKind == 0,
+                            onClick = {
+                                viewModel.setTrackMidiInputNone(track.id)
+                                midiInputMenuExpanded = false
+                                inputMenuExpanded = false
+                            },
+                        )
+                        val assignmentStatus = midiAssignmentStatus(track, usbMidiState)
+                        val assignment = usbMidiState.assignments[track.id]
+                        val matchingEndpoints = usbMidiState.endpoints.filter {
+                            midiEndpointMatches(track, it)
+                        }
+                        val showSavedAssignment =
+                            track.midiInputKind == 1 &&
+                                assignmentStatus != MidiAssignmentStatus.Connected &&
+                                matchingEndpoints.size != 1
+                        if (showSavedAssignment) {
+                            NnagaSelectorMenuItem(
+                                text = midiInputLabel(track, tracks, usbMidiState),
+                                selected = true,
+                                enabled = false,
+                                onClick = {},
+                            )
+                        }
+                        usbMidiState.endpoints.forEach { endpoint ->
+                            val matchesAssignment =
+                                track.midiInputKind == 1 && midiEndpointMatches(track, endpoint)
+                            val endpointSelected = matchesAssignment && (
+                                matchingEndpoints.size == 1 ||
+                                    assignmentStatus == MidiAssignmentStatus.Connected &&
+                                    assignment?.deviceToken == endpoint.deviceToken
+                                )
+                            val endpointText = midiEndpointLabel(endpoint, usbMidiState.endpoints) +
+                                if (matchesAssignment &&
+                                    assignmentStatus != MidiAssignmentStatus.Connected &&
+                                    matchingEndpoints.size == 1
+                                ) {
+                                    " · ${midiStatusLabel(assignmentStatus)}"
+                                } else {
+                                    ""
+                                }
+                            NnagaSelectorMenuItem(
+                                text = endpointText,
+                                selected = endpointSelected,
+                                onClick = {
+                                    viewModel.setTrackMidiInputUsb(track.id, endpoint)
+                                    midiInputMenuExpanded = false
+                                    inputMenuExpanded = false
+                                },
+                            )
+                        }
+                        tracks.filter { it.id != track.id }.forEach { source ->
+                            NnagaSelectorMenuItem(
+                                text = "${rackTrackDisplayName(source, tracks)} output",
+                                selected = track.midiInputKind == 2 &&
+                                    track.midiInputSourceTrackId == source.id,
+                                onClick = {
+                                    viewModel.setTrackMidiInputTrack(track.id, source.id)
+                                    midiInputMenuExpanded = false
+                                    inputMenuExpanded = false
+                                },
+                            )
                         }
                     }
                 }

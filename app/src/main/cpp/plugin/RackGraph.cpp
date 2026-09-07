@@ -25,6 +25,126 @@ RackGraph::RackGraph() : master_(std::make_shared<PluginChain>()) {
     auto first=std::make_shared<TrackNode>(); first->id=nextTrackId_++; first->chain=std::make_shared<PluginChain>(); first->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f); first->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f); tracks_.push_back(first); clips_.push_back(nullptr); recordingClips_.push_back(nullptr); midiClips_.push_back(nullptr); wavSlots_.push_back({}); midiSlots_.push_back({});
     activeOwner_=buildSnapshotLocked(tracks_, clips_, recordingClips_); activeSnapshot_.store(activeOwner_.get(),std::memory_order_release); reclaimerThread_=std::thread(&RackGraph::reclaimerLoop,this);
 }
+uint64_t RackGraph::registerUsbMidiSource(const UsbMidiPortIdentity& identity) {
+    std::lock_guard lock(controlMutex_);
+    if (nextMidiSourceHandle_ == 0) return 0;
+    const uint64_t handle = nextMidiSourceHandle_++;
+    midiSourceRegistry_[handle] = std::make_shared<LiveMidiSource>(handle, identity);
+    return handle;
+}
+
+bool RackGraph::hasUsbMidiSource(uint64_t handle) const {
+    std::lock_guard lock(controlMutex_);
+    return midiSourceRegistry_.find(handle) != midiSourceRegistry_.end();
+}
+void RackGraph::unregisterUsbMidiSource(uint64_t handle) {
+    std::lock_guard lock(controlMutex_);
+    midiSourceRegistry_.erase(handle);
+    for (auto& node : tracks_) {
+        if (node->midiInputSource.runtimeSourceHandle == handle) {
+            node->midiInputSource.runtimeSourceHandle = 0;
+            node->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+        }
+    }
+    auto next = buildSnapshotLocked(tracks_, clips_, recordingClips_);
+    publishSnapshotLocked(std::move(next));
+}
+void RackGraph::flushUsbMidiSource(uint64_t handle) {
+    std::lock_guard lock(controlMutex_);
+    auto it = midiSourceRegistry_.find(handle);
+    if (it == midiSourceRegistry_.end()) return;
+    it->second->flush();
+    for (auto& node : tracks_)
+        if (node->midiInputSource.runtimeSourceHandle == handle)
+            node->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+}
+uint32_t RackGraph::enqueueUsbMidiBatch(uint64_t handle, const uint64_t* timestamps,
+        const uint32_t* offsets, const uint32_t* lengths, const uint8_t* payload,
+        uint32_t count, uint32_t oversizeDelta, uint32_t malformedDelta) {
+    std::shared_ptr<LiveMidiSource> source;
+    { std::lock_guard lock(controlMutex_); auto it = midiSourceRegistry_.find(handle);
+      if (it == midiSourceRegistry_.end()) return 0; source = it->second; }
+    midiOversizeMessages_.fetch_add(oversizeDelta, std::memory_order_relaxed);
+    midiMalformedMessages_.fetch_add(malformedDelta, std::memory_order_relaxed);
+    const uint32_t accepted = source->enqueue(timestamps, offsets, lengths, payload, count);
+    midiIngressDrops_.fetch_add(source->takeDropped(), std::memory_order_relaxed);
+    return accepted;
+}
+bool RackGraph::setTrackMidiInputNone(RackPathId id) {
+    std::lock_guard lock(controlMutex_);
+    auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n){ return n->id == id; });
+    if (it == tracks_.end()) return false;
+    const auto old = (*it)->midiInputSource;
+    if (old.kind == TrackMidiInputSource::Kind::None) return true;
+    (*it)->midiInputSource = TrackMidiInputSource{};
+    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
+        (*it)->midiInputSource = old;
+        return false;
+    }
+    (*it)->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    return true;
+}
+bool RackGraph::setTrackMidiInputUsb(RackPathId id, const UsbMidiPortIdentity& identity,
+                                     const std::string& displayName, uint64_t handle) {
+    std::lock_guard lock(controlMutex_);
+    auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n){ return n->id == id; });
+    if (it == tracks_.end()) return false;
+    if (handle != 0) {
+        auto source = midiSourceRegistry_.find(handle);
+        if (source == midiSourceRegistry_.end() || !(source->second->identity() == identity)) return false;
+    }
+    const auto old = (*it)->midiInputSource;
+    TrackMidiInputSource next{TrackMidiInputSource::Kind::UsbPort, identity, displayName, 0, handle};
+    if (old.kind == next.kind && old.usb == next.usb && old.displayName == next.displayName &&
+        old.runtimeSourceHandle == next.runtimeSourceHandle) return true;
+    (*it)->midiInputSource = next;
+    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
+        (*it)->midiInputSource = old;
+        return false;
+    }
+    (*it)->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    return true;
+}
+bool RackGraph::setTrackMidiInputTrack(RackPathId id, RackPathId sourceId) {
+    std::lock_guard lock(controlMutex_);
+    auto it = std::find_if(tracks_.begin(), tracks_.end(),
+        [&](const auto& n) { return n->id == id; });
+    if (it == tracks_.end() || sourceId == id) return false;
+    const auto old = (*it)->midiInputSource;
+    TrackMidiInputSource nextSource{};
+    nextSource.kind = TrackMidiInputSource::Kind::TrackOutput;
+    nextSource.trackId = sourceId;
+    if (old.kind == nextSource.kind && old.trackId == nextSource.trackId) return true;
+    (*it)->midiInputSource = nextSource;
+    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
+        (*it)->midiInputSource = old;
+        return false;
+    }
+    (*it)->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    return true;
+}
+bool RackGraph::bindTrackUsbMidiSource(RackPathId id, uint64_t handle) {
+    std::lock_guard lock(controlMutex_);
+    auto ti = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n){ return n->id == id; });
+    auto si = midiSourceRegistry_.find(handle);
+    if (ti == tracks_.end() || si == midiSourceRegistry_.end() ||
+        (*ti)->midiInputSource.kind != TrackMidiInputSource::Kind::UsbPort ||
+        !((*ti)->midiInputSource.usb == si->second->identity())) return false;
+    if ((*ti)->midiInputSource.runtimeSourceHandle == handle) return true;
+    const auto old = (*ti)->midiInputSource.runtimeSourceHandle;
+    (*ti)->midiInputSource.runtimeSourceHandle = handle;
+    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
+        (*ti)->midiInputSource.runtimeSourceHandle = old;
+        return false;
+    }
+    (*ti)->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    return true;
+}
+TrackMidiInputSource RackGraph::getTrackMidiInputSource(RackPathId id) const {
+    std::lock_guard lock(controlMutex_);
+    for (const auto& node : tracks_) if (node->id == id) return node->midiInputSource;
+    return {};
+}
 RackGraph::~RackGraph(){ hazardSnapshot_.store(nullptr,std::memory_order_seq_cst); {std::lock_guard lock(reclaimerMutex_);reclaimerStop_=true;} reclaimerWake_.notify_one(); if(reclaimerThread_.joinable()) reclaimerThread_.join(); reclaimRetired(); }
 double RackGraph::clipDuration(const WavClip& clip) {
     return clip.sampleRate && !clip.left.empty()
@@ -46,29 +166,39 @@ std::unique_ptr<RackGraph::GraphSnapshot> RackGraph::buildSnapshotLocked(const s
     snapshot->tracks.reserve(nodes.size());
     std::unordered_map<RackPathId, uint32_t> index;
     index.reserve(nodes.size());
+    std::unordered_map<uint64_t, uint32_t> sourceIndex;
     for (uint32_t i = 0; i < nodes.size(); ++i) {
         if (!nodes[i] || !nodes[i]->chain ||
-            nodes[i]->sourceLeft.size() < bufferSize_ ||
-            nodes[i]->sourceRight.size() < bufferSize_ ||
-            nodes[i]->outputLeft.size() < bufferSize_ ||
-            nodes[i]->outputRight.size() < bufferSize_) return nullptr;
+            nodes[i]->sourceLeft.size() < bufferSize_ || nodes[i]->sourceRight.size() < bufferSize_ ||
+            nodes[i]->outputLeft.size() < bufferSize_ || nodes[i]->outputRight.size() < bufferSize_) return nullptr;
         index.emplace(nodes[i]->id, i);
         auto view = GraphSnapshot::TrackView{};
-        view.node = nodes[i];
-        view.inputSource = nodes[i]->inputSource;
-        view.clipRuntime = nodes[i]->clipRuntime;
-        view.slotConfig = nodes[i]->slotConfig;
-        view.clip = clips[i];
-        view.recordingClip = recordings.size() == nodes.size() ? recordings[i] : nullptr;
+        view.node = nodes[i]; view.inputSource = nodes[i]->inputSource;
+        view.midiInputSource = nodes[i]->midiInputSource;
+        view.clipRuntime = nodes[i]->clipRuntime; view.slotConfig = nodes[i]->slotConfig;
+        view.clip = clips[i]; view.recordingClip = recordings.size() == nodes.size() ? recordings[i] : nullptr;
         if (i < wavSlots.size()) view.wavSlots = wavSlots[i];
         if (i < midiSlots.size()) view.midiSlots = midiSlots[i];
         view.selectedSlot = nodes[i]->selectedSlot.load(std::memory_order_relaxed);
-        view.recordingSlot = nodes[i]->recordingSlot;
-        view.recordLength = nodes[i]->recordLength;
+        view.recordingSlot = nodes[i]->recordingSlot; view.recordLength = nodes[i]->recordLength;
         view.recordingGeneration = nodes[i]->recordingGeneration;
         const auto s = view.selectedSlot;
         if (s < view.wavSlots.size()) view.clip = view.wavSlots[s];
         if (s < view.midiSlots.size()) view.midi = view.midiSlots[s];
+        if (view.midiInputSource.kind == TrackMidiInputSource::Kind::UsbPort &&
+            view.midiInputSource.runtimeSourceHandle != 0) {
+            auto it = sourceIndex.find(view.midiInputSource.runtimeSourceHandle);
+            if (it == sourceIndex.end()) {
+                auto src = midiSourceRegistry_.find(view.midiInputSource.runtimeSourceHandle);
+                if (src != midiSourceRegistry_.end()) {
+                    const uint32_t n = static_cast<uint32_t>(snapshot->midiSources.size());
+                    sourceIndex.emplace(view.midiInputSource.runtimeSourceHandle, n);
+                    snapshot->midiSources.push_back(src->second);
+                    snapshot->midiSourceBuffers.emplace_back();
+                    view.midiSourceIndex = static_cast<int32_t>(n);
+                }
+            } else view.midiSourceIndex = static_cast<int32_t>(it->second);
+        }
         snapshot->tracks.push_back(std::move(view));
     }
     std::vector<uint8_t> state(nodes.size(), 0);
@@ -76,11 +206,17 @@ std::unique_ptr<RackGraph::GraphSnapshot> RackGraph::buildSnapshotLocked(const s
         if (state[i] == 1) return false;
         if (state[i] == 2) return true;
         state[i] = 1;
-        const auto& source = snapshot->tracks[i].inputSource;
-        if (source.kind == TrackInputSource::Kind::TrackOutput) {
-            auto it = index.find(source.trackId);
+        const auto& audio = snapshot->tracks[i].inputSource;
+        if (audio.kind == TrackInputSource::Kind::TrackOutput) {
+            auto it = index.find(audio.trackId);
             if (it == index.end() || it->second == i || !visit(it->second)) return false;
-            snapshot->tracks[i].routeIndex = static_cast<int32_t>(it->second);
+            snapshot->tracks[i].audioRouteIndex = static_cast<int32_t>(it->second);
+        }
+        const auto& midi = snapshot->tracks[i].midiInputSource;
+        if (midi.kind == TrackMidiInputSource::Kind::TrackOutput) {
+            auto it = index.find(midi.trackId);
+            if (it == index.end() || it->second == i || !visit(it->second)) return false;
+            snapshot->tracks[i].midiRouteIndex = static_cast<int32_t>(it->second);
         }
         state[i] = 2;
         snapshot->topoOrder.push_back(i);
@@ -91,7 +227,53 @@ std::unique_ptr<RackGraph::GraphSnapshot> RackGraph::buildSnapshotLocked(const s
 }
 bool RackGraph::publishSnapshotLocked(std::unique_ptr<GraphSnapshot> next){ if(!next)return false; ++controlGeneration_; std::unique_ptr<RetiredSnapshot> retired; if(activeOwner_){retired=std::make_unique<RetiredSnapshot>();retired->owner=std::move(activeOwner_);} auto* raw=next.get(); activeOwner_=std::move(next); activeSnapshot_.exchange(raw,std::memory_order_release); if(retired){std::lock_guard lock(reclaimerMutex_);retired->next=retired_;retired_=retired.release();reclaimerWake_.notify_one();} return true; }
 RackPathId RackGraph::addTrack(){std::lock_guard lock(controlMutex_);try{auto node=std::make_shared<TrackNode>();node->id=nextTrackId_;node->chain=std::make_shared<PluginChain>();node->sourceLeft.resize(bufferSize_);node->sourceRight.resize(bufferSize_);node->outputLeft.resize(bufferSize_);node->outputRight.resize(bufferSize_);node->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);node->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);if(sampleRate_.load()>0)node->chain->setSampleRate(sampleRate_.load(),bufferSize_);auto nodes=tracks_;auto clips=clips_;auto recs=recordingClips_;auto slots=wavSlots_;auto midiSlots=midiSlots_;auto labels=clipLabelOverrides_;nodes.push_back(node);clips.push_back(nullptr);recs.push_back(nullptr);slots.push_back({});midiSlots.push_back({});labels.push_back({});if(!publishSnapshotLocked(buildSnapshotLocked(nodes,clips,recs,slots,midiSlots)))return 0;tracks_=std::move(nodes);clips_=std::move(clips);recordingClips_=std::move(recs);wavSlots_=std::move(slots);midiSlots_=std::move(midiSlots);clipLabelOverrides_=std::move(labels);midiClips_.push_back(nullptr);return nextTrackId_++;}catch(...){return 0;}}
-bool RackGraph::removeTrack(RackPathId id){std::lock_guard lock(controlMutex_);if(id==kMasterPathId||tracks_.size()<=1)return false;auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;auto nodes=tracks_;auto clips=clips_;auto recs=recordingClips_;auto mids=midiClips_;auto ws=wavSlots_;auto ms=midiSlots_;auto labels=clipLabelOverrides_;auto wa=wavAssetIds_;auto ma=midiAssetIds_;auto i=static_cast<size_t>(it-tracks_.begin());nodes.erase(nodes.begin()+i);clips.erase(clips.begin()+i);recs.erase(recs.begin()+i);mids.erase(mids.begin()+i);ws.erase(ws.begin()+i);ms.erase(ms.begin()+i);if(i<labels.size())labels.erase(labels.begin()+i);if(i<wa.size())wa.erase(wa.begin()+i);if(i<ma.size())ma.erase(ma.begin()+i);if(!publishSnapshotLocked(buildSnapshotLocked(nodes,clips,recs,ws,ms)))return false;tracks_=std::move(nodes);clips_=std::move(clips);recordingClips_=std::move(recs);midiClips_=std::move(mids);wavSlots_=std::move(ws);midiSlots_=std::move(ms);clipLabelOverrides_=std::move(labels);wavAssetIds_=std::move(wa);midiAssetIds_=std::move(ma);return true;}
+bool RackGraph::removeTrack(RackPathId id) {
+    std::lock_guard lock(controlMutex_);
+    if (id == kMasterPathId || tracks_.size() <= 1) return false;
+    auto it = std::find_if(
+        tracks_.begin(), tracks_.end(), [&](const auto& node) { return node->id == id; });
+    if (it == tracks_.end()) return false;
+    for (const auto& node : tracks_) {
+        if (node->id == id) continue;
+        if ((node->inputSource.kind == TrackInputSource::Kind::TrackOutput &&
+             node->inputSource.trackId == id) ||
+            (node->midiInputSource.kind == TrackMidiInputSource::Kind::TrackOutput &&
+             node->midiInputSource.trackId == id)) {
+            return false;
+        }
+    }
+
+    auto nodes = tracks_;
+    auto clips = clips_;
+    auto recs = recordingClips_;
+    auto mids = midiClips_;
+    auto ws = wavSlots_;
+    auto ms = midiSlots_;
+    auto labels = clipLabelOverrides_;
+    auto wa = wavAssetIds_;
+    auto ma = midiAssetIds_;
+    const auto index = static_cast<size_t>(it - tracks_.begin());
+    nodes.erase(nodes.begin() + index);
+    clips.erase(clips.begin() + index);
+    recs.erase(recs.begin() + index);
+    mids.erase(mids.begin() + index);
+    ws.erase(ws.begin() + index);
+    ms.erase(ms.begin() + index);
+    if (index < labels.size()) labels.erase(labels.begin() + index);
+    if (index < wa.size()) wa.erase(wa.begin() + index);
+    if (index < ma.size()) ma.erase(ma.begin() + index);
+    if (!publishSnapshotLocked(buildSnapshotLocked(nodes, clips, recs, ws, ms))) return false;
+    tracks_ = std::move(nodes);
+    clips_ = std::move(clips);
+    recordingClips_ = std::move(recs);
+    midiClips_ = std::move(mids);
+    wavSlots_ = std::move(ws);
+    midiSlots_ = std::move(ms);
+    clipLabelOverrides_ = std::move(labels);
+    wavAssetIds_ = std::move(wa);
+    midiAssetIds_ = std::move(ma);
+    return true;
+}
 std::vector<TrackSnapshot> RackGraph::getTracks() const {
     std::lock_guard lock(controlMutex_);
     const uint64_t pollCapturedAtNanos = static_cast<uint64_t>(
@@ -143,6 +325,15 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
             (midi ? midi->displayName : (wav ? wav->displayName : std::string()));
         const double duration = midi ? static_cast<double>(midi->durationMicroseconds) / 1'000'000.0 :
             (wav ? clipDuration(*wav) : 0.0);
+        const auto& midiSource = node.midiInputSource;
+        const bool midiConnected =
+            midiSource.kind == TrackMidiInputSource::Kind::UsbPort &&
+            midiSource.runtimeSourceHandle != 0 &&
+            [&] {
+                const auto source = midiSourceRegistry_.find(midiSource.runtimeSourceHandle);
+                return source != midiSourceRegistry_.end() &&
+                    source->second && source->second->identity() == midiSource.usb;
+            }();
         result.push_back({node.id, node.volume.load(), node.inputArmed.load(), node.inputArmLocked.load(),
             static_cast<bool>(wav), name, duration, playing, looping, static_cast<double>(frame) / rate,
             frame, node.recordPending.load(),
@@ -156,7 +347,11 @@ std::vector<TrackSnapshot> RackGraph::getTracks() const {
              recordingPhase == RecordingPhase::Pending ||
              recordingPhase == RecordingPhase::Recording)
                 ? static_cast<int32_t>(node.recordingSlot)
-                : -1, node.name, node.colorArgb});
+                : -1, node.name, node.colorArgb,
+            static_cast<uint8_t>(midiSource.kind), midiSource.usb.vendorId,
+            midiSource.usb.productId, midiSource.usb.serialNumber,
+            midiSource.usb.portNumber, midiSource.displayName,
+            midiSource.trackId, midiConnected});
     }
     return result;
 }
@@ -205,7 +400,7 @@ std::vector<TrackClipSlotInfo> RackGraph::getTrackClipSlots(RackPathId id) const
     }
     return out;
 }
-std::vector<MidiNoteInfo> RackGraph::getTrackClipMidiNotes(RackPathId id,uint32_t slot) const { std::lock_guard lock(controlMutex_); auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;}); if(it==tracks_.end())return {}; size_t i=static_cast<size_t>(it-tracks_.begin()); std::vector<MidiNoteInfo> out; if(i>=midiSlots_.size()||slot>=midiSlots_[i].size()||!midiSlots_[i][slot])return out; for(const auto& e:midiSlots_[i][slot]->events){ if(e.event.status>=0x90 && e.event.status<0xa0 && e.event.data2>0) out.push_back({e.microseconds,0,e.event.data1,e.event.data2}); } return out; }
+std::vector<MidiNoteInfo> RackGraph::getTrackClipMidiNotes(RackPathId id,uint32_t slot) const { std::lock_guard lock(controlMutex_); auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;}); if(it==tracks_.end())return {}; size_t i=static_cast<size_t>(it-tracks_.begin()); std::vector<MidiNoteInfo> out; if(i>=midiSlots_.size()||slot>=midiSlots_[i].size()||!midiSlots_[i][slot])return out; for(const auto& e:midiSlots_[i][slot]->events){ if(e.payload.size() >= 3 && e.payload[0]>=0x90 && e.payload[0]<0xa0 && e.payload[2]>0) out.push_back({e.microseconds,0,e.payload[1],e.payload[2]}); } return out; }
 bool RackGraph::selectTrackClipSlot(RackPathId id,uint32_t slot){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;const size_t i=static_cast<size_t>(it-tracks_.begin());if(i>=wavSlots_.size()||i>=midiSlots_.size())return false;(*it)->selectedSlot.store(slot);return publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
 bool RackGraph::attachTrackWavSlot(RackPathId id,uint32_t slot,std::shared_ptr<const WavClip> c){
     if(!c || c->sampleRate == 0 || c->left.empty() || !std::isfinite(c->sourceBpm) || c->sourceBpm < 20.0 || c->sourceBpm > 400.0)return false; std::lock_guard lock(controlMutex_);
@@ -265,9 +460,6 @@ bool RackGraph::attachTrackMidiSlot(RackPathId id,uint32_t slot,std::shared_ptr<
     auto ms=midiSlots_;
     if(i>=ms.size())return false; if(slot>=ms[i].size())ms[i].resize(static_cast<size_t>(slot)+1);
     ms[i][slot]=std::move(c);
-    constexpr size_t kMaxMidiEventsPerBlock = 4096;
-    const size_t eventCount = ms[i][slot]->events.size();
-    (*it)->midiScratchCount = 0;
     auto old=midiSlots_; auto oldRuntime=(*it)->clipRuntime; midiSlots_=ms;
     if(freshRuntime){
         (*it)->clipRuntime[slot]=std::make_shared<ClipRuntime>();
@@ -302,9 +494,9 @@ bool RackGraph::renameTrackClip(RackPathId id,int32_t slot,const std::string& di
 bool RackGraph::setTrackVolume(RackPathId id,float value){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->volume.store(std::clamp(value,0.f,1.f));return true;}
 bool RackGraph::setTrackName(RackPathId id,const std::string& name){if(name.empty()||!isValidTrackName(name))return false;std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->name=name;return true;}
 bool RackGraph::setTrackColor(RackPathId id,uint32_t argb){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->colorArgb=argb|0xff000000u;return true;}
-bool RackGraph::setTrackInputArmed(RackPathId id,bool armed){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->inputArmed.store(armed);return true;}
+bool RackGraph::setTrackInputArmed(RackPathId id,bool armed){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;const bool old=(*it)->inputArmed.exchange(armed);if(old&&!armed)(*it)->midiPanicGeneration.fetch_add(1,std::memory_order_release);return true;}
 bool RackGraph::setTrackInputArmLocked(RackPathId id,bool locked){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;(*it)->inputArmLocked.store(locked);return true;}
-bool RackGraph::setTrackInputArmedExclusive(RackPathId id){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;for(auto& node:tracks_)if(node.get()==it->get())node->inputArmed.store(true,std::memory_order_release);else if(!node->inputArmLocked.load(std::memory_order_acquire))node->inputArmed.store(false,std::memory_order_release);return true;}
+bool RackGraph::setTrackInputArmedExclusive(RackPathId id){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto& n){return n->id==id;});if(it==tracks_.end())return false;for(auto& node:tracks_)if(node.get()==it->get()){if(!node->inputArmed.exchange(true)){} }else if(!node->inputArmLocked.load(std::memory_order_acquire)){if(node->inputArmed.exchange(false))node->midiPanicGeneration.fetch_add(1,std::memory_order_release);}return true;}
 bool RackGraph::setTrackInputSource(RackPathId id, const TrackInputSource& source) {
     std::lock_guard lock(controlMutex_);
     auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n) { return n->id == id; });
@@ -777,8 +969,8 @@ bool RackGraph::setManualLatencyFrames(RackPathId pathId, int pluginIndex, uint3
         const auto& view = next->tracks[topoIndex];
         uint64_t latency = view.node->chain->getLatencyFrames();
         bool overflow = view.node->chain->hasLatencyOverflow();
-        if (view.routeIndex >= 0) {
-            const uint32_t upstream = static_cast<uint32_t>(view.routeIndex);
+        if (view.audioRouteIndex >= 0) {
+            const uint32_t upstream = static_cast<uint32_t>(view.audioRouteIndex);
             latency += pathLatency[upstream];
             overflow = overflow || pathOverflow[upstream];
         }
@@ -838,8 +1030,8 @@ bool RackGraph::hasPluginLatencyOverflow(RackPathId pathId) const {
     }();
     return chain && chain->hasLatencyOverflow();
 }
-void RackGraph::setSampleRate(float rate,uint32_t buffer){std::lock_guard lock(controlMutex_);sampleRate_.store(rate);bufferSize_=buffer;mixLeft_.resize(buffer);mixRight_.resize(buffer);for(auto& n:tracks_){n->sourceLeft.resize(buffer);n->sourceRight.resize(buffer);n->outputLeft.resize(buffer);n->outputRight.resize(buffer);n->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryWrite=0;n->chain->setSampleRate(rate,buffer);}master_->setSampleRate(rate,buffer);(void)publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
-void RackGraph::activate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->activate();master_->activate();}void RackGraph::deactivate(){std::lock_guard lock(controlMutex_);for(auto& n:tracks_)n->chain->deactivate();master_->deactivate();}void RackGraph::pauseAndResetTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,false,true);}
+void RackGraph::setSampleRate(float rate,uint32_t buffer){std::lock_guard lock(controlMutex_);sampleRate_.store(rate);bufferSize_=buffer;mixLeft_.resize(buffer);mixRight_.resize(buffer);for(auto& n:tracks_){n->sourceLeft.resize(buffer);n->sourceRight.resize(buffer);n->outputLeft.resize(buffer);n->outputRight.resize(buffer);n->latencyHistoryLeft.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryRight.assign(kLatencyHistoryFrames, 0.0f);n->latencyHistoryWrite=0;n->chain->setSampleRate(rate,buffer);}for(auto& s:midiSourceRegistry_)s.second->resetEpoch();master_->setSampleRate(rate,buffer);(void)publishSnapshotLocked(buildSnapshotLocked(tracks_,clips_,recordingClips_));}
+void RackGraph::activate(){std::lock_guard lock(controlMutex_);for(auto& s:midiSourceRegistry_)s.second->resetEpoch();for(auto& n:tracks_)n->chain->activate();master_->activate();}void RackGraph::deactivate(){std::lock_guard lock(controlMutex_);for(auto& s:midiSourceRegistry_)s.second->resetEpoch();for(auto& n:tracks_)n->chain->deactivate();master_->deactivate();}void RackGraph::pauseAndResetTransport(){std::lock_guard lock(controlMutex_);writeMailboxLocked(true,false,true);}
 bool RackGraph::setTrackClipAssetId(RackPathId id,uint32_t slot,bool midi,const std::string& asset){std::lock_guard lock(controlMutex_);auto it=std::find_if(tracks_.begin(),tracks_.end(),[&](auto&n){return n->id==id;});if(it==tracks_.end()||asset.empty())return false;size_t i=it-tracks_.begin();auto&v=midi?midiAssetIds_:wavAssetIds_;if(v.size()<=i)v.resize(i+1);if(v[i].size()<=slot)v[i].resize(slot+1);v[i][slot]=asset;++controlGeneration_;return true;}
 
 bool RackGraph::materializeProjectMedia(const std::string& directory, std::string& diagnostic) {
@@ -953,7 +1145,7 @@ bool RackGraph::materializeProjectMedia(const std::string& directory, std::strin
     return true;
 }
 std::vector<std::tuple<RackPathId,uint32_t,std::string,bool>> RackGraph::getProjectClipMediaRefs() const{std::lock_guard lock(controlMutex_);std::vector<std::tuple<RackPathId,uint32_t,std::string,bool>> out;for(size_t i=0;i<tracks_.size();++i){for(size_t j=0;j<(i<wavAssetIds_.size()?wavAssetIds_[i].size():0);++j)if(!wavAssetIds_[i][j].empty())out.emplace_back(tracks_[i]->id,j,wavAssetIds_[i][j],false);for(size_t j=0;j<(i<midiAssetIds_.size()?midiAssetIds_[i].size():0);++j)if(!midiAssetIds_[i][j].empty())out.emplace_back(tracks_[i]->id,j,midiAssetIds_[i][j],true);}return out;}
-RackGraph::State RackGraph::saveState(){ State s; std::vector<std::shared_ptr<PluginChain>> chains; { std::lock_guard lock(controlMutex_); s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); chains.reserve(tracks_.size()+1); for(size_t i=0;i<tracks_.size();++i){auto& n=tracks_[i]; State::Track t; t.id=n->id;t.volume=n->volume.load();t.inputArmed=n->inputArmed.load();t.inputArmLocked=n->inputArmLocked.load();t.inputSource=n->inputSource;t.selectedSlot=n->selectedSlot.load();t.defaultLoopLengthBars=n->defaultLoopLengthBars.load();t.name=n->name;t.colorArgb=n->colorArgb;chains.push_back(n->chain);const size_t count=std::max({i<wavSlots_.size()?wavSlots_[i].size():0,i<midiSlots_.size()?midiSlots_[i].size():0,n->clipRuntime.size()});for(size_t j=0;j<count;++j){State::ClipSlot c;c.slot=uint32_t(j);c.wav=i<wavSlots_.size()&&j<wavSlots_[i].size()&&wavSlots_[i][j];c.midi=i<midiSlots_.size()&&j<midiSlots_[i].size()&&midiSlots_[i][j];c.assetId=i<wavAssetIds_.size()&&j<wavAssetIds_[i].size()?wavAssetIds_[i][j]:"";c.midiAssetId=i<midiAssetIds_.size()&&j<midiAssetIds_[i].size()?midiAssetIds_[i][j]:"";c.displayName=i<clipLabelOverrides_.size()&&j<clipLabelOverrides_[i].size()?clipLabelOverrides_[i][j]:"";if(j<n->clipRuntime.size()&&n->clipRuntime[j]){auto&r=*n->clipRuntime[j];c.sourceBpm=r.sourceBpm.load();c.tempoMode=r.tempoMode.load();c.looping=r.looping.load();c.loopLengthBars=r.loopLengthBars.load();c.loopStartQuarterNotes=r.loopStartQuarterNotes.load();c.loopLengthQuarterNotes=r.loopLengthQuarterNotes.load();c.launchQuantization=LaunchQuantization(r.desiredQuantization.load());}if(j<n->slotConfig.size()&&n->slotConfig[j]){c.defaultLoopLengthBars=n->slotConfig[j]->defaultLoopLengthBars.load();c.enterOnPunch=n->slotConfig[j]->enterOnPunch.load();c.launchQuantization=LaunchQuantization(n->slotConfig[j]->punchQuantization.load());}if(c.wav||c.midi||!c.assetId.empty()||!c.midiAssetId.empty())t.clipSlots.push_back(std::move(c));}s.tracks.push_back(std::move(t));}chains.push_back(master_);}for(size_t i=0;i<s.tracks.size();++i)s.tracks[i].chain=chains[i]->saveChainState();s.master=chains.back()->saveChainState();return s;}
+RackGraph::State RackGraph::saveState(){ State s; std::vector<std::shared_ptr<PluginChain>> chains; { std::lock_guard lock(controlMutex_); s.beatsPerMinute=statusBpm_.load(); s.transportPlaying=statusPlaying_.load(); s.transportFrame=statusTransportFrame_.load(); s.samplePosition=statusSamplePosition_.load(); s.musicalQuarterNotes=statusMusicalQuarterNotes_.load(); chains.reserve(tracks_.size()+1); for(size_t i=0;i<tracks_.size();++i){auto& n=tracks_[i]; State::Track t; t.id=n->id;t.volume=n->volume.load();t.inputArmed=n->inputArmed.load();t.inputArmLocked=n->inputArmLocked.load();t.inputSource=n->inputSource;t.midiInputSource=n->midiInputSource;t.midiInputSource.runtimeSourceHandle=0;t.selectedSlot=n->selectedSlot.load();t.defaultLoopLengthBars=n->defaultLoopLengthBars.load();t.name=n->name;t.colorArgb=n->colorArgb;chains.push_back(n->chain);const size_t count=std::max({i<wavSlots_.size()?wavSlots_[i].size():0,i<midiSlots_.size()?midiSlots_[i].size():0,n->clipRuntime.size()});for(size_t j=0;j<count;++j){State::ClipSlot c;c.slot=uint32_t(j);c.wav=i<wavSlots_.size()&&j<wavSlots_[i].size()&&wavSlots_[i][j];c.midi=i<midiSlots_.size()&&j<midiSlots_[i].size()&&midiSlots_[i][j];c.assetId=i<wavAssetIds_.size()&&j<wavAssetIds_[i].size()?wavAssetIds_[i][j]:"";c.midiAssetId=i<midiAssetIds_.size()&&j<midiAssetIds_[i].size()?midiAssetIds_[i][j]:"";c.displayName=i<clipLabelOverrides_.size()&&j<clipLabelOverrides_[i].size()?clipLabelOverrides_[i][j]:"";if(j<n->clipRuntime.size()&&n->clipRuntime[j]){auto&r=*n->clipRuntime[j];c.sourceBpm=r.sourceBpm.load();c.tempoMode=r.tempoMode.load();c.looping=r.looping.load();c.loopLengthBars=r.loopLengthBars.load();c.loopStartQuarterNotes=r.loopStartQuarterNotes.load();c.loopLengthQuarterNotes=r.loopLengthQuarterNotes.load();c.launchQuantization=LaunchQuantization(r.desiredQuantization.load());}if(j<n->slotConfig.size()&&n->slotConfig[j]){c.defaultLoopLengthBars=n->slotConfig[j]->defaultLoopLengthBars.load();c.enterOnPunch=n->slotConfig[j]->enterOnPunch.load();c.launchQuantization=LaunchQuantization(n->slotConfig[j]->punchQuantization.load());}if(c.wav||c.midi||!c.assetId.empty()||!c.midiAssetId.empty())t.clipSlots.push_back(std::move(c));}s.tracks.push_back(std::move(t));}chains.push_back(master_);}for(size_t i=0;i<s.tracks.size();++i)s.tracks[i].chain=chains[i]->saveChainState();s.master=chains.back()->saveChainState();return s;}
 bool RackGraph::exportDeviceChain(
         RackPathId pathId,
         PluginChain::ChainState& chain,
@@ -1100,6 +1292,9 @@ bool RackGraph::createParallelWetReturn(
         drySource->name = source->name;
         drySource->colorArgb = source->colorArgb;
         drySource->inputSource = source->inputSource;
+                drySource->midiInputSource = source->midiInputSource;
+                drySource->midiPanicGeneration.store(source->midiPanicGeneration.load(std::memory_order_relaxed), std::memory_order_relaxed);
+                drySource->midiPanicAppliedGeneration.store(source->midiPanicAppliedGeneration.load(std::memory_order_relaxed), std::memory_order_relaxed);
         drySource->chain = std::move(dryChain);
         drySource->slotConfig = source->slotConfig;
         drySource->clipRuntime = source->clipRuntime;
@@ -1113,8 +1308,9 @@ bool RackGraph::createParallelWetReturn(
         drySource->outputLeft = source->outputLeft;
         drySource->outputRight = source->outputRight;
         drySource->latencyHistoryLeft = source->latencyHistoryLeft;
-        drySource->midiScratch = source->midiScratch;
-        drySource->midiScratchCount = source->midiScratchCount;
+        drySource->latencyHistoryRight = source->latencyHistoryRight;
+        drySource->midiInput = source->midiInput;
+        drySource->outputMidi = source->outputMidi;
         drySource->latencyHistoryWrite = source->latencyHistoryWrite;
         drySource->recordingSlot = source->recordingSlot;
         drySource->recordLength = source->recordLength;
@@ -1275,6 +1471,9 @@ bool RackGraph::restoreState(
         node->name = saved.name;
         node->colorArgb = saved.colorArgb == 0 ? 0 : saved.colorArgb | 0xff000000u;
         node->inputSource = saved.inputSource;
+                node->midiInputSource = saved.midiInputSource;
+                node->midiInputSource.runtimeSourceHandle = 0;
+                if (static_cast<uint8_t>(node->midiInputSource.kind) > static_cast<uint8_t>(TrackMidiInputSource::Kind::TrackOutput)) { diagnostic = "invalid-midi-source"; return false; }
         node->chain = std::make_shared<PluginChain>();
         if (!restoreChain(saved.chain, node->chain)) return false;
         node->sourceLeft.resize(restoreBufferSize);
@@ -1433,6 +1632,19 @@ void RackGraph::process(
     double rate = sampleRate_.load(std::memory_order_relaxed);
     if (rate <= 0.0) rate = 48000.0;
     const bool masterEmpty = snapshot->master->isEmptyForAudio();
+    const uint64_t callbackNowNanos = static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    for (uint32_t sourceIndex = 0; sourceIndex < snapshot->midiSources.size(); ++sourceIndex) {
+        snapshot->midiSourceBuffers[sourceIndex].clear();
+        auto& source = snapshot->midiSources[sourceIndex];
+        source->drain(frames, callbackNowNanos, rate, snapshot->midiSourceBuffers[sourceIndex],
+            [&](bool late) noexcept {
+                if (late) midiLateEvents_.fetch_add(1, std::memory_order_relaxed);
+                else midiIngressDrops_.fetch_add(1, std::memory_order_relaxed);
+            });
+        midiIngressDrops_.fetch_add(source->takeDropped(), std::memory_order_relaxed);
+    }
     uint32_t globalLatency = 0;
     bool globalLatencyOverflow = false;
     for (const uint32_t topoIndex : snapshot->topoOrder) {
@@ -1440,9 +1652,9 @@ void RackGraph::process(
         auto& node = *view.node;
         uint64_t path = node.chain->getLatencyFrames();
         bool overflow = node.chain->hasLatencyOverflow();
-        if (view.routeIndex >= 0) {
+        if (view.audioRouteIndex >= 0) {
             const auto& upstream =
-                *snapshot->tracks[static_cast<uint32_t>(view.routeIndex)].node;
+                *snapshot->tracks[static_cast<uint32_t>(view.audioRouteIndex)].node;
             path += upstream.audioPathLatency;
             overflow = overflow || upstream.audioPathLatencyOverflow;
         }
@@ -1574,13 +1786,51 @@ void RackGraph::process(
                 active = -1;
             }
         }
-        node.midiScratchCount = 0;
+        node.panicMidi.clear();
+        const uint32_t panicGeneration = node.midiPanicGeneration.load(std::memory_order_acquire);
+        if (panicGeneration != node.midiPanicAppliedGeneration.load(std::memory_order_relaxed)) {
+            static const uint8_t kPanicCc[3] = {0xB0, 64, 0};
+            static const uint8_t kPanicAllNotes[3] = {0xB0, 123, 0};
+            for (uint8_t channel = 0; channel < 16; ++channel) {
+                uint8_t cc[3] = {static_cast<uint8_t>(kPanicCc[0] | channel), kPanicCc[1], kPanicCc[2]};
+                uint8_t all[3] = {static_cast<uint8_t>(kPanicAllNotes[0] | channel), kPanicAllNotes[1], kPanicAllNotes[2]};
+                node.panicMidi.append(0, cc, 3);
+                node.panicMidi.append(0, all, 3);
+            }
+            node.midiPanicAppliedGeneration.store(panicGeneration, std::memory_order_release);
+        }
+        node.midiInput.clear();
+        node.clipMidi.clear();
+        node.mergeMidi.clear();
+        if (node.inputArmed.load(std::memory_order_relaxed) &&
+            view.midiSourceIndex >= 0) {
+            const auto sourceIndex =
+                static_cast<uint32_t>(view.midiSourceIndex);
+            const auto& liveSource = snapshot->midiSources[sourceIndex];
+            if (liveSource->lastDrainedEpoch() == liveSource->epoch()) {
+                const auto& sourceMidi =
+                    snapshot->midiSourceBuffers[sourceIndex];
+                for (uint32_t event = 0; event < sourceMidi.eventCount(); ++event) {
+                    if (!node.midiInput.append(
+                            sourceMidi, sourceMidi.eventAt(event))) {
+                        midiMergeDrops_.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            }
+        }
+        if (node.inputArmed.load(std::memory_order_relaxed) && view.midiRouteIndex >= 0) {
+            const auto& routedMidi = *snapshot->tracks[static_cast<uint32_t>(view.midiRouteIndex)].node;
+            for (uint32_t e = 0; e < routedMidi.outputMidi.eventCount(); ++e) {
+                if (!node.midiInput.append(routedMidi.outputMidi, routedMidi.outputMidi.eventAt(e)))
+                    midiMergeDrops_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
         float* source[2] = {node.sourceLeft.data(), node.sourceRight.data()};
         const float* routedLeft = nullptr;
         const float* routedRight = nullptr;
         float routedGain = 1.0f;
-        if (view.routeIndex >= 0) {
-            const auto& sourceNode = *snapshot->tracks[static_cast<uint32_t>(view.routeIndex)].node;
+        if (view.audioRouteIndex >= 0) {
+            const auto& sourceNode = *snapshot->tracks[static_cast<uint32_t>(view.audioRouteIndex)].node;
             routedLeft = sourceNode.outputLeft.data();
             routedRight = sourceNode.outputRight.data();
             if (view.inputSource.tap == TrackInputTap::PostFader)
@@ -1814,19 +2064,15 @@ void RackGraph::process(
                     }
                     runtime->midiCursor = lo;
                 }
-                uint32_t dropped = 0;
-                while (runtime->midiCursor < midi->events.size() && dropped++ < 4096) {
+                while (runtime->midiCursor < midi->events.size()) {
                     const auto& timed = midi->events[runtime->midiCursor];
                     const uint64_t eventFrame = static_cast<uint64_t>(
                         static_cast<double>(timed.microseconds) * sourceBpm / timelineBpm * rate / 1'000'000.0);
                     if (eventFrame > phase) break;
                     if (eventFrame == phase) {
-                        if (node.midiScratchCount < node.midiScratch.size()) {
-                            auto event = timed.event;
-                            event.frameOffset = frame;
-                            node.midiScratch[node.midiScratchCount++] = event;
-                        } else {
-                            midiEventDrops_.fetch_add(1, std::memory_order_relaxed);
+                        if (!node.clipMidi.append(frame, timed.payload.data(),
+                                static_cast<uint32_t>(timed.payload.size()))) {
+                            midiMergeDrops_.fetch_add(1, std::memory_order_relaxed);
                         }
                     }
                     ++runtime->midiCursor;
@@ -1863,16 +2109,24 @@ void RackGraph::process(
             }
             rt.statusFrame.store(rt.localFrame, std::memory_order_relaxed);
         }
+        const uint32_t sourceMergeDrops = node.mergeMidi.stableMergeFrom(node.panicMidi, node.midiInput);
+        if (sourceMergeDrops) midiMergeDrops_.fetch_add(sourceMergeDrops, std::memory_order_relaxed);
+        const uint32_t clipMergeDrops = node.midiInput.stableMergeFrom(node.mergeMidi, node.clipMidi);
+        if (clipMergeDrops) midiMergeDrops_.fetch_add(clipMergeDrops, std::memory_order_relaxed);
         const float* trackSignal[2] = {node.outputLeft.data(), node.outputRight.data()};
         if (!node.chain->isEmptyForAudio()) {
             float* trackOutput[2] = {node.outputLeft.data(), node.outputRight.data()};
-            std::array<MidiEvent, 128> midiOutputScratch{};
-            node.chain->process(source, trackOutput, frames, context, node.midiScratch.data(),
-                node.midiScratchCount, midiOutputScratch.data(),
-                static_cast<uint32_t>(midiOutputScratch.size()));
+            const uint64_t beforeDrops = node.chain->getMidiPluginOutputDrops();
+            node.chain->process(source, trackOutput, frames, context, node.midiInput, node.outputMidi);
+            const uint64_t afterDrops = node.chain->getMidiPluginOutputDrops();
+            if (afterDrops > beforeDrops)
+                midiPluginOutputDrops_.fetch_add(afterDrops - beforeDrops, std::memory_order_relaxed);
         } else {
             std::memcpy(node.outputLeft.data(), source[0], frames * sizeof(float));
             std::memcpy(node.outputRight.data(), source[1], frames * sizeof(float));
+            node.outputMidi.copyFrom(node.midiInput);
+            if (node.outputMidi.rejectedMessages())
+                midiMergeDrops_.fetch_add(node.outputMidi.rejectedMessages(), std::memory_order_relaxed);
         }
         const float volume = node.volume.load(std::memory_order_relaxed);
         const uint32_t pathLatency = node.audioPathLatency;
@@ -1920,11 +2174,17 @@ void RackGraph::process(
             std::memset(mixRight_.data(), 0, frames * sizeof(float));
         }
         const float* mix[2] = {mixLeft_.data(), mixRight_.data()};
-        std::array<MidiEvent, 128> masterMidiOutput{};
-        if (masterEmpty) copyScaled(outputs[0], outputs[1], mix[0], mix[1], frames, 1.0f);
-        else snapshot->master->process(
-            mix, outputs, frames, context, nullptr, 0,
-            masterMidiOutput.data(), masterMidiOutput.size());
+        masterMidiInput_.clear();
+        if (masterEmpty) {
+            copyScaled(outputs[0], outputs[1], mix[0], mix[1], frames, 1.0f);
+        } else {
+            const uint64_t beforeDrops = snapshot->master->getMidiPluginOutputDrops();
+            snapshot->master->process(
+                mix, outputs, frames, context, masterMidiInput_, masterMidiOutput_);
+            const uint64_t afterDrops = snapshot->master->getMidiPluginOutputDrops();
+            if (afterDrops > beforeDrops)
+                midiPluginOutputDrops_.fetch_add(afterDrops - beforeDrops, std::memory_order_relaxed);
+        }
     }
     audioSamplePosition_ += frames;
     const uint32_t transportFrames = transportPlayingAtBufferStart ? frames :

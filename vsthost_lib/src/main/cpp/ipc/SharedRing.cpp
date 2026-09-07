@@ -1,6 +1,7 @@
 #include "SharedRing.h"
 #include "../util/log.h"
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cstring>
 #include <fcntl.h>
@@ -60,9 +61,9 @@ SharedRing::SharedRing(const std::string& path, int reservedFd) {
     data_->shared_feature_bits = VSTPOC_FEATURE_PLANAR_AUDIO |
                                  VSTPOC_FEATURE_MIDI_EVENTS |
                                  VSTPOC_FEATURE_MIDI_OUTPUT |
-                                 VSTPOC_FEATURE_OUTPUT_BLOCK_MIDI |
+                                 VSTPOC_FEATURE_MIDI_PAYLOAD_RING |
                                  (wakeReady() ? VSTPOC_FEATURE_WAKE_SOCKET : 0);
-    __atomic_store_n(&data_->shared_layout_size, static_cast<uint32_t>(VSTPOC_SHARED_LAYOUT_V9_SIZE),
+    __atomic_store_n(&data_->shared_layout_size, static_cast<uint32_t>(VSTPOC_SHARED_LAYOUT_V10_SIZE),
                      __ATOMIC_RELEASE);
     LOGI("SharedRing: mapped %s (%zu bytes)", path.c_str(), sizeof(VstpocShared));
 }
@@ -118,73 +119,109 @@ SharedRing::~SharedRing() {
     if (fd_ >= 0) ::close(fd_);
 }
 
-
 int32_t SharedRing::pullAudio(float* outL, float* outR, int32_t maxFrames) {
-    return pullAudioBlock(outL, outR, maxFrames, nullptr, 0, nullptr, false);
+    guitarrackcraft::MidiBuffer ignored;
+    bool authoritative = false;
+    return pullOutput(outL, outR, maxFrames, ignored, false, authoritative);
 }
 
-int32_t SharedRing::pullAudioBlock(float* outL, float* outR, int32_t maxFrames,
-                                   guitarrackcraft::MidiEvent* midi,
-                                   uint32_t midiCapacity, uint32_t* midiCount,
-                                   bool oldest) {
-    if (midiCount) *midiCount = 0;
+namespace {
+static void copyRingOut(const uint8_t* ring, uint64_t absolute, uint32_t size,
+                        uint8_t* dst) {
+    const uint32_t slot = static_cast<uint32_t>(absolute & (VSTPOC_MIDI_PAYLOAD_RING_BYTES - 1u));
+    const uint32_t first = std::min<uint32_t>(size, VSTPOC_MIDI_PAYLOAD_RING_BYTES - slot);
+    std::memcpy(dst, ring + slot, first);
+    if (size > first) std::memcpy(dst + first, ring, size - first);
+}
+static void copyRingIn(uint8_t* ring, uint64_t absolute, const uint8_t* src,
+                       uint32_t size) {
+    const uint32_t slot = static_cast<uint32_t>(absolute & (VSTPOC_MIDI_PAYLOAD_RING_BYTES - 1u));
+    const uint32_t first = std::min<uint32_t>(size, VSTPOC_MIDI_PAYLOAD_RING_BYTES - slot);
+    std::memcpy(ring + slot, src, first);
+    if (size > first) std::memcpy(ring, src + first, size - first);
+}
+}
+
+int32_t SharedRing::pullOutput(float* outL, float* outR, int32_t maxFrames,
+                               guitarrackcraft::MidiBuffer& midi, bool oldest,
+                               bool& authoritative) {
+    midi.clear(); authoritative = false;
     if (!data_ || !outL || !outR || maxFrames <= 0) return 0;
     const uint64_t want = static_cast<uint64_t>(maxFrames);
     uint64_t tail = __atomic_load_n(&data_->output_block_tail, __ATOMIC_RELAXED);
     const uint64_t head = __atomic_load_n(&data_->output_block_head, __ATOMIC_ACQUIRE);
     while (tail != head) {
-        VstpocOutputBlock& block = data_->output_blocks[
-            tail & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
-        const uint64_t sequence = __atomic_load_n(&block.sequence, __ATOMIC_ACQUIRE);
-        if (sequence != tail + 1u) break;
+        VstpocOutputBlock& block = data_->output_blocks[tail & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
+        if (__atomic_load_n(&block.sequence, __ATOMIC_ACQUIRE) != tail + 1u) {
+            // The producer publishes the descriptor sequence before advancing
+            // head. A mismatch is therefore an uncommitted block, not a stale
+            // block to discard; advancing tail here permanently loses valid
+            // guest output under the normal publication race.
+            break;
+        }
+        ++tail;
         const uint32_t frames = block.frame_count;
         const uint32_t offset = block.ring_offset;
-        ++tail;
-        const uint64_t audioTail = __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
-        if (frames == 0 || frames > VSTPOC_MAX_BLOCK_FRAMES ||
-            offset >= VSTPOC_AUDIO_RING_FRAMES) {
+        const uint32_t count = block.midi_event_count;
+        const uint64_t payloadBegin = block.midi_payload_begin;
+        const uint64_t payloadEnd = block.midi_payload_end;
+        const uint64_t payloadHead =
+            __atomic_load_n(&data_->midi_output_payload_head, __ATOMIC_ACQUIRE);
+        const uint64_t oldAudioTail =
+            __atomic_load_n(&data_->audio_tail, __ATOMIC_RELAXED);
+        const uint64_t audioHead =
+            __atomic_load_n(&data_->audio_head, __ATOMIC_ACQUIRE);
+        const uint64_t oldPayloadTail =
+            __atomic_load_n(&data_->midi_output_payload_tail, __ATOMIC_RELAXED);
+        const bool audioRangeValid =
+            frames > 0 && frames <= VSTPOC_MAX_BLOCK_FRAMES &&
+            offset == (oldAudioTail & (VSTPOC_AUDIO_RING_FRAMES - 1u)) &&
+            frames <= audioHead - oldAudioTail;
+        const bool payloadRangeValid =
+            payloadBegin == oldPayloadTail && payloadEnd >= payloadBegin &&
+            payloadEnd <= payloadHead &&
+            payloadEnd - payloadBegin <= VSTPOC_MIDI_PAYLOAD_RING_BYTES;
+        const bool metadataValid =
+            count <= VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
+        const bool valid = audioRangeValid && payloadRangeValid && metadataValid;
+        const bool match = valid && frames == want && (oldest || tail == head);
+        if (!valid || !match) {
+            __atomic_store_n(
+                &data_->audio_tail,
+                audioRangeValid ? oldAudioTail + frames : audioHead,
+                __ATOMIC_RELEASE);
+            __atomic_store_n(
+                &data_->midi_output_payload_tail,
+                payloadRangeValid ? payloadEnd : payloadHead,
+                __ATOMIC_RELEASE);
             __atomic_store_n(
                 &data_->output_block_tail, tail, __ATOMIC_RELEASE);
             continue;
         }
-        if (frames != want || (!oldest && tail != head)) {
-            __atomic_store_n(&data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
-            __atomic_store_n(
-                &data_->output_block_tail, tail, __ATOMIC_RELEASE);
-            continue;
-        }
-        const uint32_t first = std::min<uint32_t>(
-            frames, VSTPOC_AUDIO_RING_FRAMES - offset);
+        const uint32_t first = std::min<uint32_t>(frames, VSTPOC_AUDIO_RING_FRAMES - offset);
         std::memcpy(outL, &data_->audio[0][offset], first * sizeof(float));
         std::memcpy(outR, &data_->audio[1][offset], first * sizeof(float));
-        const uint32_t second = frames - first;
-        if (second != 0) {
-            std::memcpy(outL + first, data_->audio[0], second * sizeof(float));
-            std::memcpy(outR + first, data_->audio[1], second * sizeof(float));
+        if (frames > first) {
+            std::memcpy(outL + first, data_->audio[0], (frames - first) * sizeof(float));
+            std::memcpy(outR + first, data_->audio[1], (frames - first) * sizeof(float));
         }
-        if (midi && midiCapacity && midiCount) {
-            VstpocOutputMidiBlock& mb = data_->output_midi_blocks[
-                (tail - 1u) & (VSTPOC_OUTPUT_BLOCK_CAPACITY - 1u)];
-            if (__atomic_load_n(&mb.sequence, __ATOMIC_ACQUIRE) == tail) {
-                uint32_t count = mb.event_count;
-                if (count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) count = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
-                if (count > midiCapacity) count = midiCapacity;
-                for (uint32_t i = 0; i < count; ++i) {
-                    const VstpocMidiEvent& in = mb.events[i];
-                    midi[i].frameOffset = in.frame_offset;
-                    midi[i].status = in.status;
-                    midi[i].data1 = in.data1;
-                    midi[i].data2 = in.data2;
-                }
-                __atomic_thread_fence(__ATOMIC_ACQUIRE);
-                if (__atomic_load_n(&mb.sequence, __ATOMIC_ACQUIRE) == tail)
-                    *midiCount = count;
+        auto& payload = payload_scratch_;
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto& e = block.midi_events[i];
+            if (e.payload_size == 0 || e.payload_size > 65536u ||
+                e.payload_offset < payloadBegin || e.payload_offset > payloadEnd ||
+                e.payload_size > payloadEnd - e.payload_offset ||
+                e.frame_offset >= frames) {
+                midi.recordRejectedMessages();
+                continue;
             }
+            copyRingOut(data_->midi_output_payload, e.payload_offset, e.payload_size, payload.data());
+            (void)midi.append(e.frame_offset, payload.data(), e.payload_size);
         }
-        __atomic_store_n(
-            &data_->audio_tail, audioTail + frames, __ATOMIC_RELEASE);
-        __atomic_store_n(
-            &data_->output_block_tail, tail, __ATOMIC_RELEASE);
+        authoritative = (block.midi_flags & VSTPOC_MIDI_FLAG_AUTHORITATIVE) != 0;
+        __atomic_store_n(&data_->audio_tail, oldAudioTail + frames, __ATOMIC_RELEASE);
+        __atomic_store_n(&data_->midi_output_payload_tail, payloadEnd, __ATOMIC_RELEASE);
+        __atomic_store_n(&data_->output_block_tail, tail, __ATOMIC_RELEASE);
         return static_cast<int32_t>(frames);
     }
     return 0;
@@ -196,46 +233,49 @@ bool SharedRing::inputWritable(uint32_t frames) const {
     const uint64_t tail = __atomic_load_n(&data_->audio_in_tail, __ATOMIC_ACQUIRE);
     return head - tail + frames <= VSTPOC_AUDIO_RING_FRAMES;
 }
-
 bool SharedRing::publishTransport(uint64_t samplePosition, uint64_t transportFrame,
                                    uint64_t loopEndFrame, double sampleRate,
                                    double beatsPerMinute, bool playing, bool looping,
                                    uint32_t blockFrames,
-                                   const guitarrackcraft::MidiEvent* midiEvents,
-                                   uint32_t midiEventCount) {
+                                   const guitarrackcraft::MidiBuffer& midiEvents) {
     if (!data_ || blockFrames == 0 || blockFrames > VSTPOC_MAX_BLOCK_FRAMES) return false;
-    uint64_t qh = __atomic_load_n(&data_->transport_queue_head, __ATOMIC_RELAXED);
-    uint64_t qt = __atomic_load_n(&data_->transport_queue_tail, __ATOMIC_ACQUIRE);
+    const uint64_t qh = __atomic_load_n(&data_->transport_queue_head, __ATOMIC_RELAXED);
+    const uint64_t qt = __atomic_load_n(&data_->transport_queue_tail, __ATOMIC_ACQUIRE);
     if (qh - qt >= VSTPOC_TRANSPORT_QUEUE_CAPACITY) {
         __atomic_add_fetch(&data_->transport_queue_dropped, 1u, __ATOMIC_RELAXED);
         return false;
     }
     VstpocTransportBlock& b = data_->transport_queue[qh & (VSTPOC_TRANSPORT_QUEUE_CAPACITY - 1u)];
-    b.sample_position = samplePosition;
-    b.transport_frame = transportFrame;
-    b.loop_end_frame = loopEndFrame;
-    b.sample_rate = sampleRate;
+    b.sample_position = samplePosition; b.transport_frame = transportFrame;
+    b.loop_end_frame = loopEndFrame; b.sample_rate = sampleRate;
     b.beats_per_minute = beatsPerMinute;
     b.flags = (playing ? 1u : 0u) | (looping ? 2u : 0u);
-    b.block_frames = blockFrames;
-    const uint32_t count = (midiEvents && midiEventCount < VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK)
-                             ? midiEventCount : (midiEvents ? VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK : 0u);
-    b.midi_event_count = count;
-    for (uint32_t i = 0; i < count; ++i) {
-        const auto& e = midiEvents[i];
-        VstpocMidiEvent& out = b.midi_events[i];
-        out.frame_offset = e.frameOffset < blockFrames ? e.frameOffset : blockFrames - 1u;
-        out.status = e.status; out.data1 = e.data1; out.data2 = e.data2; out.reserved = 0;
+    b.block_frames = blockFrames; b.midi_event_count = 0;
+    uint64_t payloadHead = __atomic_load_n(&data_->midi_input_payload_head, __ATOMIC_RELAXED);
+    const uint64_t payloadTail = __atomic_load_n(&data_->midi_input_payload_tail, __ATOMIC_ACQUIRE);
+    const uint64_t payloadBegin = payloadHead;
+    for (uint32_t i = 0; i < midiEvents.eventCount() &&
+                         b.midi_event_count < VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK; ++i) {
+        const auto& e = midiEvents.eventAt(i);
+        if (e.payloadSize == 0 || e.payloadSize > VSTPOC_MIDI_PAYLOAD_RING_BYTES ||
+            e.frameOffset >= blockFrames ||
+            payloadHead - payloadTail + e.payloadSize > VSTPOC_MIDI_PAYLOAD_RING_BYTES) {
+            __atomic_add_fetch(&data_->midi_input_drop_count, 1u, __ATOMIC_RELAXED);
+            continue;
+        }
+        copyRingIn(data_->midi_input_payload, payloadHead, midiEvents.payloadFor(e), e.payloadSize);
+        auto& d = b.midi_events[b.midi_event_count++];
+        d.frame_offset = e.frameOffset; d.payload_size = e.payloadSize; d.payload_offset = payloadHead;
+        payloadHead += e.payloadSize;
     }
+    b.midi_payload_begin = payloadBegin; b.midi_payload_end = payloadHead;
+    __atomic_store_n(&data_->midi_input_payload_head, payloadHead, __ATOMIC_RELEASE);
     const uint64_t deadlineBudgetNs = sampleRate > 0.0
-        ? static_cast<uint64_t>(
-              static_cast<double>(blockFrames) * 1'000'000'000.0 / sampleRate)
-        : 0;
+        ? static_cast<uint64_t>(static_cast<double>(blockFrames) * 1'000'000'000.0 / sampleRate) : 0;
     __atomic_store_n(&data_->block_deadline_ns, deadlineBudgetNs, __ATOMIC_RELAXED);
     __atomic_store_n(&data_->transport_queue_head, qh + 1u, __ATOMIC_RELEASE);
     __atomic_store_n(&data_->transport_seq, qh + 2u, __ATOMIC_RELEASE);
-    if (__atomic_exchange_n(&data_->wake_requested, 1u, __ATOMIC_ACQ_REL) == 0u)
-        signalWake();
+    if (__atomic_exchange_n(&data_->wake_requested, 1u, __ATOMIC_ACQ_REL) == 0u) signalWake();
     return true;
 }
 int32_t SharedRing::pushInput(const float* left, const float* right, int32_t numFrames) {
@@ -260,24 +300,6 @@ int32_t SharedRing::pushInput(const float* left, const float* right, int32_t num
     return numFrames;
 }
 
-uint32_t SharedRing::readMidiOutput(guitarrackcraft::MidiEvent* outputEvents,
-                                    uint32_t outputCapacity) const {
-    if (!data_ || !outputEvents || outputCapacity == 0) return 0;
-    const uint64_t seq = __atomic_load_n(&data_->midi_output_seq, __ATOMIC_ACQUIRE);
-    uint32_t count = data_->midi_output_count;
-    if (count > VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK) count = VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK;
-    if (count > outputCapacity) count = outputCapacity;
-    for (uint32_t i = 0; i < count; ++i) {
-        const VstpocMidiEvent& in = data_->midi_output_events[i];
-        outputEvents[i].frameOffset = in.frame_offset;
-        outputEvents[i].status = in.status;
-        outputEvents[i].data1 = in.data1;
-        outputEvents[i].data2 = in.data2;
-    }
-    __atomic_thread_fence(__ATOMIC_ACQUIRE);
-    if (__atomic_load_n(&data_->midi_output_seq, __ATOMIC_ACQUIRE) != seq) return 0;
-    return count;
-}
 
 
 void SharedRing::setMicActive(bool active) {
@@ -324,4 +346,8 @@ uint64_t SharedRing::guestDeadlineNs() const noexcept {
 }
 uint64_t SharedRing::deadlineMissCount() const noexcept {
     return data_ ? __atomic_load_n(&data_->deadline_miss_count, __ATOMIC_RELAXED) : 0;
+}
+uint64_t SharedRing::midiDropCount() const noexcept {
+    return data_ ? __atomic_load_n(&data_->midi_input_drop_count, __ATOMIC_RELAXED) +
+                   __atomic_load_n(&data_->midi_output_drop_count, __ATOMIC_RELAXED) : 0;
 }

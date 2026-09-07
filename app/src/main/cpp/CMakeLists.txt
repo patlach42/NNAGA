@@ -128,6 +128,7 @@ endforeach()
 # Plugin abstraction layer
 add_library(plugin_abstraction STATIC
     plugin/PluginChain.cpp
+    plugin/LiveMidiSource.cpp
     plugin/RackGraph.cpp
     plugin/PluginRegistry.cpp
     plugin/PluginUIGuard.cpp

@@ -31,9 +31,9 @@ public:
     void activate(float sampleRate, uint32_t bufferSize) override;
     bool isReadyForRealtime() const noexcept override { return maxFrames_ != 0; }
     void deactivate() override;
-    uint32_t process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
-                     const AudioProcessContext& context, const MidiEvent* inputEvents, uint32_t inputCount,
-                     MidiEvent* outputEvents, uint32_t outputCapacity) override;
+    MidiOutputDisposition process(const float* const* inputs, float* const* outputs, uint32_t numFrames,
+                                  const AudioProcessContext& context, const MidiBuffer& inputMidi,
+                                  MidiBuffer& outputMidi) override;
     PluginInfo getInfo() const override { return info_; }
     uint32_t getLatencyFrames() const noexcept override;
     void setParameter(uint32_t portIndex, float value) override;

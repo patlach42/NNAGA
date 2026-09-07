@@ -91,6 +91,30 @@ protected:
 };
 
 }  // namespace
+template <typename Processor>
+guitarrackcraft::MidiOutputDisposition processNoMidi(
+        Processor& processor,
+        const float* const* inputs,
+        float* const* outputs,
+        uint32_t numFrames,
+        const guitarrackcraft::AudioProcessContext& context) {
+    guitarrackcraft::MidiBuffer inputMidi;
+    guitarrackcraft::MidiBuffer outputMidi;
+    return processor.process(inputs, outputs, numFrames, context, inputMidi,
+                             outputMidi);
+}
+template <typename Processor>
+void processChainNoMidi(
+        Processor& processor,
+        const float* const* inputs,
+        float* const* outputs,
+        uint32_t numFrames,
+        const guitarrackcraft::AudioProcessContext& context) {
+    guitarrackcraft::MidiBuffer inputMidi;
+    guitarrackcraft::MidiBuffer outputMidi;
+    processor.process(inputs, outputs, numFrames, context, inputMidi,
+                      outputMidi);
+}
 
 TEST_F(LV2HostContractTest, SendsTypedTransportAndEchoesLargeInjectedAtom) {
     guitarrackcraft::LV2Plugin instance(plugin_, generation_, 48000.0f);
@@ -137,8 +161,8 @@ TEST_F(LV2HostContractTest, SendsTypedTransportAndEchoesLargeInjectedAtom) {
         const auto& processContext = tick == 0
             ? context
             : guitarrackcraft::AudioProcessContext{};
-        ASSERT_EQ(instance.process(nullptr, nullptr, 64, processContext,
-                                   nullptr, 0, nullptr, 0), 0u);
+        ASSERT_EQ(processNoMidi(instance, nullptr, nullptr, 64, processContext),
+                  guitarrackcraft::MidiOutputDisposition::Replace);
         auto current = instance.drainOutputAtoms();
         output.insert(output.end(), current.begin(), current.end());
     }
@@ -174,32 +198,90 @@ TEST_F(LV2HostContractTest, PreservesTwoByteChannelVoiceAndThreeByteNoteMidi) {
     ASSERT_TRUE(instance.hasInstance());
     instance.activate(48000.0f, 64);
 
-    const guitarrackcraft::MidiEvent input[] = {
-        {3, 0xc0, 12, 0x7e},
-        {11, 0xd0, 64, 0x6a},
-        {17, 0x90, 60, 100},
-    };
-    guitarrackcraft::MidiEvent output[3]{};
-    const uint32_t outputCount =
-        instance.process(nullptr, nullptr, 64, guitarrackcraft::AudioProcessContext{},
-                         input, 3, output, 3);
+    const uint8_t program[] = {0xc0, 12};
+    const uint8_t pressure[] = {0xd0, 64};
+    const uint8_t note[] = {0x90, 60, 100};
+    guitarrackcraft::MidiBuffer inputMidi;
+    ASSERT_TRUE(inputMidi.append(3, program, sizeof(program)));
+    ASSERT_TRUE(inputMidi.append(11, pressure, sizeof(pressure)));
+    ASSERT_TRUE(inputMidi.append(17, note, sizeof(note)));
+    guitarrackcraft::MidiBuffer outputMidi;
+    const auto disposition =
+        instance.process(nullptr, nullptr, 64,
+                         guitarrackcraft::AudioProcessContext{}, inputMidi,
+                         outputMidi);
 
-    ASSERT_EQ(outputCount, 3u);
-    EXPECT_EQ(output[0].frameOffset, 3u);
-    EXPECT_EQ(output[0].status, 0xc0u);
-    EXPECT_EQ(output[0].data1, 12u);
-    EXPECT_EQ(output[0].data2, 0u);
-    EXPECT_EQ(output[1].frameOffset, 11u);
-    EXPECT_EQ(output[1].status, 0xd0u);
-    EXPECT_EQ(output[1].data1, 64u);
-    EXPECT_EQ(output[1].data2, 0u);
-    EXPECT_EQ(output[2].frameOffset, 17u);
-    EXPECT_EQ(output[2].status, 0x90u);
-    EXPECT_EQ(output[2].data1, 60u);
-    EXPECT_EQ(output[2].data2, 100u);
+    ASSERT_EQ(disposition, guitarrackcraft::MidiOutputDisposition::Replace);
+    ASSERT_EQ(outputMidi.eventCount(), 3u);
+    EXPECT_EQ(outputMidi.eventAt(0).frameOffset, 3u);
+    EXPECT_EQ(outputMidi.eventAt(1).frameOffset, 11u);
+    EXPECT_EQ(outputMidi.eventAt(2).frameOffset, 17u);
+    EXPECT_EQ(outputMidi.eventAt(0).payloadSize, sizeof(program));
+    EXPECT_EQ(outputMidi.eventAt(1).payloadSize, sizeof(pressure));
+    EXPECT_EQ(outputMidi.eventAt(2).payloadSize, sizeof(note));
+    EXPECT_TRUE(std::equal(program, program + sizeof(program),
+                           outputMidi.payloadFor(outputMidi.eventAt(0))));
+    EXPECT_TRUE(std::equal(pressure, pressure + sizeof(pressure),
+                           outputMidi.payloadFor(outputMidi.eventAt(1))));
+    EXPECT_TRUE(std::equal(note, note + sizeof(note),
+                           outputMidi.payloadFor(outputMidi.eventAt(2))));
     instance.deactivate();
 }
 
+TEST_F(LV2HostContractTest, EchoesShortAndMaximumSysExPayloadsByteExactly) {
+    guitarrackcraft::LV2Plugin instance(plugin_, generation_, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    instance.activate(48000.0f, 64);
+
+    const std::array<uint8_t, 2> program = {0xc0, 12};
+    guitarrackcraft::MidiBuffer inputMidi;
+    ASSERT_TRUE(inputMidi.append(3, program.data(), program.size()));
+    guitarrackcraft::MidiBuffer outputMidi;
+    ASSERT_EQ(instance.process(nullptr, nullptr, 64,
+                               guitarrackcraft::AudioProcessContext{},
+                               inputMidi, outputMidi),
+              guitarrackcraft::MidiOutputDisposition::Replace);
+    ASSERT_EQ(outputMidi.eventCount(), 1u);
+    EXPECT_EQ(outputMidi.eventAt(0).frameOffset, 3u);
+    ASSERT_EQ(outputMidi.eventAt(0).payloadSize, program.size());
+    EXPECT_TRUE(std::equal(program.begin(), program.end(),
+                           outputMidi.payloadFor(outputMidi.eventAt(0))));
+
+    std::vector<uint8_t> sysex(guitarrackcraft::kMaxMidiPayloadBytes);
+    sysex.front() = 0xf0;
+    for (uint32_t i = 1; i + 1 < sysex.size(); ++i)
+        sysex[i] = static_cast<uint8_t>((i * 19u) % 127u);
+    sysex.back() = 0xf7;
+    inputMidi.clear();
+    outputMidi.clear();
+    ASSERT_TRUE(inputMidi.append(17, sysex.data(), sysex.size()));
+    ASSERT_EQ(instance.process(nullptr, nullptr, 64,
+                               guitarrackcraft::AudioProcessContext{},
+                               inputMidi, outputMidi),
+              guitarrackcraft::MidiOutputDisposition::Replace);
+    ASSERT_EQ(outputMidi.eventCount(), 1u);
+    const auto& actual = outputMidi.eventAt(0);
+    EXPECT_EQ(actual.frameOffset, 17u);
+    ASSERT_EQ(actual.payloadSize, sysex.size());
+    EXPECT_TRUE(std::equal(sysex.begin(), sysex.end(),
+                           outputMidi.payloadFor(actual)));
+    instance.deactivate();
+}
+
+
+TEST_F(LV2HostContractTest, MIDIOutputPortIsAuthoritativeWhenItEmitsNoEvents) {
+    guitarrackcraft::LV2Plugin instance(plugin_, generation_, 48000.0f);
+    ASSERT_TRUE(instance.hasInstance());
+    instance.activate(48000.0f, 64);
+    guitarrackcraft::MidiBuffer inputMidi;
+    guitarrackcraft::MidiBuffer outputMidi;
+    EXPECT_EQ(instance.process(nullptr, nullptr, 64,
+                               guitarrackcraft::AudioProcessContext{},
+                               inputMidi, outputMidi),
+              guitarrackcraft::MidiOutputDisposition::Replace);
+    EXPECT_EQ(outputMidi.eventCount(), 0u);
+    instance.deactivate();
+}
 
 TEST(LV2PluginProcessTest, RunsDspAndCopiesProcessedAudio) {
     ScopedEnvironment lv2Path("LV2_PATH", LV2_FIXTURE_DIR);
@@ -237,8 +319,7 @@ TEST(LV2PluginProcessTest, RunsDspAndCopiesProcessedAudio) {
         const float* inputs[2] = {input, nullptr};
         float* outputs[2] = {outputLeft, outputRight};
         const guitarrackcraft::AudioProcessContext context{};
-        ASSERT_EQ(instance.process(inputs, outputs, kFrames, context,
-                                   nullptr, 0, nullptr, 0), 0u);
+        (void)processNoMidi(instance, inputs, outputs, kFrames, context);
 
         for (uint32_t i = 0; i < kFrames; ++i) {
             EXPECT_FLOAT_EQ(outputLeft[i], input[i] * 2.0f);
@@ -370,9 +451,8 @@ TEST(LV2PluginProcessTest, InvalidActivationStaysUnreadyAndBypassesAudio) {
                   guitarrackcraft::RealtimeClass::Unsupported);
         std::fill(outputLeft, outputLeft + kFrames, -9.0f);
         std::fill(outputRight, outputRight + kFrames, -9.0f);
-        ASSERT_EQ(instance.process(inputs, outputs, kFrames,
-                                   guitarrackcraft::AudioProcessContext{},
-                                   nullptr, 0, nullptr, 0), 0u);
+        (void)processNoMidi(instance, inputs, outputs, kFrames,
+                            guitarrackcraft::AudioProcessContext{});
         for (uint32_t frame = 0; frame < kFrames; ++frame) {
             EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
             EXPECT_FLOAT_EQ(outputRight[frame], inputRight[frame]);
@@ -403,9 +483,8 @@ TEST(LV2PluginProcessTest, UnsupportedRequiredFeatureFailsCleanly) {
     float outputLeft[kFrames];
     float outputRight[kFrames];
     float* outputs[2] = {outputLeft, outputRight};
-    ASSERT_EQ(instance.process(inputs, outputs, kFrames,
-                               guitarrackcraft::AudioProcessContext{},
-                               nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(instance, inputs, outputs, kFrames,
+                        guitarrackcraft::AudioProcessContext{});
     for (uint32_t frame = 0; frame < kFrames; ++frame) {
         EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
         EXPECT_FLOAT_EQ(outputRight[frame], inputRight[frame]);
@@ -442,9 +521,8 @@ TEST(LV2PluginProcessTest, PluginChainPublishesActivatedFixture) {
     float outputLeft[kFrames] = {};
     float outputRight[kFrames] = {};
     float* outputs[2] = {outputLeft, outputRight};
-    ASSERT_EQ(chain.process(inputs, outputs, kFrames,
-                            guitarrackcraft::AudioProcessContext{},
-                            nullptr, 0, nullptr, 0), 0u);
+    processChainNoMidi(chain, inputs, outputs, kFrames,
+                       guitarrackcraft::AudioProcessContext{});
     for (uint32_t frame = 0; frame < kFrames; ++frame) {
         EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame] * 2.0f);
         EXPECT_FLOAT_EQ(outputRight[frame], inputLeft[frame] * 2.0f);
@@ -472,9 +550,8 @@ TEST(LV2PluginProcessTest, RuntimeUridFaultEnablesPersistentPassthrough) {
     for (int block = 0; block < 2; ++block) {
         std::fill(outputLeft, outputLeft + kFrames, -9.0f);
         std::fill(outputRight, outputRight + kFrames, -9.0f);
-        ASSERT_EQ(instance.process(inputs, outputs, kFrames,
-                                   guitarrackcraft::AudioProcessContext{},
-                                   nullptr, 0, nullptr, 0), 0u);
+        (void)processNoMidi(instance, inputs, outputs, kFrames,
+                            guitarrackcraft::AudioProcessContext{});
         for (uint32_t frame = 0; frame < kFrames; ++frame) {
             EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
             EXPECT_FLOAT_EQ(outputRight[frame], inputRight[frame]);
@@ -499,17 +576,15 @@ TEST(LV2PluginProcessTest, ActivatedQuantumIsExactAndOversizedCallbacksDoNotProc
     const float* inputs[] = {input.data(), nullptr};
     float* outputs[] = {output.data(), nullptr};
 
-    ASSERT_EQ(instance.process(inputs, outputs, 64,
-                               guitarrackcraft::AudioProcessContext{},
-                               nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(instance, inputs, outputs, 64,
+                        guitarrackcraft::AudioProcessContext{});
     for (uint32_t i = 0; i < 64; ++i)
         EXPECT_FLOAT_EQ(output[i], input[i] * 2.0f);
     EXPECT_FLOAT_EQ(output[64], -99.0f);
 
     output.fill(-99.0f);
-    ASSERT_EQ(instance.process(inputs, outputs, 65,
-                               guitarrackcraft::AudioProcessContext{},
-                               nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(instance, inputs, outputs, 65,
+                        guitarrackcraft::AudioProcessContext{});
     for (uint32_t i = 0; i < input.size(); ++i)
         EXPECT_FLOAT_EQ(output[i], input[i]);
     instance.deactivate();
@@ -532,22 +607,19 @@ TEST(LV2PluginProcessTest, ActivationAndDeactivationAreAcknowledgedBeforeNextPro
     outputs[1] = nullptr;
 
     instance.activate(48000.0f, 32);
-    ASSERT_EQ(instance.process(inputs, outputs, 32,
-                               guitarrackcraft::AudioProcessContext{},
-                               nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(instance, inputs, outputs, 32,
+                        guitarrackcraft::AudioProcessContext{});
     EXPECT_FLOAT_EQ(output[31], input[31] * 2.0f);
 
     instance.activate(48000.0f, 64);
-    ASSERT_EQ(instance.process(inputs, outputs, 64,
-                               guitarrackcraft::AudioProcessContext{},
-                               nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(instance, inputs, outputs, 64,
+                        guitarrackcraft::AudioProcessContext{});
     EXPECT_FLOAT_EQ(output[63], input[63] * 2.0f);
 
     instance.deactivate();
     output.fill(-7.0f);
-    ASSERT_EQ(instance.process(inputs, outputs, 64,
-                               guitarrackcraft::AudioProcessContext{},
-                               nullptr, 0, nullptr, 0), 0u);
+    (void)processNoMidi(instance, inputs, outputs, 64,
+                        guitarrackcraft::AudioProcessContext{});
     for (uint32_t i = 0; i < input.size(); ++i)
         EXPECT_FLOAT_EQ(output[i], input[i]);
 }
@@ -574,9 +646,8 @@ TEST_F(LV2HostContractTest, BoundedAtomQueueDropsAfterCapacityWithoutReorderingE
 
     std::vector<uint32_t> seen;
     for (uint32_t tick = 0; tick < 40; ++tick) {
-        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
-                                   guitarrackcraft::AudioProcessContext{},
-                                   nullptr, 0, nullptr, 0), 0u);
+        (void)processNoMidi(instance, nullptr, nullptr, 64,
+                            guitarrackcraft::AudioProcessContext{});
         for (const OutputAtomEvent& event : instance.drainOutputAtoms()) {
             if (event.data.size() != sizeof(LV2_Atom) + kBodySize) continue;
             uint32_t value = 0;
@@ -643,7 +714,7 @@ TEST_F(LV2HostContractTest, ConcurrentInstancesShareCollisionSafeURIDs) {
             context.beatUnit = 8;
             context.bar = 42;
             context.barBeat = 2.5;
-            instance.process(nullptr, nullptr, 64, context, nullptr, 0, nullptr, 0);
+            (void)processNoMidi(instance, nullptr, nullptr, 64, context);
             const auto values = drainIntEvents(instance);
             succeeded[index] = contains(values, 0x4c563254) ? 1 : 0;
             instance.deactivate();
@@ -687,9 +758,8 @@ TEST(LV2WorkerContractTest, OptionalEndRunIsAdmittedAndProcessesWorkerResponseAu
     float outputRight[kFrames] = {};
     float* outputs[2] = {outputLeft, outputRight};
 
-    ASSERT_EQ(chain.process(inputs, outputs, kFrames,
-                            guitarrackcraft::AudioProcessContext{},
-                            nullptr, 0, nullptr, 0), 0u);
+    processChainNoMidi(chain, inputs, outputs, kFrames,
+                       guitarrackcraft::AudioProcessContext{});
     for (uint32_t frame = 0; frame < kFrames; ++frame) {
         EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
         EXPECT_FLOAT_EQ(outputRight[frame], inputLeft[frame]);
@@ -700,9 +770,8 @@ TEST(LV2WorkerContractTest, OptionalEndRunIsAdmittedAndProcessesWorkerResponseAu
     for (uint32_t tick = 0; tick < 128 && !sawProcessedAudio; ++tick) {
         std::fill(outputLeft, outputLeft + kFrames, -7.0f);
         std::fill(outputRight, outputRight + kFrames, -7.0f);
-        ASSERT_EQ(chain.process(inputs, outputs, kFrames,
-                                guitarrackcraft::AudioProcessContext{},
-                                nullptr, 0, nullptr, 0), 0u);
+        processChainNoMidi(chain, inputs, outputs, kFrames,
+                           guitarrackcraft::AudioProcessContext{});
         const auto values = drainIntEvents(*instance);
         if (contains(values, 10201)) sawResponse = true;
         bool scaled = true;
@@ -750,9 +819,8 @@ TEST(LV2WorkerContractTest, OptionalWorkResponseIsAdmittedAndKeepsProcessing) {
     float* outputs[2] = {outputLeft, outputRight};
 
     for (uint32_t tick = 0; tick < 16; ++tick) {
-        ASSERT_EQ(chain.process(inputs, outputs, kFrames,
-                                guitarrackcraft::AudioProcessContext{},
-                                nullptr, 0, nullptr, 0), 0u);
+        processChainNoMidi(chain, inputs, outputs, kFrames,
+                           guitarrackcraft::AudioProcessContext{});
         for (uint32_t frame = 0; frame < kFrames; ++frame) {
             EXPECT_FLOAT_EQ(outputLeft[frame], inputLeft[frame]);
             EXPECT_FLOAT_EQ(outputRight[frame], inputLeft[frame]);
@@ -773,9 +841,8 @@ TEST(LV2WorkerContractTest, WorkerResponseIsDeliveredBeforeEndRunWhenAvailable) 
 
     bool sawResponse = false;
     for (uint32_t tick = 0; tick < 128 && !sawResponse; ++tick) {
-        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
-                                   guitarrackcraft::AudioProcessContext{},
-                                   nullptr, 0, nullptr, 0), 0u);
+        (void)processNoMidi(instance, nullptr, nullptr, 64,
+                            guitarrackcraft::AudioProcessContext{});
         const auto values = drainIntEvents(instance);
         const auto response = std::find(values.begin(), values.end(), 10201);
         if (response != values.end()) {
@@ -800,9 +867,8 @@ TEST(LV2WorkerContractTest, FullRequestQueueReturnsNoSpaceInsteadOfBlockingOrReo
 
     std::vector<int32_t> values;
     for (uint32_t tick = 0; tick < 8; ++tick) {
-        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
-                                   guitarrackcraft::AudioProcessContext{},
-                                   nullptr, 0, nullptr, 0), 0u);
+        (void)processNoMidi(instance, nullptr, nullptr, 64,
+                            guitarrackcraft::AudioProcessContext{});
         const auto current = drainIntEvents(instance);
         values.insert(values.end(), current.begin(), current.end());
         std::this_thread::yield();
@@ -833,9 +899,8 @@ TEST(LV2WorkerContractTest, ResponseQueueAndPayloadBoundariesReturnNoSpaceWithDr
     uint32_t tick = 0;
     while (std::chrono::steady_clock::now() < deadline &&
            (responseValues.empty() || !sawResponseDrop)) {
-        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
-                                   guitarrackcraft::AudioProcessContext{},
-                                   nullptr, 0, nullptr, 0), 0u);
+        (void)processNoMidi(instance, nullptr, nullptr, 64,
+                            guitarrackcraft::AudioProcessContext{});
         for (int32_t value : drainIntEvents(instance)) {
             if (value >= 12000 && value < 12200) responseValues.push_back(value);
             if (value > 3200) sawResponseDrop = true;
@@ -854,9 +919,8 @@ TEST(LV2WorkerContractTest, ResponseQueueAndPayloadBoundariesReturnNoSpaceWithDr
     instance.setParameter(0, 4.0f);
     bool sawOversizedDrop = false;
     for (uint32_t tick = 0; tick < 128 && !sawOversizedDrop; ++tick) {
-        ASSERT_EQ(instance.process(nullptr, nullptr, 64,
-                                   guitarrackcraft::AudioProcessContext{},
-                                   nullptr, 0, nullptr, 0), 0u);
+        (void)processNoMidi(instance, nullptr, nullptr, 64,
+                            guitarrackcraft::AudioProcessContext{});
         for (int32_t value : drainIntEvents(instance))
             if (value >= 3201) sawOversizedDrop = true;
         if (!sawOversizedDrop) std::this_thread::yield();
