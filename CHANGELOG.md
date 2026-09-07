@@ -2,7 +2,9 @@
 
 All notable changes to NNAGA are documented here. This file follows the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format. Version history from the upstream project is not reproduced here; this fork records its own release notes.
 
-## [Unreleased] — NNAGA fork release
+## [Unreleased]
+
+## [0.2.0] - 2026-09-08
 
 ### Added
 
