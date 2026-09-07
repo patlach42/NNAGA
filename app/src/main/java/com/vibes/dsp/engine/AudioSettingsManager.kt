@@ -109,6 +109,7 @@ object AudioSettingsManager {
     private const val DEFAULT_BUFFER_SIZE = 32
 
     private const val DEFAULT_DIRECT_USB_PERIOD_MULTIPLIER = 2
+    private const val DEFAULT_DIRECT_USB_PACKETS = 4
     private const val MIN_DIRECT_USB_PERIOD_MULTIPLIER = 1
     private const val MAX_DIRECT_USB_PERIOD_MULTIPLIER = 8
     private const val MAX_DIRECT_USB_WATERMARK = 4096
@@ -173,8 +174,14 @@ object AudioSettingsManager {
     fun setDirectUsbTransferCount(context: Context, count: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_TRANSFER_COUNT, count.coerceIn(0, 8)).apply()
     }
+    // Four, not the automatic policy. Automatic picks eight here, which makes a
+    // transfer 48 frames instead of 24 and doubles the submitted runway - and
+    // every arm that produced the shipped numbers pinned four, so leaving this
+    // on automatic meant the app never ran the geometry that was measured.
     fun getDirectUsbPacketsPerTransfer(context: Context): Int =
-        prefs(context).getInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, 0).coerceIn(0, 8)
+        prefs(context).getInt(
+            KEY_DIRECT_USB_PACKETS_PER_TRANSFER, DEFAULT_DIRECT_USB_PACKETS
+        ).coerceIn(0, 8)
     fun setDirectUsbPacketsPerTransfer(context: Context, packets: Int) {
         prefs(context).edit().putInt(KEY_DIRECT_USB_PACKETS_PER_TRANSFER, packets.coerceIn(0, 8)).apply()
     }

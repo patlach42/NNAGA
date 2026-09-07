@@ -1792,3 +1792,50 @@ the probe behind the dialog, and the only visible symptom was a later cycle
 reporting "No configured USB audio device". The runner now watches for that
 activity and accepts it, reading the button's own bounds rather than guessing at
 screen coordinates, and records it in the arm's status.
+
+## The measured configuration is now what the app ships
+
+Three defaults moved. Two were already right and are listed so the shipped
+geometry is stated in one place rather than reconstructed from the sweep.
+
+| knob | was | is | why |
+|---|---|---|---|
+| packets per transfer | automatic (8) | **4** | automatic makes a transfer 48 frames instead of 24 and doubles the submitted runway; every arm behind these numbers pinned four, so the app had never run the geometry that was measured |
+| automatic capture target | 2 waves (56) | **1 wave (28)** | about 0.5 ms of round trip, every timeout still soft |
+| automatic playback target | quantum x multiplier (64) | **quantum + drain chunk (56)** | eight cycles with nothing on any fault counter, against a discontinuity cluster at 64 |
+| buffer, multiplier, transfers, headroom | 32, 2, 5, 416 | unchanged | already the measured values |
+| admission, credit reserve | credit, 32 | unchanged | already the measured values |
+
+The playback rule cost two wrong answers before it was right, both caught by the
+derived number rather than by reading the code, and both worth recording because
+the failure mode is quiet:
+
+* `exactInitialPacketFrames_` is the **first** packet plan, not the settled one.
+  It reads 16 at configuration time and grows to 24 once implicit feedback has
+  converged, so a target derived from it came out 48 - exactly the value this
+  geometry was measured to break at. The nominal chunk has to come from the
+  negotiated rate and packet count, which do not move.
+* The nominal chunk must be read from `format_` and `microframesPerSec_`, the
+  playback endpoint's own numbers. The first attempt used the capture format
+  struct.
+
+A regression test now drives `setUserspaceBufferConfig` with the geometry pinned
+and asserts 56, so the derivation is covered end to end and not only in the
+arithmetic helper.
+
+### What is verified on the device and what is not
+
+`packets=4` and `capture_target_frames=28` were both read back from a run on the
+interface. The playback target rule is verified by test through the real driver
+path but **not yet on the device**: the interface began dropping its session on
+every start part way through the verification and needs a physical reconnect.
+
+Two harness hazards surfaced while chasing it, and both cost arms:
+
+* A saved per-device watermark pref outranks the automatic policy, so a stale
+  48 left behind by a crashed arm silently masked the new rule for three runs.
+  A defaults verification has to clear `directUsbWatermark:` first.
+* The app pins a USB device id (`bus * 1000 + device`) that goes stale whenever
+  the interface re-enumerates, and the harness restores the stale one in its
+  finally block. The symptom is "No configured USB audio device" some cycles
+  later, which names neither the id nor the re-enumeration.

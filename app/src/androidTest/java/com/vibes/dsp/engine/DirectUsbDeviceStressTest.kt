@@ -1028,10 +1028,15 @@ class DirectUsbDeviceStressTest {
         // queue than it requested; comparing an explicit request against the
         // derived value instead made every arm below the derived target fail
         // on the guard while the pipeline itself stayed clean.
+        // An explicit request is checked exactly; an automatic one is only
+        // checked against the structural minimum. The automatic policy is now
+        // a quantum plus a drain chunk rather than a whole period, so demanding
+        // quantum * multiplier here would fail every run that leaves the target
+        // alone - which is every run of the shipped defaults.
         val configuredTarget = if (requestedPlaybackTarget > 0) {
             requestedPlaybackTarget.toLong()
         } else {
-            minOf(1024L, buffer.toLong() * multiplier)
+            buffer.toLong()
         }
         if (stats.steadyTarget < configuredTarget) return "steady-target-below-configured-${stats.steadyTarget}"
         if (stats.startupPrime < stats.steadyTarget) return "startup-prime-below-steady-target-${stats.startupPrime}-${stats.steadyTarget}"
