@@ -7,13 +7,13 @@ on the connected reference device (`25113PN0EG`, platform `canoe`), big cluster
 
 Benchmark harness and scripts: `tools/jsfx_bench/` (see "Reproducing" below).
 
-**Status.** Findings 1, 2, 4, 6, 7 and 8 are implemented in `app/src/main/cpp/jsfx/JsfxPlugin.{h,cpp}`
+**Status.** Findings 1, 2, 3, 4, 6, 7 and 8 are implemented in `app/src/main/cpp/jsfx/JsfxPlugin.{h,cpp}`
 and covered by `JsfxPluginContractTest.SliderChangesApplyAcrossEveryChangeMaskWord`
 (11/11 in `ysfx_smoke_contract_tests`). Codegen was verified by disassembly:
 `mrs`/`msr FPCR` now appear once per block including on the exception-unwind
 path, the 256 `ldaxrb`/`stlxrb` pairs are gone, and the mask fast path is four
 plain loads. **The on-device end-to-end re-measurement has not been done** — the
-reference device dropped its wireless `adb` link and has not come back. Finding 3 is not implemented; findings 4 and 6 are.
+reference device dropped its wireless `adb` link and has not come back. 
 
 ## Summary
 
@@ -34,7 +34,7 @@ The EEL2 AArch64 JIT itself is **not** a bottleneck — marginal cost measures a
 | --- | --- | --- | --- | --- |
 | 1 | FPCR saved/restored once **per sample** | 41–54 ns/sample | ~0 | `JsfxPlugin::process` |
 | 2 | 256 atomic RMW per block for slider scan | 0.57–0.65 µs/block | 0.002 µs/block | `JsfxPlugin::process` |
-| 3 | `@init` executes on the audio thread | +70 µs per transport start | 0 | `ysfx_process_generic` |
+| 3 | `@init` executes on the audio thread | **2361 µs vs 667 µs budget** | 36.9 µs | `ysfx_process_generic` |
 | 4 | Lazy 512 KiB `calloc` inside `@sample` | max 35.0 → 23.5 µs cold | — | `__NSEEL_RAMAlloc` |
 | 5 | Residual per-sample call overhead | 6.4 ns/sample | needs JIT work | `eel_callcode64` |
 | 6 | **Audio thread yields the VM to the UI** | **0.23% / 8.90% of blocks lost** | 0.00% | `JsfxPlugin::process` |
@@ -230,12 +230,29 @@ candidate for glitching at loop/transport start.
 
 ### Fix
 
-Do not let `@init` run from `process()`. Detect the pending-init edge on the
-control thread (the app already owns `controlMutex_` and `UiPauseGuard`), run
-`ysfx_init` there, and have the audio thread pass through for that block. If the
-edge must be honoured sample-accurately, the alternative is to stop feeding
-`ysfx_set_time_info` transitions from the RT thread and drive them from the
-transport control path instead.
+`jsfxTakePendingInit()` claims ysfx's pending-`@init` flag on the audio thread
+so `ysfx_process_float` will not run it inline. The plugin then bypasses until
+the worker thread (the one added for Finding 8) has run `ysfx_init`.
+
+Unlike `@slider`, this one **must not** run concurrently with `@sample`:
+`ysfx_init` calls `ysfx_clear_files` (`ysfx.cpp:1581`), which destroys the
+script's open file objects, so a concurrent `@sample` holding a file handle is a
+use-after-free, not merely a stale read. Hence the bypass rather than the
+concurrency trade taken for `@slider`. The bypass is released as soon as
+`@init` returns, before sliders are re-applied, so it lasts only as long as
+`@init` itself — and it happens at a transport restart, where the script is
+being reset anyway.
+
+Measured over six transport restarts with a fixture whose `@init` clears 128 Ki
+doubles and rebuilds a table:
+
+```
+worst audio block, @init inline    2361.5 us      (budget 667 us)
+worst audio block, @init deferred     36.9 us
+```
+
+Asserted by `JsfxPluginContractTest.TransportRestartInitStaysOffTheAudioThread`,
+which also checks the plugin resumes processing afterwards.
 
 ## Finding 4 — 512 KiB `calloc` from inside `@sample`
 

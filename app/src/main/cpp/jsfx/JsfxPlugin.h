@@ -71,6 +71,10 @@ private:
     std::atomic<bool> callbackFaulted_{false};
     std::atomic<uint32_t> quantum_{0};
     std::atomic<uint32_t> latencyFrames_{0};
+    // Set when ysfx has flagged @init (transport restart). The audio thread
+    // bypasses this plugin until the worker has run it, because ysfx_init()
+    // destroys open file objects and cannot run beside @sample.
+    std::atomic<bool> initPending_{false};
     // Audio-thread only; guarded by the single-writer process() path.
     uint32_t latencyCandidate_ = 0;
     uint32_t latencyStableBlocks_ = 0;

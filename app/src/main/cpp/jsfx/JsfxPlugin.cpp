@@ -135,6 +135,18 @@ void JsfxPlugin::sliderWorkerLoop() {
             if (sliderWorkerStopping_) return;
             sliderPending_ = false;
         }
+        if (initPending_.load(std::memory_order_acquire)) {
+            {
+                std::lock_guard lock(controlMutex_);
+                if (fx_) {
+                    UiPauseGuard pause(uiHost_.get());
+                    jsfxRunInit(fx_);
+                }
+            }
+            // Release the audio thread before applying sliders, so the bypass
+            // lasts only as long as @init itself.
+            initPending_.store(false, std::memory_order_release);
+        }
         // controlMutex_ serialises against activate/save/restore, which also
         // drive the VM. Anything that arrives while @slider runs is picked up
         // on the next iteration, so a drag coalesces instead of queueing.
@@ -205,7 +217,8 @@ MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* con
         callbackFaulted_.load(std::memory_order_acquire) || frames == 0 ||
         frames > quantum_.load(std::memory_order_acquire) ||
         frames > kMaxQuantum || !inputs || !inputs[0] || !inputs[1] ||
-        !outputs || !outputs[0] || !outputs[1])
+        !outputs || !outputs[0] || !outputs[1] ||
+        initPending_.load(std::memory_order_acquire))
         return passthrough();
     // The audio thread never yields the VM to the UI. ysfx is designed for
     // @gfx and @sample to run on separate threads concurrently -- that is what
@@ -222,6 +235,18 @@ MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* con
         ti.time_position = context.sampleRate > 0 ? context.samplePosition / context.sampleRate : 0;
         ti.playback_state = context.playing ? ysfx_playback_playing : ysfx_playback_stopped;
         ysfx_set_time_info(fx_, &ti);
+        // A transport restart makes ysfx want @init. It is unbounded and tears
+        // down the script's file objects, so it cannot run here nor beside
+        // @sample: take the flag, bypass this block, and let the worker run it.
+        if (jsfxTakePendingInit(fx_)) {
+            initPending_.store(true, std::memory_order_release);
+            {
+                std::lock_guard lock(sliderMutex_);
+                sliderPending_ = true;
+            }
+            sliderSignal_.notify_one();
+            return passthrough();
+        }
         for (uint32_t i = 0; i < inputMidi.eventCount(); ++i) {
             const MidiEvent& midi = inputMidi.eventAt(i);
             if (midi.frameOffset >= frames || midi.payloadSize == 0 ||

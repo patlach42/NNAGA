@@ -26,6 +26,19 @@ void jsfxPreallocRam(ysfx_t* fx, uint32_t items);
 // Must be called off the audio thread.
 bool jsfxRunSliderCode(ysfx_t* fx);
 
+// Takes ysfx's pending-@init flag, clearing it so ysfx_process_float will not
+// run @init inline on the audio thread. ysfx sets it on every transport
+// stopped->playing edge. @init is unbounded and ysfx_init() additionally
+// destroys the script's open file objects, so unlike @slider it must never run
+// concurrently with @sample -- the caller is expected to bypass the plugin
+// until jsfxRunInit() has completed.
+// Safe to call from the audio thread; it only reads and clears a flag.
+bool jsfxTakePendingInit(ysfx_t* fx);
+
+// Runs @init. Must be called off the audio thread, and only while the audio
+// thread is bypassing this plugin.
+void jsfxRunInit(ysfx_t* fx);
+
 // 2 MiB of script RAM: four EEL blocks, enough for the delay lines of a typical
 // reverb, without reserving the 64 MiB that ysfx's default maxmem would allow.
 inline constexpr uint32_t kJsfxPreallocItems = 256 * 1024;

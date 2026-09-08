@@ -494,6 +494,57 @@ TEST(JsfxPluginContractTest, HeavySliderCostStaysOffTheAudioThread) {
     plugin->deactivate();
 }
 
+// ysfx wants @init on every transport stopped->playing edge and runs it inside
+// ysfx_process_float. It is unbounded and ysfx_init() destroys the script's
+// file objects, so no audio block may carry it.
+TEST(JsfxPluginContractTest, TransportRestartInitStaysOffTheAudioThread) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("HeavyInit.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    plugin->activate(48000.0f, kFrames);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    inputLeft.fill(0.25f);
+    inputRight.fill(0.25f);
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    AudioProcessContext context;
+    context.sampleRate = 48000.0;
+
+    auto timeBlock = [&] {
+        const auto start = std::chrono::steady_clock::now();
+        (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
+        return std::chrono::duration<double, std::micro>(
+                   std::chrono::steady_clock::now() - start).count();
+    };
+
+    context.playing = false;
+    for (int i = 0; i < 40; ++i) (void)timeBlock();
+
+    // Toggle transport repeatedly; every stopped->playing edge asks for @init.
+    double worst = 0.0;
+    for (int cycle = 0; cycle < 12; ++cycle) {
+        context.playing = (cycle % 2) == 1;
+        for (int i = 0; i < 30; ++i) worst = std::max(worst, timeBlock());
+    }
+    const double budget = 1e6 * kFrames / 48000.0;
+    printf("[@init] worst audio block across 6 transport restarts: %.1f us"
+           " (budget %.0f us)\n", worst, budget);
+    EXPECT_LT(worst, budget);
+
+    // And the plugin must come back: gain of 2 after the bypass ends.
+    context.playing = true;
+    ASSERT_TRUE(processUntil(*plugin, inputs, outputs, kFrames, context,
+                             [&] { return std::abs(outputLeft[0] - 0.5f) < 1e-6f; }))
+        << "plugin must resume processing after @init completes";
+    plugin->deactivate();
+}
+
 TEST(JsfxGfxGateContractTest, DSPKeepsProcessingWhilePublicUiGateIsHeld) {
     auto factory = makeFactory();
     ASSERT_TRUE(factory.initialize());

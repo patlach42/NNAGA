@@ -37,4 +37,15 @@ bool jsfxRunSliderCode(ysfx_t* fx) {
     return true;
 }
 
+bool jsfxTakePendingInit(ysfx_t* fx) {
+    if (!fx || !fx->code.compiled || !fx->must_compute_init) return false;
+    fx->must_compute_init = false;
+    return true;
+}
+
+void jsfxRunInit(ysfx_t* fx) {
+    if (!fx) return;
+    ysfx_init(fx);
+}
+
 } // namespace guitarrackcraft
