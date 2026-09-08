@@ -2188,11 +2188,15 @@ static void publish_latency(VstpocShared* shm, IAudioProcessor* processor,
 
 static bool g_processor_running = false;
 
+static constexpr int32 kProcessEventListCapacity = 128;
+
 
 /* Process one block of stereo audio. Uses the existing ring layout —
  * deinterleave from `audio_in`, deinterleave/reinterleave through VST3
  * (which wants per-channel buffers), interleave back into `audio`. */
 static void process_block(IAudioProcessor* processor,
+                          EventList& inputEvents,
+                          EventList& outputEvents,
                           const float* in_l, const float* in_r,
                           float* out_l, float* out_r,
                           int32 nFrames)
@@ -2250,7 +2254,8 @@ static void process_block(IAudioProcessor* processor,
         }
         g_pendingParamFlags[index] = 0;
     }
-    EventList events;
+    inputEvents.clear();
+    outputEvents.clear();
     g_vst3_unsupported_input.clear();
     for (uint32 i = 0; i < g_transport.midiEventCount; ++i) {
         const VstpocMidiEvent& message = g_transport.midiEvents[i];
@@ -2315,7 +2320,7 @@ static void process_block(IAudioProcessor* processor,
         }
 
         if (supported) {
-            if (events.addEvent(event) != kResultOk && g_shm) {
+            if (inputEvents.addEvent(event) != kResultOk && g_shm) {
                 __atomic_add_fetch(
                     (uint64_t*)&g_shm->midi_input_drop_count, 1u, __ATOMIC_RELAXED);
             }
@@ -2332,6 +2337,10 @@ static void process_block(IAudioProcessor* processor,
     data.symbolicSampleSize   = kSample32;
     data.numSamples           = nFrames;
     data.numInputs            = 1;
+    data.numOutputs           = 1;
+    data.inputs               = &inBus;
+    data.outputs              = &outBus;
+    data.inputParameterChanges = &g_paramChanges;
     ProcessContext processContext{};
     processContext.sampleRate = g_configured_rate > 0.0
         ? g_configured_rate
@@ -2359,15 +2368,9 @@ static void process_block(IAudioProcessor* processor,
         }
         processContext.timeSigDenominator = 4;
     }
-
-    data.numOutputs           = 1;
-    data.inputs               = &inBus;
-    data.outputs              = &outBus;
-    data.inputParameterChanges  = &g_paramChanges;
-    data.outputParameterChanges = nullptr;
-    data.inputEvents          = &events;
-    EventList outputEvents;
+    data.inputEvents          = &inputEvents;
     data.outputEvents         = &outputEvents;
+    data.outputParameterChanges = nullptr;
     data.processContext       = &processContext;
 
     g_vst3_output_midi.clear();
@@ -2398,7 +2401,6 @@ static void process_block(IAudioProcessor* processor,
                 outputEventTotal - count,
                 __ATOMIC_RELAXED);
         }
-
         uint8_t shortBytes[3]{};
         for (uint32_t i = 0; i < count; ++i) {
             Event event{};
@@ -2541,6 +2543,8 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
     IAudioProcessor* processor = (IAudioProcessor*)arg;
     static float in_l[VSTPOC_MAX_BLOCK_FRAMES], in_r[VSTPOC_MAX_BLOCK_FRAMES];
     static float out_l[VSTPOC_MAX_BLOCK_FRAMES], out_r[VSTPOC_MAX_BLOCK_FRAMES];
+    EventList inputEvents(kProcessEventListCapacity);
+    EventList outputEvents(kProcessEventListCapacity);
 
     bool audioConfigured = false;
     LARGE_INTEGER performanceFrequency{};
@@ -2619,7 +2623,8 @@ static DWORD WINAPI audio_thread_proc(LPVOID arg)
             &g_shm->guest_state, VSTPOC_GUEST_STATE_RUNNING, __ATOMIC_RELEASE);
         LARGE_INTEGER dspStarted{};
         QueryPerformanceCounter(&dspStarted);
-        process_block(processor, in_l, in_r, out_l, out_r, blockFrames);
+        process_block(
+            processor, inputEvents, outputEvents, in_l, in_r, out_l, out_r, blockFrames);
         LARGE_INTEGER dspFinished{};
         QueryPerformanceCounter(&dspFinished);
         if (performanceFrequency.QuadPart > 0) {

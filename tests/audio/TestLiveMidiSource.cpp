@@ -154,6 +154,34 @@ TEST(LiveMidiSourceTest, PreservesShortAndExactMaximumPayloads) {
     EXPECT_EQ(lateDrops, 0u);
     EXPECT_EQ(otherDrops, 0u);
 }
+TEST(LiveMidiSourceTest, DrainsMessagesInFrameOrderWithStableEqualTimestampOrder) {
+    LiveMidiSource source(2, testIdentity());
+    const uint64_t now = 1'000'000'000;
+    const uint32_t offsets[] = {0, 3, 6};
+    const uint32_t lengths[] = {3, 3, 3};
+    const std::array<uint8_t, 9> payload = {
+        0x90, 60, 100, 0x90, 61, 101, 0x90, 62, 102,
+    };
+    // The first event is latest, while the next two share an earlier
+    // timestamp. Sorting must reorder by frame and retain their enqueue
+    // order at the equal frame.
+    const uint64_t timestamps[] = {
+        now - 20'000'000, now - 80'000'000, now - 80'000'000,
+    };
+    ASSERT_EQ(source.enqueue(timestamps, offsets, lengths, payload.data(), 3), 3u);
+
+    MidiBuffer output;
+    EXPECT_EQ(source.drain(100, now, 1'000.0, output,
+                           [&](bool) { FAIL() << "test event was dropped"; }), 3u);
+    ASSERT_EQ(output.eventCount(), 3u);
+    EXPECT_EQ(output.eventAt(0).frameOffset, 20u);
+    EXPECT_EQ(output.eventAt(1).frameOffset, 20u);
+    EXPECT_EQ(output.eventAt(2).frameOffset, 80u);
+    EXPECT_EQ(output.payloadFor(output.eventAt(0))[1], 61u);
+    EXPECT_EQ(output.payloadFor(output.eventAt(1))[1], 62u);
+    EXPECT_EQ(output.payloadFor(output.eventAt(2))[1], 60u);
+}
+
 
 TEST(LiveMidiSourceTest, RejectsNewestMessageWhenDescriptorRingIsFull) {
     LiveMidiSource source(2, testIdentity());
@@ -358,6 +386,44 @@ TEST(RackGraphMidiIngressTest, USBBindingRejectsIdentityMismatch) {
               guitarrackcraft::TrackMidiInputSource::Kind::None);
     EXPECT_TRUE(graph.setTrackMidiInputUsb(track, registered, "USB", handle));
 }
+TEST(RackGraphMidiIngressTest, UsbIdentityAcceptsCodecBoundaryAndRejectsOverlongStrings) {
+    RackGraph graph;
+    configureGraph(graph);
+    const RackPathId track = graph.getTracks().front().id;
+    const auto boundaryString = [] {
+        std::string value;
+        value.reserve(48 * 6);
+        for (int index = 0; index < 48; ++index) {
+            // Modified UTF-8 surrogate pair: six bytes, one validator codepoint.
+            value.append("\xed\xa0\xbd\xed\xb8\x80", 6);
+        }
+        return value;
+    };
+    auto identity = testIdentity();
+    identity.serialNumber = boundaryString();
+    const std::string displayName = boundaryString();
+    const uint64_t handle = graph.registerUsbMidiSource(identity);
+    ASSERT_NE(handle, 0u);
+
+    ASSERT_TRUE(graph.setTrackMidiInputUsb(track, identity, displayName, handle));
+    const auto accepted = graph.getTrackMidiInputSource(track);
+    EXPECT_EQ(accepted.kind, guitarrackcraft::TrackMidiInputSource::Kind::UsbPort);
+    EXPECT_EQ(accepted.usb.serialNumber.size(), 288u);
+    EXPECT_EQ(accepted.displayName.size(), 288u);
+
+    auto overlongIdentity = identity;
+    overlongIdentity.serialNumber.push_back('X');
+    EXPECT_FALSE(graph.setTrackMidiInputUsb(
+        track, overlongIdentity, displayName, 0));
+    std::string overlongDisplayName = displayName;
+    overlongDisplayName.push_back('X');
+    EXPECT_FALSE(graph.setTrackMidiInputUsb(
+        track, identity, overlongDisplayName, 0));
+    const auto preserved = graph.getTrackMidiInputSource(track);
+    EXPECT_EQ(preserved.usb, identity);
+    EXPECT_EQ(preserved.displayName, displayName);
+}
+
 
 TEST(RackGraphMidiIngressTest, OneRegisteredSourceFansOutOnceToTwoArmedTracks) {
     RackGraph graph;

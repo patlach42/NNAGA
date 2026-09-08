@@ -416,6 +416,173 @@ class UsbMidiInputManagerTest {
     }
 
     @Test
+    fun equivalentConnectedAssignmentsTokensAndEndpointsDoNotRestartOrLoseHandle() {
+        val identity = UsbMidiPortIdentity(10, 20, "serial", 1)
+        val endpoint = endpoint(identity, 77)
+        val platform = LifecyclePlatform(listOf(endpoint), FakeDevice(77, listOf(FakePort(1))))
+        val sink = FakeSink(platform.events)
+        val coordinator = UsbMidiCoordinator(platform, sink)
+        coordinator.setAssignments(mapOf(9L to UsbMidiAssignment(identity, "Saved")))
+        coordinator.start()
+
+        // Normalize the persisted assignment to the connected session token
+        // once; subsequent equivalent updates must be observationally inert.
+        coordinator.setAssignments(
+            mapOf(9L to UsbMidiAssignment(identity, "Saved", deviceToken = 77)),
+        )
+        val connected = coordinator.state.value.assignments.getValue(9L)
+        assertEquals(MidiAssignmentStatus.Connected, connected.status)
+        assertTrue(connected.sourceHandle != 0L)
+        val stableHandle = connected.sourceHandle
+        val stableGeneration = coordinator.state.value.sessionGeneration
+        val stableOpenCount = platform.openTokens.size
+        val stableEventCount = platform.events.size
+
+        repeat(2) {
+            coordinator.setAssignments(
+                mapOf(9L to UsbMidiAssignment(identity, "Saved", deviceToken = 77)),
+            )
+            coordinator.setSessionTokens(mapOf(9L to 77))
+            coordinator.setAvailable(listOf(endpoint))
+        }
+
+        assertEquals(stableHandle, coordinator.state.value.assignments.getValue(9L).sourceHandle)
+        assertEquals(stableGeneration, coordinator.state.value.sessionGeneration)
+        assertEquals(stableOpenCount, platform.openTokens.size)
+        assertEquals(stableEventCount, platform.events.size)
+    }
+    @Test
+    fun publishingResolvedTokenForConnectedTokenlessAssignmentDoesNotRestartSession() {
+        val identity = UsbMidiPortIdentity(10, 20, "serial", 1)
+        val endpoint = endpoint(identity, 77)
+        val platform = LifecyclePlatform(listOf(endpoint), FakeDevice(77, listOf(FakePort(1))))
+        val sink = FakeSink(platform.events)
+        val coordinator = UsbMidiCoordinator(platform, sink)
+
+        // Start with only the persisted identity; the session token is discovered
+        // by resolving the unique live endpoint during session startup.
+        coordinator.setAssignments(mapOf(9L to UsbMidiAssignment(identity, "Saved")))
+        coordinator.start()
+
+        val connected = coordinator.state.value.assignments.getValue(9L)
+        assertEquals(MidiAssignmentStatus.Connected, connected.status)
+        assertEquals(77, connected.deviceToken)
+        val stableHandle = connected.sourceHandle
+        val stableGeneration = coordinator.state.value.sessionGeneration
+        val stableOpenCount = platform.openTokens.size
+        val stableEvents = platform.events.toList()
+
+        coordinator.setSessionTokens(mapOf(9L to 77))
+
+        assertEquals(stableHandle, coordinator.state.value.assignments.getValue(9L).sourceHandle)
+        assertEquals(stableGeneration, coordinator.state.value.sessionGeneration)
+        assertEquals(stableOpenCount, platform.openTokens.size)
+        assertEquals(stableEvents, platform.events)
+    }
+
+    @Test
+    fun selectingExplicitTokenForAmbiguousTokenlessAssignmentRestartsSession() {
+        val identity = UsbMidiPortIdentity(10, 20, "", 1)
+        val endpoints = listOf(endpoint(identity, 42), endpoint(identity, 43))
+        val platform = LifecyclePlatform(endpoints, FakeDevice(42, listOf(FakePort(1))))
+        val coordinator = UsbMidiCoordinator(platform, FakeSink(platform.events))
+
+        coordinator.setAssignments(mapOf(9L to UsbMidiAssignment(identity, "Saved")))
+        coordinator.start()
+
+        assertEquals(
+            MidiAssignmentStatus.Ambiguous,
+            coordinator.state.value.assignments.getValue(9L).status,
+        )
+        val ambiguousGeneration = coordinator.state.value.sessionGeneration
+        val ambiguousOpenCount = platform.openTokens.size
+
+        coordinator.setSessionTokens(mapOf(9L to 42))
+
+        assertEquals(ambiguousGeneration + 1, coordinator.state.value.sessionGeneration)
+        assertEquals(ambiguousOpenCount + 1, platform.openTokens.size)
+        assertEquals(listOf(42), platform.openTokens)
+        assertEquals(
+            MidiAssignmentStatus.Connected,
+            coordinator.state.value.assignments.getValue(9L).status,
+        )
+    }
+
+
+
+    @Test
+    fun reorderingConnectedEndpointSetKeepsLifecycleAndUpdatesPublishedOrder() {
+        val firstIdentity = UsbMidiPortIdentity(10, 20, "serial", 0)
+        val secondIdentity = firstIdentity.copy(portNumber = 1)
+        val first = endpoint(firstIdentity, 77)
+        val second = endpoint(secondIdentity, 77)
+        val platform = LifecyclePlatform(listOf(first, second), FakeDevice(
+            77,
+            listOf(FakePort(0), FakePort(1)),
+        ))
+        val coordinator = UsbMidiCoordinator(platform, FakeSink(platform.events))
+        coordinator.setAssignments(
+            mapOf(
+                1L to UsbMidiAssignment(firstIdentity, "First"),
+                2L to UsbMidiAssignment(secondIdentity, "Second"),
+            ),
+        )
+        coordinator.start()
+
+        val connected = coordinator.state.value.assignments
+        assertTrue(connected.values.all { it.status == MidiAssignmentStatus.Connected })
+        val stableHandles = connected.mapValues { it.value.sourceHandle }
+        val stableGeneration = coordinator.state.value.sessionGeneration
+        val stableOpenCount = platform.openTokens.size
+        val stableEvents = platform.events.toList()
+
+        val reordered = listOf(second, first)
+
+        coordinator.setAvailable(reordered)
+
+        assertEquals(reordered, coordinator.state.value.endpoints)
+        assertEquals(stableGeneration, coordinator.state.value.sessionGeneration)
+        assertEquals(
+            stableHandles,
+            coordinator.state.value.assignments.mapValues { it.value.sourceHandle },
+        )
+        assertEquals(stableOpenCount, platform.openTokens.size)
+        assertEquals(stableEvents, platform.events)
+    }
+
+    @Test
+    fun changingConnectedEndpointLabelKeepsLifecycleAndUpdatesPublishedLabel() {
+        val identity = UsbMidiPortIdentity(10, 20, "serial", 0)
+        val initial = endpoint(identity, 77)
+        val renamed = initial.copy(displayName = "Renamed")
+        val platform = LifecyclePlatform(listOf(initial), FakeDevice(77, listOf(FakePort(0))))
+        val coordinator = UsbMidiCoordinator(platform, FakeSink(platform.events))
+        coordinator.setAssignments(mapOf(1L to UsbMidiAssignment(identity, "Saved")))
+        coordinator.start()
+
+        val stableHandle = coordinator.state.value.assignments.getValue(1L).sourceHandle
+        val stableGeneration = coordinator.state.value.sessionGeneration
+        val stableOpenCount = platform.openTokens.size
+        val stableEvents = platform.events.toList()
+
+        coordinator.setAvailable(listOf(renamed))
+        assertEquals(
+            MidiAssignmentStatus.Connected,
+            coordinator.state.value.assignments.getValue(1L).status,
+        )
+
+        assertEquals(listOf(renamed), coordinator.state.value.endpoints)
+        assertEquals(stableGeneration, coordinator.state.value.sessionGeneration)
+        assertEquals(
+            stableHandle,
+            coordinator.state.value.assignments.getValue(1L).sourceHandle,
+        )
+        assertEquals(stableOpenCount, platform.openTokens.size)
+        assertEquals(stableEvents, platform.events)
+    }
+
+
+    @Test
     fun groupedPortsOpenOneDeviceAndStopTeardownIsDisconnectCloseUnregisterThenDeviceClose() {
         val first = UsbMidiPortIdentity(10, 20, "serial", 0)
         val second = first.copy(portNumber = 1)
@@ -502,6 +669,77 @@ class UsbMidiInputManagerTest {
         )
         assertEquals(listOf("register-1", "enqueue", "flush-1", "unregister-1"), sink.calls)
         assertEquals(MidiAssignmentStatus.Failed, coordinator.state.value.assignments.getValue(1L).status)
+    }
+
+    @Test
+    fun selectingFailedEndpointAgainWithSameTokenStartsExactlyOneNewAttempt() {
+        val identity = UsbMidiPortIdentity(10, 20, "serial", 0)
+        val endpoint = endpoint(identity, 7)
+        val device = FakeDevice(7, listOf(FakePort(0, connectResult = false)))
+        val platform = LifecyclePlatform(listOf(endpoint), device)
+        val coordinator = UsbMidiCoordinator(platform, FakeSink(platform.events))
+
+        coordinator.setAssignments(
+            mapOf(1L to UsbMidiAssignment(identity, "one", deviceToken = 7)),
+        )
+        coordinator.setAvailable(listOf(endpoint))
+        coordinator.start()
+
+        assertEquals(
+            MidiAssignmentStatus.Failed,
+            coordinator.state.value.assignments.getValue(1L).status,
+        )
+        val failedGeneration = coordinator.state.value.sessionGeneration
+        val failedOpenCount = platform.openTokens.size
+
+        coordinator.setSessionTokens(mapOf(1L to 7))
+
+        assertEquals(failedGeneration + 1, coordinator.state.value.sessionGeneration)
+        assertEquals(failedOpenCount + 1, platform.openTokens.size)
+        assertEquals(listOf(7, 7), platform.openTokens)
+        assertEquals(
+            MidiAssignmentStatus.Failed,
+            coordinator.state.value.assignments.getValue(1L).status,
+        )
+    }
+
+    @Test
+    fun selectingDisconnectedEndpointAgainWithSameTokenRetriesMissingOutputPort() {
+        val identity = UsbMidiPortIdentity(10, 20, "serial", 0)
+        val endpoint = endpoint(identity, 7)
+        val port = FakePort(0)
+        val device = FakeDevice(
+            token = 7,
+            ports = listOf(port),
+            outputPortSequence = listOf(null, port),
+        )
+        val platform = LifecyclePlatform(listOf(endpoint), device)
+        val coordinator = UsbMidiCoordinator(platform, FakeSink(platform.events))
+
+        coordinator.setAssignments(
+            mapOf(1L to UsbMidiAssignment(identity, "one", deviceToken = 7)),
+        )
+        coordinator.setAvailable(listOf(endpoint))
+        coordinator.start()
+
+        assertEquals(
+            MidiAssignmentStatus.Disconnected,
+            coordinator.state.value.assignments.getValue(1L).status,
+        )
+        val disconnectedGeneration = coordinator.state.value.sessionGeneration
+        val disconnectedOpenCount = platform.openTokens.size
+        val disconnectedPortAttempts = device.outputPortAttempts
+
+        coordinator.setSessionTokens(mapOf(1L to 7))
+
+        assertEquals(disconnectedGeneration + 1, coordinator.state.value.sessionGeneration)
+        assertEquals(disconnectedOpenCount + 1, platform.openTokens.size)
+        assertEquals(disconnectedPortAttempts + 1, device.outputPortAttempts)
+        assertEquals(listOf(7, 7), platform.openTokens)
+        assertEquals(
+            MidiAssignmentStatus.Connected,
+            coordinator.state.value.assignments.getValue(1L).status,
+        )
     }
 
     @Test
@@ -687,16 +925,27 @@ class UsbMidiInputManagerTest {
     private class FakeDevice(
         override val token: Int,
         val ports: List<FakePort>,
+        private val outputPortSequence: List<MidiPlatformPort?> = emptyList(),
     ) : MidiPlatformDevice {
         private var events: MutableList<String>? = null
+        private var outputPortAttemptIndex = 0
+        val outputPortAttempts: Int
+            get() = outputPortAttemptIndex
 
         fun attachEvents(log: MutableList<String>) {
             events = log
             ports.forEach { it.platformEvents = log }
         }
 
-        override fun openOutputPort(portNumber: Int): MidiPlatformPort? =
-            ports.firstOrNull { it.portNumber == portNumber }
+        override fun openOutputPort(portNumber: Int): MidiPlatformPort? {
+            val attempt = outputPortAttemptIndex++
+            if (outputPortSequence.isNotEmpty()) {
+                return outputPortSequence.getOrNull(attempt)?.takeIf {
+                    it.portNumber == portNumber
+                }
+            }
+            return ports.firstOrNull { it.portNumber == portNumber }
+        }
 
         override fun close() {
             events?.add("close-device-$token")

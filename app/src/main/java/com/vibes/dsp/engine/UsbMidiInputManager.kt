@@ -413,7 +413,7 @@ internal class UsbMidiCoordinator(
     val state = MutableStateFlow(UsbMidiState())
 
     fun setAssignments(assignments: Map<Long, UsbMidiAssignment>) {
-        desired = assignments.mapValues { (trackId, incoming) ->
+        val next = assignments.mapValues { (trackId, incoming) ->
             val previous = desired[trackId]
             if (incoming.deviceToken == null && previous?.identity == incoming.identity) {
                 incoming.copy(deviceToken = previous.deviceToken)
@@ -421,28 +421,68 @@ internal class UsbMidiCoordinator(
                 incoming
             }
         }
-        if (sessionRunning) restartSession() else publish()
+        val changed = !sameSessionAssignments(desired, next)
+        desired = next
+        if (sessionRunning && changed) restartSession() else publish()
     }
 
     fun setSessionTokens(tokens: Map<Long, Int>) {
-        desired = desired.mapValues { (trackId, assignment) ->
+        val next = desired.mapValues { (trackId, assignment) ->
             assignment.copy(deviceToken = tokens[trackId] ?: assignment.deviceToken)
         }
-        if (sessionRunning) restartSession() else publish()
+        val changed =
+            routingSignature(desired, available) != routingSignature(next, available)
+        val retryUnsuccessful = next.any { (trackId, assignment) ->
+            tokens.containsKey(trackId) &&
+                resolveEndpoint(assignment, available) != null &&
+                (runtime[trackId]?.first == MidiAssignmentStatus.Failed ||
+                    runtime[trackId]?.first == MidiAssignmentStatus.Disconnected)
+        }
+        desired = next
+        if (sessionRunning && (changed || retryUnsuccessful)) restartSession() else publish()
     }
 
     fun setAvailable(endpoints: List<UsbMidiEndpoint>) {
-        available = endpoints
-        desired = desired.mapValues { (_, assignment) ->
+        val nextDesired = desired.mapValues { (_, assignment) ->
             val token = assignment.deviceToken
-            if (token != null && matchUsbAssignment(assignment.identity, available)
+            if (token != null && matchUsbAssignment(assignment.identity, endpoints)
                     .none { it.deviceToken == token }) {
                 assignment.copy(deviceToken = null, sourceHandle = 0L)
             } else {
                 assignment
             }
         }
-        if (sessionRunning) restartSession() else publish()
+        val changed = endpointSessionKeys(available) != endpointSessionKeys(endpoints) ||
+            !sameSessionAssignments(desired, nextDesired) ||
+            routingSignature(desired, available) != routingSignature(nextDesired, endpoints)
+        available = endpoints
+        desired = nextDesired
+        if (sessionRunning && changed) restartSession() else publish()
+    }
+
+    private fun endpointSessionKeys(
+        endpoints: List<UsbMidiEndpoint>,
+    ): Set<Pair<UsbMidiPortIdentity, Int>> =
+        endpoints.mapTo(mutableSetOf()) { it.identity to it.deviceToken }
+
+    private fun routingSignature(
+        assignments: Map<Long, UsbMidiAssignment>,
+        endpoints: List<UsbMidiEndpoint>,
+    ): Map<Long, Pair<UsbMidiPortIdentity, Int>?> =
+        assignments.mapValues { (_, assignment) ->
+            resolveEndpoint(assignment, endpoints)?.let { it.identity to it.deviceToken }
+        }
+
+    private fun sameSessionAssignments(
+        left: Map<Long, UsbMidiAssignment>,
+        right: Map<Long, UsbMidiAssignment>,
+    ): Boolean {
+        if (left.size != right.size || left.keys != right.keys) return false
+        return left.all { (trackId, assignment) ->
+            val other = right[trackId] ?: return false
+            assignment.identity == other.identity &&
+                assignment.deviceToken == other.deviceToken
+        }
     }
 
     fun startDiscovery() {
@@ -716,8 +756,11 @@ internal class UsbMidiCoordinator(
         }
     }
 
-    private fun resolveEndpoint(assignment: UsbMidiAssignment): UsbMidiEndpoint? {
-        val matches = matchUsbAssignment(assignment.identity, available)
+    private fun resolveEndpoint(
+        assignment: UsbMidiAssignment,
+        endpoints: List<UsbMidiEndpoint> = available,
+    ): UsbMidiEndpoint? {
+        val matches = matchUsbAssignment(assignment.identity, endpoints)
         if (matches.isEmpty()) return null
         if (assignment.identity.serialNumber.isBlank()) {
             assignment.deviceToken?.let { token ->

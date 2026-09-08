@@ -3878,6 +3878,11 @@ TEST(RackGraphInputArmingTest, InvalidArmLockIdReturnsFalseWithoutMutatingTrackS
     EXPECT_TRUE(trackSnapshot(graph, third, tracks).inputArmed);
     EXPECT_FALSE(trackSnapshot(graph, third, tracks).inputArmLocked);
 }
+// A plugin whose *reported* latency moves must not silence the rest of the rack.
+// RackGraph zeroes latencyHistoryValid on any latency change, and the delayed
+// read path emits hard 0.0f while valid < delay, so a plugin that rewrites its
+// PDC every block (JSFX scripts do this from @slider/@block) can hold every
+// other track silent indefinitely.
 TEST(RackGraphPluginRoutingTest, TrackChainRoutesProcessedStereoToDirectOutput) {
     RackGraph graph;
     configure(graph);
@@ -5671,6 +5676,70 @@ TEST(RackGraphMidiRoutingTest, ArmAndSourceLifecycleEachEmitOneOrderedPanicQuant
         capturePtr->clear();
         graph.process(buffers.inputs, 2, buffers.outputs, 1);
         EXPECT_EQ(capturePtr->count(), 0u);
+    }
+}
+
+TEST(RackGraphMidiRoutingTest, PanicQuantumSuppressesPendingLiveAndRoutedNormalMessages) {
+    {
+        RackGraph graph;
+        configure(graph);
+        const RackPathId track = graph.getTracks().front().id;
+        ASSERT_TRUE(graph.setTrackInputArmed(track, true));
+        const auto identity = routingIdentity("panic-live");
+        const uint64_t handle = graph.registerUsbMidiSource(identity);
+        ASSERT_NE(handle, 0u);
+        ASSERT_TRUE(graph.setTrackMidiInputUsb(track, identity, "USB", handle));
+
+        auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+        auto* capturePtr = capture.get();
+        ASSERT_EQ(graph.getChain(track)->addPlugin(std::move(capture)), 0);
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        capturePtr->clear();
+
+        graph.flushUsbMidiSource(handle);
+        enqueueRoutingMessage(graph, handle, {0x90, 60, 100});
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        expectPanic(*capturePtr);
+    }
+
+    {
+        RackGraph graph;
+        configure(graph);
+        const RackPathId upstream = graph.getTracks().front().id;
+        const RackPathId downstream = graph.addTrack();
+        ASSERT_TRUE(graph.setTrackInputArmed(downstream, true));
+        ASSERT_TRUE(graph.attachTrackMidiSlot(
+            upstream, 0, makeScheduledMidiClip(
+                1'000'000, {0u, 16'667u, 33'334u})));
+        ASSERT_TRUE(graph.setTrackMidiInputTrack(downstream, upstream));
+
+        auto capture = std::make_unique<RoutingMidiCapturePlugin>();
+        auto* capturePtr = capture.get();
+        ASSERT_EQ(graph.getChain(downstream)->addPlugin(std::move(capture)), 0);
+        ASSERT_TRUE(graph.setTransportPlaying(true));
+        StereoBuffers buffers;
+        clearBuffers(buffers);
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        capturePtr->clear();
+        ASSERT_TRUE(graph.setClipTransportPlaying(
+            upstream, 0, true, guitarrackcraft::LaunchQuantization::None));
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        ASSERT_EQ(capturePtr->count(), 1u);
+        EXPECT_EQ(capturePtr->event(0).bytes[1], 60u);
+        capturePtr->clear();
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        ASSERT_EQ(capturePtr->count(), 1u);
+        EXPECT_EQ(capturePtr->event(0).bytes[1], 61u);
+        capturePtr->clear();
+
+        // The routed event at the next frame is valid, but the arm transition
+        // requests a panic quantum that must suppress it.
+        ASSERT_TRUE(graph.setTrackInputArmed(downstream, false));
+        ASSERT_TRUE(graph.setTrackInputArmed(downstream, true));
+        graph.process(buffers.inputs, 2, buffers.outputs, 1);
+        expectPanic(*capturePtr);
     }
 }
 

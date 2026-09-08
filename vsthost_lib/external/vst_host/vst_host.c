@@ -29,7 +29,7 @@
 #include <math.h>
 #include <string.h>
 #include <setjmp.h>
-#include <stdint.h>
+#include <stddef.h>
 #include "vst2.h"
 #include "shared_layout.h"
 #include "vst_host_midi.h"
@@ -42,10 +42,30 @@ typedef struct {
 } VstMidiEvent;
 typedef struct {
     int32_t type, byteSize, deltaFrames, flags;
-    uint8_t* sysexDump;
     int32_t dumpBytes;
-    uint8_t reserved[8];
+    intptr_t resvd1;
+    char* sysexDump;
+    intptr_t resvd2;
 } VstMidiSysexEvent;
+
+_Static_assert(offsetof(VstMidiSysexEvent, type) == 0, "VST2 SysEx type offset");
+_Static_assert(offsetof(VstMidiSysexEvent, byteSize) == 4, "VST2 SysEx byteSize offset");
+_Static_assert(offsetof(VstMidiSysexEvent, deltaFrames) == 8, "VST2 SysEx deltaFrames offset");
+_Static_assert(offsetof(VstMidiSysexEvent, flags) == 12, "VST2 SysEx flags offset");
+_Static_assert(offsetof(VstMidiSysexEvent, dumpBytes) == 16, "VST2 SysEx dumpBytes offset");
+#if INTPTR_MAX == INT32_MAX
+_Static_assert(offsetof(VstMidiSysexEvent, resvd1) == 20, "VST2 SysEx resvd1 offset (x86)");
+_Static_assert(offsetof(VstMidiSysexEvent, sysexDump) == 24, "VST2 SysEx sysexDump offset (x86)");
+_Static_assert(offsetof(VstMidiSysexEvent, resvd2) == 28, "VST2 SysEx resvd2 offset (x86)");
+_Static_assert(sizeof(VstMidiSysexEvent) == 32, "VST2 SysEx size (x86)");
+#elif INTPTR_MAX == INT64_MAX
+_Static_assert(offsetof(VstMidiSysexEvent, resvd1) == 24, "VST2 SysEx resvd1 offset (x64)");
+_Static_assert(offsetof(VstMidiSysexEvent, sysexDump) == 32, "VST2 SysEx sysexDump offset (x64)");
+_Static_assert(offsetof(VstMidiSysexEvent, resvd2) == 40, "VST2 SysEx resvd2 offset (x64)");
+_Static_assert(sizeof(VstMidiSysexEvent) == 48, "VST2 SysEx size (x64)");
+#else
+#error "Unsupported pointer width for VST2 SysEx ABI"
+#endif
 typedef struct {
     int32_t numEvents, reserved;
     VstMidiEvent* events[VSTPOC_MAX_MIDI_EVENTS_PER_BLOCK];
@@ -361,7 +381,7 @@ static void dispatch_midi(AEffect* effect, const VstHostMidiBuffer* input) {
             sysex[i].byteSize = sizeof(sysex[i]);
             sysex[i].deltaFrames = (int32_t)clamp_frame((int32_t)d->frame_offset);
             sysex[i].dumpBytes = (int32_t)d->payload_size;
-            sysex[i].sysexDump = (uint8_t*)bytes;
+            sysex[i].sysexDump = (char*)bytes;
             events.events[events.numEvents - 1] = (VstMidiEvent*)&sysex[i];
         } else if (d->payload_size <= 3) {
             memset(&midi[i], 0, sizeof(midi[i]));
@@ -911,7 +931,7 @@ static VST_CALL intptr_t host_callback(AEffect* eff, int32_t opcode,
                         g_midi_capture->dropped++; continue;
                     }
                     vst_host_midi_append_vst_sysex(g_midi_capture, frame, sx->type, sx->byteSize,
-                                                   sx->dumpBytes, sx->sysexDump);
+                                                   sx->dumpBytes, (const uint8_t*)sx->sysexDump);
                 } else {
                     if (frame < 0 || (g_transport.block_frames && (uint32_t)frame >= g_transport.block_frames)) {
                         g_midi_capture->dropped++; continue;

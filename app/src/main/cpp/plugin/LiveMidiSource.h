@@ -44,6 +44,7 @@ public:
         if (frameCount == 0 || sampleRate <= 0.0) {
             Descriptor descriptor{};
             while (peekDescriptor(descriptor)) consumeDescriptor(descriptor);
+            destination.stableSortByFrameOffset();
             return 0;
         }
         const uint64_t window = static_cast<uint64_t>(
@@ -77,6 +78,7 @@ public:
             consumeDescriptor(descriptor);
             ++drained;
         }
+        destination.stableSortByFrameOffset();
         return drained;
     }
     uint64_t dropped() const noexcept { return ingressDrops_.load(std::memory_order_relaxed); }

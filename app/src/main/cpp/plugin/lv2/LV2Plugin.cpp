@@ -434,6 +434,18 @@ MidiOutputDisposition LV2Plugin::process(const float* const* inputs, float* cons
                                     : static_cast<uint32_t>(ap.capacity - sizeof(LV2_Atom));
     }
     if (inputMidi.eventCount() > 0) {
+        std::array<bool, kMaxMidiEvents> validMidi{};
+        for (uint32_t i = 0; i < inputMidi.eventCount(); ++i) {
+            const MidiEvent& midi = inputMidi.eventAt(i);
+            if (midi.frameOffset >= maxCopy || midi.payloadSize == 0 ||
+                midi.payloadSize > kMaxMidiPayloadBytes ||
+                midi.payloadOffset > inputMidi.payloadBytes() ||
+                midi.payloadSize > inputMidi.payloadBytes() - midi.payloadOffset) {
+                outputMidi.recordRejectedMessages();
+                continue;
+            }
+            validMidi[i] = true;
+        }
         for (auto& ap : atomPorts_) {
             if (!ap.isInput || !ap.supportsMidi) continue;
             auto* seq = reinterpret_cast<LV2_Atom_Sequence*>(atomPortBuffers_[ap.bufferIdx].data());
@@ -441,14 +453,8 @@ MidiOutputDisposition LV2Plugin::process(const float* const* inputs, float* cons
             const size_t bodyCapacity =
                 ap.capacity - sizeof(LV2_Atom) - sizeof(LV2_Atom_Sequence_Body);
             for (uint32_t i = 0; i < inputMidi.eventCount(); ++i) {
+                if (!validMidi[i]) continue;
                 const MidiEvent& midi = inputMidi.eventAt(i);
-                if (midi.frameOffset >= maxCopy || midi.payloadSize == 0 ||
-                    midi.payloadSize > kMaxMidiPayloadBytes ||
-                    midi.payloadOffset > inputMidi.payloadBytes() ||
-                    midi.payloadSize > inputMidi.payloadBytes() - midi.payloadOffset) {
-                    outputMidi.recordRejectedMessages();
-                    continue;
-                }
                 const uint32_t eventBytes = sizeof(LV2_Atom_Event) + midi.payloadSize;
                 const uint32_t padded = (eventBytes + 7u) & ~uint32_t(7u);
                 if (used < sizeof(LV2_Atom_Sequence_Body) ||

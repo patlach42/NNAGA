@@ -265,6 +265,20 @@ public:
         rejectedMessages_ = dropped;
         return dropped;
     }
+    /** Stable in-place insertion sort by frame offset; payload ownership is unchanged. */
+    void stableSortByFrameOffset() noexcept {
+        for (uint32_t i = 1; i < eventCount_; ++i) {
+            const MidiEvent value = events_[i];
+            uint32_t position = i;
+            while (position > 0 &&
+                   events_[position - 1].frameOffset > value.frameOffset) {
+                events_[position] = events_[position - 1];
+                --position;
+            }
+            events_[position] = value;
+        }
+    }
+
 
     /** Remove invalid events and compact their payload bytes in place. */
     uint32_t discardInvalid(uint32_t numFrames) noexcept {

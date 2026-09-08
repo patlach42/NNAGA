@@ -218,8 +218,9 @@ private fun midiInputLabel(
 private fun midiEndpointMatches(track: RackTrackInfo, endpoint: UsbMidiEndpoint): Boolean =
     track.midiVendorId == endpoint.identity.vendorId &&
         track.midiProductId == endpoint.identity.productId &&
-        track.midiSerialNumber == endpoint.identity.serialNumber &&
-        track.midiPortNumber == endpoint.identity.portNumber
+        track.midiPortNumber == endpoint.identity.portNumber &&
+        (track.midiSerialNumber.isBlank() ||
+            track.midiSerialNumber == endpoint.identity.serialNumber)
 
 private fun midiEndpointLabel(endpoint: UsbMidiEndpoint, endpoints: List<UsbMidiEndpoint>): String {
     val duplicates = endpoints.filter {

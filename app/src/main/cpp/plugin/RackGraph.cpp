@@ -53,10 +53,10 @@ void RackGraph::flushUsbMidiSource(uint64_t handle) {
     std::lock_guard lock(controlMutex_);
     auto it = midiSourceRegistry_.find(handle);
     if (it == midiSourceRegistry_.end()) return;
-    it->second->flush();
     for (auto& node : tracks_)
         if (node->midiInputSource.runtimeSourceHandle == handle)
             node->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    it->second->flush();
 }
 uint32_t RackGraph::enqueueUsbMidiBatch(uint64_t handle, const uint64_t* timestamps,
         const uint32_t* offsets, const uint32_t* lengths, const uint8_t* payload,
@@ -77,15 +77,21 @@ bool RackGraph::setTrackMidiInputNone(RackPathId id) {
     const auto old = (*it)->midiInputSource;
     if (old.kind == TrackMidiInputSource::Kind::None) return true;
     (*it)->midiInputSource = TrackMidiInputSource{};
-    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
+    auto candidate = buildSnapshotLocked(tracks_, clips_, recordingClips_);
+    if (!candidate) {
         (*it)->midiInputSource = old;
         return false;
     }
     (*it)->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    publishSnapshotLocked(std::move(candidate));
     return true;
 }
 bool RackGraph::setTrackMidiInputUsb(RackPathId id, const UsbMidiPortIdentity& identity,
                                      const std::string& displayName, uint64_t handle) {
+    if ((!identity.serialNumber.empty() && !isValidTrackName(identity.serialNumber)) ||
+        (!displayName.empty() && !isValidTrackName(displayName))) {
+        return false;
+    }
     std::lock_guard lock(controlMutex_);
     auto it = std::find_if(tracks_.begin(), tracks_.end(), [&](const auto& n){ return n->id == id; });
     if (it == tracks_.end()) return false;
@@ -98,11 +104,13 @@ bool RackGraph::setTrackMidiInputUsb(RackPathId id, const UsbMidiPortIdentity& i
     if (old.kind == next.kind && old.usb == next.usb && old.displayName == next.displayName &&
         old.runtimeSourceHandle == next.runtimeSourceHandle) return true;
     (*it)->midiInputSource = next;
-    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
+    auto candidate = buildSnapshotLocked(tracks_, clips_, recordingClips_);
+    if (!candidate) {
         (*it)->midiInputSource = old;
         return false;
     }
     (*it)->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    publishSnapshotLocked(std::move(candidate));
     return true;
 }
 bool RackGraph::setTrackMidiInputTrack(RackPathId id, RackPathId sourceId) {
@@ -116,11 +124,13 @@ bool RackGraph::setTrackMidiInputTrack(RackPathId id, RackPathId sourceId) {
     nextSource.trackId = sourceId;
     if (old.kind == nextSource.kind && old.trackId == nextSource.trackId) return true;
     (*it)->midiInputSource = nextSource;
-    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
+    auto candidate = buildSnapshotLocked(tracks_, clips_, recordingClips_);
+    if (!candidate) {
         (*it)->midiInputSource = old;
         return false;
     }
     (*it)->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    publishSnapshotLocked(std::move(candidate));
     return true;
 }
 bool RackGraph::bindTrackUsbMidiSource(RackPathId id, uint64_t handle) {
@@ -133,11 +143,13 @@ bool RackGraph::bindTrackUsbMidiSource(RackPathId id, uint64_t handle) {
     if ((*ti)->midiInputSource.runtimeSourceHandle == handle) return true;
     const auto old = (*ti)->midiInputSource.runtimeSourceHandle;
     (*ti)->midiInputSource.runtimeSourceHandle = handle;
-    if (!publishSnapshotLocked(buildSnapshotLocked(tracks_, clips_, recordingClips_))) {
+    auto candidate = buildSnapshotLocked(tracks_, clips_, recordingClips_);
+    if (!candidate) {
         (*ti)->midiInputSource.runtimeSourceHandle = old;
         return false;
     }
     (*ti)->midiPanicGeneration.fetch_add(1, std::memory_order_release);
+    publishSnapshotLocked(std::move(candidate));
     return true;
 }
 TrackMidiInputSource RackGraph::getTrackMidiInputSource(RackPathId id) const {
@@ -1788,6 +1800,7 @@ void RackGraph::process(
         }
         node.panicMidi.clear();
         const uint32_t panicGeneration = node.midiPanicGeneration.load(std::memory_order_acquire);
+        bool consumedPanic = false;
         if (panicGeneration != node.midiPanicAppliedGeneration.load(std::memory_order_relaxed)) {
             static const uint8_t kPanicCc[3] = {0xB0, 64, 0};
             static const uint8_t kPanicAllNotes[3] = {0xB0, 123, 0};
@@ -1798,11 +1811,12 @@ void RackGraph::process(
                 node.panicMidi.append(0, all, 3);
             }
             node.midiPanicAppliedGeneration.store(panicGeneration, std::memory_order_release);
+            consumedPanic = true;
         }
         node.midiInput.clear();
         node.clipMidi.clear();
         node.mergeMidi.clear();
-        if (node.inputArmed.load(std::memory_order_relaxed) &&
+        if (!consumedPanic && node.inputArmed.load(std::memory_order_relaxed) &&
             view.midiSourceIndex >= 0) {
             const auto sourceIndex =
                 static_cast<uint32_t>(view.midiSourceIndex);
@@ -1818,7 +1832,7 @@ void RackGraph::process(
                 }
             }
         }
-        if (node.inputArmed.load(std::memory_order_relaxed) && view.midiRouteIndex >= 0) {
+        if (!consumedPanic && node.inputArmed.load(std::memory_order_relaxed) && view.midiRouteIndex >= 0) {
             const auto& routedMidi = *snapshot->tracks[static_cast<uint32_t>(view.midiRouteIndex)].node;
             for (uint32_t e = 0; e < routedMidi.outputMidi.eventCount(); ++e) {
                 if (!node.midiInput.append(routedMidi.outputMidi, routedMidi.outputMidi.eventAt(e)))
