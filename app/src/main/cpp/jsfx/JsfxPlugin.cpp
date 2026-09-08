@@ -5,6 +5,7 @@
 #include "JsfxPlugin.h"
 #include "JsfxUiHost.h"
 #include "JsfxYsfxInternals.h"
+#include "../plugin/AudioPathDiagnostics.h"
 #include <algorithm>
 #include <cmath>
 
@@ -213,13 +214,28 @@ MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* con
         }
         return MidiOutputDisposition::Passthrough;
     };
-    if (!fx_ || !active_.load(std::memory_order_acquire) ||
-        callbackFaulted_.load(std::memory_order_acquire) || frames == 0 ||
-        frames > quantum_.load(std::memory_order_acquire) ||
-        frames > kMaxQuantum || !inputs || !inputs[0] || !inputs[1] ||
-        !outputs || !outputs[0] || !outputs[1] ||
-        initPending_.load(std::memory_order_acquire))
+    auto& diag = diag::counters();
+    if (!fx_ || !active_.load(std::memory_order_acquire)) {
+        diag.jsfxNotActive.fetch_add(1, std::memory_order_relaxed);
         return passthrough();
+    }
+    if (callbackFaulted_.load(std::memory_order_acquire)) {
+        diag.jsfxFaulted.fetch_add(1, std::memory_order_relaxed);
+        return passthrough();
+    }
+    if (frames == 0 || frames > quantum_.load(std::memory_order_acquire) ||
+        frames > kMaxQuantum) {
+        diag.jsfxOversized.fetch_add(1, std::memory_order_relaxed);
+        return passthrough();
+    }
+    if (!inputs || !inputs[0] || !inputs[1] || !outputs || !outputs[0] || !outputs[1]) {
+        diag.jsfxBadPorts.fetch_add(1, std::memory_order_relaxed);
+        return passthrough();
+    }
+    if (initPending_.load(std::memory_order_acquire)) {
+        diag.jsfxInitBypass.fetch_add(1, std::memory_order_relaxed);
+        return passthrough();
+    }
     // The audio thread never yields the VM to the UI. ysfx is designed for
     // @gfx and @sample to run on separate threads concurrently -- that is what
     // its thread-id guards are for, and it is what REAPER and ysfx's own plugin
@@ -240,6 +256,7 @@ MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* con
         // @sample: take the flag, bypass this block, and let the worker run it.
         if (jsfxTakePendingInit(fx_)) {
             initPending_.store(true, std::memory_order_release);
+            diag.jsfxInitBypass.fetch_add(1, std::memory_order_relaxed);
             {
                 std::lock_guard lock(sliderMutex_);
                 sliderPending_ = true;

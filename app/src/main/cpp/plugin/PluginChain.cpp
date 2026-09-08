@@ -1,4 +1,5 @@
 #include "PluginChain.h"
+#include "AudioPathDiagnostics.h"
 
 #include <algorithm>
 #include <chrono>
@@ -321,6 +322,9 @@ void PluginChain::process(const float* const* inputs,
         !outputs || !outputs[0] || !outputs[1]) {
         if (numFrames > quantum || numFrames > renderCapacity) {
             oversizedBlocks_.fetch_add(1, std::memory_order_relaxed);
+            diag::counters().chainOversized.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            diag::counters().chainNoPlan.fetch_add(1, std::memory_order_relaxed);
         }
         clearOutputs(outputs, numFrames);
         return;

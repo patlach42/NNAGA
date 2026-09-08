@@ -18,6 +18,7 @@
  */
 
 #include "AudioEngine.h"
+#include "../plugin/AudioPathDiagnostics.h"
 #include "RoundTripCorrelation.h"
 #include "utils/WavIO.h"
 #include <liblowlatencyaudio/ThreadUtils.h>
@@ -95,6 +96,7 @@ AudioEngine::AudioEngine()
     , isRunning_(false)
     , androidOboeBackend_(std::make_unique<AndroidOboeBackend>(rackGraph_))
 {
+    diag::startLogging();
     inputPtrs_[1] = nullptr;
     outputPtrs_[0] = nullptr;
     outputPtrs_[1] = nullptr;

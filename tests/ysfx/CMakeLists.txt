@@ -13,6 +13,7 @@ add_executable(ysfx_smoke_contract_tests
     TestYsfxSmoke.cpp
     TestJsfxPluginContract.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/plugin/PluginChain.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/plugin/AudioPathDiagnostics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/jsfx/JsfxPlugin.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/jsfx/JsfxYsfxInternals.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/jsfx/JsfxPluginFactory.cpp
