@@ -9,8 +9,11 @@
 #include <ysfx.h>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <memory>
+#include <condition_variable>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -41,6 +44,18 @@ public:
 
 private:
     static constexpr uint32_t kMaxSliders = ysfx_max_sliders;
+    // One bit per slider, packed into 64-bit words, matching NativePlugin, so
+    // the audio thread scans four atomic words per block instead of 256 atomic
+    // read-modify-writes.
+    static constexpr uint32_t kSliderWords = ysfx_max_slider_groups;
+    static_assert(kSliderWords * 64 == kMaxSliders,
+                  "slider change mask must cover every slider exactly once");
+    // A JSFX may rewrite its PDC from any section, so a reported-latency change
+    // is only published once the script has held the same value this many
+    // consecutive blocks. At 48-frame blocks/48 kHz this is ~16 ms, short
+    // enough to be inaudible for a real change and long enough that per-block
+    // jitter never reaches the graph's delay compensation.
+    static constexpr uint32_t kLatencyStableBlocks = 16;
     static constexpr uint32_t kMaxQuantum = 8192;
     static constexpr uint32_t kMidiCapacityBytes = 67'584;
     std::shared_ptr<ysfx_config_t> config_;
@@ -50,13 +65,28 @@ private:
     std::string id_;
     PluginInfo info_;
     std::array<std::atomic<float>, kMaxSliders> pending_{};
-    std::array<std::atomic<bool>, kMaxSliders> dirty_{};
+    std::array<std::atomic<uint64_t>, kSliderWords> dirty_{};
     std::atomic<bool> active_{false};
     std::atomic<bool> ready_{false};
     std::atomic<bool> callbackFaulted_{false};
     std::atomic<uint32_t> quantum_{0};
     std::atomic<uint32_t> latencyFrames_{0};
+    // Audio-thread only; guarded by the single-writer process() path.
+    uint32_t latencyCandidate_ = 0;
+    uint32_t latencyStableBlocks_ = 0;
     mutable std::mutex controlMutex_;
+
+    // @slider is script-defined and unbounded, so it runs here rather than on
+    // the audio thread. The worker coalesces: whatever slider values are
+    // pending when it wakes are applied together, then @slider runs once. The
+    // audio thread keeps processing with the previous coefficients meanwhile.
+    void sliderWorkerLoop();
+    void applyPendingSliders();
+    std::thread sliderWorker_;
+    std::mutex sliderMutex_;
+    std::condition_variable sliderSignal_;
+    bool sliderPending_ = false;
+    bool sliderWorkerStopping_ = false;
 };
 
 } // namespace guitarrackcraft

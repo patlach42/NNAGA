@@ -1,0 +1,21 @@
+desc: Heavy Slider Contract
+in_pin:L
+in_pin:R
+out_pin:L
+out_pin:R
+slider1:0.5<0,1,0.001>size
+
+@init
+buf = 0;
+memset(buf, 0, 65536);
+
+@slider
+// Typical of a reverb/synth: a slider move rebuilds coefficient tables and
+// clears delay lines. This runs on the AUDIO thread inside ysfx_process.
+memset(buf, 0, 65536);
+i = 0;
+loop(20000, buf[i % 65536] = sin(i * slider1); i += 1;);
+
+@sample
+spl0 = spl0 * 0.5;
+spl1 = spl1 * 0.5;

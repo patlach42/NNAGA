@@ -1,0 +1,44 @@
+desc:bench poly synth (8 voices, saw + svf, midi)
+slider1:0.3<0,1,0.001>cutoff
+@init
+NV = 8;
+vf = 0;      // freq per voice
+vp = 100;    // phase
+va = 200;    // amp
+vl = 300;    // filter lp
+vb = 400;    // filter bp
+i = 0; loop(NV, vf[i]=0; vp[i]=0; va[i]=0; vl[i]=0; vb[i]=0; i+=1;);
+nextvoice = 0;
+@slider
+fc = 2 * $pi * (100 + slider1 * 8000) / srate;
+fc > 1.4 ? fc = 1.4;
+q = 0.8;
+@block
+while (midirecv(mpos, msg1, msg2, msg3) ? (
+  st = msg1 & 0xF0;
+  st == 0x90 && msg3 > 0 ? (
+    vf[nextvoice] = 2 * $pi * 440 * pow(2, (msg2 - 69) / 12) / srate;
+    va[nextvoice] = msg3 / 127; vp[nextvoice] = 0;
+    nextvoice = (nextvoice + 1) % NV;
+  ) : st == 0x80 || (st == 0x90 && msg3 == 0) ? (
+    i = 0; loop(NV, va[i] = va[i] * 0.0; i += 1;);
+  );
+  1;
+));
+@sample
+o = 0; i = 0;
+loop(NV,
+  va[i] > 0.0001 ? (
+    vp[i] += vf[i];
+    vp[i] > 2*$pi ? vp[i] -= 2*$pi;
+    saw = vp[i] / $pi - 1;
+    vl[i] += fc * vb[i];
+    hp = saw - vl[i] - q * vb[i];
+    vb[i] += fc * hp;
+    o += vl[i] * va[i];
+    va[i] *= 0.99995;
+  );
+  i += 1;
+);
+o *= 0.15;
+spl0 = o; spl1 = o;

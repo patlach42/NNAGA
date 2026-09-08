@@ -4,12 +4,47 @@
  */
 #include "JsfxPlugin.h"
 #include "JsfxUiHost.h"
+#include "JsfxYsfxInternals.h"
 #include <algorithm>
 #include <cmath>
 
 namespace guitarrackcraft {
 
 namespace {
+// EEL's JIT entry sequence (GLUE_CALL_CODE, glue_aarch64.h) reads FPCR and,
+// when flush-to-zero is clear, does msr/call/msr around *every* code execution.
+// @sample runs once per frame, so that is 48k FPCR writes per second per plugin
+// -- measured at 41-54 ns/sample on arm64. Android starts threads with FPCR=0,
+// so the slow branch is always taken. Setting FZ for the duration of the block
+// makes EEL take its fast branch instead; semantics are unchanged, because EEL
+// already forces FZ=1 for the whole of every JIT call today. Scoped to the ysfx
+// call so no other plugin format sees a different FP environment.
+class ScopedFlushToZero {
+public:
+    ScopedFlushToZero() {
+#if defined(__aarch64__)
+        __asm__ __volatile__("mrs %0, fpcr" : "=r"(saved_));
+        if ((saved_ & kFz) == 0) {
+            const uint64_t enabled = saved_ | kFz;
+            __asm__ __volatile__("msr fpcr, %0" : : "r"(enabled));
+        }
+#endif
+    }
+    ~ScopedFlushToZero() {
+#if defined(__aarch64__)
+        if ((saved_ & kFz) == 0)
+            __asm__ __volatile__("msr fpcr, %0" : : "r"(saved_));
+#endif
+    }
+    ScopedFlushToZero(const ScopedFlushToZero&) = delete;
+    ScopedFlushToZero& operator=(const ScopedFlushToZero&) = delete;
+private:
+#if defined(__aarch64__)
+    static constexpr uint64_t kFz = 1ull << 24;
+    uint64_t saved_ = 0;
+#endif
+};
+
 class UiPauseGuard {
 public:
     explicit UiPauseGuard(JsfxUiHost* host) : host_(host) {
@@ -70,9 +105,53 @@ JsfxPlugin::JsfxPlugin(std::shared_ptr<ysfx_config_t> config, std::string path, 
         info_.ports.push_back(std::move(port));
         pending_[index].store(static_cast<float>(curve.def), std::memory_order_relaxed);
     }
+    sliderWorker_ = std::thread([this] { sliderWorkerLoop(); });
+}
+
+void JsfxPlugin::applyPendingSliders() {
+    bool any = false;
+    for (uint32_t word = 0; word < dirty_.size(); ++word) {
+        if (dirty_[word].load(std::memory_order_relaxed) == 0) continue;
+        uint64_t changed = dirty_[word].exchange(0, std::memory_order_acquire);
+        while (changed) {
+            const uint32_t bit = static_cast<uint32_t>(__builtin_ctzll(changed));
+            const uint32_t index = word * 64 + bit;
+            // notify=false: ysfx must not schedule @slider onto the audio
+            // thread, we run it here ourselves once all values are in.
+            ysfx_slider_set_value(fx_, index,
+                                  pending_[index].load(std::memory_order_relaxed), false);
+            changed &= changed - 1;
+            any = true;
+        }
+    }
+    if (any) (void)jsfxRunSliderCode(fx_);
+}
+
+void JsfxPlugin::sliderWorkerLoop() {
+    for (;;) {
+        {
+            std::unique_lock lock(sliderMutex_);
+            sliderSignal_.wait(lock, [&] { return sliderPending_ || sliderWorkerStopping_; });
+            if (sliderWorkerStopping_) return;
+            sliderPending_ = false;
+        }
+        // controlMutex_ serialises against activate/save/restore, which also
+        // drive the VM. Anything that arrives while @slider runs is picked up
+        // on the next iteration, so a drag coalesces instead of queueing.
+        std::lock_guard lock(controlMutex_);
+        if (fx_) applyPendingSliders();
+    }
 }
 
 JsfxPlugin::~JsfxPlugin() {
+    if (sliderWorker_.joinable()) {
+        {
+            std::lock_guard lock(sliderMutex_);
+            sliderWorkerStopping_ = true;
+        }
+        sliderSignal_.notify_all();
+        sliderWorker_.join();
+    }
     uiHost_.reset();
     if (fx_) ysfx_free(fx_);
 }
@@ -91,7 +170,14 @@ void JsfxPlugin::activate(float sampleRate, uint32_t bufferSize) {
         ysfx_set_sample_rate(fx_, sampleRate);
         ysfx_set_block_size(fx_, bufferSize);
         ysfx_set_midi_capacity(fx_, kMidiCapacityBytes, false);
+        // Claim script RAM here, on the control thread, so EEL never callocs
+        // from inside @sample or @gfx.
+        jsfxPreallocRam(fx_, kJsfxPreallocItems);
         ysfx_init(fx_);
+        // ysfx_init leaves @slider pending; run it here rather than letting the
+        // first audio block pay for it.
+        applyPendingSliders();
+        (void)jsfxRunSliderCode(fx_);
         quantum_.store(bufferSize, std::memory_order_release);
         ready_.store(true, std::memory_order_release);
         active_.store(true, std::memory_order_release);
@@ -121,11 +207,15 @@ MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* con
         frames > kMaxQuantum || !inputs || !inputs[0] || !inputs[1] ||
         !outputs || !outputs[0] || !outputs[1])
         return passthrough();
-    if (uiHost_ && !uiHost_->tryAcquireEffect()) return passthrough();
+    // The audio thread never yields the VM to the UI. ysfx is designed for
+    // @gfx and @sample to run on separate threads concurrently -- that is what
+    // its thread-id guards are for, and it is what REAPER and ysfx's own plugin
+    // do. Making the audio thread stand down instead cost 0.2% of blocks with
+    // the editor closed and 8.9% with it open, and a lost block is silence for
+    // a synth and a dry jump for a reverb. A stale UI frame is the cheaper loss.
     try {
-        for (uint32_t i = 0; i < kMaxSliders; ++i)
-            if (dirty_[i].exchange(false, std::memory_order_acq_rel))
-                ysfx_slider_set_value(fx_, i, pending_[i].load(std::memory_order_relaxed), true);
+        // Slider values and @slider are applied by sliderWorkerLoop(), off the
+        // audio thread; nothing to do here.
         ysfx_time_info_t ti{};
         ti.tempo = context.beatsPerMinute;
         ti.beat_position = context.beatPosition;
@@ -145,7 +235,18 @@ MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* con
                                  inputMidi.payloadFor(midi)};
             ysfx_send_midi(fx_, &ev);
         }
-        ysfx_process_float(fx_, inputs, outputs, 2, 2, frames);
+        {
+            ScopedFlushToZero denormalsOff;
+            ysfx_process_float(fx_, inputs, outputs, 2, 2, frames);
+        }
+        // pdc_delay/pdc_bot_ch/pdc_top_ch are ordinary script globals, writable
+        // from @slider, @block, @sample and @gfx, so their value can move every
+        // block. The graph treats a reported-latency change as a timeline
+        // change and restarts delay compensation, which costs a burst of
+        // silence on every other track; a value that keeps moving keeps the
+        // rack silent. Latency is a control-rate property, so only publish a
+        // new value once the script has held it for kLatencyStableBlocks.
+        uint32_t candidate = 0;
         const ysfx_real pdc = ysfx_get_pdc_delay(fx_);
         uint32_t channels[2] = {0, 0};
         ysfx_get_pdc_channels(fx_, channels);
@@ -153,9 +254,20 @@ MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* con
         const bool stereoChannels = channels[0] == 0 && channels[1] >= 2;
         if (std::isfinite(static_cast<double>(pdc)) && pdc >= 0 &&
             (defaultChannels || stereoChannels))
-            latencyFrames_.store(static_cast<uint32_t>(
-                std::min(static_cast<double>(pdc), 65535.0)), std::memory_order_relaxed);
-        else latencyFrames_.store(0, std::memory_order_relaxed);
+            candidate = static_cast<uint32_t>(
+                std::min(static_cast<double>(pdc), 65535.0));
+        if (candidate == latencyFrames_.load(std::memory_order_relaxed)) {
+            latencyCandidate_ = candidate;
+            latencyStableBlocks_ = 0;
+        } else if (candidate == latencyCandidate_) {
+            if (++latencyStableBlocks_ >= kLatencyStableBlocks) {
+                latencyFrames_.store(candidate, std::memory_order_relaxed);
+                latencyStableBlocks_ = 0;
+            }
+        } else {
+            latencyCandidate_ = candidate;
+            latencyStableBlocks_ = 1;
+        }
         bool emitted = false;
         ysfx_midi_event_t ev{};
         while (ysfx_receive_midi(fx_, &ev)) {
@@ -167,17 +279,24 @@ MidiOutputDisposition JsfxPlugin::process(const float* const* inputs, float* con
             }
             outputMidi.append(ev.offset, ev.data, ev.size);
         }
-        if (uiHost_) uiHost_->releaseEffect();
         return emitted ? MidiOutputDisposition::Replace : MidiOutputDisposition::Passthrough;
     } catch (...) {
         callbackFaulted_.store(true, std::memory_order_release);
-        if (uiHost_) uiHost_->releaseEffect();
         return MidiOutputDisposition::Passthrough;
     }
 }
 
 PluginInfo JsfxPlugin::getInfo() const { return info_; }
-void JsfxPlugin::setParameter(uint32_t i, float v) { if (i < kMaxSliders) { pending_[i].store(v, std::memory_order_relaxed); dirty_[i].store(true, std::memory_order_release); } }
+void JsfxPlugin::setParameter(uint32_t i, float v) {
+    if (i >= kMaxSliders) return;
+    pending_[i].store(v, std::memory_order_relaxed);
+    dirty_[i / 64].fetch_or(UINT64_C(1) << (i % 64), std::memory_order_release);
+    {
+        std::lock_guard lock(sliderMutex_);
+        sliderPending_ = true;
+    }
+    sliderSignal_.notify_one();
+}
 float JsfxPlugin::getParameter(uint32_t i) const {
     return i < kMaxSliders ? pending_[i].load(std::memory_order_relaxed) : 0.0f;
 }
@@ -235,7 +354,7 @@ bool JsfxPlugin::restoreState(const PluginState& state) {
         for (const auto& [index, value] : state.controlPortValues) {
             if (index < kMaxSliders) {
                 pending_[index].store(value, std::memory_order_relaxed);
-                dirty_[index].store(true, std::memory_order_release);
+                dirty_[index / 64].fetch_or(UINT64_C(1) << (index % 64), std::memory_order_release);
             }
         }
     }

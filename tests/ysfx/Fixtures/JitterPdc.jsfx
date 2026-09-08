@@ -1,0 +1,26 @@
+desc: Oscillating PDC Contract
+in_pin:L
+in_pin:R
+out_pin:L
+out_pin:R
+slider1:0<0,1,1>jitter
+
+@init
+pdc_bot_ch = 0;
+pdc_top_ch = 2;
+pdc_delay = 128;
+n = 0;
+
+@block
+// A script is free to rewrite pdc_delay from @block. When slider1 is on this
+// oscillates every block, which must not reach the host as a latency change.
+slider1 > 0.5 ? (
+  n += 1;
+  pdc_delay = 128 + (n % 2);
+) : (
+  pdc_delay = 128;
+);
+
+@sample
+spl0 = spl0;
+spl1 = spl1;

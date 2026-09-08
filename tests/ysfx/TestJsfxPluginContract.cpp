@@ -15,6 +15,11 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <thread>
+#include <unistd.h>
 
 #ifndef NNAGA_FIXTURE_ROOT
 #error "NNAGA_FIXTURE_ROOT must point at the JSFX contract fixtures"
@@ -73,6 +78,23 @@ void expectStereoEquals(const std::array<float, kFrames>& left,
         EXPECT_NEAR(right[frame], expectedRight[frame], 1e-6f);
     }
 }
+// Slider values and @slider are applied on JsfxPlugin's worker thread now, so
+// a parameter set is observable only after that thread has run. Process blocks
+// until the expected gain shows up, or give up.
+template <typename Processor, typename Predicate>
+bool processUntil(Processor& processor, const float* const* inputs,
+                  float* const* outputs, uint32_t numFrames,
+                  const AudioProcessContext& context, Predicate&& ready) {
+    for (int attempt = 0; attempt < 400; ++attempt) {
+        MidiBuffer in;
+        MidiBuffer out;
+        processor.process(inputs, outputs, numFrames, context, in, out);
+        if (ready()) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
 template <typename Processor>
 MidiOutputDisposition processNoMidi(
         Processor& processor,
@@ -212,6 +234,75 @@ TEST(JsfxPluginContractTest, ActivationReadinessAndBoundedProcessArePubliclyObse
     EXPECT_FALSE(plugin->isReadyForRealtime());
 }
 
+TEST(JsfxPluginContractTest, SliderChangesApplyAcrossEveryChangeMaskWord) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("SliderGroups.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    plugin->activate(48000.0f, kFrames);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    inputLeft.fill(1.0f);
+    inputRight.fill(-1.0f);
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    AudioProcessContext context;
+    context.sampleRate = 48000.0;
+
+    // One slider per change-mask word, hitting bit 0 and bit 63 of a word.
+    // gain = 1*1 + 1*2 + 1*4 + 1*8 = 15
+    plugin->setParameter(0, 1.0f);
+    plugin->setParameter(63, 1.0f);
+    plugin->setParameter(64, 1.0f);
+    plugin->setParameter(255, 1.0f);
+    ASSERT_TRUE(processUntil(*plugin, inputs, outputs, kFrames, context,
+                             [&] { return std::abs(outputLeft[0] - 15.0f) < 1e-6f; }))
+        << "all four change-mask words must reach the script";
+    for (uint32_t frame = 0; frame < kFrames; ++frame) {
+        EXPECT_NEAR(outputLeft[frame], 15.0f, 1e-6f);
+        EXPECT_NEAR(outputRight[frame], -15.0f, 1e-6f);
+    }
+
+    // A block with no parameter change must keep the values already applied,
+    // i.e. clearing the mask must not clear the slider state.
+    outputLeft.fill(0.0f);
+    outputRight.fill(0.0f);
+    (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
+    for (uint32_t frame = 0; frame < kFrames; ++frame) {
+        EXPECT_NEAR(outputLeft[frame], 15.0f, 1e-6f);
+        EXPECT_NEAR(outputRight[frame], -15.0f, 1e-6f);
+    }
+
+    // Changing one slider in the last word must not disturb the other words.
+    // gain = 1 + 2 + 4 + 0 = 7
+    plugin->setParameter(255, 0.0f);
+    ASSERT_TRUE(processUntil(*plugin, inputs, outputs, kFrames, context,
+                             [&] { return std::abs(outputLeft[0] - 7.0f) < 1e-6f; }))
+        << "a change in the last mask word must not disturb the others";
+    for (uint32_t frame = 0; frame < kFrames; ++frame) {
+        EXPECT_NEAR(outputLeft[frame], 7.0f, 1e-6f);
+        EXPECT_NEAR(outputRight[frame], -7.0f, 1e-6f);
+    }
+    EXPECT_FLOAT_EQ(plugin->getParameter(0), 1.0f);
+    EXPECT_FLOAT_EQ(plugin->getParameter(255), 0.0f);
+
+    // Out-of-range indices are ignored rather than corrupting a mask word.
+    plugin->setParameter(256, 1.0f);
+    plugin->setParameter(4096, 1.0f);
+    for (int i = 0; i < 20; ++i) {
+        (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    for (uint32_t frame = 0; frame < kFrames; ++frame)
+        EXPECT_NEAR(outputLeft[frame], 7.0f, 1e-6f);
+
+    plugin->deactivate();
+}
+
 TEST(JsfxPluginChainContractTest, ActivatesCertifiedWrapperAndHandlesDryBypassBoundaries) {
     auto factory = makeFactory();
     ASSERT_TRUE(factory.initialize());
@@ -271,12 +362,143 @@ TEST(JsfxPluginChainContractTest, ActivatesCertifiedWrapperAndHandlesDryBypassBo
 
 }
 
-TEST(JsfxGfxGateContractTest, DSPPassesThroughWhilePublicUiGateIsHeld) {
-    auto factory = JsfxPluginFactory(
-        std::filesystem::path(NNAGA_SMOKE_PATH).parent_path().parent_path().string(),
-        NNAGA_FIXTURE_ROOT);
+// activate() must commit script RAM up front, so EEL never callocs or takes a
+// first-touch page fault from inside @sample or @gfx.
+TEST(JsfxPluginContractTest, ActivateCommitsScriptRamUpFront) {
+    auto readRssKb = [] {
+        long rssPages = 0;
+        FILE* f = std::fopen("/proc/self/statm", "r");
+        if (!f) return 0L;
+        long total = 0;
+        if (std::fscanf(f, "%ld %ld", &total, &rssPages) != 2) rssPages = 0;
+        std::fclose(f);
+        return rssPages * (sysconf(_SC_PAGESIZE) / 1024);
+    };
+    auto factory = makeFactory();
     ASSERT_TRUE(factory.initialize());
-    auto plugin = factory.createPlugin("NNAGA/NNAGA_Smoke.jsfx");
+    auto plugin = factory.createPlugin("SparseSlider.jsfx");
+    ASSERT_NE(plugin, nullptr);
+
+    const long before = readRssKb();
+    plugin->activate(48000.0f, kFrames);
+    const long after = readRssKb();
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    // kJsfxPreallocItems is 256Ki doubles = 2 MiB. Allow slack for allocator
+    // and unrelated activity, but require most of it to be resident.
+    const long grewKb = after - before;
+    printf("[prealloc] RSS grew %ld KiB across activate()\n", grewKb);
+    EXPECT_GE(grewKb, 1536);
+    plugin->deactivate();
+}
+
+// A JSFX rewriting pdc_delay every block must not surface as a per-block
+// latency change: RackGraph restarts delay compensation on every change and
+// emits silence on the other tracks while it refills, so an oscillating value
+// would hold the rack silent for as long as the script kept moving.
+TEST(JsfxPluginContractTest, OscillatingScriptPdcDoesNotJitterReportedLatency) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("JitterPdc.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    plugin->activate(48000.0f, kFrames);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    inputLeft.fill(0.25f);
+    inputRight.fill(-0.25f);
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    AudioProcessContext context;
+    context.sampleRate = 48000.0;
+
+    auto runAndCountChanges = [&](int blocks) {
+        uint32_t previous = plugin->getLatencyFrames();
+        int changes = 0;
+        for (int i = 0; i < blocks; ++i) {
+            (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
+            const uint32_t now = plugin->getLatencyFrames();
+            if (now != previous) ++changes;
+            previous = now;
+        }
+        return changes;
+    };
+
+    // Steady pdc_delay: settles to the script's value and stays there.
+    (void)runAndCountChanges(64);
+    EXPECT_EQ(plugin->getLatencyFrames(), 128u);
+
+    // Now make the script oscillate pdc_delay every single block.
+    plugin->setParameter(0, 1.0f);
+    const int changes = runAndCountChanges(200);
+    printf("[pdc] reported-latency changes over 200 oscillating blocks: %d\n", changes);
+    EXPECT_EQ(changes, 0);
+    EXPECT_EQ(plugin->getLatencyFrames(), 128u);
+
+    // A genuine, stable change must still be honoured.
+    plugin->setParameter(0, 0.0f);
+    (void)runAndCountChanges(64);
+    EXPECT_EQ(plugin->getLatencyFrames(), 128u);
+    plugin->deactivate();
+}
+
+// Measurement: @slider runs on the audio thread inside ysfx_process_float, so a
+// script whose @slider rebuilds tables costs that time in the audio callback on
+// every block that carries a parameter change -- i.e. continuously while the
+// user drags a slider.
+TEST(JsfxPluginContractTest, HeavySliderCostStaysOffTheAudioThread) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("HeavySlider.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    plugin->activate(48000.0f, kFrames);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    inputLeft.fill(0.1f);
+    inputRight.fill(0.1f);
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    AudioProcessContext context;
+    context.sampleRate = 48000.0;
+
+    auto timeBlock = [&] {
+        const auto start = std::chrono::steady_clock::now();
+        (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
+        return std::chrono::duration<double, std::micro>(
+                   std::chrono::steady_clock::now() - start).count();
+    };
+
+    for (int i = 0; i < 50; ++i) (void)timeBlock();
+    double steady = 1e9;
+    for (int i = 0; i < 50; ++i) steady = std::min(steady, timeBlock());
+
+    double withChange = 1e9;
+    for (int i = 0; i < 20; ++i) {
+        plugin->setParameter(0, 0.1f + 0.01f * static_cast<float>(i));
+        withChange = std::min(withChange, timeBlock());
+    }
+    // 32 frames @ 48 kHz = 667 us of budget.
+    const double budget = 1e6 * kFrames / 48000.0;
+    printf("[@slider] steady block %.1f us, block carrying a slider change %.1f us"
+           " (budget %.0f us for %u frames)\n", steady, withChange, budget, kFrames);
+    // Before @slider was moved to the worker thread this measured 10580 us
+    // against a 667 us budget. No audio block may carry that work.
+    EXPECT_LT(withChange, budget);
+    plugin->deactivate();
+}
+
+TEST(JsfxGfxGateContractTest, DSPKeepsProcessingWhilePublicUiGateIsHeld) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    // Gain of 2, so a processed block and a passed-through block are distinct.
+    auto plugin = factory.createPlugin("GfxContention.jsfx");
     ASSERT_NE(plugin, nullptr);
     auto* target = dynamic_cast<IJsfxUiTarget*>(plugin.get());
     ASSERT_NE(target, nullptr);
@@ -285,16 +507,10 @@ TEST(JsfxGfxGateContractTest, DSPPassesThroughWhilePublicUiGateIsHeld) {
 
     plugin->activate(48000.0f, kFrames);
     ASSERT_TRUE(plugin->isReadyForRealtime());
-    const std::array<float, kFrames> inputLeft = [] {
-        std::array<float, kFrames> values{};
-        values.fill(0.4f);
-        return values;
-    }();
-    const std::array<float, kFrames> inputRight = [] {
-        std::array<float, kFrames> values{};
-        values.fill(-0.2f);
-        return values;
-    }();
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    inputLeft.fill(0.4f);
+    inputRight.fill(-0.2f);
     std::array<float, kFrames> outputLeft{};
     std::array<float, kFrames> outputRight{};
     const float* inputs[] = {inputLeft.data(), inputRight.data()};
@@ -302,12 +518,70 @@ TEST(JsfxGfxGateContractTest, DSPPassesThroughWhilePublicUiGateIsHeld) {
     AudioProcessContext context;
     context.sampleRate = 48000.0;
 
+    // Holding the UI gate must not cost the audio thread its block. The gate
+    // now coordinates the gfx thread only; audio owns the VM unconditionally.
     target->jsfxUiHost()->pauseEffect();
     ASSERT_TRUE(target->jsfxUiHost()->tryAcquireEffect());
     (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
     target->jsfxUiHost()->releaseEffect();
     target->jsfxUiHost()->resumeEffect();
-    expectStereoEquals(outputLeft, outputRight, inputLeft, inputRight);
+    for (uint32_t frame = 0; frame < kFrames; ++frame) {
+        EXPECT_NEAR(outputLeft[frame], inputLeft[frame] * 2.0f, 1e-6f);
+        EXPECT_NEAR(outputRight[frame], inputRight[frame] * 2.0f, 1e-6f);
+    }
+    plugin->deactivate();
+}
+
+// The audio thread must never lose a block to UI activity. Before the gate was
+// removed from the audio path this measured 0.23% of blocks lost with the
+// editor closed and 8.90% with it open at 30 fps.
+TEST(JsfxGfxGateContractTest, AudioLosesNoBlocksToUiContention) {
+    auto factory = makeFactory();
+    ASSERT_TRUE(factory.initialize());
+    auto plugin = factory.createPlugin("GfxContention.jsfx");
+    ASSERT_NE(plugin, nullptr);
+    auto* target = dynamic_cast<IJsfxUiTarget*>(plugin.get());
+    ASSERT_NE(target, nullptr);
+    ASSERT_TRUE(target->hasJsfxGfx());
+    plugin->activate(48000.0f, kFrames);
+    ASSERT_TRUE(plugin->isReadyForRealtime());
+
+    std::array<float, kFrames> inputLeft{};
+    std::array<float, kFrames> inputRight{};
+    inputLeft.fill(0.25f);
+    inputRight.fill(-0.25f);
+    std::array<float, kFrames> outputLeft{};
+    std::array<float, kFrames> outputRight{};
+    const float* inputs[] = {inputLeft.data(), inputRight.data()};
+    float* outputs[] = {outputLeft.data(), outputRight.data()};
+    AudioProcessContext context;
+    context.sampleRate = 48000.0;
+
+    auto runBlocks = [&](const char* label) {
+        // 32 frames @ 48 kHz = 667 us per block; pace roughly to real time.
+        const int blocks = 1500;
+        int lost = 0;
+        for (int b = 0; b < blocks; ++b) {
+            outputLeft.fill(0.0f);
+            (void)processNoMidi(*plugin, inputs, outputs, kFrames, context);
+            // gain is 2, so an unprocessed (passthrough) block shows the input.
+            if (std::abs(outputLeft[0] - inputLeft[0]) < 1e-6f) ++lost;
+            std::this_thread::sleep_for(std::chrono::microseconds(667));
+        }
+        printf("[gfx-gate] %-22s %4d / %d blocks lost to UI contention (%.2f%%)\n",
+               label, lost, blocks, 100.0 * lost / blocks);
+        return lost;
+    };
+
+    const int lostClosed = runBlocks("UI closed");
+    target->jsfxUiHost()->resize(400, 200, 1.0f);
+    target->jsfxUiHost()->setVisible(true);
+    const int lostOpen = runBlocks("UI visible @30fps");
+    target->jsfxUiHost()->setVisible(false);
+
+    EXPECT_EQ(lostClosed, 0);
+    EXPECT_EQ(lostOpen, 0);
+    plugin->deactivate();
 }
 
 TEST(JsfxMidiContractTest, EchoesShortAndMaximumCompleteSysExByteExactly) {

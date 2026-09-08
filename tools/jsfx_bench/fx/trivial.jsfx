@@ -1,0 +1,7 @@
+desc:bench trivial gain
+slider1:0.5<0,1,0.001>gain
+@slider
+g = slider1;
+@sample
+spl0 = spl0 * g;
+spl1 = spl1 * g;

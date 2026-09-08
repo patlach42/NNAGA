@@ -138,10 +138,17 @@ add_library(plugin_abstraction STATIC
     plugin/native/NativePluginFactory.cpp
     jsfx/JsfxPlugin.cpp
     jsfx/JsfxPluginFactory.cpp
+    jsfx/JsfxYsfxInternals.cpp
 )
 target_include_directories(plugin_abstraction PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/ysfx/include"
     "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/nnaga-native-plugin-sdk/include")
+# JsfxYsfxInternals.cpp is the only TU that reaches into ysfx's private headers,
+# so the extra include paths and WDL's signed-char requirement stay scoped to it.
+set_source_files_properties(jsfx/JsfxYsfxInternals.cpp PROPERTIES
+    INCLUDE_DIRECTORIES
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/ysfx/sources;${CMAKE_CURRENT_SOURCE_DIR}/../../../../3rd_party/ysfx/thirdparty/WDL/source"
+    COMPILE_OPTIONS "-fsigned-char")
 target_link_libraries(plugin_abstraction PRIVATE
     lowlatencyaudio::lowlatencyaudio
     ysfx
