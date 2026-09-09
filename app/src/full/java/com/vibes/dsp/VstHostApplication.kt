@@ -10,6 +10,7 @@ import android.util.Log
 import com.vibes.dsp.engine.NativeEngine
 import com.vibes.dsp.engine.RendererPreferenceManager
 import com.vibes.dsp.engine.WineEnvFile
+import com.vibes.dsp.ui.vst.Serum2Compatibility
 import com.vibes.dsp.ui.vst.VstHostSetup
 import com.vibes.dsp.ui.vst.VstRegistry
 import kotlinx.coroutines.CancellationException
@@ -51,10 +52,23 @@ class VstHostApplication : Application(), StartupPrerequisite {
             return
         }
         Log.i(TAG, "VstHostApplication.onCreate — staging wine on background thread")
+        // This is intentionally synchronous: registered Wine plugins can be
+        // selected as soon as MainActivity appears, before the slower Wine
+        // extraction prerequisite completes. The repair only reads tiny
+        // registry/preferences JSON files.
+        repairRegisteredSerumPreferences()
         wineSetup.start()
     }
 
     override suspend fun awaitStartupPrerequisite(): Boolean = wineSetup.await()
+
+    private fun repairRegisteredSerumPreferences() {
+        runCatching {
+            Serum2Compatibility.applyToRegisteredPrefixes(this, VstRegistry.read(this))
+        }.onFailure { error ->
+            Log.w(TAG, "Early Serum 2 preference repair failed; background setup will retry", error)
+        }
+    }
 
     private suspend fun runWineSetup(): Boolean {
         return try {
@@ -73,6 +87,7 @@ class VstHostApplication : Application(), StartupPrerequisite {
             for (e in entries) {
                 if (!VstHostSetup.ensurePluginPrefix(this, e.uuid)) return false
             }
+            Serum2Compatibility.applyToRegisteredPrefixes(this, entries)
             if (entries.isNotEmpty()) {
                 runCatching { NativeEngine.getInstance().nativeRefreshPluginRegistry() }
             }

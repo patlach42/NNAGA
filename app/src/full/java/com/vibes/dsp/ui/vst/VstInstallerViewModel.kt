@@ -69,10 +69,10 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         val id: String,
         val displayName: String,
         /** INSTALL: path of the staged installer file the user picked.
-         *  LAUNCH:  absolute path of the registered manager .exe inside its prefix. */
+         *  LAUNCH: registered manager EXE or a staged installer targeting an existing prefix. */
         val stagedExePath: String,
         /** INSTALL: path of the one-shot template prefix (deleted after PICK).
-         *  LAUNCH:  path of the registered manager's permanent prefix (preserved). */
+         *  LAUNCH: permanent manager/plugin prefix, always preserved. */
         val templatePrefixPath: String,
         val displayNumber: Int,
         val winePid: Int = -1,
@@ -210,21 +210,22 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         )
         _state.value = State.PREPARING
         watchJob = viewModelScope.launch {
-            withContext(Dispatchers.IO) {
+            val prefixReady = withContext(Dispatchers.IO) {
                 // CRITICAL: kill any wineserver still running on this prefix
                 // BEFORE applying seeds. wineserver caches the registry in
-                // memory and rewrites system.reg from its cache on shutdown
-                // — that would silently undo seeds we write to disk while
-                // it's running. Killing it first means the next wine launch
-                // starts a fresh wineserver that reads our updated registry.
-                VstHostSetup.killWineserversForPrefix(exe.prefixPath)
-                // Re-apply seeds on every launch — they're idempotent (each
-                // checks for a version marker before writing) and this is the
-                // cheapest way to upgrade prefixes registered before a new
-                // seed was added (e.g., the Session Manager\Environment seed
-                // landed after the IK Product Manager + Native Access etc.
-                // managers had already been registered).
-                VstHostSetup.applyPluginPrefixSeeds(ctx, File(exe.prefixPath))
+                // memory and rewrites system.reg from its cache on shutdown.
+                if (!VstHostSetup.killWineserversForPrefix(exe.prefixPath)) {
+                    false
+                } else {
+                    // Re-apply seeds on every launch so prefixes registered
+                    // before a new seed was added are upgraded in place.
+                    VstHostSetup.applyPluginPrefixSeeds(ctx, File(exe.prefixPath))
+                    true
+                }
+            }
+            if (!prefixReady) {
+                bailOut("Wine processes did not stop for ${exe.displayName}.")
+                return@launch
             }
             Log.i(TAG, "launch: starting manager '${exe.displayName}' uuid=${exe.uuid} " +
                        "prefix=${exe.prefixPath}")
@@ -282,43 +283,80 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         NativeBridge.nativeSetX11FramebufferFrozen(INSTALLER_DISPLAY_NUMBER, true)
     }
 
-    /** Run a user-picked installer .exe INSIDE an existing activation environment
-     *  (the manager's prefix) instead of a throwaway template — so the plugin it
-     *  installs lands in the SAME prefix as the manager's licence, and the
-     *  activation catches. This is the bridge for "I have a standalone installer
-     *  AND a manager that activates it": pick the installer, target the env.
-     *
-     *  Mechanically identical to [launchExecutable] (LAUNCH mode → prefix
-     *  preserved; on exit, in-prefix VSTs not yet registered for this prefix are
-     *  discovered and registered with prefixPath = env) except the exe is the
-     *  picked installer rather than the registered manager. The installer runs as
-     *  a top-level wine process (like installFromExe), so OS-spoof etc. behave the
-     *  same as a standalone external install — just into [env]'s prefix. */
+    private fun effectivePluginPrefixPath(ctx: Context, plugin: VstRegistryEntry): String =
+        plugin.prefixPath ?: File(ctx.filesDir, "wineprefix_v${plugin.uuid}").absolutePath
+
+    /** Run a picked installer inside the exact prefix used by [plugin].
+     *  This supports update installers for both legacy per-plugin prefixes and
+     *  plugins installed into a shared activation environment. */
+    fun installIntoPluginPrefix(
+        stagedExePath: String,
+        displayName: String,
+        plugin: VstRegistryEntry,
+    ) {
+        val ctx = getApplication<Application>()
+        installIntoExistingPrefix(
+            stagedExePath = stagedExePath,
+            displayName = displayName,
+            sessionId = plugin.uuid,
+            targetLabel = "plugin ${plugin.displayName}",
+            prefixPath = effectivePluginPrefixPath(ctx, plugin),
+        )
+    }
+
+    /** Run a picked installer inside an existing activation environment. */
     fun installIntoEnvironment(stagedExePath: String, displayName: String, env: VstExecutableEntry) {
+        installIntoExistingPrefix(
+            stagedExePath = stagedExePath,
+            displayName = displayName,
+            sessionId = env.environmentId ?: env.uuid,
+            targetLabel = "environment ${env.displayName}",
+            prefixPath = env.prefixPath,
+        )
+    }
+
+    private fun installIntoExistingPrefix(
+        stagedExePath: String,
+        displayName: String,
+        sessionId: String,
+        targetLabel: String,
+        prefixPath: String,
+    ) {
         if (_state.value != State.IDLE) {
-            Log.w(TAG, "installIntoEnvironment called while state=${_state.value}; ignoring")
+            Log.w(TAG, "installIntoExistingPrefix called while state=${_state.value}; ignoring")
             return
         }
         val ctx = getApplication<Application>()
+        val prefix = File(prefixPath)
+        if (!prefix.isDirectory) {
+            _errorMessage.value = "Wine prefix not found for $targetLabel (${prefix.name})."
+            return
+        }
         _session.value = Session(
-            mode = Mode.LAUNCH,                       // preserve the env prefix; register against it
-            id = env.environmentId ?: env.uuid,
+            mode = Mode.LAUNCH,
+            id = sessionId,
             displayName = displayName,
             stagedExePath = stagedExePath,
-            templatePrefixPath = env.prefixPath,
+            templatePrefixPath = prefix.absolutePath,
             displayNumber = INSTALLER_DISPLAY_NUMBER,
         )
         _state.value = State.PREPARING
         watchJob = viewModelScope.launch {
-            withContext(Dispatchers.IO) {
-                // Same wineserver-kill-then-reseed dance as launchExecutable —
-                // a running wineserver would stomp seeds on shutdown.
-                VstHostSetup.killWineserversForPrefix(env.prefixPath)
-                VstHostSetup.applyPluginPrefixSeeds(ctx, File(env.prefixPath))
+            val prefixReady = withContext(Dispatchers.IO) {
+                if (!VstHostSetup.killWineserversForPrefix(prefix.absolutePath)) {
+                    false
+                } else {
+                    VstHostSetup.applyPluginPrefixSeeds(ctx, prefix)
+                    true
+                }
             }
-            Log.i(TAG, "installIntoEnv: running '$displayName' in environment ${env.displayName} " +
-                       "prefix=${env.prefixPath}")
-            runWineSession(ctx, stagedExePath, env.prefixPath)
+            if (!prefixReady) {
+                bailOut("Wine processes did not stop for $targetLabel.")
+                return@launch
+            }
+            Log.i(TAG, "installIntoPrefix: running '$displayName' for $targetLabel " +
+                "prefix=${prefix.absolutePath}")
+            runWineSession(ctx, stagedExePath, prefix.absolutePath)
         }
     }
 
@@ -367,6 +405,16 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
 
         _state.value = State.DRAINING
         delay(2_000)  // let wineserver write its last registry entries
+        val prefixReady = withContext(Dispatchers.IO) {
+            // The launched EXE may leave Wine children mutating the prefix after
+            // its own process exits. Quiesce them before scanning or cloning.
+            VstHostSetup.killWineserversForPrefix(prefixPath)
+        }
+        if (!prefixReady) {
+            val sessionName = _session.value?.displayName ?: File(exePath).name
+            bailOut("Wine processes did not stop after $sessionName exited.")
+            return
+        }
 
         discoverSession(ctx)
     }
@@ -377,14 +425,29 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
         val session = _session.value ?: run { reset(); return }
         val scanPaths = VstScanPathManager.readScanPaths(ctx)
         val found = withContext(Dispatchers.IO) {
-            val alreadyRegistered =
-                if (session.mode == Mode.LAUNCH)
-                    VstRegistry.read(ctx)
-                        .filter { it.prefixPath == session.templatePrefixPath }
-                        .map { it.dllPath }
-                        .toSet()
-                else emptySet()
-            discoverItems(session.templatePrefixPath, session.mode, alreadyRegistered, scanPaths)
+            val registeredEntries: List<VstRegistryEntry> =
+                if (session.mode == Mode.LAUNCH) {
+                    VstRegistry.read(ctx).filter {
+                        effectivePluginPrefixPath(ctx, it) == session.templatePrefixPath
+                    }
+                } else {
+                    emptyList()
+                }
+            val candidates = discoverItems(
+                session.templatePrefixPath,
+                session.mode,
+                registeredEntries.map { it.dllPath }.toSet(),
+                scanPaths,
+            )
+            val containsSerum2 =
+                registeredEntries.any { Serum2Compatibility.isPluginPath(it.dllPath) } ||
+                    candidates.any {
+                        it.kind == Kind.VST3 && Serum2Compatibility.isPluginPath(it.relToPrefix)
+                    }
+            if (containsSerum2) {
+                Serum2Compatibility.applyToPrefix(File(session.templatePrefixPath))
+            }
+            candidates
         }
         _discovered.value = found
         if (found.isEmpty()) {

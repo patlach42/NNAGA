@@ -1,0 +1,30 @@
+From: giang17 <33104857+giang17@users.noreply.github.com>
+Subject: winex11: allow framebuffer EGL default-visual client surface fallback
+
+diff --git a/dlls/winex11.drv/init.c b/dlls/winex11.drv/init.c
+--- a/dlls/winex11.drv/init.c
++++ b/dlls/winex11.drv/init.c
+@@ -25,5 +25,6 @@
+ #include "config.h"
+ 
+ #include <stdarg.h>
++#include <stdlib.h>
+ #include <string.h>
+ #include <assert.h>
+@@ -443,10 +443,15 @@ struct client_surface *X11DRV_CreateClientSurface( HWND hwnd, int format )
+ struct client_surface *X11DRV_CreateClientSurface( HWND hwnd, int format )
+ {
+     struct x11drv_client_surface *surface;
+     XVisualInfo visual = default_visual;
+     Colormap colormap;
+ 
+-    if (format && !visual_from_pixel_format( format, &visual )) return NULL;
++    if (format && !visual_from_pixel_format( format, &visual ))
++    {
++        const char *egl_library = getenv( "VSTPOC_EGL_LIBRARY" );
++        if (!egl_library || !*egl_library) return NULL;
++        /* NNAGA custom framebuffer EGL may map EGL_NATIVE_VISUAL_ID to 0; keep default X11 visual. */
++    }
+ 
+     if (visual.visualid == default_visual.visualid) colormap = default_colormap;
+     else colormap = XCreateColormap( gdi_display, get_dummy_parent(), visual.visual, visual_class_alloc( visual.class ) );

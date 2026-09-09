@@ -11,8 +11,10 @@ import android.util.Log
 import com.varcain.vsthost.NativeBridge
 import com.varcain.vsthost.wine.WineSetup
 import java.io.File
+import java.io.FileNotFoundException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.NoSuchFileException
 import java.nio.file.Path
 
 /**
@@ -173,52 +175,61 @@ object VstHostSetup {
      *  launch reads the fresh on-disk registry. Per-prefix surgery so we
      *  don't disturb other VST chains running against different prefixes.
      *
-     *  Blocks up to 2 seconds per killed wineserver for graceful exit. */
-    fun killWineserversForPrefix(prefixPath: String) {
-        val procDir = File("/proc")
-        val pids = procDir.listFiles { f -> f.isDirectory && f.name.all { it.isDigit() } }
-            ?: return
-        val targeted = mutableListOf<Int>()
-        for (procPid in pids) {
-            val comm = runCatching { File(procPid, "comm").readText().trim() }
-                .getOrNull() ?: continue
-            // Don't filter by comm name. We want to kill EVERY process in
-            // this wineprefix: wineserver, the wine loader, AND any
-            // Windows exe (the orphan whose comm shows up as the
-            // truncated exe basename, or the full chrooted path string).
-            // Electron managers like IK Multimedia Product Manager use
-            // requestSingleInstanceLock() and SILENTLY EXIT if any
-            // previous instance is still alive — orphan exes from prior
-            // launches were blocking every subsequent attempt.
-            val environ = runCatching { File(procPid, "environ").readBytes() }
-                .getOrNull() ?: continue
-            val envText = String(environ).split(' ')
-            val winePrefix = envText.firstOrNull { it.startsWith("WINEPREFIX=") }
-                ?.removePrefix("WINEPREFIX=") ?: continue
-            if (winePrefix.trimEnd('/') == prefixPath.trimEnd('/')) {
-                val pid = procPid.name.toIntOrNull() ?: continue
-                Log.i(TAG, "killWineserversForPrefix: targeting pid=$pid for $prefixPath")
-                runCatching { android.os.Process.sendSignal(pid, 15 /* SIGTERM */) }
-                targeted += pid
-            }
+     *  Blocks up to 5 seconds while the matching process set drains.
+     *  Returns false if a process still owns the prefix. */
+    fun killWineserversForPrefix(prefixPath: String): Boolean {
+        val graceful = winePrefixPids(prefixPath)
+        for (pid in graceful) {
+            Log.i(TAG, "killWineserversForPrefix: SIGTERM pid=$pid for $prefixPath")
+            runCatching { android.os.Process.sendSignal(pid, 15 /* SIGTERM */) }
         }
-        // Wait briefly for graceful exit so its on-shutdown registry flush
-        // (which would otherwise stomp our subsequent seed) finishes first.
-        if (targeted.isNotEmpty()) {
-            for (i in 0 until 20) {  // up to ~2s
-                val stillAlive = targeted.any { pid ->
-                    File("/proc/$pid").exists()
-                }
-                if (!stillAlive) break
-                Thread.sleep(100)
+        waitForExit(graceful, 20)
+
+        // A child may fork after the first /proc snapshot. Rescan after every
+        // force-kill round and do not return while a matching process can still
+        // mutate the prefix.
+        repeat(3) {
+            val remaining = winePrefixPids(prefixPath)
+            if (remaining.isEmpty()) return true
+            for (pid in remaining) {
+                Log.w(TAG, "killWineserversForPrefix: SIGKILL pid=$pid for $prefixPath")
+                runCatching { android.os.Process.sendSignal(pid, 9 /* SIGKILL */) }
             }
-            // Final flush check: if any are still alive, force-kill.
-            for (pid in targeted) {
-                if (File("/proc/$pid").exists()) {
-                    Log.w(TAG, "killWineserversForPrefix: pid=$pid still alive after 2s, SIGKILL")
-                    runCatching { android.os.Process.sendSignal(pid, 9 /* SIGKILL */) }
-                }
-            }
+            waitForExit(remaining, 10)
+        }
+
+        val remaining = winePrefixPids(prefixPath)
+        if (remaining.isEmpty()) return true
+        Log.e(
+            TAG,
+            "killWineserversForPrefix: processes remain for $prefixPath: $remaining",
+        )
+        return false
+    }
+
+    private fun winePrefixPids(prefixPath: String): List<Int> {
+        val normalizedPrefix = prefixPath.trimEnd('/')
+        val procDirs = File("/proc").listFiles { file ->
+            file.isDirectory && file.name.all { it.isDigit() }
+        } ?: return emptyList()
+        return procDirs.mapNotNull { procDir ->
+            val environ = runCatching { File(procDir, "environ").readBytes() }
+                .getOrNull() ?: return@mapNotNull null
+            val winePrefix = String(environ, Charsets.UTF_8)
+                .split('\u0000')
+                .firstOrNull { it.startsWith("WINEPREFIX=") }
+                ?.removePrefix("WINEPREFIX=")
+                ?.trimEnd('/')
+                ?: return@mapNotNull null
+            if (winePrefix == normalizedPrefix) procDir.name.toIntOrNull() else null
+        }
+    }
+
+    private fun waitForExit(pids: List<Int>, attempts: Int) {
+        if (pids.isEmpty()) return
+        repeat(attempts) {
+            if (pids.none { File("/proc/$it").exists() }) return
+            Thread.sleep(100)
         }
     }
 
@@ -267,16 +278,28 @@ object VstHostSetup {
                 isSymlink -> {
                     // Read the symlink target and recreate as a symlink.
                     val link: Path = entry.toPath()
-                    val linkTarget = Files.readSymbolicLink(link).toString()
-                    target.delete()
-                    Os.symlink(linkTarget, target.absolutePath)
+                    try {
+                        val linkTarget = Files.readSymbolicLink(link).toString()
+                        target.delete()
+                        Os.symlink(linkTarget, target.absolutePath)
+                    } catch (e: NoSuchFileException) {
+                        if (Files.exists(link, LinkOption.NOFOLLOW_LINKS)) throw e
+                        target.delete()
+                        Log.i(TAG, "copyPrefix: skipped vanished source ${entry.absolutePath}")
+                    }
                 }
                 Files.isDirectory(entry.toPath(), LinkOption.NOFOLLOW_LINKS) -> {
                     copyDirectoryTree(entry, target)
                 }
                 Files.isRegularFile(entry.toPath(), LinkOption.NOFOLLOW_LINKS) -> {
-                    entry.inputStream().use { input ->
-                        target.outputStream().use { output -> input.copyTo(output) }
+                    try {
+                        entry.inputStream().use { input ->
+                            target.outputStream().use { output -> input.copyTo(output) }
+                        }
+                    } catch (e: FileNotFoundException) {
+                        if (entry.exists()) throw e
+                        target.delete()
+                        Log.i(TAG, "copyPrefix: skipped vanished source ${entry.absolutePath}")
                     }
                 }
                 // else: socket / FIFO / device node — runtime state, not data; skip.

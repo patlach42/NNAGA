@@ -258,6 +258,38 @@ fun VstManagerScreen(
         }
     }
 
+    // Run a picked updater/installer in the exact prefix of the selected VST.
+    // The row is the prefix selector; pendingPluginInstaller carries that
+    // identity across the SAF callback.
+    var pendingPluginInstaller by remember { mutableStateOf<VstRegistryEntry?>(null) }
+    val pluginExePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
+        val plugin = pendingPluginInstaller
+        pendingPluginInstaller = null
+        if (uris.isEmpty() || plugin == null) return@rememberLauncherForActivityResult
+        scope.launch {
+            blockingOperation = "Preparing plugin installer"
+            val staged = try {
+                withContext(Dispatchers.IO) {
+                    if (!VstHostSetup.ensureWineRoot(context)) return@withContext null
+                    stageInstaller(context, uris)
+                }
+            } finally {
+                blockingOperation = null
+            }
+            if (staged == null) {
+                Toast.makeText(context, "Couldn't stage the installer file", Toast.LENGTH_LONG).show()
+                return@launch
+            }
+            installerVm.installIntoPluginPrefix(
+                staged.absolutePath,
+                staged.nameWithoutExtension,
+                plugin,
+            )
+        }
+    }
+
     val pickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
@@ -422,6 +454,13 @@ fun VstManagerScreen(
                             style = MaterialTheme.typography.titleMedium
                         )
                         Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Use + to run an update installer in that plugin's Wine prefix. " +
+                                "You can select companion .bin files together with the .exe.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(Modifier.height(8.dp))
                     }
                     if (entries.isEmpty()) {
                         item {
@@ -434,12 +473,18 @@ fun VstManagerScreen(
                         items(entries, key = { "vst-${it.uuid}" }) { e ->
                             VstRow(
                                 entry = e,
+                                prefixLabel = e.prefixPath?.let { File(it).name }
+                                    ?: "wineprefix_v${e.uuid}",
                                 environmentLabel = e.prefixPath?.let { p ->
                                     executables.firstOrNull { it.prefixPath == p }?.displayName
                                         ?: "shared"
                                 },
                                 onOpenEditor = {
                                     openVstEditor(context, e.uuid)
+                                },
+                                onRunInstaller = {
+                                    pendingPluginInstaller = e
+                                    pluginExePickerLauncher.launch(arrayOf("*/*"))
                                 },
                                 onRemove = {
                                     scope.launch(Dispatchers.IO) {
@@ -671,12 +716,15 @@ private fun RendererDropdown(
 @Composable
 private fun VstRow(
     entry: VstRegistryEntry,
+    prefixLabel: String,
     /** Display name of the activation environment this plugin lives in (its
      *  manager), or null for a standalone (legacy) plugin in its own prefix. */
     environmentLabel: String?,
     onOpenEditor: () -> Unit,
+    onRunInstaller: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    val architecture = if (entry.is64Bit) "x64" else "x86"
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -684,8 +732,13 @@ private fun VstRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(entry.displayName, style = MaterialTheme.typography.bodyLarge,
                  maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text("${entry.format} · ${if (entry.is64Bit) "x64" else "x86"}",
-                 style = MaterialTheme.typography.bodySmall)
+            Text(
+                "${entry.format} · $architecture · $prefixLabel",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
             if (environmentLabel != null) {
                 Text("in $environmentLabel environment",
                      style = MaterialTheme.typography.labelSmall,
@@ -695,6 +748,13 @@ private fun VstRow(
         }
         NnagaIconButton(onClick = onOpenEditor) {
             Icon(Icons.Default.OpenInNew, contentDescription = "Open ${entry.displayName} editor")
+        }
+        NnagaIconButton(onClick = onRunInstaller) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = "Run installer in ${entry.displayName}, " +
+                    "${entry.format}, $architecture, prefix $prefixLabel",
+            )
         }
         NnagaIconButton(onClick = onRemove) {
             Icon(Icons.Default.Delete, contentDescription = "Remove ${entry.displayName}")

@@ -1,0 +1,26 @@
+From: giang17 <33104857+giang17@users.noreply.github.com>
+Subject: win32u/opengl: expose Mesa fallback pixel formats to wined3d
+
+diff --git a/dlls/win32u/opengl.c b/dlls/win32u/opengl.c
+--- a/dlls/win32u/opengl.c
++++ b/dlls/win32u/opengl.c
+@@ -1108,12 +1108,17 @@
+ {
+     const struct opengl_funcs *funcs = &display_funcs;
+     struct egl_platform *egl = &display_egl;
++    const char *vstpoc_egl_library = getenv( "VSTPOC_EGL_LIBRARY" );
+-    EGLint value, surface_type;
++    EGLint value, surface_type = 0;
+     PIXELFORMATDESCRIPTOR *pfd = &fmt->pfd;
+ 
+     /* If we can't get basic information, there is no point continuing */
+     if (!funcs->p_eglGetConfigAttrib( egl->display, config, EGL_SURFACE_TYPE, &surface_type )) return FALSE;
+-    if (egl->type == EGL_PLATFORM_SURFACELESS_MESA) surface_type |= EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
++    if (egl->type == EGL_PLATFORM_SURFACELESS_MESA || (vstpoc_egl_library && *vstpoc_egl_library))
++        /* custom Mesa EGL uses framebuffer-backed onscreen drawables and default
++         * display fallback; advertise as window/pbuffer-capable so Wine keeps
++         * PFD_DRAW_TO_WINDOW variants. */
++        surface_type |= EGL_WINDOW_BIT | EGL_PBUFFER_BIT;
+ 
+     memset( fmt, 0, sizeof(*fmt) );
+     pfd->nSize = sizeof(*pfd);
