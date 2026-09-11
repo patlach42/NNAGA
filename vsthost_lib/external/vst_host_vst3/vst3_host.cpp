@@ -35,6 +35,7 @@ extern "C" {
 #include <afunix.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <ole2.h>
 #include <tlhelp32.h>
 #include <stdio.h>
 #include <string.h>
@@ -2745,11 +2746,20 @@ int main(int argc, char** argv)
     g_main_tid = GetCurrentThreadId();
     SetUnhandledExceptionFilter(vstpoc_unhandled_filter);
     log_teb_stack("main");
-
     if (argc < 3) {
         LOG("usage: vst3_host.exe <shm_path> <plugin.vst3> [plugin.vst3 ...]\n");
         return 1;
     }
+
+    HRESULT hr = OleInitialize(nullptr);
+    if (hr != S_OK && hr != S_FALSE) {
+        LOG("OleInitialize failed: 0x%08lx\n", (unsigned long)hr);
+        return 7;
+    }
+    struct OleInitGuard {
+        ~OleInitGuard() { OleUninitialize(); }
+    } oleInitGuard;
+    LOG("OleInitialize succeeded: 0x%08lx\n", (unsigned long)hr);
 
     /* Wire up SHM first so errors are visible to the launcher even if
      * the plugin never loads. */

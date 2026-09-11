@@ -104,7 +104,7 @@ static bool equalsAsciiCaseInsensitive(const char* value, size_t valueLen, const
     return true;
 }
 
-static bool vstpocNeedsSerum2BuiltinD3dDefaults(const WineHostProcess::Config& cfg) {
+static bool vstpocNeedsSerum2BuiltinD2dStack(const WineHostProcess::Config& cfg) {
     for (const auto& path : cfg.pluginPaths) {
         const size_t separator = path.find_last_of("/\\");
         const size_t nameStart = separator == std::string::npos ? 0 : separator + 1;
@@ -130,15 +130,14 @@ static bool vstpocNeedsScaledGuestStacks(const WineHostProcess::Config& cfg) {
 }
 
 static void vstpocApplyPluginEnvDefaults(const WineHostProcess::Config& cfg) {
-    if (vstpocNeedsSerum2BuiltinD3dDefaults(cfg)) {
+    if (vstpocNeedsSerum2BuiltinD2dStack(cfg)) {
         const char* existing = ::getenv("WINEDLLOVERRIDES");
         if (!existing || !*existing) {
-            /* Serum 2 uses a Wine GDI path where DXVK/D3D DLL mix breaks
-             * rendering. Force builtin d3d11,dxgi,d3d10core only when unset,
-             * keep wine_env.txt overrides as final authority. */
+            /* Serum 2 needs patched builtin D3D11/DXGI/DComp stack; DXVK would bypass
+             * it. Force builtins only when unset, keep wine_env.txt overrides as final
+             * authority. */
             ::setenv("WINEDLLOVERRIDES", "d3d11,dxgi,d3d10core=b", 1);
-            LOGI("Serum 2 GDI fallback: forcing WINEDLLOVERRIDES to builtin "
-                 "d3d11,dxgi,d3d10core");
+            LOGI("Serum 2: forced WINEDLLOVERRIDES builtins d3d11,dxgi,d3d10core");
         }
     }
     if (vstpocNeedsScaledGuestStacks(cfg)) {

@@ -439,14 +439,6 @@ class VstInstallerViewModel(app: Application) : AndroidViewModel(app) {
                 registeredEntries.map { it.dllPath }.toSet(),
                 scanPaths,
             )
-            val containsSerum2 =
-                registeredEntries.any { Serum2Compatibility.isPluginPath(it.dllPath) } ||
-                    candidates.any {
-                        it.kind == Kind.VST3 && Serum2Compatibility.isPluginPath(it.relToPrefix)
-                    }
-            if (containsSerum2) {
-                Serum2Compatibility.applyToPrefix(File(session.templatePrefixPath))
-            }
             candidates
         }
         _discovered.value = found

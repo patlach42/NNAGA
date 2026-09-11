@@ -1,0 +1,34 @@
+From: Kamil Lulko <limakzagan@gmail.com>
+Subject: shell32: register VirtualDesktopManager class
+
+Rationale: giang VirtualDesktopManager implementation was otherwise never compiled/reachable because virtualdesktop.c was not in SOURCES and CLSID_VirtualDesktopManager was neither declared in shell32_main.h nor in shell32 InterfaceTable.
+
+diff --git a/dlls/shell32/Makefile.in b/dlls/shell32/Makefile.in
+--- a/dlls/shell32/Makefile.in
++++ b/dlls/shell32/Makefile.in
+@@ -99,5 +99,6 @@
+ 	shlmenu.c \
+ 	shlview.c \
+ 	shlview_cmenu.c \
+ 	shpolicy.c \
+-	systray.c
++	systray.c \
++	virtualdesktop.c
+diff --git a/dlls/shell32/shellole.c b/dlls/shell32/shellole.c
+--- a/dlls/shell32/shellole.c
++++ b/dlls/shell32/shellole.c
+@@ -77,3 +77,4 @@
+ 	{&CLSID_ShellDesktop,	ISF_Desktop_Constructor},
++	{&CLSID_VirtualDesktopManager, VirtualDesktopManager_Constructor},
+ 	{&CLSID_ShellFSFolder,	IFSFolder_Constructor},
+ 	{&CLSID_ShellItem,	IShellItem_Constructor},
+diff --git a/dlls/shell32/shell32_main.h b/dlls/shell32/shell32_main.h
+--- a/dlls/shell32/shell32_main.h
++++ b/dlls/shell32/shell32_main.h
+@@ -103,5 +103,6 @@
+ HRESULT WINAPI KnownFolderManager_Constructor(IUnknown *pUnkOuter, REFIID riid, LPVOID *ppv);
+ HRESULT WINAPI IFileOperation_Constructor(IUnknown *outer, REFIID riid, void **out);
+ HRESULT WINAPI ActiveDesktop_Constructor(IUnknown *outer, REFIID riid, void **out);
++extern const GUID CLSID_VirtualDesktopManager;
+ HRESULT WINAPI VirtualDesktopManager_Constructor(IUnknown *outer, REFIID riid, void **out);
+ HRESULT WINAPI EnumerableObjectCollection_Constructor(IUnknown *outer, REFIID riid, void **obj);

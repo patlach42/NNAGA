@@ -65,10 +65,19 @@ object WineSetup {
      *  (block confirmed in pWindowPosChanging→create_win_data). TEMP.
      *  v12: cwx2 unconditional + create_win_data ENTER marker (v11 size gate
      *  hid markers; disambiguate dispatch vs get_win_data vs create). TEMP. */
+    // v50: restore stable Wine 11.14 initialized fill buffers and remove
+    //      broken imported D2D fill-AA path.
+    // v49: commit 87f5dbac — readback-during-draw race fix in dcomp_target_flush_present; force payload refresh.
+    // v48: D2D/DComp payload refreshed for bounded pixel-boundary diagnostics.
+    // v47: giang faad0824009dbe1dae3af9d9b0bf5cf838067413 composites all D2D PopLayer paths as premultiplied, preventing transparent coverage from turning black.
+    // v46: backport giang c0d5a558 so WIC-created TARGET bitmaps retain source pixels instead of transparent/missing artwork.
+    // v45: restore framebuffer EGL callbacks because normal winex11 EGL client surfaces do not initialize with Android custom Mesa.
+    // v44: remove legacy framebuffer-EGL callback bypass so giang DComp uses normal winex11 client surfaces.
+    // v43: full giang17 Wine 11.14 D2D/DComp/DWrite/DXGI/WineD3D stack for VSTGUI/Serum 2.
     // v42: patch 0065 treats empty `VSTPOC_EGL_LIBRARY` as disabled, preventing mismatched EGL pixel formats.
     // v41: Wine patches 0064-0067 make Serum 2's `Disable DirectComposition=true` GDI fallback render through embedded X11; re-extract the rebuilt Wine payload.
     // v40: patch 0062 — comdlg32 GetOpenFileName/IFileOpenDialog routes Wine file picks through Android SAF.
-    private const val SETUP_VERSION = 42  // v39: patch 0061 — kernelbase WaitForSingleObjectEx/WaitForMultipleObjectsEx sent-msg drain on the JUCE WaitableEvent (kernel-object) wait, the TH-U deadlock fix; bump to re-extract the rebuilt kernelbase.dll. // v38: DXVK/D3D11 plugin editors (AmpliTube, Ampbox) now RENDER on software lavapipe. Two lavapipe-build roots, both ours: (1) lavapipe was built with empty -Dplatforms so LVP_USE_WSI_PLATFORM was undefined → lvp_device.c dropped VK_KHR_swapchain from its tables → DXVK couldn't create the D3D11 device. Fix = -DLVP_USE_WSI_PLATFORM in build-lavapipe-android.sh (the headless sw WSI was already compiled). (2) llvmpipe's DETECT_OS_LINUX device-memory path (forced by MESA_FORCE_LINUX) backs allocations with a sha…
+    private const val SETUP_VERSION = 50  // v39: patch 0061 — kernelbase WaitForSingleObjectEx/WaitForMultipleObjectsEx sent-msg drain on the JUCE WaitableEvent (kernel-object) wait, the TH-U deadlock fix; bump to re-extract the rebuilt kernelbase.dll. // v38: DXVK/D3D11 plugin editors (AmpliTube, Ampbox) now RENDER on software lavapipe. Two lavapipe-build roots, both ours: (1) lavapipe was built with empty -Dplatforms so LVP_USE_WSI_PLATFORM was undefined → lvp_device.c dropped VK_KHR_swapchain from its tables → DXVK couldn't create the D3D11 device. (2) llvmpipe's DETECT_OS_LINUX device-memory path (forced by MESA_FORCE_LINUX) backs allocations with a shared default memory pool that breaks with our Vulkan ICD; fix is to force the per-process dedicated poo…
     // v32: turnip-libs.tar.gz's Khronos Vulkan loader (libvulkan.so.1) is now BUILT FROM SOURCE (external/Vulkan-Loader v1.3.296, CMAKE_SYSTEM_NAME=Linux generic discovery) instead of the Termux vulkan-loader-generic .deb — Phase 1 of the prebuilt→source migration; bump so existing installs re-extract the swapped loader
     // v31: turnip-libs.tar.gz now bundles the AdrenoTools HAL Turnip (vulkan.ad07xx.so, exports HMI) alongside the Khronos ICD — the HAL driver is the adrenotools/zink PRIMARY GPU path (kgsl) and was previously only device-pushed (lost on clean reinstall → AmpliTube black). See feedback_amplitube_turnip_driver_name_regression
     // v30: repackaged mesa-zink-libs.tar.gz with the 6 zink fixes (kopper/swrast dri_target, EGL_OPENGL_API, zink-HW pdev, etc.) — the asset was stale (only device-pushed before); fixes "DRI_SWRast version 5" fatal after a data wipe
