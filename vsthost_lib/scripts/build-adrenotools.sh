@@ -33,7 +33,7 @@ if [ ! -f "$src/CMakeLists.txt" ] || [ ! -f "$src/lib/linkernsbypass/CMakeLists.
   exit 1
 fi
 
-build="$src/build-android-arm64"
+build="build/libadrenotools-android-arm64"
 out="toolchain/adrenotools-libs"
 mkdir -p "$out"
 
