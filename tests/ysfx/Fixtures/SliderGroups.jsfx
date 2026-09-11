@@ -1,0 +1,21 @@
+desc: Slider Group Mask Contract
+in_pin:L
+in_pin:R
+out_pin:L
+out_pin:R
+// One slider in each 64-bit change-mask word, at both ends of a word:
+// index 0 (word 0 bit 0), 63 (word 0 bit 63), 64 (word 1 bit 0), 255 (word 3 bit 63).
+slider1:0<0,8,1>Word0 Low
+slider64:0<0,8,1>Word0 High
+slider65:0<0,8,1>Word1 Low
+slider256:0<0,8,1>Word3 High
+
+@init
+gain = 0;
+
+@slider
+gain = slider1 + slider64 * 2 + slider65 * 4 + slider256 * 8;
+
+@sample
+spl0 *= gain;
+spl1 *= gain;

@@ -29,8 +29,6 @@ import kotlinx.coroutines.CoroutineStart
  * because we're extracting symlinks and seeding wineprefix up front. Worth it
  * for the much simpler "import-and-run" flow.
  *
- * Also re-applies any per-plugin prefixes for plugins that were previously
- * imported, in case the user deleted them or the setup version bumped.
  */
 class VstHostApplication : Application(), StartupPrerequisite {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Resets the wine-upstream submodule to its pinned commit and applies every
+# Resets the wine-upstream submodule to its recorded revision and applies every
 # patch in patches/wine/*.patch in lexicographic order.
 #
-# Idempotent: reset → apply. Re-running this script is safe and starts from
-# a clean tree each time. Untracked files (build dirs, config caches) are
-# preserved — reset --hard only reverts tracked sources.
+# Idempotent: reset → apply using selected clean patch base. Re-running this
+# script is safe and starts from a clean tree each time. Untracked files (build
+# dirs, config caches) are preserved — reset --hard only reverts tracked sources.
 #
 # Called from:
 #   - scripts/build-wine-android.sh  (Bionic arm64 cross-compile)
@@ -13,9 +13,8 @@
 # If a patch fails to apply, this script aborts. That means either:
 #   - the wine submodule has been bumped to a commit where the patch no
 #     longer fits — adjust the patch to match the new wine tree, OR
-#   - the patches list itself is inconsistent (two patches modify the same
+#     the patches list itself is inconsistent (two patches modify the same
 #     hunk). Either way: don't proceed with the build.
-
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,13 +27,26 @@ if [ ! -d "$WINE_DIR/.git" ] && [ ! -f "$WINE_DIR/.git" ]; then
     exit 1
 fi
 
-# Reset to the pinned commit AND clean any untracked files left by a prior
-# patch-apply (e.g. new files added by `git apply` like dlls/comdlg32/-
-# vstpoc_picker.c) — otherwise a second run hits "file already exists" on
-# add-new-file hunks. We preserve the build dirs by name so re-running this
-# helper doesn't force a full wine reconfigure on every iteration.
-echo "[+] resetting $WINE_DIR to pinned HEAD ($(cd "$WINE_DIR" && git rev-parse --short HEAD))"
-git -C "$WINE_DIR" reset --hard HEAD >/dev/null
+# Resolve base for patch replay. Read recorded HEAD subject first:
+# if it is aggregate Android adaptation commit, use its first parent instead.
+recorded_head="$(git -C "$WINE_DIR" rev-parse HEAD)"
+recorded_short="$(git -C "$WINE_DIR" rev-parse --short "$recorded_head")"
+recorded_subject="$(git -C "$WINE_DIR" log -1 --pretty=%s "$recorded_head")"
+
+if [ "$recorded_subject" = "feat(android): adapt Wine host runtime" ]; then
+    patch_base="$(git -C "$WINE_DIR" rev-parse "${recorded_head}^")"
+    patch_base_short="$(git -C "$WINE_DIR" rev-parse --short "$patch_base")"
+    patch_base_reason="recorded commit is aggregate adaptation commit; using first parent"
+else
+    patch_base="$recorded_head"
+    patch_base_short="$recorded_short"
+    patch_base_reason="recorded commit is clean upstream revision"
+fi
+
+echo "[+] recorded wine revision: $recorded_short"
+echo "[+] patch base: $patch_base_short ($patch_base_reason)"
+echo "[+] resetting $WINE_DIR to $patch_base_short"
+git -C "$WINE_DIR" reset --hard "$patch_base" >/dev/null
 git -C "$WINE_DIR" clean -fdx \
     -e build-android-arm64 \
     -e build-arm64ec >/dev/null

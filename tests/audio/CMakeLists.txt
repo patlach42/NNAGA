@@ -12,6 +12,7 @@ add_executable(audio_realtime_tests
     TestRoundTripCorrelation.cpp
     TestClipTempoAdapter.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginChain.cpp
+    ${AUDIO_APP_CPP_DIR}/plugin/AudioPathDiagnostics.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/RackGraph.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginRegistry.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/LiveMidiSource.cpp
@@ -30,6 +31,7 @@ gtest_discover_tests(audio_realtime_tests)
 add_executable(plugin_chain_lifecycle_tests
     TestPluginChainLifecycle.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginChain.cpp
+    ${AUDIO_APP_CPP_DIR}/plugin/AudioPathDiagnostics.cpp
 )
 
 target_include_directories(plugin_chain_lifecycle_tests PRIVATE
@@ -43,6 +45,7 @@ gtest_discover_tests(plugin_chain_lifecycle_tests)
 add_executable(native_plugin_host_tests
     TestNativePluginHost.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/PluginChain.cpp
+    ${AUDIO_APP_CPP_DIR}/plugin/AudioPathDiagnostics.cpp
     ${AUDIO_APP_CPP_DIR}/plugin/native/NativePlugin.cpp
 )
 

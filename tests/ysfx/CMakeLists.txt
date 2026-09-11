@@ -13,7 +13,9 @@ add_executable(ysfx_smoke_contract_tests
     TestYsfxSmoke.cpp
     TestJsfxPluginContract.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/plugin/PluginChain.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/plugin/AudioPathDiagnostics.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/jsfx/JsfxPlugin.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/jsfx/JsfxYsfxInternals.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/jsfx/JsfxPluginFactory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/jsfx/JsfxUiHost.cpp)
 target_compile_definitions(ysfx_smoke_contract_tests PRIVATE
@@ -25,6 +27,13 @@ target_include_directories(ysfx_smoke_contract_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../../3rd_party/ysfx/include)
+
+# Only this TU reaches into ysfx's private headers; keep the coupling scoped.
+set_source_files_properties(
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../app/src/main/cpp/jsfx/JsfxYsfxInternals.cpp
+    PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../3rd_party/ysfx/sources;${CMAKE_CURRENT_SOURCE_DIR}/../../3rd_party/ysfx/thirdparty/WDL/source"
+        COMPILE_OPTIONS "-fsigned-char")
 
 include(GoogleTest)
 gtest_discover_tests(ysfx_smoke_contract_tests)

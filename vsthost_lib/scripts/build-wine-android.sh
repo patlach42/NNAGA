@@ -27,11 +27,15 @@ HOST_TAG=linux-x86_64
 TARGET=aarch64-linux-android
 API=28
 TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/$HOST_TAG"
-export PATH="$TOOLCHAIN/bin:$PATH"
-# also keep llvm-mingw on PATH so the PE-side build still works from this
-# same shell environment (mingw triple won't collide with NDK clang).
-export PATH="$repo_root/external/llvm-mingw/install/bin:$PATH"
-
+# Keep unprefixed host/PE clang first in PATH (llvm-mingw if installed, then
+# host PATH). Keep NDK cross compiler explicit via CC/CXX for Android Bionic.
+export HOST_PATH="$PATH"
+LLVM_MINGW_PATH="$repo_root/external/llvm-mingw/install/bin"
+if [ -d "$LLVM_MINGW_PATH" ]; then
+    export PATH="$LLVM_MINGW_PATH:$HOST_PATH:$TOOLCHAIN/bin"
+else
+    export PATH="$HOST_PATH:$TOOLCHAIN/bin"
+fi
 export CC="$TOOLCHAIN/bin/${TARGET}${API}-clang"
 export CXX="$TOOLCHAIN/bin/${TARGET}${API}-clang++"
 export AR="$TOOLCHAIN/bin/llvm-ar"

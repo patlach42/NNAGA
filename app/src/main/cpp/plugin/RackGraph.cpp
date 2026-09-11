@@ -1,4 +1,5 @@
 #include "RackGraph.h"
+#include "AudioPathDiagnostics.h"
 #include "../utils/WavIO.h"
 
 #include <algorithm>
@@ -1680,6 +1681,7 @@ void RackGraph::process(
              previousPathOverflow != node.audioPathLatencyOverflow)) {
             node.latencyHistoryWrite = 0;
             node.latencyHistoryValid = 0;
+            diag::counters().latencyResetNode.fetch_add(1, std::memory_order_relaxed);
         }
         globalLatencyOverflow = globalLatencyOverflow || overflow;
         globalLatency = std::max(globalLatency, node.audioPathLatency);
@@ -1689,6 +1691,7 @@ void RackGraph::process(
     const bool globalLatencyChanged = globalLatency != audioGlobalLatency_ ||
         globalLatencyOverflow != audioLatencyOverflow_;
     if (globalLatencyChanged) {
+        diag::counters().latencyResetGlobal.fetch_add(1, std::memory_order_relaxed);
         for (const auto& view : snapshot->tracks) {
             auto& node = *view.node;
             node.latencyHistoryWrite = 0;

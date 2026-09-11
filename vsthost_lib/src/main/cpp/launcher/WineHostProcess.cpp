@@ -14,6 +14,7 @@
 #include <dirent.h>
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <sys/system_properties.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
@@ -94,6 +95,29 @@ static bool containsAsciiCaseInsensitive(const std::string& haystack, const char
     return false;
 }
 
+static bool equalsAsciiCaseInsensitive(const char* value, size_t valueLen, const char* expected) {
+    const size_t expectedLen = expected ? std::strlen(expected) : 0;
+    if (valueLen != expectedLen) return false;
+    for (size_t i = 0; i < valueLen; ++i) {
+        if (asciiLower(value[i]) != asciiLower(expected[i])) return false;
+    }
+    return true;
+}
+
+static bool vstpocNeedsSerum2BuiltinD2dStack(const WineHostProcess::Config& cfg) {
+    for (const auto& path : cfg.pluginPaths) {
+        const size_t separator = path.find_last_of("/\\");
+        const size_t nameStart = separator == std::string::npos ? 0 : separator + 1;
+        const char* name = path.data() + nameStart;
+        const size_t nameLen = path.size() - nameStart;
+        if (equalsAsciiCaseInsensitive(name, nameLen, "Serum2.vst3") ||
+            equalsAsciiCaseInsensitive(name, nameLen, "Serum 2.vst3")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool vstpocNeedsScaledGuestStacks(const WineHostProcess::Config& cfg) {
     for (const auto& path : cfg.pluginPaths) {
         if (containsAsciiCaseInsensitive(path, "x50ii") ||
@@ -106,6 +130,16 @@ static bool vstpocNeedsScaledGuestStacks(const WineHostProcess::Config& cfg) {
 }
 
 static void vstpocApplyPluginEnvDefaults(const WineHostProcess::Config& cfg) {
+    if (vstpocNeedsSerum2BuiltinD2dStack(cfg)) {
+        const char* existing = ::getenv("WINEDLLOVERRIDES");
+        if (!existing || !*existing) {
+            /* Serum 2 needs patched builtin D3D11/DXGI/DComp stack; DXVK would bypass
+             * it. Force builtins only when unset, keep wine_env.txt overrides as final
+             * authority. */
+            ::setenv("WINEDLLOVERRIDES", "d3d11,dxgi,d3d10core=b", 1);
+            LOGI("Serum 2: forced WINEDLLOVERRIDES builtins d3d11,dxgi,d3d10core");
+        }
+    }
     if (vstpocNeedsScaledGuestStacks(cfg)) {
         const char* existing = ::getenv("VSTPOC_STACK_PCT");
         if (!existing || !*existing) {
@@ -205,6 +239,69 @@ static std::string vstpocWineEnvValue(const std::string& cacheDir, const std::st
     }
     return "";
 }
+/* vstpoc: choose VSTPOC_ADRENOTOOLS driver path.
+ * Defaults to bundled Turnip: <wineRoot>/turnip/vulkan.ad07xx.so.
+ * For readable non-Adreno7 GPU models, load ro.hardware.vulkan and only
+ * use /vendor/lib64/hw/vulkan.<value>.so when readable. Any uncertainty keeps
+ * bundled defaults so launch still works. */
+static void vstpocSetAdrenotoolsEnv(const std::string& wineRoot, const std::string& hookDir) {
+    auto trimLine = [](std::string& value) {
+        const size_t begin = value.find_first_not_of(" \t\r\n");
+        if (begin == std::string::npos) {
+            value.clear();
+            return;
+        }
+        const size_t end = value.find_last_not_of(" \t\r\n");
+        value = value.substr(begin, end - begin + 1);
+    };
+
+    const std::string bundledDriverDir = wineRoot + "/turnip/";
+    const std::string bundledDriverName = "vulkan.ad07xx.so";
+    std::string driverDir = bundledDriverDir;
+    std::string driverName = bundledDriverName;
+    const char* reason = "gpu_model unreadable; using bundled Turnip";
+
+    std::ifstream gpuModelFile("/sys/class/kgsl/kgsl-3d0/gpu_model");
+    if (gpuModelFile.is_open()) {
+        std::string gpuModel;
+        std::getline(gpuModelFile, gpuModel);
+        trimLine(gpuModel);
+        if (!gpuModel.empty() && gpuModel.rfind("Adreno7", 0) == 0) {
+            reason = "Adreno7 GPU keeps bundled Turnip";
+        } else if (!gpuModel.empty()) {
+            char propName[128] = {};
+            if (__system_property_get("ro.hardware.vulkan", propName) > 0) {
+                std::string halSuffix = propName;
+                trimLine(halSuffix);
+                if (!halSuffix.empty()) {
+                    const std::string halDriverName = std::string("vulkan.") + halSuffix + ".so";
+                    const std::string halDriverPath = "/vendor/lib64/hw/" + halDriverName;
+                    if (::access(halDriverPath.c_str(), R_OK) == 0) {
+                        driverDir = "/vendor/lib64/hw/";
+                        driverName = halDriverName;
+                        reason = "non-Adreno7 GPU; using vendor HAL from ro.hardware.vulkan";
+                    } else {
+                        reason = "non-Adreno7 GPU; HAL driver not readable, keeping bundled Turnip";
+                    }
+                } else {
+                    reason = "non-Adreno7 GPU; empty ro.hardware.vulkan, keeping bundled Turnip";
+                }
+            } else {
+                reason = "non-Adreno7 GPU; missing ro.hardware.vulkan, keeping bundled Turnip";
+            }
+        } else {
+            reason = "gpu_model empty; using bundled Turnip";
+        }
+    }
+
+    LOGI("vstpoc: Vulkan HAL via adrenotools: %s (%s)",
+         (driverDir + driverName).c_str(),
+         reason);
+    ::setenv("VSTPOC_ADRENOTOOLS_HOOKDIR", hookDir.c_str(), 1);
+    ::setenv("VSTPOC_ADRENOTOOLS_DRIVERDIR", driverDir.c_str(), 1);
+    ::setenv("VSTPOC_ADRENOTOOLS_DRIVERNAME", driverName.c_str(), 1);
+}
+
 
 /* vstpoc: wire the lavapipe software-Vulkan fallback (the universal, non-Adreno-
  * tied path). Always export VSTPOC_LAVAPIPE_ICD — the zink shim's load_vulkan()
@@ -365,9 +462,7 @@ void WineHostProcess::setupWineEnvChild(const Config& cfg) {
          * broken VK_EXT_robustness2 nullDescriptor makes DXVK/D3D11 plugins
          * (AmpliTube) render black. */
         const std::string turnipDir = wineRoot + "/turnip/";
-        ::setenv("VSTPOC_ADRENOTOOLS_HOOKDIR",   cfg.nativeLibDir.c_str(), 1);
-        ::setenv("VSTPOC_ADRENOTOOLS_DRIVERDIR", turnipDir.c_str(),        1);
-        ::setenv("VSTPOC_ADRENOTOOLS_DRIVERNAME", "vulkan.ad07xx.so",      1);
+        vstpocSetAdrenotoolsEnv(wineRoot, cfg.nativeLibDir);
         vstpocLavapipeEnv(turnipDir, cfg.cacheDir);
         /* Mesa/Turnip logs to logcat by default (invisible from the forked wine
          * process); redirect to a readable file + trace device init. */
@@ -953,10 +1048,8 @@ bool WineHostProcess::start() {
          * dlopen fails → silent fallback to system (Qualcomm) Vulkan, whose
          * broken VK_EXT_robustness2 nullDescriptor makes DXVK/D3D11 plugins
          * (AmpliTube) render black. */
-        const std::string turnipDir = wineRoot + "/turnip/";
-            ::setenv("VSTPOC_ADRENOTOOLS_HOOKDIR",   cfg_.nativeLibDir.c_str(), 1);
-            ::setenv("VSTPOC_ADRENOTOOLS_DRIVERDIR", turnipDir.c_str(),         1);
-            ::setenv("VSTPOC_ADRENOTOOLS_DRIVERNAME", "vulkan.ad07xx.so",       1);
+            const std::string turnipDir = wineRoot + "/turnip/";
+            vstpocSetAdrenotoolsEnv(wineRoot, cfg_.nativeLibDir);
             vstpocLavapipeEnv(turnipDir, cfg_.cacheDir);
             ::setenv("MESA_LOG_FILE", (cfg_.cacheDir + "/turnip.log").c_str(), 1);
             ::setenv("TU_DEBUG", "startup", 1);

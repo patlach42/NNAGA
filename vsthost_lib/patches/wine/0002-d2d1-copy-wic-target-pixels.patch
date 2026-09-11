@@ -1,0 +1,54 @@
+From c0d5a5589e92f02720976d17d5966ae1a98a97b1 Mon Sep 17 00:00:00 2001
+From: Giang Nguyen <33104857+giang17@users.noreply.github.com>
+Date: Fri, 4 Sep 2026 12:53:28 +0200
+Subject: [PATCH] d2d1: Copy the WIC pixels into bitmaps created from a WIC
+ source with the TARGET option too.
+
+CreateBitmapFromWicBitmap() skipped the CopyPixels() step for bitmaps created
+with D2D1_BITMAP_OPTIONS_TARGET since 3bf270c39a0, so such a target started out
+transparent instead of holding the WIC source's pixels.  That skip was a
+hypothesis from the Serum 2 tooltip investigation which the investigation itself
+refuted (the tooltip layers came from the image brush ignoring source_rect), and
+its claim about Windows has no source: the documented behaviour is that the
+bitmap is created by copying the WIC bitmap, whatever the options are.
+
+Cubase 15 depends on the copy.  It composes its skin images in several passes
+over one WIC bitmap: create a target from the WIC bitmap, draw one layer into
+it, read it back into the same WIC bitmap through CopyFromBitmap() and Map(),
+and repeat for the next layer.  With every pass starting from zero only the last
+layer survived; the MixConsole level meter images ended up with 99 of 2013
+pixels set and the meters stayed empty (issue 338).  Restoring the copy makes
+them appear.
+---
+ dlls/d2d1/bitmap.c | 18 +++++-------------
+ 1 file changed, 5 insertions(+), 13 deletions(-)
+
+diff --git a/dlls/d2d1/bitmap.c b/dlls/d2d1/bitmap.c
+index 4ed9d8265c73..5066c69a7990 100644
+--- a/dlls/d2d1/bitmap.c
++++ b/dlls/d2d1/bitmap.c
+@@ -792,19 +792,11 @@ HRESULT d2d_bitmap_create_from_wic_bitmap(struct d2d_device_context *context, IW
+     rect.Y = 0;
+     rect.Width = size.width;
+     rect.Height = size.height;
+-    /* Skip CopyPixels for TARGET bitmaps — they should start transparent (zeroed).
+-     * On Windows, CreateBitmapFromWicBitmap with D2D1_BITMAP_OPTIONS_TARGET ignores
+-     * the WIC source data. Without this skip, the WIC bitmap retains GPU readback
+-     * content from previous frames, causing alpha accumulation on semi-transparent
+-     * regions (e.g. tooltip rounded-rect corners rendered via SOURCE_OVER). */
+-    if (!(bitmap_desc.bitmapOptions & D2D1_BITMAP_OPTIONS_TARGET))
+-    {
+-        if (FAILED(hr = IWICBitmapSource_CopyPixels(bitmap_source, &rect, pitch, data_size, data)))
+-        {
+-            WARN("Failed to copy bitmap pixels, hr %#lx.\n", hr);
+-            free(data);
+-            return hr;
+-        }
++    if (FAILED(hr = IWICBitmapSource_CopyPixels(bitmap_source, &rect, pitch, data_size, data)))
++    {
++        WARN("Failed to copy bitmap pixels, hr %#lx.\n", hr);
++        free(data);
++        return hr;
+     }
+ 
+     hr = d2d_bitmap_create(context, size, data, pitch, &bitmap_desc, bitmap);

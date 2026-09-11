@@ -1,0 +1,16 @@
+desc: Heavy Init Contract
+in_pin:L
+in_pin:R
+out_pin:L
+out_pin:R
+
+@init
+// What a reverb does on init: clear its delay lines and rebuild tables.
+memset(0, 0, 131072);
+i = 0;
+loop(20000, i += 1;);
+g = 2;
+
+@sample
+spl0 *= g;
+spl1 *= g;

@@ -1,0 +1,22 @@
+desc: Gfx Contention Probe
+in_pin:L
+in_pin:R
+out_pin:L
+out_pin:R
+
+@init
+g = 2;
+
+@gfx 400 200
+// Stand-in for a real JSFX UI repaint: a few thousand EEL ops per frame.
+i = 0;
+loop(4000,
+  gfx_x = i % 400; gfx_y = (i * 7) % 200;
+  gfx_r = 0.5; gfx_g = 0.25; gfx_b = 0.75;
+  gfx_setpixel(gfx_r, gfx_g, gfx_b);
+  i += 1;
+);
+
+@sample
+spl0 *= g;
+spl1 *= g;

@@ -1,0 +1,28 @@
+From: giang17 <33104857+giang17@users.noreply.github.com>
+Subject: winex11: preserve framebuffer EGL callbacks with VSTPOC_EGL_LIBRARY
+
+diff --git a/dlls/winex11.drv/opengl.c b/dlls/winex11.drv/opengl.c
+--- a/dlls/winex11.drv/opengl.c
++++ b/dlls/winex11.drv/opengl.c
+@@ -562,11 +562,15 @@ UINT X11DRV_OpenGLInit( UINT version, const struct opengl_funcs *opengl_funcs, const struct opengl_driver_funcs **driver_funcs )
+     if (use_egl && opengl_funcs->egl_handle)
+     {
+-        TRACE( "Using EGL OpenGL backend\n" );
+-        x11drv_driver_funcs = **driver_funcs;
+-        x11drv_driver_funcs.p_init_egl_platform = x11drv_init_egl_platform;
+-        x11drv_driver_funcs.p_surface_create = x11drv_egl_surface_create;
+-        x11drv_driver_funcs.p_describe_pixel_format = x11drv_egl_describe_pixel_format;
+-        p_egl_describe_pixel_format = (*driver_funcs)->p_describe_pixel_format;
++        const char *egl_library = getenv( "VSTPOC_EGL_LIBRARY" );
++        TRACE( "Using EGL OpenGL backend\n" );
++        x11drv_driver_funcs = **driver_funcs;
++        x11drv_driver_funcs.p_init_egl_platform = x11drv_init_egl_platform;
++        if (!egl_library || !*egl_library)
++        {
++            x11drv_driver_funcs.p_surface_create = x11drv_egl_surface_create;
++            x11drv_driver_funcs.p_describe_pixel_format = x11drv_egl_describe_pixel_format;
++            p_egl_describe_pixel_format = (*driver_funcs)->p_describe_pixel_format;
++        }
+         *driver_funcs = &x11drv_driver_funcs;
+         return STATUS_SUCCESS;
+     }
